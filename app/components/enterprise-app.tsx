@@ -312,7 +312,7 @@ export function EnterpriseApp() {
         </header>
 
         <main className="app-content">
-          {currentView === "dashboard" && canUse("dashboard") && <DashboardView navigate={navigate} notify={notify} selectedProjectId={selectedProjectId} />}
+          {currentView === "dashboard" && canUse("dashboard") && <DashboardView navigate={navigate} notify={notify} selectedProjectId={selectedProjectId} userName={user.name} />}
           {currentView === "project" && canUse("projects") && <ProjectView navigate={navigate} notify={notify} projectId={activeProjectId} project={projects.find((item) => item.id === activeProjectId)} />}
           {currentView === "boq" && canUse("boq") && <BoqView navigate={navigate} notify={notify} projectId={activeProjectId} />}
           {currentView === "billing" && canUse("billing") && <BillingView notify={notify} projectId={activeProjectId} />}

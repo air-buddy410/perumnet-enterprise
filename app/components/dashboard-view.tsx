@@ -31,6 +31,7 @@ interface DashboardViewProps {
   navigate: (view: ViewKey) => void;
   notify: (message: string) => void;
   selectedProjectId?: string;
+  userName: string;
 }
 
 const filters = ["Semua", "Aktif", "Selesai", "Draft"] as const;
@@ -48,7 +49,7 @@ function paymentClass(payment: Project["payment"]) {
   return "neutral";
 }
 
-export function DashboardView({ navigate, notify, selectedProjectId = "" }: DashboardViewProps) {
+export function DashboardView({ navigate, notify, selectedProjectId = "", userName }: DashboardViewProps) {
   const [projectList, setProjectList] = useState(seedProjects);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<(typeof filters)[number]>("Semua");
@@ -56,6 +57,7 @@ export function DashboardView({ navigate, notify, selectedProjectId = "" }: Dash
   const [projectName, setProjectName] = useState("");
   const [clientName, setClientName] = useState("");
   const [location, setLocation] = useState("");
+  const firstName = userName.trim().split(/\s+/)[0] || "Rekan";
 
   useEffect(() => {
     let active = true;
@@ -130,7 +132,7 @@ export function DashboardView({ navigate, notify, selectedProjectId = "" }: Dash
       <section className="welcome-strip">
         <div>
           <span className="eyebrow">SABTU, 18 JULI 2026</span>
-          <h1>Selamat sore, Dewa.</h1>
+          <h1>Selamat sore, {firstName}.</h1>
           <p>Berikut ringkasan operasional proyek PerumNet hari ini.</p>
         </div>
         <button className="button primary" type="button" onClick={() => setShowNewProject(true)}>

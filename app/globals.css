@@ -4763,6 +4763,51 @@ h3 {
   accent-color: var(--teal);
 }
 
+.email-delivery-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px 12px;
+}
+
+.email-delivery-status > span:last-child {
+  display: grid;
+  gap: 3px;
+}
+
+.email-delivery-status strong {
+  color: var(--navy);
+  font-size: 10px;
+}
+
+.email-delivery-status small {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.email-delivery-status.pending {
+  border-color: #efdba8;
+  background: #fffaf0;
+}
+
+.email-delivery-status.pending .badge-dot {
+  margin-top: 4px;
+  background: #d99d22;
+}
+
+.email-delivery-status.configured {
+  border-color: #bde2d4;
+  background: #f2fbf7;
+}
+
+.email-delivery-status.configured .badge-dot {
+  margin-top: 4px;
+  background: #35a878;
+}
+
 .settings-form-actions {
   display: flex;
   justify-content: flex-end;

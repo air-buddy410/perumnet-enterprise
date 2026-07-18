@@ -1789,6 +1789,7 @@ async function handleSettings(request: Request, user: AuthUser) {
     return ok({
       preferredLanguage: profile.preferredLanguage,
       emailNotifications: profile.emailNotifications,
+      emailDeliveryConfigured: Boolean(process.env.RESEND_API_KEY),
     });
   }
   if (request.method === "PATCH") {
@@ -1803,7 +1804,7 @@ async function handleSettings(request: Request, user: AuthUser) {
       args: [user.id, input.preferredLanguage, input.emailNotifications ? 1 : 0, timestamp],
     });
     await writeAuditLog(client, request, user, "update_settings", "user", user.id, input);
-    return ok(input);
+    return ok({ ...input, emailDeliveryConfigured: Boolean(process.env.RESEND_API_KEY) });
   }
   throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
 }

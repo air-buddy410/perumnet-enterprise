@@ -324,6 +324,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     body: JSON.stringify({ preferredLanguage: "en", emailNotifications: false }),
   });
   assert.equal(settings.preferredLanguage, "en");
+  assert.equal(settings.emailDeliveryConfigured, false);
   assert.equal((await json("/api/auth/session")).user.preferredLanguage, "en");
 
   const avatarForm = new FormData();

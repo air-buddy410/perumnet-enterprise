@@ -28,7 +28,7 @@ const guides = {
     { title: "Quotation, invoice, dan pembayaran", icon: ReceiptText, body: "Quotation mengambil nilai dari BoQ proyek aktif. Buat invoice berdasarkan termin, tentukan tanggal jatuh tempo, unduh PDF, lalu konfirmasi pembayaran ketika dana diterima. Konfirmasi otomatis membuat transaksi pemasukan." },
     { title: "Pengguna dan hak akses", icon: ShieldCheck, body: "Admin membuat akun dengan email dan kata sandi awal, lalu memilih tingkat akses per modul: Tidak ada, Lihat, atau Kelola. “Lihat” hanya mengizinkan membaca data; “Kelola” mengizinkan pembuatan dan perubahan data. Hak akses juga diperiksa oleh server." },
     { title: "Profil pribadi", icon: UserRound, body: "Buka Profil Saya dari menu akun. Anda dapat mengganti foto, nama, email, telepon, jabatan, tanggal lahir, alamat, dan bio. Foto harus JPG, PNG, atau WebP dengan ukuran maksimal 3 MB." },
-    { title: "Bahasa, notifikasi, dan kata sandi", icon: Settings, body: "Buka Pengaturan untuk memilih Bahasa Indonesia atau English, mengaktifkan notifikasi email, dan mengganti kata sandi. Pilihan bahasa tersimpan pada akun sehingga digunakan kembali saat login berikutnya." },
+    { title: "Bahasa, notifikasi, dan kata sandi", icon: Settings, body: "Buka Pengaturan untuk memilih Bahasa Indonesia atau English, menyimpan preferensi notifikasi email, dan mengganti kata sandi. Status pada halaman akan menunjukkan apakah provider pengiriman email sudah aktif. Pilihan bahasa tersimpan pada akun sehingga digunakan kembali saat login berikutnya." },
     { title: "Masalah login dan keamanan", icon: KeyRound, body: "Pastikan email dan kata sandi benar serta akun berstatus Aktif. Gunakan Lupa kata sandi jika email layanan sudah dikonfigurasi. Jika akses suatu menu ditolak, hubungi Admin untuk memeriksa matriks hak akses akun Anda." },
   ],
   en: [
@@ -38,7 +38,7 @@ const guides = {
     { title: "Quotations, invoices, and payments", icon: ReceiptText, body: "A quotation uses the active project’s BoQ. Create milestone invoices, set due dates, download PDFs, and confirm a payment when funds arrive. A confirmed payment automatically creates an income transaction." },
     { title: "Users and permissions", icon: ShieldCheck, body: "Admins create accounts with an email and initial password, then set each module to No access, View, or Manage. View is read-only; Manage allows users to create and update data. Permissions are enforced by the server as well as the interface." },
     { title: "Personal profile", icon: UserRound, body: "Open My Profile from the account menu. You can update your photo, name, email, phone, job title, birth date, address, and bio. Photos must be JPG, PNG, or WebP and no larger than 3 MB." },
-    { title: "Language, notifications, and password", icon: Settings, body: "Open Settings to choose Indonesian or English, enable email notifications, and change your password. The language choice is saved to your account and restored at your next sign-in." },
+    { title: "Language, notifications, and password", icon: Settings, body: "Open Settings to choose Indonesian or English, save your email notification preference, and change your password. The page shows whether an email delivery provider is active. Your language choice is restored at your next sign-in." },
     { title: "Login and security issues", icon: KeyRound, body: "Confirm your email and password and make sure the account is Active. Use Forgot password when email delivery is configured. If a module is denied, ask an Admin to review your account permission matrix." },
   ],
 };

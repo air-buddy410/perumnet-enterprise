@@ -14,6 +14,7 @@ interface SettingsViewProps {
 export function SettingsView({ language, notify, onLanguageChange }: SettingsViewProps) {
   const [selectedLanguage, setSelectedLanguage] = useState<AppLanguage>(language);
   const [emailNotifications, setEmailNotifications] = useState(true);
+  const [emailDeliveryConfigured, setEmailDeliveryConfigured] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -21,11 +22,12 @@ export function SettingsView({ language, notify, onLanguageChange }: SettingsVie
 
   useEffect(() => {
     let active = true;
-    api<{ preferredLanguage: AppLanguage; emailNotifications: boolean }>("/api/settings")
+    api<{ preferredLanguage: AppLanguage; emailNotifications: boolean; emailDeliveryConfigured: boolean }>("/api/settings")
       .then((settings) => {
         if (!active) return;
         setSelectedLanguage(settings.preferredLanguage);
         setEmailNotifications(settings.emailNotifications);
+        setEmailDeliveryConfigured(settings.emailDeliveryConfigured);
       })
       .catch((error) => notify(messageOf(error)));
     return () => { active = false; };
@@ -79,6 +81,7 @@ export function SettingsView({ language, notify, onLanguageChange }: SettingsVie
           </div>
           <div className="settings-divider" />
           <label className="toggle-setting"><span className="metric-icon blue"><Bell size={19} /></span><span><strong>{id ? "Notifikasi email" : "Email notifications"}</strong><small>{id ? "Terima pembaruan penting tentang proyek dan tagihan." : "Receive important project and billing updates."}</small></span><input type="checkbox" checked={emailNotifications} onChange={(event) => setEmailNotifications(event.target.checked)} /></label>
+          <div className={`email-delivery-status ${emailDeliveryConfigured ? "configured" : "pending"}`}><span className="badge-dot" /><span><strong>{emailDeliveryConfigured ? (id ? "Pengiriman email aktif" : "Email delivery active") : (id ? "Pengiriman email belum aktif" : "Email delivery not active")}</strong><small>{emailDeliveryConfigured ? (id ? "Provider email sudah terhubung ke aplikasi." : "An email provider is connected to the application.") : (id ? "Preferensi tetap tersimpan, tetapi email baru akan terkirim setelah provider email dikonfigurasi." : "Your preference is saved, but emails will only be sent after an email provider is configured.")}</small></span></div>
           <div className="settings-form-actions"><button className="button primary" type="submit"><Save size={16} /> {id ? "Simpan preferensi" : "Save preferences"}</button></div>
         </form>
         <form className="panel settings-card" onSubmit={changePassword}>
