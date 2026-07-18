@@ -2316,12 +2316,22 @@ h3 {
   display: grid;
 }
 
+.template-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+
 .template-item {
   display: flex;
   width: 100%;
+  min-width: 0;
+  flex: 1;
   align-items: center;
   gap: 10px;
-  border-bottom: 1px solid var(--line);
+  border: 0;
   padding: 11px 14px;
   background: #fff;
   color: var(--muted);
@@ -2367,6 +2377,11 @@ h3 {
 .template-item small {
   color: var(--muted);
   font-size: 8px;
+}
+
+.template-delete {
+  flex: 0 0 auto;
+  margin-right: 10px;
 }
 
 .save-template-form {

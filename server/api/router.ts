@@ -1042,8 +1042,15 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
 
     if (childId && request.method === "DELETE") {
       if (!mutationRoles("boq").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menghapus template.");
+      const template = await ensureExists(
+        "SELECT id,name FROM boq_templates WHERE id = ?",
+        [childId],
+        "Template tidak ditemukan.",
+      );
       await client.execute({ sql: "DELETE FROM boq_templates WHERE id = ?", args: [childId] });
-      await writeAuditLog(client, request, user, "delete", "boq_template", childId);
+      await writeAuditLog(client, request, user, "delete", "boq_template", childId, {
+        name: template.name,
+      });
       return noContent();
     }
   }

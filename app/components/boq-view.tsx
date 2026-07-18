@@ -213,6 +213,28 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
     }
   }
 
+  async function deleteTemplate(template: BoqTemplate) {
+    if (
+      !window.confirm(
+        `Hapus template "${template.name}"? Template akan dihapus permanen, tetapi BoQ proyek yang sudah memakai template ini tidak berubah.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await api(`/api/boq/templates/${template.id}`, { method: "DELETE" });
+      setTemplateList((current) =>
+        current.filter((item) => item.id !== template.id),
+      );
+      setActiveTemplate((current) =>
+        current === template.id ? "" : current,
+      );
+      notify(`Template "${template.name}" berhasil dihapus.`);
+    } catch (error) {
+      notify(messageOf(error));
+    }
+  }
+
   async function continueToQuotation() {
     if (!items.length) {
       notify("Tambahkan minimal satu item sebelum membuat Quotation.");
@@ -473,20 +495,36 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
             </div>
             <div className="template-list">
               {templateList.map((template) => (
-                <button
-                  key={template.id}
-                  type="button"
-                  className={`template-item ${activeTemplate === template.id ? "active" : ""}`}
-                  onClick={() => loadTemplate(template.id)}
-                >
-                  <span className="template-icon"><FileSpreadsheet size={17} /></span>
-                  <span>
-                    <strong>{template.name}</strong>
-                    <small>{template.items} item · {template.lastUsed}</small>
-                  </span>
-                  {activeTemplate === template.id ? <Check size={16} /> : <ArrowRight size={15} />}
-                </button>
+                <div className="template-row" key={template.id}>
+                  <button
+                    type="button"
+                    className={`template-item ${activeTemplate === template.id ? "active" : ""}`}
+                    onClick={() => loadTemplate(template.id)}
+                  >
+                    <span className="template-icon"><FileSpreadsheet size={17} /></span>
+                    <span>
+                      <strong>{template.name}</strong>
+                      <small>{template.items} item · {template.lastUsed}</small>
+                    </span>
+                    {activeTemplate === template.id ? <Check size={16} /> : <ArrowRight size={15} />}
+                  </button>
+                  {canManage && (
+                    <button
+                      className="icon-button danger template-delete"
+                      type="button"
+                      aria-label={`Hapus template ${template.name}`}
+                      onClick={() => deleteTemplate(template)}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  )}
+                </div>
               ))}
+              {!templateList.length && (
+                <div className="empty-state compact">
+                  <p>Belum ada template BoQ tersimpan.</p>
+                </div>
+              )}
             </div>
             {canManage && <div className="save-template-form">
               <label className="field">

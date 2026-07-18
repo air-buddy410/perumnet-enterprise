@@ -482,6 +482,22 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     409,
   );
   await json(`/api/boq/templates/${template.id}`, { method: "DELETE" }, 204);
+  assert.equal(
+    (await json("/api/boq/templates")).some(
+      (savedTemplate) => savedTemplate.id === template.id,
+    ),
+    false,
+  );
+  assert.equal(
+    (await request(`/api/boq/templates/${template.id}`)).status,
+    404,
+  );
+  assert.equal(
+    (await request(`/api/boq/templates/${template.id}`, {
+      method: "DELETE",
+    })).status,
+    404,
+  );
 
   await json("/api/auth/logout", { method: "POST" });
   cookie = "";
