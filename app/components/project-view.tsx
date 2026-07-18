@@ -19,7 +19,8 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
-import { ChangeEvent, FormEvent, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { api, messageOf } from "../api-client";
 import { ViewKey } from "../data";
 
 interface ProjectViewProps {
@@ -36,6 +37,8 @@ interface ProjectTask {
   startLabel: string;
   endLabel: string;
   status: "Selesai" | "Berjalan" | "Belum Mulai";
+  startDate?: string;
+  endDate?: string;
 }
 
 interface ProjectDocument {
@@ -78,6 +81,30 @@ export function ProjectView({ navigate, notify }: ProjectViewProps) {
   const [taskOwner, setTaskOwner] = useState("Agus Suardana");
   const [taskDate, setTaskDate] = useState("2026-07-22");
 
+  const refreshTasks = useCallback(async () => {
+    try {
+      setTasks(await api<ProjectTask[]>("/api/projects/project-1/tasks"));
+    } catch (error) {
+      notify(messageOf(error));
+    }
+  }, [notify]);
+
+  const refreshDocuments = useCallback(async () => {
+    try {
+      setDocuments(await api<ProjectDocument[]>("/api/projects/project-1/documents"));
+    } catch (error) {
+      notify(messageOf(error));
+    }
+  }, [notify]);
+
+  useEffect(() => {
+    const update = window.setTimeout(() => {
+      void refreshTasks();
+      void refreshDocuments();
+    }, 0);
+    return () => window.clearTimeout(update);
+  }, [refreshDocuments, refreshTasks]);
+
   const progress = useMemo(
     () => Math.round((tasks.filter((task) => task.status === "Selesai").length / tasks.length) * 100),
     [tasks],
@@ -86,56 +113,61 @@ export function ProjectView({ navigate, notify }: ProjectViewProps) {
   const active = tasks.filter((task) => task.status === "Berjalan").length;
   const remaining = tasks.filter((task) => task.status === "Belum Mulai").length;
 
-  function toggleTask(id: string) {
-    setTasks((current) =>
-      current.map((task) =>
-        task.id === id
-          ? { ...task, status: task.status === "Selesai" ? "Berjalan" : "Selesai" }
-          : task,
-      ),
-    );
-    notify("Status tugas dan progres proyek diperbarui.");
+  async function toggleTask(id: string) {
+    const task = tasks.find((item) => item.id === id);
+    if (!task) return;
+    const status = task.status === "Selesai" ? "Berjalan" : "Selesai";
+    try {
+      await api(`/api/projects/project-1/tasks/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      });
+      setTasks((current) => current.map((item) => (item.id === id ? { ...item, status } : item)));
+      notify("Status tugas dan progres proyek diperbarui.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
-  function addTask(event: FormEvent<HTMLFormElement>) {
+  async function addTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!taskName.trim()) return;
-    setTasks((current) => [
-      ...current,
-      {
-        id: `task-${Date.now()}`,
-        name: taskName.trim(),
-        owner: taskOwner,
-        start: 72,
-        duration: 18,
-        startLabel: new Date(taskDate).toLocaleDateString("id-ID", { day: "2-digit", month: "short" }),
-        endLabel: "Belum diatur",
-        status: "Belum Mulai",
-      },
-    ]);
-    setTaskName("");
-    setShowTaskForm(false);
-    notify("Tugas baru ditambahkan ke timeline.");
+    try {
+      await api("/api/projects/project-1/tasks", {
+        method: "POST",
+        body: JSON.stringify({
+          name: taskName.trim(),
+          owner: taskOwner,
+          startDate: taskDate,
+          status: "Belum Mulai",
+        }),
+      });
+      await refreshTasks();
+      setTaskName("");
+      setShowTaskForm(false);
+      notify("Tugas baru ditambahkan ke timeline.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
-  function uploadDocument(event: ChangeEvent<HTMLInputElement>) {
+  async function uploadDocument(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    const isImage = file.type.startsWith("image/");
-    const preview = isImage ? URL.createObjectURL(file) : undefined;
-    setDocuments((current) => [
-      {
-        id: `doc-${Date.now()}`,
-        name: file.name,
-        type: isImage ? "image" : "file",
-        date: "Baru saja",
-        uploader: "Dewa Mahardika",
-        preview,
-      },
-      ...current,
-    ]);
-    event.target.value = "";
-    notify("Dokumentasi berhasil ditambahkan ke proyek.");
+    const form = new FormData();
+    form.set("file", file);
+    try {
+      const document = await api<ProjectDocument>("/api/projects/project-1/documents", {
+        method: "POST",
+        body: form,
+      });
+      setDocuments((current) => [document, ...current]);
+      notify("Dokumentasi berhasil ditambahkan ke proyek.");
+    } catch (error) {
+      notify(messageOf(error));
+    } finally {
+      event.target.value = "";
+    }
   }
 
   return (

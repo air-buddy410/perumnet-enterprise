@@ -1,10 +1,11 @@
 "use client";
 
 import { ArrowLeft, ArrowRight, Eye, EyeOff, KeyRound, Mail, ShieldCheck, Wifi } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
+import { api, messageOf, SessionUser } from "../api-client";
 
 interface AuthScreenProps {
-  onLogin: (email: string) => void;
+  onLogin: (user: SessionUser) => void;
 }
 
 type AuthMode = "login" | "forgot" | "reset";
@@ -18,28 +19,60 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [sent, setSent] = useState(false);
+  const [resetToken, setResetToken] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  function submitLogin(event: FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get("resetToken");
+    if (token) {
+      const update = window.setTimeout(() => {
+        setResetToken(token);
+        setMode("reset");
+      }, 0);
+      return () => window.clearTimeout(update);
+    }
+  }, []);
+
+  async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
-    if (!email.includes("@") || password.length < 6) {
-      setError("Email atau kata sandi tidak sesuai.");
-      return;
+    setBusy(true);
+    try {
+      const result = await api<{ user: SessionUser }>("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email, password, remember: true }),
+      });
+      onLogin(result.user);
+    } catch (requestError) {
+      setError(messageOf(requestError));
+    } finally {
+      setBusy(false);
     }
-    onLogin(email);
   }
 
-  function submitForgot(event: FormEvent<HTMLFormElement>) {
+  async function submitForgot(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     if (!email.includes("@")) {
       setError("Masukkan alamat email yang valid.");
       return;
     }
-    setSent(true);
+    setBusy(true);
+    try {
+      const result = await api<{ message: string; resetToken?: string }>("/api/auth/forgot-password", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      setResetToken(result.resetToken ?? "");
+      setSent(true);
+    } catch (requestError) {
+      setError(messageOf(requestError));
+    } finally {
+      setBusy(false);
+    }
   }
 
-  function submitReset(event: FormEvent<HTMLFormElement>) {
+  async function submitReset(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     if (newPassword.length < 8) {
@@ -50,11 +83,28 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
       setError("Konfirmasi kata sandi belum sama.");
       return;
     }
-    setPassword(newPassword);
-    setNewPassword("");
-    setConfirmPassword("");
-    setSent(false);
-    setMode("login");
+    if (!resetToken) {
+      setError("Tautan reset tidak ditemukan. Minta tautan pemulihan baru.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api("/api/auth/reset-password", {
+        method: "POST",
+        body: JSON.stringify({ token: resetToken, password: newPassword }),
+      });
+      setPassword(newPassword);
+      setNewPassword("");
+      setConfirmPassword("");
+      setSent(false);
+      setResetToken("");
+      window.history.replaceState({}, "", window.location.pathname);
+      setMode("login");
+    } catch (requestError) {
+      setError(messageOf(requestError));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -168,8 +218,8 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
                   </button>
                 </div>
                 {error && <p className="form-error" role="alert">{error}</p>}
-                <button className="button primary auth-submit" type="submit">
-                  Masuk ke Dashboard <ArrowRight size={17} />
+                <button className="button primary auth-submit" type="submit" disabled={busy}>
+                  {busy ? "Memeriksa akses..." : "Masuk ke Dashboard"} <ArrowRight size={17} />
                 </button>
               </form>
               <div className="demo-access">
@@ -208,8 +258,8 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
                     </span>
                   </label>
                   {error && <p className="form-error" role="alert">{error}</p>}
-                  <button className="button primary auth-submit" type="submit">
-                    Kirim tautan pemulihan <ArrowRight size={17} />
+                  <button className="button primary auth-submit" type="submit" disabled={busy}>
+                    {busy ? "Mengirim..." : "Kirim tautan pemulihan"} <ArrowRight size={17} />
                   </button>
                 </form>
               ) : (
@@ -217,11 +267,13 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
                   <span className="success-panel-icon"><Mail size={25} /></span>
                   <h3>Email pemulihan terkirim</h3>
                   <p>
-                    Simulasi tautan reset telah dikirim ke <strong>{email}</strong>.
+                    Tautan reset telah dikirim ke <strong>{email}</strong>.
                   </p>
-                  <button className="button primary" type="button" onClick={() => setMode("reset")}>
-                    Buka halaman reset <ArrowRight size={17} />
-                  </button>
+                  {resetToken && (
+                    <button className="button primary" type="button" onClick={() => setMode("reset")}>
+                      Buka halaman reset <ArrowRight size={17} />
+                    </button>
+                  )}
                 </div>
               )}
             </>
@@ -258,8 +310,8 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
                   />
                 </label>
                 {error && <p className="form-error" role="alert">{error}</p>}
-                <button className="button primary auth-submit" type="submit">
-                  Simpan kata sandi <ArrowRight size={17} />
+                <button className="button primary auth-submit" type="submit" disabled={busy}>
+                  {busy ? "Menyimpan..." : "Simpan kata sandi"} <ArrowRight size={17} />
                 </button>
               </form>
             </>

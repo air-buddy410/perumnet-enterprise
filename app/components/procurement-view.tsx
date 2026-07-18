@@ -17,7 +17,8 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { api, downloadApiFile, messageOf } from "../api-client";
 import {
   formatCurrency,
   initialVendors,
@@ -25,7 +26,6 @@ import {
   Vendor,
   WorkOrder,
 } from "../data";
-import { currencyLine, downloadDocument } from "../pdf";
 
 interface ProcurementViewProps {
   notify: (message: string) => void;
@@ -58,6 +58,21 @@ export function ProcurementView({ notify }: ProcurementViewProps) {
   const [spkScope, setSpkScope] = useState("");
   const [spkCost, setSpkCost] = useState(0);
 
+  useEffect(() => {
+    let active = true;
+    Promise.all([api<Vendor[]>("/api/vendors"), api<WorkOrder[]>("/api/spks")])
+      .then(([vendorData, spkData]) => {
+        if (!active) return;
+        setVendors(vendorData);
+        setWorkOrders(spkData);
+        if (vendorData[0]) setSpkVendor(vendorData[0].name);
+      })
+      .catch((error) => notify(messageOf(error)));
+    return () => {
+      active = false;
+    };
+  }, [notify]);
+
   const filteredVendors = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return vendors.filter((vendor) => {
@@ -71,70 +86,79 @@ export function ProcurementView({ notify }: ProcurementViewProps) {
 
   const categories = ["Semua kategori", ...Array.from(new Set(vendors.map((vendor) => vendor.category)))];
 
-  function addVendor(event: FormEvent<HTMLFormElement>) {
+  async function addVendor(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!vendorName.trim() || !vendorContact.trim()) return;
-    const vendor: Vendor = {
-      id: `vendor-${Date.now()}`,
-      name: vendorName.trim(),
-      category: vendorCategory,
-      contact: vendorContact.trim(),
-      rate: vendorRate,
-      status: "Aktif",
-    };
-    setVendors((current) => [vendor, ...current]);
-    setSpkVendor(vendor.name);
-    setVendorName("");
-    setVendorContact("");
-    setVendorRate(0);
-    setShowVendorForm(false);
-    notify("Vendor baru berhasil ditambahkan.");
+    try {
+      const vendor = await api<Vendor>("/api/vendors", {
+        method: "POST",
+        body: JSON.stringify({
+          name: vendorName.trim(),
+          category: vendorCategory,
+          contact: vendorContact.trim(),
+          rate: vendorRate,
+          status: "Aktif",
+        }),
+      });
+      setVendors((current) => [vendor, ...current]);
+      setSpkVendor(vendor.name);
+      setVendorName("");
+      setVendorContact("");
+      setVendorRate(0);
+      setShowVendorForm(false);
+      notify("Vendor baru berhasil ditambahkan.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
-  function createSpk(event: FormEvent<HTMLFormElement>) {
+  async function createSpk(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!spkScope.trim() || spkCost <= 0) return;
-    setWorkOrders((current) => [
-      {
-        id: `spk-${Date.now()}`,
-        number: `SPK/PN/VII/2026/${String(22 + current.length).padStart(3, "0")}`,
-        vendor: spkVendor,
-        project: "Implementasi WiFi Resort Ubud",
-        scope: spkScope.trim(),
-        cost: spkCost,
-        status: "Draft",
-      },
-      ...current,
-    ]);
-    setSpkScope("");
-    setSpkCost(0);
-    setShowSpkForm(false);
-    setActiveTab("spk");
-    notify("SPK berhasil dibuat sebagai draft.");
+    const vendor = vendors.find((item) => item.name === spkVendor);
+    if (!vendor) return;
+    try {
+      const workOrder = await api<WorkOrder>("/api/spks", {
+        method: "POST",
+        body: JSON.stringify({
+          vendorId: vendor.id,
+          projectId: "project-1",
+          scope: spkScope.trim(),
+          cost: spkCost,
+          status: "Draft",
+        }),
+      });
+      setWorkOrders((current) => [workOrder, ...current]);
+      setSpkScope("");
+      setSpkCost(0);
+      setShowSpkForm(false);
+      setActiveTab("spk");
+      notify("SPK berhasil dibuat sebagai draft.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
-  function updateSpkStatus(id: string, status: WorkOrder["status"]) {
-    setWorkOrders((current) =>
-      current.map((workOrder) => (workOrder.id === id ? { ...workOrder, status } : workOrder)),
-    );
-    notify(`Status SPK diperbarui menjadi ${status}.`);
+  async function updateSpkStatus(id: string, status: WorkOrder["status"]) {
+    try {
+      const updated = await api<WorkOrder>(`/api/spks/${id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      });
+      setWorkOrders((current) => current.map((workOrder) => (workOrder.id === id ? updated : workOrder)));
+      notify(`Status SPK diperbarui menjadi ${status}.`);
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
   async function downloadSpk(workOrder: WorkOrder) {
-    await downloadDocument(
-      "Surat Perintah Kerja",
-      workOrder.number,
-      [
-        { label: "Vendor", value: workOrder.vendor },
-        { label: "Proyek", value: workOrder.project },
-        { label: "Lingkup kerja", value: workOrder.scope },
-        currencyLine("Biaya disepakati", workOrder.cost, true),
-        { label: "Status", value: workOrder.status },
-        { value: "Pihak pelaksana wajib menyelesaikan pekerjaan sesuai spesifikasi, jadwal, dan standar keselamatan kerja PerumNet Enterprise." },
-      ],
-      `${workOrder.number.replaceAll("/", "-")}.pdf`,
-    );
-    notify("SPK PDF berhasil dibuat.");
+    try {
+      await downloadApiFile(`/api/spks/${workOrder.id}/pdf`, `${workOrder.number.replaceAll("/", "-")}.pdf`);
+      notify("SPK PDF berhasil dibuat.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
   return (

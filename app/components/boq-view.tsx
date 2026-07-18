@@ -16,7 +16,8 @@ import {
   Trash2,
   Truck,
 } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { api, messageOf } from "../api-client";
 import { BoqItem, formatCurrency, initialBoqItems, ViewKey } from "../data";
 
 interface BoqViewProps {
@@ -49,6 +50,24 @@ export function BoqView({ navigate, notify }: BoqViewProps) {
   const [templateList, setTemplateList] = useState(templates);
   const [activeTemplate, setActiveTemplate] = useState("tpl-1");
 
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      api<{ items: BoqItem[] }>("/api/boq?projectId=project-1"),
+      api<typeof templates>("/api/boq/templates"),
+    ])
+      .then(([boq, savedTemplates]) => {
+        if (!active) return;
+        setItems(boq.items);
+        setTemplateList(savedTemplates);
+        setActiveTemplate(savedTemplates[0]?.id ?? "");
+      })
+      .catch((error) => notify(messageOf(error)));
+    return () => {
+      active = false;
+    };
+  }, [notify]);
+
   const totals = useMemo(() => {
     const cost = items.reduce((sum, item) => sum + item.quantity * item.costPrice, 0);
     const selling = items.reduce((sum, item) => sum + item.quantity * item.sellingPrice, 0);
@@ -68,49 +87,60 @@ export function BoqView({ navigate, notify }: BoqViewProps) {
     [items],
   );
 
-  function addItem(event: FormEvent<HTMLFormElement>) {
+  async function addItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!description.trim() || quantity < 1 || sellingPrice <= 0) return;
-    const item: BoqItem = {
-      id: `boq-${Date.now()}`,
-      category,
-      description: description.trim(),
-      quantity,
-      unit,
-      costPrice,
-      sellingPrice,
-    };
-    setItems((current) => [...current, item]);
-    setDescription("");
-    setQuantity(1);
-    setCostPrice(0);
-    setSellingPrice(0);
-    notify("Item BoQ berhasil ditambahkan.");
+    try {
+      const item = await api<BoqItem>("/api/boq/items?projectId=project-1", {
+        method: "POST",
+        body: JSON.stringify({ category, description: description.trim(), quantity, unit, costPrice, sellingPrice }),
+      });
+      setItems((current) => [...current, item]);
+      setDescription("");
+      setQuantity(1);
+      setCostPrice(0);
+      setSellingPrice(0);
+      notify("Item BoQ berhasil ditambahkan.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
-  function deleteItem(id: string) {
-    setItems((current) => current.filter((item) => item.id !== id));
-    notify("Item dihapus dari BoQ.");
+  async function deleteItem(id: string) {
+    try {
+      await api(`/api/boq/items/${id}?projectId=project-1`, { method: "DELETE" });
+      setItems((current) => current.filter((item) => item.id !== id));
+      notify("Item dihapus dari BoQ.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
-  function saveTemplate() {
+  async function saveTemplate() {
     const name = templateName.trim() || `Template BoQ ${templateList.length + 1}`;
-    const newTemplate = {
-      id: `tpl-${Date.now()}`,
-      name,
-      items: items.length,
-      lastUsed: "Baru saja",
-    };
-    setTemplateList((current) => [newTemplate, ...current]);
-    setActiveTemplate(newTemplate.id);
-    setTemplateName("");
-    notify("BoQ berhasil disimpan sebagai template.");
+    try {
+      const newTemplate = await api<(typeof templates)[number]>("/api/boq/templates", {
+        method: "POST",
+        body: JSON.stringify({ name, items }),
+      });
+      setTemplateList((current) => [newTemplate, ...current]);
+      setActiveTemplate(newTemplate.id);
+      setTemplateName("");
+      notify("BoQ berhasil disimpan sebagai template.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
-  function loadTemplate(id: string) {
-    setActiveTemplate(id);
-    setItems(initialBoqItems);
-    notify("Template dimuat ke BoQ aktif.");
+  async function loadTemplate(id: string) {
+    try {
+      const template = await api<{ id: string; items: BoqItem[] }>(`/api/boq/templates/${id}`);
+      setActiveTemplate(id);
+      setItems(template.items);
+      notify("Template dimuat ke BoQ aktif.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
   return (

@@ -1485,7 +1485,8 @@ h3 {
 }
 
 .notifications-dropdown > button,
-.profile-dropdown > button {
+.profile-dropdown > button,
+.search-dropdown > button {
   display: flex;
   width: 100%;
   align-items: center;
@@ -1498,7 +1499,8 @@ h3 {
 }
 
 .notifications-dropdown > button:hover,
-.profile-dropdown > button:hover {
+.profile-dropdown > button:hover,
+.search-dropdown > button:hover {
   background: #f6faf9;
 }
 
@@ -1516,6 +1518,27 @@ h3 {
   color: var(--muted);
   font-size: 9px;
   line-height: 1.4;
+}
+
+.search-dropdown {
+  left: 0;
+  right: auto;
+  width: min(420px, 80vw);
+}
+
+.search-dropdown > button > span {
+  display: grid;
+  gap: 2px;
+}
+
+.search-dropdown strong {
+  color: var(--navy);
+  font-size: 10px;
+}
+
+.search-dropdown small {
+  color: var(--muted);
+  font-size: 9px;
 }
 
 .notification-icon {

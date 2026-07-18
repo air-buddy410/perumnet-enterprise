@@ -15,7 +15,8 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { api, messageOf } from "../api-client";
 import { initialUsers, TeamUser } from "../data";
 
 interface UsersViewProps {
@@ -40,6 +41,18 @@ export function UsersView({ notify }: UsersViewProps) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<TeamUser["role"]>("Engineer");
 
+  useEffect(() => {
+    let active = true;
+    api<TeamUser[]>("/api/users")
+      .then((data) => {
+        if (active) setUsers(data);
+      })
+      .catch((error) => notify(messageOf(error)));
+    return () => {
+      active = false;
+    };
+  }, [notify]);
+
   const visibleUsers = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return users.filter((user) => {
@@ -50,43 +63,51 @@ export function UsersView({ notify }: UsersViewProps) {
     });
   }, [filter, query, users]);
 
-  function addUser(event: FormEvent<HTMLFormElement>) {
+  async function addUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!name.trim() || !email.includes("@")) return;
-    setUsers((current) => [
-      {
-        id: `user-${Date.now()}`,
-        name: name.trim(),
-        email: email.trim(),
-        role,
-        status: "Aktif",
-        lastActive: "Belum pernah masuk",
-      },
-      ...current,
-    ]);
-    setName("");
-    setEmail("");
-    setRole("Engineer");
-    setShowUserForm(false);
-    notify("Akun pengguna berhasil ditambahkan.");
+    try {
+      const user = await api<TeamUser>("/api/users", {
+        method: "POST",
+        body: JSON.stringify({ name: name.trim(), email: email.trim(), role, status: "Aktif" }),
+      });
+      setUsers((current) => [user, ...current]);
+      setName("");
+      setEmail("");
+      setRole("Engineer");
+      setShowUserForm(false);
+      notify("Akun pengguna berhasil ditambahkan.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
-  function updateRole(id: string, nextRole: TeamUser["role"]) {
-    setUsers((current) =>
-      current.map((user) => (user.id === id ? { ...user, role: nextRole } : user)),
-    );
-    notify(`Peran pengguna diubah menjadi ${nextRole}.`);
+  async function updateRole(id: string, nextRole: TeamUser["role"]) {
+    try {
+      const updated = await api<TeamUser>(`/api/users/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ role: nextRole }),
+      });
+      setUsers((current) => current.map((user) => (user.id === id ? updated : user)));
+      notify(`Peran pengguna diubah menjadi ${nextRole}.`);
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
-  function toggleUser(id: string) {
-    setUsers((current) =>
-      current.map((user) =>
-        user.id === id
-          ? { ...user, status: user.status === "Aktif" ? "Nonaktif" : "Aktif" }
-          : user,
-      ),
-    );
-    notify("Status akses pengguna diperbarui.");
+  async function toggleUser(id: string) {
+    const currentUser = users.find((user) => user.id === id);
+    if (!currentUser) return;
+    try {
+      const updated = await api<TeamUser>(`/api/users/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: currentUser.status === "Aktif" ? "Nonaktif" : "Aktif" }),
+      });
+      setUsers((current) => current.map((user) => (user.id === id ? updated : user)));
+      notify("Status akses pengguna diperbarui.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
   const activeCount = users.filter((user) => user.status === "Aktif").length;

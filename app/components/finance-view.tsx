@@ -16,7 +16,8 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { api, messageOf } from "../api-client";
 import {
   formatCompactCurrency,
   formatCurrency,
@@ -47,6 +48,18 @@ export function FinanceView({ notify }: FinanceViewProps) {
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState(0);
 
+  useEffect(() => {
+    let active = true;
+    api<Transaction[]>("/api/transactions")
+      .then((data) => {
+        if (active) setTransactions(data);
+      })
+      .catch((error) => notify(messageOf(error)));
+    return () => {
+      active = false;
+    };
+  }, [notify]);
+
   const totals = useMemo(() => {
     const income = transactions
       .filter((transaction) => transaction.type === "Pemasukan")
@@ -69,25 +82,34 @@ export function FinanceView({ notify }: FinanceViewProps) {
     );
   }, [query, transactions]);
 
-  function addTransaction(event: FormEvent<HTMLFormElement>) {
+  async function addTransaction(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!description.trim() || amount <= 0) return;
-    setTransactions((current) => [
-      {
-        id: `trx-${Date.now()}`,
-        date: "18 Jul 2026",
-        type: transactionType,
-        project,
-        description: description.trim(),
-        amount,
-        source: transactionType === "Pemasukan" ? "Manual" : "Operasional",
-      },
-      ...current,
-    ]);
-    setDescription("");
-    setAmount(0);
-    setShowTransactionForm(false);
-    notify("Transaksi berhasil dicatat.");
+    const projectIds: Record<string, string> = {
+      "Implementasi WiFi Resort Ubud": "project-1",
+      "CCTV & Network Warehouse": "project-2",
+      "Managed Service Kantor Cabang": "project-3",
+    };
+    try {
+      const transaction = await api<Transaction>("/api/transactions", {
+        method: "POST",
+        body: JSON.stringify({
+          projectId: projectIds[project],
+          date: new Date().toISOString().slice(0, 10),
+          type: transactionType,
+          description: description.trim(),
+          amount,
+          source: transactionType === "Pemasukan" ? "Manual" : "Operasional",
+        }),
+      });
+      setTransactions((current) => [transaction, ...current]);
+      setDescription("");
+      setAmount(0);
+      setShowTransactionForm(false);
+      notify("Transaksi berhasil dicatat.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
   function exportReport() {

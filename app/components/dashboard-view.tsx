@@ -16,7 +16,8 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { api, messageOf } from "../api-client";
 import {
   formatCompactCurrency,
   formatCurrency,
@@ -55,6 +56,18 @@ export function DashboardView({ navigate, notify }: DashboardViewProps) {
   const [clientName, setClientName] = useState("");
   const [location, setLocation] = useState("");
 
+  useEffect(() => {
+    let active = true;
+    api<Project[]>("/api/projects")
+      .then((data) => {
+        if (active) setProjectList(data);
+      })
+      .catch((error) => notify(messageOf(error)));
+    return () => {
+      active = false;
+    };
+  }, [notify]);
+
   const filteredProjects = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return projectList.filter((project) => {
@@ -82,31 +95,29 @@ export function DashboardView({ navigate, notify }: DashboardViewProps) {
     return { active, completed, value, paid };
   }, [projectList]);
 
-  function addProject(event: FormEvent<HTMLFormElement>) {
+  async function addProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!projectName.trim() || !clientName.trim()) return;
-    const newProject: Project = {
-      id: `project-${Date.now()}`,
-      code: `PN-2607-${String(projectList.length + 16).padStart(3, "0")}`,
-      name: projectName.trim(),
-      client: clientName.trim(),
-      location: location.trim() || "Bali",
-      status: "Draft",
-      progress: 0,
-      payment: "Belum Ada Tagihan",
-      paidRatio: 0,
-      startDate: "18 Jul 2026",
-      targetDate: "Belum ditentukan",
-      value: 0,
-      manager: "Dewa Mahardika",
-      team: ["DM"],
-    };
-    setProjectList((items) => [newProject, ...items]);
-    setProjectName("");
-    setClientName("");
-    setLocation("");
-    setShowNewProject(false);
-    notify("Proyek baru berhasil ditambahkan sebagai draft.");
+    try {
+      const newProject = await api<Project>("/api/projects", {
+        method: "POST",
+        body: JSON.stringify({
+          name: projectName.trim(),
+          client: clientName.trim(),
+          location: location.trim() || "Bali",
+          status: "Draft",
+          value: 0,
+        }),
+      });
+      setProjectList((items) => [newProject, ...items]);
+      setProjectName("");
+      setClientName("");
+      setLocation("");
+      setShowNewProject(false);
+      notify("Proyek baru berhasil ditambahkan sebagai draft.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
   return (

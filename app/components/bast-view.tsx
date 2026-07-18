@@ -11,7 +11,8 @@ import {
   Save,
   ShieldCheck,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { api, downloadApiFile, messageOf } from "../api-client";
 import { SignaturePad } from "./signature-pad";
 
 interface BastViewProps {
@@ -34,68 +35,87 @@ export function BastView({ notify }: BastViewProps) {
   const [clientSignature, setClientSignature] = useState("");
   const [engineerSignature, setEngineerSignature] = useState("");
   const [saved, setSaved] = useState(false);
+  const [bastId, setBastId] = useState("");
 
-  function saveBast() {
-    setSaved(true);
-    notify("BAST dan tanda tangan berhasil disimpan.");
+  useEffect(() => {
+    let active = true;
+    api<Array<{
+      id: string;
+      completionDate: string;
+      notes: string;
+      clientName: string;
+      clientRole: string;
+      clientSignature: string;
+      engineerName: string;
+      engineerSignature: string;
+      status: string;
+    }>>("/api/bast?projectId=project-1")
+      .then((records) => {
+        if (!active || !records[0]) return;
+        const record = records[0];
+        setBastId(record.id);
+        setDate(record.completionDate);
+        setNotes(record.notes);
+        setClientName(record.clientName);
+        setClientRole(record.clientRole);
+        setClientSignature(record.clientSignature);
+        setEngineerName(record.engineerName);
+        setEngineerSignature(record.engineerSignature);
+        setSaved(record.status === "Final");
+      })
+      .catch((error) => notify(messageOf(error)));
+    return () => {
+      active = false;
+    };
+  }, [notify]);
+
+  async function persistBast(status: "Draft" | "Final") {
+    const payload = {
+      projectId: "project-1",
+      completionDate: date,
+      notes,
+      installedItems,
+      clientName,
+      clientRole,
+      clientSignature,
+      engineerName,
+      engineerSignature,
+      status,
+    };
+    if (bastId) {
+      const record = await api<{ id: string }>(`/api/bast/${bastId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+      return record.id;
+    }
+    const record = await api<{ id: string }>("/api/bast", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    setBastId(record.id);
+    return record.id;
+  }
+
+  async function saveBast() {
+    try {
+      await persistBast("Draft");
+      setSaved(true);
+      notify("BAST dan tanda tangan berhasil disimpan.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
   async function downloadBast() {
-    const { jsPDF } = await import("jspdf");
-    const pdf = new jsPDF({ unit: "mm", format: "a4" });
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    pdf.setFillColor(4, 169, 159);
-    pdf.rect(0, 0, pageWidth, 18, "F");
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(13);
-    pdf.setTextColor(255, 255, 255);
-    pdf.text("PERUMNET ENTERPRISE", 15, 11.5);
-    pdf.setTextColor(49, 80, 94);
-    pdf.setFontSize(18);
-    pdf.text("BERITA ACARA SERAH TERIMA", pageWidth / 2, 33, { align: "center" });
-    pdf.setFontSize(9);
-    pdf.setFont("helvetica", "normal");
-    pdf.setTextColor(105, 121, 124);
-    pdf.text("BAST/PN/VIII/2026/014", pageWidth / 2, 40, { align: "center" });
-    pdf.setDrawColor(218, 231, 228);
-    pdf.line(15, 47, pageWidth - 15, 47);
-    pdf.setTextColor(37, 57, 65);
-    pdf.setFontSize(10);
-    const intro = `Pada tanggal ${new Date(date).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}, telah dilakukan serah terima pekerjaan proyek Implementasi WiFi Resort Ubud kepada Bali Serenity Resort.`;
-    pdf.text(pdf.splitTextToSize(intro, pageWidth - 30), 15, 57);
-    let y = 73;
-    installedItems.forEach((item, index) => {
-      pdf.setFont("helvetica", "bold");
-      pdf.text(`${index + 1}. ${item.name}`, 15, y);
-      pdf.setFont("helvetica", "normal");
-      pdf.text(`${item.quantity} · ${item.status}`, 115, y);
-      y += 8;
-    });
-    pdf.setDrawColor(218, 231, 228);
-    pdf.line(15, y + 2, pageWidth - 15, y + 2);
-    y += 12;
-    pdf.setFont("helvetica", "bold");
-    pdf.text("Catatan serah terima", 15, y);
-    pdf.setFont("helvetica", "normal");
-    pdf.text(pdf.splitTextToSize(notes, pageWidth - 30), 15, y + 7);
-    y += 34;
-    pdf.setFont("helvetica", "bold");
-    pdf.text("Pihak Klien", 15, y);
-    pdf.text("Pihak PerumNet", 112, y);
-    if (clientSignature) pdf.addImage(clientSignature, "PNG", 15, y + 5, 65, 25);
-    if (engineerSignature) pdf.addImage(engineerSignature, "PNG", 112, y + 5, 65, 25);
-    pdf.setDrawColor(150, 163, 164);
-    pdf.line(15, y + 34, 80, y + 34);
-    pdf.line(112, y + 34, 177, y + 34);
-    pdf.setFont("helvetica", "bold");
-    pdf.text(clientName, 15, y + 41);
-    pdf.text(engineerName, 112, y + 41);
-    pdf.setFont("helvetica", "normal");
-    pdf.setTextColor(105, 121, 124);
-    pdf.text(clientRole, 15, y + 47);
-    pdf.text("Project Manager", 112, y + 47);
-    pdf.save("BAST-PerumNet-014.pdf");
-    notify("BAST PDF bertanda tangan berhasil dibuat.");
+    try {
+      const id = await persistBast("Final");
+      setSaved(true);
+      await downloadApiFile(`/api/bast/${id}/pdf`, "BAST-PerumNet-014.pdf");
+      notify("BAST PDF bertanda tangan berhasil dibuat.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
   const signaturesComplete = Boolean(clientSignature && engineerSignature);

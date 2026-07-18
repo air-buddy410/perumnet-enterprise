@@ -14,9 +14,9 @@ import {
   Send,
   X,
 } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { api, downloadApiFile, messageOf } from "../api-client";
 import { formatCurrency, initialBoqItems, initialInvoices, Invoice } from "../data";
-import { currencyLine, downloadDocument } from "../pdf";
 
 interface BillingViewProps {
   notify: (message: string) => void;
@@ -27,18 +27,37 @@ type BillingTab = "quotation" | "invoice";
 export function BillingView({ notify }: BillingViewProps) {
   const [activeTab, setActiveTab] = useState<BillingTab>("quotation");
   const [invoices, setInvoices] = useState<Invoice[]>(initialInvoices);
+  const [quotationItems, setQuotationItems] = useState(initialBoqItems);
   const [showInvoiceForm, setShowInvoiceForm] = useState(false);
   const [invoiceType, setInvoiceType] = useState("Termin 2");
   const [invoiceAmount, setInvoiceAmount] = useState(46_862_500);
   const [dueDate, setDueDate] = useState("2026-08-02");
 
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      api<Invoice[]>("/api/invoices?projectId=project-1"),
+      api<{ items: typeof initialBoqItems }>("/api/boq?projectId=project-1"),
+    ])
+      .then(([invoiceData, boq]) => {
+        if (active) {
+          setInvoices(invoiceData);
+          setQuotationItems(boq.items);
+        }
+      })
+      .catch((error) => notify(messageOf(error)));
+    return () => {
+      active = false;
+    };
+  }, [notify]);
+
   const quotationTotal = useMemo(
     () =>
-      initialBoqItems.reduce(
+      quotationItems.reduce(
         (sum, item) => sum + item.quantity * item.sellingPrice,
         0,
       ),
-    [],
+    [quotationItems],
   );
   const paidTotal = invoices
     .filter((invoice) => invoice.status === "Lunas")
@@ -48,77 +67,56 @@ export function BillingView({ notify }: BillingViewProps) {
     .reduce((sum, invoice) => sum + invoice.amount, 0);
 
   async function downloadQuotation() {
-    await downloadDocument(
-      "Quotation",
-      "QUO/PN/VII/2026/027",
-      [
-        { label: "Klien", value: "Bali Serenity Resort" },
-        { label: "Proyek", value: "Implementasi WiFi Resort Ubud" },
-        { label: "Tanggal", value: "18 Juli 2026" },
-        ...initialBoqItems.map((item) => ({
-          label: `${item.quantity} ${item.unit}`,
-          value: `${item.description} — ${formatCurrency(item.quantity * item.sellingPrice)}`,
-        })),
-        currencyLine("Total penawaran", quotationTotal, true),
-        { value: "Harga sudah termasuk instalasi, konfigurasi, testing, dan dokumentasi pekerjaan." },
-      ],
-      "Quotation-PerumNet-QUO-027.pdf",
-    );
-    notify("Quotation PDF berhasil dibuat.");
+    try {
+      await downloadApiFile("/api/projects/project-1/quotation.pdf", "Quotation-PerumNet.pdf");
+      notify("Quotation PDF berhasil dibuat.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
   async function downloadInvoice(invoice: Invoice) {
-    await downloadDocument(
-      "Invoice",
-      invoice.number,
-      [
-        { label: "Klien", value: "Bali Serenity Resort" },
-        { label: "Proyek", value: "Implementasi WiFi Resort Ubud" },
-        { label: "Jenis tagihan", value: invoice.type },
-        { label: "Tanggal terbit", value: invoice.issueDate },
-        { label: "Jatuh tempo", value: invoice.dueDate },
-        currencyLine("Nilai tagihan", invoice.amount, true),
-        { label: "Status", value: invoice.status },
-        { value: "Pembayaran dapat dilakukan melalui rekening perusahaan yang tercantum pada perjanjian kerja sama." },
-      ],
-      `${invoice.number.replaceAll("/", "-")}.pdf`,
-    );
-    notify("Invoice PDF berhasil dibuat.");
+    try {
+      await downloadApiFile(`/api/invoices/${invoice.id}/pdf`, `${invoice.number.replaceAll("/", "-")}.pdf`);
+      notify("Invoice PDF berhasil dibuat.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
-  function confirmPayment(id: string) {
-    setInvoices((current) =>
-      current.map((invoice) =>
-        invoice.id === id
-          ? { ...invoice, status: "Lunas", paidDate: "18 Jul 2026" }
-          : invoice,
-      ),
-    );
-    notify("Pembayaran dikonfirmasi dan ringkasan proyek diperbarui.");
+  async function confirmPayment(id: string) {
+    try {
+      const updated = await api<Invoice>(`/api/invoices/${id}/payment`, {
+        method: "POST",
+        body: JSON.stringify({ paidDate: new Date().toISOString().slice(0, 10) }),
+      });
+      setInvoices((current) => current.map((invoice) => (invoice.id === id ? updated : invoice)));
+      notify("Pembayaran dikonfirmasi dan ringkasan proyek diperbarui.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
-  function createInvoice(event: FormEvent<HTMLFormElement>) {
+  async function createInvoice(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (invoiceAmount <= 0) return;
-    const nextNumber = `INV/PN/VII/2026/${String(45 + invoices.length).padStart(3, "0")}`;
-    setInvoices((current) => [
-      {
-        id: `inv-${Date.now()}`,
-        number: nextNumber,
-        type: invoiceType,
-        issueDate: "18 Jul 2026",
-        dueDate: new Date(dueDate).toLocaleDateString("id-ID", {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
+    try {
+      const invoice = await api<Invoice>("/api/invoices", {
+        method: "POST",
+        body: JSON.stringify({
+          projectId: "project-1",
+          type: invoiceType,
+          issueDate: new Date().toISOString().slice(0, 10),
+          dueDate,
+          amount: invoiceAmount,
         }),
-        amount: invoiceAmount,
-        status: "Belum Lunas",
-      },
-      ...current,
-    ]);
-    setShowInvoiceForm(false);
-    notify("Invoice baru berhasil diterbitkan.");
+      });
+      setInvoices((current) => [invoice, ...current]);
+      setShowInvoiceForm(false);
+      notify("Invoice baru berhasil diterbitkan.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
   return (
@@ -215,7 +213,7 @@ export function BillingView({ notify }: BillingViewProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  {initialBoqItems.map((item, index) => (
+                  {quotationItems.map((item, index) => (
                     <tr key={item.id}>
                       <td>{index + 1}</td>
                       <td>

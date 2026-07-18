@@ -61,6 +61,8 @@ export interface Vendor {
 export interface WorkOrder {
   id: string;
   number: string;
+  vendorId?: string;
+  projectId?: string;
   vendor: string;
   project: string;
   scope: string;
