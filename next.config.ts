@@ -8,6 +8,7 @@ const basePath =
 
 const nextConfig: NextConfig = {
   basePath,
+  poweredByHeader: false,
 };
 
 export default nextConfig;
