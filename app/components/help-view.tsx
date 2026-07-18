@@ -74,7 +74,7 @@ export function HelpView({ language }: HelpViewProps) {
       {!visible.length && <section className="panel empty-state"><Search size={28} /><h3>{id ? "Panduan tidak ditemukan" : "No guide found"}</h3><p>{id ? "Coba gunakan kata kunci yang lebih singkat." : "Try a shorter search term."}</p></section>}
       <section className="help-support panel">
         <div><span className="metric-icon green"><ShieldCheck size={20} /></span><span><strong>{id ? "Masih membutuhkan bantuan?" : "Still need help?"}</strong><small>{id ? "Hubungi Admin workspace dengan menyertakan nama menu dan pesan error yang tampil." : "Contact your workspace Admin and include the menu name and the error message shown."}</small></span></div>
-        <a className="button secondary" href="mailto:support@perumnet.id">{id ? "Email dukungan" : "Email support"}</a>
+        <a className="button secondary" href="mailto:it@perumnet.id">{id ? "Email dukungan" : "Email support"}</a>
       </section>
     </div>
   );
