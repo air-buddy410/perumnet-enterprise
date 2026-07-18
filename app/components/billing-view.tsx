@@ -21,15 +21,17 @@ import { appPath } from "../paths";
 
 interface BillingViewProps {
   notify: (message: string) => void;
+  projectId: string;
 }
 
 type BillingTab = "quotation" | "invoice";
 
-export function BillingView({ notify }: BillingViewProps) {
+export function BillingView({ notify, projectId }: BillingViewProps) {
   const [activeTab, setActiveTab] = useState<BillingTab>("quotation");
   const [invoices, setInvoices] = useState<Invoice[]>(initialInvoices);
   const [quotationItems, setQuotationItems] = useState(initialBoqItems);
   const [showInvoiceForm, setShowInvoiceForm] = useState(false);
+  const [quotationSent, setQuotationSent] = useState(false);
   const [invoiceType, setInvoiceType] = useState("Termin 2");
   const [invoiceAmount, setInvoiceAmount] = useState(46_862_500);
   const [dueDate, setDueDate] = useState("2026-08-02");
@@ -37,20 +39,22 @@ export function BillingView({ notify }: BillingViewProps) {
   useEffect(() => {
     let active = true;
     Promise.all([
-      api<Invoice[]>("/api/invoices?projectId=project-1"),
-      api<{ items: typeof initialBoqItems }>("/api/boq?projectId=project-1"),
+      api<Invoice[]>(`/api/invoices?projectId=${encodeURIComponent(projectId)}`),
+      api<{ items: typeof initialBoqItems }>(`/api/boq?projectId=${encodeURIComponent(projectId)}`),
+      api<{ status: string }>(`/api/quotations?projectId=${encodeURIComponent(projectId)}`),
     ])
-      .then(([invoiceData, boq]) => {
+      .then(([invoiceData, boq, quotation]) => {
         if (active) {
           setInvoices(invoiceData);
           setQuotationItems(boq.items);
+          setQuotationSent(quotation.status === "Sent");
         }
       })
       .catch((error) => notify(messageOf(error)));
     return () => {
       active = false;
     };
-  }, [notify]);
+  }, [notify, projectId]);
 
   const quotationTotal = useMemo(
     () =>
@@ -69,7 +73,7 @@ export function BillingView({ notify }: BillingViewProps) {
 
   async function downloadQuotation() {
     try {
-      await downloadApiFile("/api/projects/project-1/quotation.pdf", "Quotation-PerumNet.pdf");
+      await downloadApiFile(`/api/projects/${projectId}/quotation.pdf`, "Quotation-PerumNet.pdf");
       notify("Quotation PDF berhasil dibuat.");
     } catch (error) {
       notify(messageOf(error));
@@ -105,7 +109,7 @@ export function BillingView({ notify }: BillingViewProps) {
       const invoice = await api<Invoice>("/api/invoices", {
         method: "POST",
         body: JSON.stringify({
-          projectId: "project-1",
+          projectId,
           type: invoiceType,
           issueDate: new Date().toISOString().slice(0, 10),
           dueDate,
@@ -120,6 +124,31 @@ export function BillingView({ notify }: BillingViewProps) {
     }
   }
 
+  async function shareDocument() {
+    const url = `${window.location.origin}${appPath("/")}?module=billing&project=${encodeURIComponent(projectId)}`;
+    try {
+      if (navigator.share) await navigator.share({ title: "PerumNet Enterprise — Quotation", url });
+      else await navigator.clipboard.writeText(url);
+      notify("Tautan workspace dokumen berhasil dibagikan.");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      notify(messageOf(error));
+    }
+  }
+
+  async function markQuotationSent() {
+    try {
+      await api(`/api/quotations?projectId=${encodeURIComponent(projectId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "Sent" }),
+      });
+      setQuotationSent(true);
+      notify("Quotation ditandai sebagai terkirim.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
+  }
+
   return (
     <div className="page-stack" data-testid="billing-view">
       <section className="page-title-row">
@@ -129,7 +158,7 @@ export function BillingView({ notify }: BillingViewProps) {
           <p>Buat penawaran resmi dan pantau pembayaran proyek dalam satu alur.</p>
         </div>
         <div className="title-actions">
-          <button className="button secondary" type="button" onClick={() => notify("Tautan dokumen disalin untuk dikirim ke klien.")}>
+          <button className="button secondary" type="button" onClick={shareDocument}>
             <Send size={16} /> Bagikan
           </button>
           <button className="button primary" type="button" onClick={() => { setActiveTab("invoice"); setShowInvoiceForm(true); }}>
@@ -264,13 +293,13 @@ export function BillingView({ notify }: BillingViewProps) {
                   <span><Check size={14} /></span>
                   <div><strong>Quotation dibuat</strong><small>QUO/PN/VII/2026/027</small></div>
                 </div>
-                <div className="active">
+                <div className={quotationSent ? "done" : "active"}>
                   <span><Mail size={14} /></span>
-                  <div><strong>Menunggu persetujuan</strong><small>Belum dikirim ke klien</small></div>
+                  <div><strong>{quotationSent ? "Sudah dikirim" : "Menunggu persetujuan"}</strong><small>{quotationSent ? "Status diperbarui pada sesi ini" : "Belum dikirim ke klien"}</small></div>
                 </div>
               </div>
-              <button className="button primary full-width" type="button" onClick={() => notify("Quotation ditandai sebagai terkirim ke klien.")}>
-                <Send size={16} /> Tandai sudah dikirim
+              <button className="button primary full-width" type="button" disabled={quotationSent} onClick={markQuotationSent}>
+                <Send size={16} /> {quotationSent ? "Sudah dikirim" : "Tandai sudah dikirim"}
               </button>
             </section>
             <section className="panel">

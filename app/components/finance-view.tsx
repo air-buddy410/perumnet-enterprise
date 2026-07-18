@@ -27,6 +27,7 @@ import {
 
 interface FinanceViewProps {
   notify: (message: string) => void;
+  projectId?: string;
 }
 
 const chartData = [
@@ -38,10 +39,12 @@ const chartData = [
   { month: "Jul", income: 123, expense: 77 },
 ];
 
-export function FinanceView({ notify }: FinanceViewProps) {
+export function FinanceView({ notify, projectId }: FinanceViewProps) {
   const [transactions, setTransactions] = useState(initialTransactions);
   const [period, setPeriod] = useState("6 bulan");
   const [query, setQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState<"Semua" | Transaction["type"]>("Semua");
+  const [filterOpen, setFilterOpen] = useState(false);
   const [showTransactionForm, setShowTransactionForm] = useState(false);
   const [transactionType, setTransactionType] = useState<Transaction["type"]>("Pemasukan");
   const [project, setProject] = useState("Implementasi WiFi Resort Ubud");
@@ -50,7 +53,7 @@ export function FinanceView({ notify }: FinanceViewProps) {
 
   useEffect(() => {
     let active = true;
-    api<Transaction[]>("/api/transactions")
+    api<Transaction[]>(`/api/transactions${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`)
       .then((data) => {
         if (active) setTransactions(data);
       })
@@ -58,7 +61,7 @@ export function FinanceView({ notify }: FinanceViewProps) {
     return () => {
       active = false;
     };
-  }, [notify]);
+  }, [notify, projectId]);
 
   const totals = useMemo(() => {
     const income = transactions
@@ -74,13 +77,14 @@ export function FinanceView({ notify }: FinanceViewProps) {
     const normalized = query.trim().toLowerCase();
     return transactions.filter(
       (transaction) =>
-        !normalized ||
+        (typeFilter === "Semua" || transaction.type === typeFilter) &&
+        (!normalized ||
         [transaction.project, transaction.description, transaction.source]
           .join(" ")
           .toLowerCase()
-          .includes(normalized),
+          .includes(normalized)),
     );
-  }, [query, transactions]);
+  }, [query, transactions, typeFilter]);
 
   async function addTransaction(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -237,7 +241,8 @@ export function FinanceView({ notify }: FinanceViewProps) {
           <div><span className="eyebrow">BUKU KAS</span><h2>Riwayat transaksi</h2></div>
           <div className="project-tools">
             <label className="search-field compact"><Search size={16} /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Cari transaksi..." /></label>
-            <button className="button subtle small" type="button" onClick={() => notify("Filter transaksi siap digunakan.")}><Filter size={15} /> Filter</button>
+            <button className={`button subtle small ${filterOpen ? "active" : ""}`} type="button" aria-expanded={filterOpen} onClick={() => setFilterOpen((value) => !value)}><Filter size={15} /> Filter</button>
+            {filterOpen && <label className="select-compact"><select aria-label="Filter jenis transaksi" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as typeof typeFilter)}><option>Semua</option><option>Pemasukan</option><option>Pengeluaran</option></select><ChevronDown size={14} /></label>}
           </div>
         </div>
         <div className="table-scroll">

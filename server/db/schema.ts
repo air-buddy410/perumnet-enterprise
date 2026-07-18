@@ -55,6 +55,31 @@ export const passwordResetTokens = sqliteTable(
   ],
 );
 
+export const userProfiles = sqliteTable("user_profiles", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  phone: text("phone"),
+  jobTitle: text("job_title"),
+  bio: text("bio"),
+  address: text("address"),
+  birthDate: text("birth_date"),
+  avatarMimeType: text("avatar_mime_type"),
+  avatarStorageUrl: text("avatar_storage_url"),
+  avatarContentBase64: text("avatar_content_base64"),
+  preferredLanguage: text("preferred_language").notNull().default("id"),
+  emailNotifications: integer("email_notifications").notNull().default(1),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const userPermissions = sqliteTable("user_permissions", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  permissionsJson: text("permissions_json").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const projects = sqliteTable(
   "projects",
   {

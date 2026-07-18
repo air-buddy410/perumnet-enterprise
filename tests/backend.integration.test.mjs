@@ -179,6 +179,12 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   const quotation = await request(`/api/projects/${project.id}/quotation.pdf`);
   assert.equal(quotation.status, 200);
   assert.equal(Buffer.from(await quotation.arrayBuffer()).subarray(0, 4).toString(), "%PDF");
+  const sentQuotation = await json(`/api/quotations?projectId=${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Sent" }),
+  });
+  assert.equal(sentQuotation.status, "Sent");
+  assert.equal((await json(`/api/quotations?projectId=${project.id}`)).status, "Sent");
 
   const template = await json(
     "/api/boq/templates",
@@ -297,11 +303,102 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
 
   const users = await json("/api/users");
   assert.ok(users.some((user) => user.role === "Finance"));
+  assert.equal(users.find((user) => user.role === "Admin").permissions.users, "manage");
+
+  const updatedProfile = await json("/api/profile", {
+    method: "PATCH",
+    body: JSON.stringify({
+      name: "Dewa Mahardika",
+      email: "admin@perumnet.id",
+      phone: "+628123456789",
+      jobTitle: "Enterprise Administrator",
+      bio: "Mengelola operasional PerumNet Enterprise.",
+      address: "Gianyar, Bali",
+      birthDate: "1990-01-01",
+    }),
+  });
+  assert.equal(updatedProfile.phone, "+628123456789");
+
+  const settings = await json("/api/settings", {
+    method: "PATCH",
+    body: JSON.stringify({ preferredLanguage: "en", emailNotifications: false }),
+  });
+  assert.equal(settings.preferredLanguage, "en");
+  assert.equal((await json("/api/auth/session")).user.preferredLanguage, "en");
+
+  const avatarForm = new FormData();
+  avatarForm.set(
+    "file",
+    new File(
+      [Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64")],
+      "avatar.png",
+      { type: "image/png" },
+    ),
+  );
+  const avatar = await json("/api/profile/avatar", { method: "POST", body: avatarForm });
+  assert.match(avatar.avatarUrl, /^\/api\/profile\/avatar\//);
+  const avatarResponse = await request(avatar.avatarUrl);
+  assert.equal(avatarResponse.status, 200);
+  assert.equal(avatarResponse.headers.get("content-type"), "image/png");
+
+  const readOnlyUser = await json(
+    "/api/users",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Viewer Integrasi",
+        email: "viewer.integration@perumnet.id",
+        password: "Viewer-Aman-2026",
+        role: "Engineer",
+        status: "Aktif",
+        permissions: {
+          dashboard: "view",
+          projects: "view",
+          boq: "none",
+          billing: "none",
+          procurement: "none",
+          bast: "none",
+          finance: "none",
+          users: "none",
+          settings: "view",
+        },
+      }),
+    },
+    201,
+  );
+  assert.equal(readOnlyUser.permissions.projects, "view");
+  assert.equal(readOnlyUser.permissions.bast, "none");
   const audit = await json("/api/audit-logs");
   assert.ok(audit.some((entry) => entry.entity === "invoice"));
 
   await json(`/api/boq/items/${boqItem.id}?projectId=${project.id}`, { method: "DELETE" }, 204);
   await json(`/api/boq/templates/${template.id}`, { method: "DELETE" }, 204);
+
+  await json("/api/auth/logout", { method: "POST" });
+  cookie = "";
+  const viewerLogin = await json("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "viewer.integration@perumnet.id",
+      password: "Viewer-Aman-2026",
+      remember: false,
+    }),
+  });
+  assert.equal(viewerLogin.user.permissions.projects, "view");
+  assert.equal((await request("/api/projects")).status, 200);
+  assert.equal((await request("/api/projects", {
+    method: "POST",
+    body: JSON.stringify({
+      name: "Tidak Boleh Dibuat",
+      client: "Klien",
+      location: "Bali",
+      status: "Draft",
+      value: 0,
+    }),
+  })).status, 403);
+  assert.equal((await request("/api/bast")).status, 403);
+  assert.equal((await request("/api/users")).status, 403);
+  assert.deepEqual(await json("/api/search?q=Vendor"), []);
 
   await json("/api/auth/logout", { method: "POST" });
   cookie = "";

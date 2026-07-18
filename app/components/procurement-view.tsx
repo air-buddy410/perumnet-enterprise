@@ -29,6 +29,7 @@ import {
 
 interface ProcurementViewProps {
   notify: (message: string) => void;
+  projectId: string;
 }
 
 type ProcurementTab = "vendor" | "spk";
@@ -42,13 +43,14 @@ function spkStatusClass(status: WorkOrder["status"]) {
   return "neutral";
 }
 
-export function ProcurementView({ notify }: ProcurementViewProps) {
+export function ProcurementView({ notify, projectId }: ProcurementViewProps) {
   const [activeTab, setActiveTab] = useState<ProcurementTab>("vendor");
   const [vendors, setVendors] = useState(initialVendors);
   const [workOrders, setWorkOrders] = useState(initialWorkOrders);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("Semua kategori");
   const [showVendorForm, setShowVendorForm] = useState(false);
+  const [editingVendorId, setEditingVendorId] = useState("");
   const [showSpkForm, setShowSpkForm] = useState(false);
   const [vendorName, setVendorName] = useState("");
   const [vendorCategory, setVendorCategory] = useState("Teknisi Jaringan");
@@ -85,13 +87,35 @@ export function ProcurementView({ notify }: ProcurementViewProps) {
   }, [category, query, vendors]);
 
   const categories = ["Semua kategori", ...Array.from(new Set(vendors.map((vendor) => vendor.category)))];
+  const scopedWorkOrders = workOrders.filter(
+    (workOrder) => !projectId || !workOrder.projectId || workOrder.projectId === projectId,
+  );
+
+  function openNewVendor() {
+    setEditingVendorId("");
+    setVendorName("");
+    setVendorCategory("Teknisi Jaringan");
+    setVendorContact("");
+    setVendorRate(0);
+    setShowVendorForm(true);
+  }
+
+  function openEditVendor(vendor: Vendor) {
+    setEditingVendorId(vendor.id);
+    setVendorName(vendor.name);
+    setVendorCategory(vendor.category);
+    setVendorContact(vendor.contact);
+    setVendorRate(vendor.rate);
+    setShowVendorForm(true);
+  }
 
   async function addVendor(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!vendorName.trim() || !vendorContact.trim()) return;
+    const isEditing = Boolean(editingVendorId);
     try {
-      const vendor = await api<Vendor>("/api/vendors", {
-        method: "POST",
+      const vendor = await api<Vendor>(isEditing ? `/api/vendors/${editingVendorId}` : "/api/vendors", {
+        method: isEditing ? "PATCH" : "POST",
         body: JSON.stringify({
           name: vendorName.trim(),
           category: vendorCategory,
@@ -100,13 +124,14 @@ export function ProcurementView({ notify }: ProcurementViewProps) {
           status: "Aktif",
         }),
       });
-      setVendors((current) => [vendor, ...current]);
+      setVendors((current) => isEditing ? current.map((item) => item.id === vendor.id ? vendor : item) : [vendor, ...current]);
       setSpkVendor(vendor.name);
       setVendorName("");
       setVendorContact("");
       setVendorRate(0);
       setShowVendorForm(false);
-      notify("Vendor baru berhasil ditambahkan.");
+      setEditingVendorId("");
+      notify(isEditing ? "Data vendor berhasil diperbarui." : "Vendor baru berhasil ditambahkan.");
     } catch (error) {
       notify(messageOf(error));
     }
@@ -122,7 +147,7 @@ export function ProcurementView({ notify }: ProcurementViewProps) {
         method: "POST",
         body: JSON.stringify({
           vendorId: vendor.id,
-          projectId: "project-1",
+          projectId,
           scope: spkScope.trim(),
           cost: spkCost,
           status: "Draft",
@@ -170,7 +195,7 @@ export function ProcurementView({ notify }: ProcurementViewProps) {
           <p>Kelola mitra kerja dan Surat Perintah Kerja secara terpusat.</p>
         </div>
         <div className="title-actions">
-          <button className="button secondary" type="button" onClick={() => { setActiveTab("vendor"); setShowVendorForm(true); }}>
+          <button className="button secondary" type="button" onClick={() => { setActiveTab("vendor"); openNewVendor(); }}>
             <Plus size={16} /> Tambah vendor
           </button>
           <button className="button primary" type="button" onClick={() => { setActiveTab("spk"); setShowSpkForm(true); }}>
@@ -187,12 +212,12 @@ export function ProcurementView({ notify }: ProcurementViewProps) {
         </article>
         <article className="metric-card">
           <span className="metric-icon blue"><FileText size={20} /></span>
-          <div className="metric-main"><span>SPK berjalan</span><strong>{workOrders.filter((item) => item.status === "Dikerjakan").length}</strong></div>
+          <div className="metric-main"><span>SPK berjalan</span><strong>{scopedWorkOrders.filter((item) => item.status === "Dikerjakan").length}</strong></div>
           <span className="metric-change">2 proyek</span>
         </article>
         <article className="metric-card">
           <span className="metric-icon orange"><UsersRound size={20} /></span>
-          <div className="metric-main"><span>Nilai SPK aktif</span><strong>{formatCurrency(workOrders.filter((item) => item.status !== "Selesai").reduce((sum, item) => sum + item.cost, 0))}</strong></div>
+          <div className="metric-main"><span>Nilai SPK aktif</span><strong>{formatCurrency(scopedWorkOrders.filter((item) => item.status !== "Selesai").reduce((sum, item) => sum + item.cost, 0))}</strong></div>
           <span className="metric-change warning-text">Perlu rekonsiliasi</span>
         </article>
       </section>
@@ -202,7 +227,7 @@ export function ProcurementView({ notify }: ProcurementViewProps) {
           <Store size={17} /> Daftar vendor <span className="tab-count">{vendors.length}</span>
         </button>
         <button role="tab" aria-selected={activeTab === "spk"} className={activeTab === "spk" ? "active" : ""} type="button" onClick={() => setActiveTab("spk")}>
-          <FileText size={17} /> Daftar SPK <span className="tab-count">{workOrders.length}</span>
+          <FileText size={17} /> Daftar SPK <span className="tab-count">{scopedWorkOrders.length}</span>
         </button>
       </div>
 
@@ -233,7 +258,7 @@ export function ProcurementView({ notify }: ProcurementViewProps) {
                 <div className="vendor-card-head">
                   <span className={`vendor-logo variant-${index % 4}`}><Building2 size={21} /></span>
                   <span className={`status-badge ${vendor.status === "Aktif" ? "success" : "neutral"}`}>{vendor.status}</span>
-                  <button className="icon-button" type="button" aria-label={`Menu ${vendor.name}`} onClick={() => notify("Aksi edit vendor tersedia pada versi frontend ini.")}><MoreHorizontal size={17} /></button>
+                  <button className="icon-button" type="button" aria-label={`Edit ${vendor.name}`} onClick={() => openEditVendor(vendor)}><MoreHorizontal size={17} /></button>
                 </div>
                 <div className="vendor-card-copy">
                   <strong>{vendor.name}</strong>
@@ -267,7 +292,7 @@ export function ProcurementView({ notify }: ProcurementViewProps) {
             <button className="button primary small" type="button" onClick={() => setShowSpkForm(true)}><Plus size={15} /> SPK baru</button>
           </div>
           <div className="spk-list">
-            {workOrders.map((workOrder) => (
+            {scopedWorkOrders.map((workOrder) => (
               <article className="spk-row" key={workOrder.id}>
                 <span className="spk-document-icon"><FileText size={20} /></span>
                 <div className="spk-primary">
@@ -300,7 +325,7 @@ export function ProcurementView({ notify }: ProcurementViewProps) {
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowVendorForm(false)}>
           <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="vendor-form-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <div><span className="eyebrow">VENDOR BARU</span><h2 id="vendor-form-title">Tambah mitra kerja</h2></div>
+              <div><span className="eyebrow">{editingVendorId ? "EDIT VENDOR" : "VENDOR BARU"}</span><h2 id="vendor-form-title">{editingVendorId ? "Perbarui mitra kerja" : "Tambah mitra kerja"}</h2></div>
               <button className="icon-button" type="button" aria-label="Tutup" onClick={() => setShowVendorForm(false)}><X size={18} /></button>
             </div>
             <form className="form-grid" onSubmit={addVendor}>
@@ -308,7 +333,7 @@ export function ProcurementView({ notify }: ProcurementViewProps) {
               <label className="field full"><span>Kategori</span><select value={vendorCategory} onChange={(event) => setVendorCategory(event.target.value)}><option>Teknisi Jaringan</option><option>Splicing Fiber Optic</option><option>Instalasi CCTV</option><option>Supplier Perangkat</option></select></label>
               <label className="field"><span>Kontak</span><input required value={vendorContact} onChange={(event) => setVendorContact(event.target.value)} placeholder="08xx xxxx xxxx" /></label>
               <label className="field"><span>Tarif standar / hari</span><input type="number" min="0" value={vendorRate || ""} onChange={(event) => setVendorRate(Number(event.target.value))} placeholder="0" /></label>
-              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowVendorForm(false)}>Batal</button><button className="button primary" type="submit"><Plus size={16} /> Simpan vendor</button></div>
+              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowVendorForm(false)}>Batal</button><button className="button primary" type="submit"><Plus size={16} /> {editingVendorId ? "Simpan perubahan" : "Simpan vendor"}</button></div>
             </form>
           </section>
         </div>

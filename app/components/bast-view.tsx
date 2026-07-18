@@ -18,6 +18,7 @@ import { SignaturePad } from "./signature-pad";
 
 interface BastViewProps {
   notify: (message: string) => void;
+  projectId: string;
 }
 
 const installedItems = [
@@ -27,7 +28,7 @@ const installedItems = [
   { name: "Controller & konfigurasi SSID", quantity: "1 paket", status: "Aktif" },
 ];
 
-export function BastView({ notify }: BastViewProps) {
+export function BastView({ notify, projectId }: BastViewProps) {
   const [clientName, setClientName] = useState("I Made Surya Wijaya");
   const [clientRole, setClientRole] = useState("General Manager");
   const [engineerName, setEngineerName] = useState("Dewa Mahardika");
@@ -50,7 +51,7 @@ export function BastView({ notify }: BastViewProps) {
       engineerName: string;
       engineerSignature: string;
       status: string;
-    }>>("/api/bast?projectId=project-1")
+    }>>(`/api/bast?projectId=${encodeURIComponent(projectId)}`)
       .then((records) => {
         if (!active || !records[0]) return;
         const record = records[0];
@@ -68,11 +69,11 @@ export function BastView({ notify }: BastViewProps) {
     return () => {
       active = false;
     };
-  }, [notify]);
+  }, [notify, projectId]);
 
   async function persistBast(status: "Draft" | "Final") {
     const payload = {
-      projectId: "project-1",
+      projectId,
       completionDate: date,
       notes,
       installedItems,

@@ -6,7 +6,10 @@ export type ViewKey =
   | "procurement"
   | "bast"
   | "finance"
-  | "users";
+  | "users"
+  | "profile"
+  | "settings"
+  | "help";
 
 export type ProjectStatus = "Aktif" | "Selesai" | "Draft";
 export type PaymentStatus = "Lunas" | "Sebagian" | "Belum Dibayar" | "Belum Ada Tagihan";
@@ -87,6 +90,7 @@ export interface TeamUser {
   role: "Admin" | "Project Manager" | "Engineer" | "Finance";
   status: "Aktif" | "Nonaktif";
   lastActive: string;
+  permissions?: import("../shared/access").AccessPermissions;
 }
 
 export const projects: Project[] = [

@@ -21,11 +21,13 @@ import {
 } from "lucide-react";
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api, messageOf } from "../api-client";
-import { ViewKey } from "../data";
+import { Project, ViewKey } from "../data";
 
 interface ProjectViewProps {
   navigate: (view: ViewKey) => void;
   notify: (message: string) => void;
+  projectId: string;
+  project?: Project;
 }
 
 interface ProjectTask {
@@ -72,7 +74,7 @@ function taskStatusClass(status: ProjectTask["status"]) {
   return "neutral";
 }
 
-export function ProjectView({ navigate, notify }: ProjectViewProps) {
+export function ProjectView({ navigate, notify, projectId, project }: ProjectViewProps) {
   const [tasks, setTasks] = useState(taskSeed);
   const [documents, setDocuments] = useState(documentSeed);
   const [viewMode, setViewMode] = useState<"timeline" | "tasks">("timeline");
@@ -83,19 +85,19 @@ export function ProjectView({ navigate, notify }: ProjectViewProps) {
 
   const refreshTasks = useCallback(async () => {
     try {
-      setTasks(await api<ProjectTask[]>("/api/projects/project-1/tasks"));
+      setTasks(await api<ProjectTask[]>(`/api/projects/${projectId}/tasks`));
     } catch (error) {
       notify(messageOf(error));
     }
-  }, [notify]);
+  }, [notify, projectId]);
 
   const refreshDocuments = useCallback(async () => {
     try {
-      setDocuments(await api<ProjectDocument[]>("/api/projects/project-1/documents"));
+      setDocuments(await api<ProjectDocument[]>(`/api/projects/${projectId}/documents`));
     } catch (error) {
       notify(messageOf(error));
     }
-  }, [notify]);
+  }, [notify, projectId]);
 
   useEffect(() => {
     const update = window.setTimeout(() => {
@@ -118,7 +120,7 @@ export function ProjectView({ navigate, notify }: ProjectViewProps) {
     if (!task) return;
     const status = task.status === "Selesai" ? "Berjalan" : "Selesai";
     try {
-      await api(`/api/projects/project-1/tasks/${id}`, {
+      await api(`/api/projects/${projectId}/tasks/${id}`, {
         method: "PATCH",
         body: JSON.stringify({ status }),
       });
@@ -133,7 +135,7 @@ export function ProjectView({ navigate, notify }: ProjectViewProps) {
     event.preventDefault();
     if (!taskName.trim()) return;
     try {
-      await api("/api/projects/project-1/tasks", {
+      await api(`/api/projects/${projectId}/tasks`, {
         method: "POST",
         body: JSON.stringify({
           name: taskName.trim(),
@@ -157,7 +159,7 @@ export function ProjectView({ navigate, notify }: ProjectViewProps) {
     const form = new FormData();
     form.set("file", file);
     try {
-      const document = await api<ProjectDocument>("/api/projects/project-1/documents", {
+      const document = await api<ProjectDocument>(`/api/projects/${projectId}/documents`, {
         method: "POST",
         body: form,
       });
@@ -176,12 +178,12 @@ export function ProjectView({ navigate, notify }: ProjectViewProps) {
         <div className="project-hero-main">
           <div className="project-hero-badges">
             <span className="status-badge info"><span className="badge-dot" /> Aktif</span>
-            <span className="project-code">PN-2607-014</span>
+            <span className="project-code">{project?.code ?? "PN-2607-014"}</span>
           </div>
-          <h1>Implementasi WiFi Resort Ubud</h1>
-          <p>Bali Serenity Resort</p>
+          <h1>{project?.name ?? "Implementasi WiFi Resort Ubud"}</h1>
+          <p>{project?.client ?? "Bali Serenity Resort"}</p>
           <div className="project-hero-meta">
-            <span><MapPin size={15} /> Ubud, Gianyar</span>
+            <span><MapPin size={15} /> {project?.location ?? "Ubud, Gianyar"}</span>
             <span><CalendarDays size={15} /> 08 Jul — 02 Agu 2026</span>
             <span><UsersRound size={15} /> 4 anggota tim</span>
           </div>

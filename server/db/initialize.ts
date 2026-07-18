@@ -35,6 +35,27 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 );
 CREATE INDEX IF NOT EXISTS password_reset_user_idx ON password_reset_tokens(user_id);
 
+CREATE TABLE IF NOT EXISTS user_profiles (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  phone TEXT,
+  job_title TEXT,
+  bio TEXT,
+  address TEXT,
+  birth_date TEXT,
+  avatar_mime_type TEXT,
+  avatar_storage_url TEXT,
+  avatar_content_base64 TEXT,
+  preferred_language TEXT NOT NULL DEFAULT 'id' CHECK (preferred_language IN ('id', 'en')),
+  email_notifications INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_permissions (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  permissions_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
   code TEXT NOT NULL UNIQUE,

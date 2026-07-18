@@ -30,6 +30,7 @@ import {
 interface DashboardViewProps {
   navigate: (view: ViewKey) => void;
   notify: (message: string) => void;
+  selectedProjectId?: string;
 }
 
 const filters = ["Semua", "Aktif", "Selesai", "Draft"] as const;
@@ -47,7 +48,7 @@ function paymentClass(payment: Project["payment"]) {
   return "neutral";
 }
 
-export function DashboardView({ navigate, notify }: DashboardViewProps) {
+export function DashboardView({ navigate, notify, selectedProjectId = "" }: DashboardViewProps) {
   const [projectList, setProjectList] = useState(seedProjects);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<(typeof filters)[number]>("Semua");
@@ -71,6 +72,7 @@ export function DashboardView({ navigate, notify }: DashboardViewProps) {
   const filteredProjects = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return projectList.filter((project) => {
+      const matchesWorkspace = !selectedProjectId || project.id === selectedProjectId;
       const matchesFilter = filter === "Semua" || project.status === filter;
       const matchesQuery =
         !normalizedQuery ||
@@ -78,22 +80,25 @@ export function DashboardView({ navigate, notify }: DashboardViewProps) {
           .join(" ")
           .toLowerCase()
           .includes(normalizedQuery);
-      return matchesFilter && matchesQuery;
+      return matchesWorkspace && matchesFilter && matchesQuery;
     });
-  }, [filter, projectList, query]);
+  }, [filter, projectList, query, selectedProjectId]);
 
   const stats = useMemo(() => {
-    const active = projectList.filter((project) => project.status === "Aktif").length;
-    const completed = projectList.filter((project) => project.status === "Selesai").length;
-    const value = projectList
+    const scopedProjects = selectedProjectId
+      ? projectList.filter((project) => project.id === selectedProjectId)
+      : projectList;
+    const active = scopedProjects.filter((project) => project.status === "Aktif").length;
+    const completed = scopedProjects.filter((project) => project.status === "Selesai").length;
+    const value = scopedProjects
       .filter((project) => project.status === "Aktif")
       .reduce((sum, project) => sum + project.value, 0);
-    const paid = projectList.reduce(
+    const paid = scopedProjects.reduce(
       (sum, project) => sum + project.value * (project.paidRatio / 100),
       0,
     );
     return { active, completed, value, paid };
-  }, [projectList]);
+  }, [projectList, selectedProjectId]);
 
   async function addProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

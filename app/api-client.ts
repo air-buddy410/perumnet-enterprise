@@ -1,5 +1,6 @@
 "use client";
 
+import type { AccessPermissions } from "@/shared/access";
 import { appPath } from "./paths";
 
 export interface SessionUser {
@@ -8,6 +9,9 @@ export interface SessionUser {
   email: string;
   role: "Admin" | "Project Manager" | "Engineer" | "Finance";
   status: "Aktif" | "Nonaktif";
+  permissions: AccessPermissions;
+  preferredLanguage: "id" | "en";
+  avatarUrl?: string;
 }
 
 export class ApiClientError extends Error {

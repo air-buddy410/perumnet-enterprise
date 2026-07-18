@@ -23,6 +23,7 @@ import { BoqItem, formatCurrency, initialBoqItems, ViewKey } from "../data";
 interface BoqViewProps {
   navigate: (view: ViewKey) => void;
   notify: (message: string) => void;
+  projectId: string;
 }
 
 const categoryIcons = {
@@ -38,7 +39,7 @@ const templates = [
   { id: "tpl-3", name: "Managed Service — Standard", items: 9, lastUsed: "25 Jun 2026" },
 ];
 
-export function BoqView({ navigate, notify }: BoqViewProps) {
+export function BoqView({ navigate, notify, projectId }: BoqViewProps) {
   const [items, setItems] = useState<BoqItem[]>(initialBoqItems);
   const [category, setCategory] = useState<BoqItem["category"]>("Perangkat");
   const [description, setDescription] = useState("");
@@ -53,7 +54,7 @@ export function BoqView({ navigate, notify }: BoqViewProps) {
   useEffect(() => {
     let active = true;
     Promise.all([
-      api<{ items: BoqItem[] }>("/api/boq?projectId=project-1"),
+      api<{ items: BoqItem[] }>(`/api/boq?projectId=${encodeURIComponent(projectId)}`),
       api<typeof templates>("/api/boq/templates"),
     ])
       .then(([boq, savedTemplates]) => {
@@ -66,7 +67,7 @@ export function BoqView({ navigate, notify }: BoqViewProps) {
     return () => {
       active = false;
     };
-  }, [notify]);
+  }, [notify, projectId]);
 
   const totals = useMemo(() => {
     const cost = items.reduce((sum, item) => sum + item.quantity * item.costPrice, 0);
@@ -91,7 +92,7 @@ export function BoqView({ navigate, notify }: BoqViewProps) {
     event.preventDefault();
     if (!description.trim() || quantity < 1 || sellingPrice <= 0) return;
     try {
-      const item = await api<BoqItem>("/api/boq/items?projectId=project-1", {
+      const item = await api<BoqItem>(`/api/boq/items?projectId=${encodeURIComponent(projectId)}`, {
         method: "POST",
         body: JSON.stringify({ category, description: description.trim(), quantity, unit, costPrice, sellingPrice }),
       });
@@ -108,7 +109,7 @@ export function BoqView({ navigate, notify }: BoqViewProps) {
 
   async function deleteItem(id: string) {
     try {
-      await api(`/api/boq/items/${id}?projectId=project-1`, { method: "DELETE" });
+      await api(`/api/boq/items/${id}?projectId=${encodeURIComponent(projectId)}`, { method: "DELETE" });
       setItems((current) => current.filter((item) => item.id !== id));
       notify("Item dihapus dari BoQ.");
     } catch (error) {

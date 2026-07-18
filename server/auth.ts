@@ -2,6 +2,12 @@ import "server-only";
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { compare } from "bcryptjs";
+import {
+  defaultPermissions,
+  normalizePermissions,
+  type AccessPermissions,
+  type EnterpriseRole,
+} from "@/shared/access";
 import { getDatabase } from "./db/client";
 import type { DatabaseClient } from "./db/client";
 import { ApiError } from "./api/errors";
@@ -16,6 +22,33 @@ export interface AuthUser {
   email: string;
   role: UserRole;
   status: "Aktif" | "Nonaktif";
+  permissions: AccessPermissions;
+  preferredLanguage: "id" | "en";
+  avatarUrl?: string;
+}
+
+function authUserFromRow(row: Record<string, unknown>): AuthUser {
+  const role = String(row.role) as EnterpriseRole;
+  let storedPermissions: Partial<AccessPermissions> | undefined;
+  try {
+    storedPermissions = row.permissions_json
+      ? (JSON.parse(String(row.permissions_json)) as Partial<AccessPermissions>)
+      : undefined;
+  } catch {
+    storedPermissions = undefined;
+  }
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    email: String(row.email),
+    role,
+    status: String(row.status) as AuthUser["status"],
+    permissions: storedPermissions
+      ? normalizePermissions(role, storedPermissions)
+      : defaultPermissions(role),
+    preferredLanguage: row.preferred_language === "en" ? "en" : "id",
+    ...(row.avatar_mime_type ? { avatarUrl: `/api/profile/avatar/${String(row.id)}` } : {}),
+  };
 }
 
 function sha256(value: string) {
@@ -49,7 +82,14 @@ function serializeCookie(name: string, value: string, maxAge: number) {
 export async function verifyCredentials(email: string, password: string) {
   const { client } = await getDatabase();
   const result = await client.execute({
-    sql: "SELECT id,name,email,password_hash,role,status FROM users WHERE lower(email) = lower(?) LIMIT 1",
+    sql: `
+      SELECT u.id,u.name,u.email,u.password_hash,u.role,u.status,
+        p.preferred_language,p.avatar_mime_type,up.permissions_json
+      FROM users u
+      LEFT JOIN user_profiles p ON p.user_id=u.id
+      LEFT JOIN user_permissions up ON up.user_id=u.id
+      WHERE lower(u.email) = lower(?) LIMIT 1
+    `,
     args: [email],
   });
   const row = result.rows[0];
@@ -61,13 +101,7 @@ export async function verifyCredentials(email: string, password: string) {
     throw new ApiError(403, "ACCOUNT_INACTIVE", "Akun ini sedang dinonaktifkan.");
   }
 
-  return {
-    id: String(row.id),
-    name: String(row.name),
-    email: String(row.email),
-    role: String(row.role) as UserRole,
-    status: String(row.status) as AuthUser["status"],
-  } satisfies AuthUser;
+  return authUserFromRow(row);
 }
 
 export async function createSession(userId: string, remember: boolean) {
@@ -115,9 +149,12 @@ export async function getSessionUser(request: Request): Promise<AuthUser | null>
   const { client } = await getDatabase();
   const result = await client.execute({
     sql: `
-      SELECT u.id,u.name,u.email,u.role,u.status
+      SELECT u.id,u.name,u.email,u.role,u.status,
+        p.preferred_language,p.avatar_mime_type,up.permissions_json
       FROM sessions s
       JOIN users u ON u.id = s.user_id
+      LEFT JOIN user_profiles p ON p.user_id=u.id
+      LEFT JOIN user_permissions up ON up.user_id=u.id
       WHERE s.token_hash = ? AND s.expires_at > ? AND u.status = 'Aktif'
       LIMIT 1
     `,
@@ -126,13 +163,7 @@ export async function getSessionUser(request: Request): Promise<AuthUser | null>
   const row = result.rows[0];
   if (!row) return null;
 
-  return {
-    id: String(row.id),
-    name: String(row.name),
-    email: String(row.email),
-    role: String(row.role) as UserRole,
-    status: String(row.status) as AuthUser["status"],
-  };
+  return authUserFromRow(row);
 }
 
 export async function requireUser(request: Request, roles?: UserRole[]) {

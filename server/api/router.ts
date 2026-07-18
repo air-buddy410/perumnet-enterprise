@@ -1,8 +1,15 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { hash } from "bcryptjs";
+import { compare, hash } from "bcryptjs";
 import { z } from "zod";
+import {
+  canAccess,
+  defaultPermissions,
+  normalizePermissions,
+  type AccessModule,
+  type AccessPermissions,
+} from "@/shared/access";
 import { writeAuditLog } from "../audit";
 import {
   createPasswordResetToken,
@@ -135,7 +142,36 @@ const userSchema = z.object({
   email: emailSchema,
   role: z.enum(["Admin", "Project Manager", "Engineer", "Finance"]),
   status: z.enum(["Aktif", "Nonaktif"]).default("Aktif"),
-  password: z.string().min(8).max(128).optional(),
+  password: z.string().min(10).max(128).optional(),
+  permissions: z
+    .object({
+      dashboard: z.enum(["none", "view", "manage"]),
+      projects: z.enum(["none", "view", "manage"]),
+      boq: z.enum(["none", "view", "manage"]),
+      billing: z.enum(["none", "view", "manage"]),
+      procurement: z.enum(["none", "view", "manage"]),
+      bast: z.enum(["none", "view", "manage"]),
+      finance: z.enum(["none", "view", "manage"]),
+      users: z.enum(["none", "view", "manage"]),
+      settings: z.enum(["none", "view", "manage"]),
+    })
+    .partial()
+    .optional(),
+});
+
+const profileSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  email: emailSchema,
+  phone: z.string().trim().max(40).optional().default(""),
+  jobTitle: z.string().trim().max(120).optional().default(""),
+  bio: z.string().trim().max(800).optional().default(""),
+  address: z.string().trim().max(300).optional().default(""),
+  birthDate: z.union([z.literal(""), isoDateSchema]).optional().default(""),
+});
+
+const settingsSchema = z.object({
+  preferredLanguage: z.enum(["id", "en"]),
+  emailNotifications: z.boolean(),
 });
 
 function now() {
@@ -173,14 +209,47 @@ async function ensureExists(sql: string, args: unknown[], message: string) {
 }
 
 function mutationRoles(resource: string): UserRole[] {
-  if (resource === "users") return ["Admin"];
-  if (resource === "finance") return ["Admin", "Finance"];
-  if (resource === "invoices") return ["Admin", "Project Manager", "Finance"];
-  if (resource === "projects") return ["Admin", "Project Manager"];
-  if (resource === "boq") return ["Admin", "Project Manager"];
-  if (resource === "procurement") return ["Admin", "Project Manager", "Finance"];
-  if (resource === "bast") return ["Admin", "Project Manager", "Engineer"];
-  return ["Admin"];
+  void resource;
+  return ["Admin", "Project Manager", "Engineer", "Finance"];
+}
+
+const resourceModules: Record<string, AccessModule> = {
+  projects: "projects",
+  boq: "boq",
+  invoices: "billing",
+  quotations: "billing",
+  vendors: "procurement",
+  spks: "procurement",
+  bast: "bast",
+  transactions: "finance",
+  finance: "finance",
+  users: "users",
+  "audit-logs": "users",
+  documents: "projects",
+};
+
+function assertAccess(
+  user: AuthUser,
+  module: AccessModule,
+  level: "view" | "manage" = "view",
+) {
+  if (!canAccess(user.permissions, module, level)) {
+    throw new ApiError(
+      403,
+      "FORBIDDEN",
+      level === "manage"
+        ? "Akun Anda tidak memiliki izin untuk mengelola modul ini."
+        : "Akun Anda tidak memiliki akses ke modul ini.",
+    );
+  }
+}
+
+function assertMutationAccess(user: AuthUser, resource: string) {
+  const accessModule = resourceModules[resource];
+  if (accessModule) assertAccess(user, accessModule, "manage");
+  if (!mutationRoles(resource).includes(user.role) && user.role !== "Admin") {
+    throw new ApiError(403, "FORBIDDEN", "Peran Anda tidak dapat menjalankan tindakan ini.");
+  }
 }
 
 async function sendResetEmail(email: string, token: string) {
@@ -417,7 +486,6 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     }
 
     if (request.method === "POST" && !childId) {
-      if (!["Admin", "Project Manager", "Engineer"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menambah tugas.");
       const input = taskSchema.parse(await jsonBody(request));
       const id = randomUUID();
       const count = await client.execute({
@@ -487,7 +555,6 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
       })));
     }
     if (request.method === "POST") {
-      if (!["Admin", "Project Manager", "Engineer"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengunggah dokumentasi.");
       const form = await request.formData();
       const file = form.get("file");
       if (!(file instanceof File)) throw new ApiError(422, "FILE_REQUIRED", "Pilih file yang akan diunggah.");
@@ -541,7 +608,6 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
   }
 
   if (projectId && !child && request.method === "DELETE") {
-    await requireUser(request, ["Admin"]);
     await client.execute({ sql: "DELETE FROM projects WHERE id = ?", args: [projectId] });
     await writeAuditLog(client, request, user, "delete", "project", projectId);
     return noContent();
@@ -794,6 +860,81 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
   }
 
   throw new ApiError(404, "NOT_FOUND", "Endpoint BoQ tidak ditemukan.");
+}
+
+async function handleQuotations(request: Request, user: AuthUser) {
+  const { client } = await getDatabase();
+  const projectId = new URL(request.url).searchParams.get("projectId");
+  if (!projectId) throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
+  await ensureExists("SELECT id FROM projects WHERE id=?", [projectId], "Proyek tidak ditemukan.");
+
+  if (request.method === "GET") {
+    const result = await client.execute({
+      sql: "SELECT id,number,status,issued_at,valid_until,total FROM quotations WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
+      args: [projectId],
+    });
+    const row = result.rows[0];
+    return ok(row ? {
+      id: String(row.id),
+      number: String(row.number),
+      status: String(row.status),
+      issuedAt: String(row.issued_at),
+      validUntil: row.valid_until ? String(row.valid_until) : null,
+      total: asNumber(row.total),
+    } : { status: "Draft" });
+  }
+
+  if (request.method === "PATCH") {
+    assertAccess(user, "billing", "manage");
+    const input = z.object({ status: z.enum(["Draft", "Sent"]) }).parse(await jsonBody(request));
+    const current = await client.execute({
+      sql: "SELECT id FROM quotations WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
+      args: [projectId],
+    });
+    const timestamp = now();
+    let quotationId = current.rows[0] ? String(current.rows[0].id) : "";
+    if (quotationId) {
+      await client.execute({
+        sql: "UPDATE quotations SET status=?,updated_at=? WHERE id=?",
+        args: [input.status, timestamp, quotationId],
+      });
+      await writeAuditLog(client, request, user, "update_status", "quotation", quotationId, input);
+    } else {
+      const boq = await getBoq(projectId);
+      const count = await client.execute("SELECT COUNT(*) AS count FROM quotations");
+      quotationId = randomUUID();
+      await client.execute({
+        sql: "INSERT INTO quotations (id,project_id,number,status,issued_at,valid_until,total,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        args: [
+          quotationId,
+          projectId,
+          makeSequence("QUO", asNumber(count.rows[0]?.count)),
+          input.status,
+          timestamp.slice(0, 10),
+          new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10),
+          boq.totals.selling,
+          timestamp,
+          timestamp,
+        ],
+      });
+      await writeAuditLog(client, request, user, "create", "quotation", quotationId, { projectId, status: input.status });
+    }
+    const result = await client.execute({
+      sql: "SELECT id,number,status,issued_at,valid_until,total FROM quotations WHERE id=?",
+      args: [quotationId],
+    });
+    const row = result.rows[0];
+    return ok({
+      id: String(row.id),
+      number: String(row.number),
+      status: String(row.status),
+      issuedAt: String(row.issued_at),
+      validUntil: row.valid_until ? String(row.valid_until) : null,
+      total: asNumber(row.total),
+    });
+  }
+
+  throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
 }
 
 function mapInvoice(row: Record<string, unknown>) {
@@ -1223,7 +1364,7 @@ function mapTransaction(row: Record<string, unknown>) {
 }
 
 async function handleTransactions(request: Request, path: string[], user: AuthUser) {
-  if (!["Admin", "Finance"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Modul pembukuan hanya dapat diakses Admin dan Finance.");
+  assertAccess(user, "finance", request.method === "GET" ? "view" : "manage");
   const { client } = await getDatabase();
   const transactionId = path[1];
 
@@ -1298,7 +1439,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
 }
 
 async function handleFinance(request: Request, user: AuthUser) {
-  if (!["Admin", "Finance"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Ringkasan keuangan hanya dapat diakses Admin dan Finance.");
+  assertAccess(user, "finance", "view");
   if (request.method !== "GET") throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
   const { client } = await getDatabase();
   const searchParams = new URL(request.url).searchParams;
@@ -1344,39 +1485,69 @@ async function handleFinance(request: Request, user: AuthUser) {
 }
 
 function mapUser(row: Record<string, unknown>) {
+  const role = String(row.role) as UserRole;
+  let storedPermissions: Partial<AccessPermissions> | undefined;
+  try {
+    storedPermissions = row.permissions_json
+      ? (JSON.parse(String(row.permissions_json)) as Partial<AccessPermissions>)
+      : undefined;
+  } catch {
+    storedPermissions = undefined;
+  }
   return {
     id: String(row.id),
     name: String(row.name),
     email: String(row.email),
-    role: String(row.role),
+    role,
     status: String(row.status),
     lastActive: lastActive(row.last_active_at),
+    permissions: normalizePermissions(role, storedPermissions),
   };
 }
 
 async function handleUsers(request: Request, path: string[], user: AuthUser) {
-  if (user.role !== "Admin") throw new ApiError(403, "FORBIDDEN", "Pengguna dan akses hanya dapat dikelola Admin.");
+  assertAccess(user, "users", request.method === "GET" ? "view" : "manage");
   const { client } = await getDatabase();
   const userId = path[1];
 
   if (request.method === "GET" && !userId) {
-    const result = await client.execute("SELECT * FROM users ORDER BY status,name");
+    const result = await client.execute(`
+      SELECT u.*,up.permissions_json
+      FROM users u
+      LEFT JOIN user_permissions up ON up.user_id=u.id
+      ORDER BY u.status,u.name
+    `);
     return ok(result.rows.map((row) => mapUser(row as Record<string, unknown>)));
   }
 
   if (request.method === "POST" && !userId) {
     const input = userSchema.parse(await jsonBody(request));
+    if (!input.password) {
+      throw new ApiError(400, "PASSWORD_REQUIRED", "Tetapkan kata sandi awal minimal 10 karakter.");
+    }
     const duplicate = await client.execute({ sql: "SELECT id FROM users WHERE lower(email)=lower(?)", args: [input.email] });
     if (duplicate.rows.length) throw new ApiError(409, "EMAIL_EXISTS", "Email sudah digunakan oleh pengguna lain.");
     const id = randomUUID();
     const timestamp = now();
-    await client.execute({
-      sql: "INSERT INTO users (id,name,email,password_hash,role,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
-      args: [id, input.name, input.email, await hash(input.password ?? randomUUID(), 12), input.role, input.status, timestamp, timestamp],
-    });
+    const permissions = normalizePermissions(input.role, input.permissions);
+    await client.batch(
+      [
+        {
+          sql: "INSERT INTO users (id,name,email,password_hash,role,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
+          args: [id, input.name, input.email, await hash(input.password, 12), input.role, input.status, timestamp, timestamp],
+        },
+        {
+          sql: "INSERT INTO user_permissions (user_id,permissions_json,updated_at) VALUES (?,?,?)",
+          args: [id, JSON.stringify(permissions), timestamp],
+        },
+        {
+          sql: "INSERT INTO user_profiles (user_id,preferred_language,email_notifications,updated_at) VALUES (?,?,?,?)",
+          args: [id, "id", 1, timestamp],
+        },
+      ],
+      "write",
+    );
     await writeAuditLog(client, request, user, "create", "user", id, { name: input.name, email: input.email, role: input.role });
-    const resetToken = await createPasswordResetToken(client, id);
-    const invitationSent = await sendResetEmail(input.email, resetToken);
     return created({
       id,
       name: input.name,
@@ -1384,8 +1555,7 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
       role: input.role,
       status: input.status,
       lastActive: "Belum pernah",
-      invitationSent,
-      ...(process.env.NODE_ENV !== "production" && !invitationSent ? { resetToken } : {}),
+      permissions,
     });
   }
 
@@ -1393,16 +1563,61 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
     const input = userSchema.partial().parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM users WHERE id=?", [userId], "Pengguna tidak ditemukan.");
     if (userId === user.id && input.status === "Nonaktif") throw new ApiError(409, "SELF_DEACTIVATE", "Anda tidak dapat menonaktifkan akun sendiri.");
+    if (input.email) {
+      const duplicate = await client.execute({
+        sql: "SELECT id FROM users WHERE lower(email)=lower(?) AND id<>?",
+        args: [input.email, userId],
+      });
+      if (duplicate.rows.length) throw new ApiError(409, "EMAIL_EXISTS", "Email sudah digunakan oleh pengguna lain.");
+    }
     const passwordHash = input.password ? await hash(input.password, 12) : current.password_hash;
-    await client.execute({
-      sql: "UPDATE users SET name=?,email=?,password_hash=?,role=?,status=?,updated_at=? WHERE id=?",
-      args: [input.name ?? current.name, input.email ?? current.email, passwordHash, input.role ?? current.role, input.status ?? current.status, now(), userId],
+    const nextRole = (input.role ?? current.role) as UserRole;
+    const currentPermissionResult = await client.execute({
+      sql: "SELECT permissions_json FROM user_permissions WHERE user_id=?",
+      args: [userId],
     });
+    const currentPermissionRow = currentPermissionResult.rows[0];
+    let currentPermissions: Partial<AccessPermissions> | undefined;
+    try {
+      currentPermissions = currentPermissionRow?.permissions_json
+        ? JSON.parse(String(currentPermissionRow.permissions_json))
+        : undefined;
+    } catch {
+      currentPermissions = undefined;
+    }
+    const permissions = normalizePermissions(
+      nextRole,
+      input.permissions ?? (input.role && input.role !== current.role ? defaultPermissions(nextRole) : currentPermissions),
+    );
+    if (userId === user.id && permissions.users !== "manage") {
+      throw new ApiError(409, "SELF_LOCKOUT", "Akun sendiri harus tetap memiliki akses Kelola pada Pengguna & Akses.");
+    }
+    const timestamp = now();
+    await client.batch(
+      [
+        {
+          sql: "UPDATE users SET name=?,email=?,password_hash=?,role=?,status=?,updated_at=? WHERE id=?",
+          args: [input.name ?? current.name, input.email ?? current.email, passwordHash, nextRole, input.status ?? current.status, timestamp, userId],
+        },
+        {
+          sql: `
+            INSERT INTO user_permissions (user_id,permissions_json,updated_at) VALUES (?,?,?)
+            ON CONFLICT (user_id) DO UPDATE SET permissions_json=excluded.permissions_json,updated_at=excluded.updated_at
+          `,
+          args: [userId, JSON.stringify(permissions), timestamp],
+        },
+      ],
+      "write",
+    );
     if (input.status === "Nonaktif" || input.password) {
       await client.execute({ sql: "DELETE FROM sessions WHERE user_id=?", args: [userId] });
     }
     await writeAuditLog(client, request, user, "update", "user", userId, { ...input, password: input.password ? "[updated]" : undefined });
-    const updated = await ensureExists("SELECT * FROM users WHERE id=?", [userId], "Pengguna tidak ditemukan.");
+    const updated = await ensureExists(
+      "SELECT u.*,up.permissions_json FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id WHERE u.id=?",
+      [userId],
+      "Pengguna tidak ditemukan.",
+    );
     return ok(mapUser(updated as Record<string, unknown>));
   }
 
@@ -1414,6 +1629,183 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
   }
 
   throw new ApiError(404, "NOT_FOUND", "Endpoint pengguna tidak ditemukan.");
+}
+
+async function getProfile(userId: string) {
+  const row = await ensureExists(
+    `
+      SELECT u.id,u.name,u.email,u.role,p.phone,p.job_title,p.bio,p.address,p.birth_date,
+        p.avatar_mime_type,p.preferred_language,p.email_notifications
+      FROM users u LEFT JOIN user_profiles p ON p.user_id=u.id
+      WHERE u.id=?
+    `,
+    [userId],
+    "Profil pengguna tidak ditemukan.",
+  );
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    email: String(row.email),
+    role: String(row.role),
+    phone: row.phone ? String(row.phone) : "",
+    jobTitle: row.job_title ? String(row.job_title) : "",
+    bio: row.bio ? String(row.bio) : "",
+    address: row.address ? String(row.address) : "",
+    birthDate: row.birth_date ? String(row.birth_date) : "",
+    preferredLanguage: row.preferred_language === "en" ? "en" : "id",
+    emailNotifications: row.email_notifications === null || row.email_notifications === undefined
+      ? true
+      : Boolean(asNumber(row.email_notifications)),
+    avatarUrl: row.avatar_mime_type ? `/api/profile/avatar/${String(row.id)}` : undefined,
+  };
+}
+
+function hasValidAvatarSignature(content: Uint8Array, mimeType: string) {
+  if (mimeType === "image/jpeg") return content[0] === 0xff && content[1] === 0xd8;
+  if (mimeType === "image/png") {
+    return content[0] === 0x89 && content[1] === 0x50 && content[2] === 0x4e && content[3] === 0x47;
+  }
+  if (mimeType === "image/webp") {
+    return (
+      String.fromCharCode(...content.slice(0, 4)) === "RIFF" &&
+      String.fromCharCode(...content.slice(8, 12)) === "WEBP"
+    );
+  }
+  return false;
+}
+
+async function handleProfile(request: Request, path: string[], user: AuthUser) {
+  const { client } = await getDatabase();
+  const action = path[1];
+
+  if (action === "avatar" && request.method === "GET") {
+    const targetId = path[2] ?? user.id;
+    const row = await ensureExists(
+      "SELECT avatar_mime_type,avatar_storage_url,avatar_content_base64 FROM user_profiles WHERE user_id=?",
+      [targetId],
+      "Foto profil tidak ditemukan.",
+    );
+    const stored = await readProjectFile(row.avatar_storage_url ? String(row.avatar_storage_url) : null);
+    const content = stored?.content ??
+      (row.avatar_content_base64 ? Buffer.from(String(row.avatar_content_base64), "base64") : null);
+    if (!content) throw new ApiError(404, "FILE_MISSING", "Foto profil tidak tersedia.");
+    return new Response(content, {
+      headers: {
+        "Content-Type": String(row.avatar_mime_type),
+        "Cache-Control": "private, max-age=300",
+        "Content-Disposition": "inline",
+      },
+    });
+  }
+
+  if (action === "avatar" && request.method === "POST") {
+    const form = await request.formData();
+    const file = form.get("file");
+    if (!(file instanceof File)) throw new ApiError(400, "FILE_REQUIRED", "Pilih foto profil terlebih dahulu.");
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      throw new ApiError(400, "INVALID_FILE_TYPE", "Gunakan foto JPG, PNG, atau WebP.");
+    }
+    if (file.size > 3 * 1024 * 1024) {
+      throw new ApiError(413, "FILE_TOO_LARGE", "Ukuran foto maksimal 3 MB.");
+    }
+    const content = new Uint8Array(await file.arrayBuffer());
+    if (!hasValidAvatarSignature(content, file.type)) {
+      throw new ApiError(400, "INVALID_FILE", "Isi file tidak sesuai dengan format gambar.");
+    }
+    const stored = await storeProjectFile(`avatar-${user.id}`, file.type, content.buffer as ArrayBuffer);
+    const timestamp = now();
+    await client.execute({
+      sql: `
+        INSERT INTO user_profiles (user_id,avatar_mime_type,avatar_storage_url,avatar_content_base64,preferred_language,email_notifications,updated_at)
+        VALUES (?,?,?,?,?,?,?)
+        ON CONFLICT (user_id) DO UPDATE SET avatar_mime_type=excluded.avatar_mime_type,
+          avatar_storage_url=excluded.avatar_storage_url,avatar_content_base64=excluded.avatar_content_base64,
+          updated_at=excluded.updated_at
+      `,
+      args: [user.id, file.type, stored.storageUrl, stored.contentBase64, user.preferredLanguage, 1, timestamp],
+    });
+    await writeAuditLog(client, request, user, "update_avatar", "user", user.id);
+    return ok({ avatarUrl: `/api/profile/avatar/${user.id}?v=${Date.now()}` });
+  }
+
+  if (!action && request.method === "GET") {
+    return ok(await getProfile(user.id));
+  }
+
+  if (!action && request.method === "PATCH") {
+    const input = profileSchema.parse(await jsonBody(request));
+    const duplicate = await client.execute({
+      sql: "SELECT id FROM users WHERE lower(email)=lower(?) AND id<>?",
+      args: [input.email, user.id],
+    });
+    if (duplicate.rows.length) throw new ApiError(409, "EMAIL_EXISTS", "Email sudah digunakan pengguna lain.");
+    const timestamp = now();
+    await client.batch(
+      [
+        {
+          sql: "UPDATE users SET name=?,email=?,updated_at=? WHERE id=?",
+          args: [input.name, input.email, timestamp, user.id],
+        },
+        {
+          sql: `
+            INSERT INTO user_profiles (user_id,phone,job_title,bio,address,birth_date,preferred_language,email_notifications,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT (user_id) DO UPDATE SET phone=excluded.phone,job_title=excluded.job_title,
+              bio=excluded.bio,address=excluded.address,birth_date=excluded.birth_date,updated_at=excluded.updated_at
+          `,
+          args: [user.id, input.phone || null, input.jobTitle || null, input.bio || null, input.address || null, input.birthDate || null, user.preferredLanguage, 1, timestamp],
+        },
+      ],
+      "write",
+    );
+    await writeAuditLog(client, request, user, "update_profile", "user", user.id);
+    return ok(await getProfile(user.id));
+  }
+
+  if (action === "password" && request.method === "PATCH") {
+    const input = z.object({
+      currentPassword: z.string().min(8).max(128),
+      newPassword: z.string().min(10).max(128),
+    }).parse(await jsonBody(request));
+    const row = await ensureExists("SELECT password_hash FROM users WHERE id=?", [user.id], "Pengguna tidak ditemukan.");
+    if (!(await compare(input.currentPassword, String(row.password_hash)))) {
+      throw new ApiError(400, "INVALID_PASSWORD", "Kata sandi saat ini tidak sesuai.");
+    }
+    await client.execute({
+      sql: "UPDATE users SET password_hash=?,updated_at=? WHERE id=?",
+      args: [await hash(input.newPassword, 12), now(), user.id],
+    });
+    await writeAuditLog(client, request, user, "change_password", "user", user.id);
+    return ok({ success: true });
+  }
+
+  throw new ApiError(404, "NOT_FOUND", "Endpoint profil tidak ditemukan.");
+}
+
+async function handleSettings(request: Request, user: AuthUser) {
+  const { client } = await getDatabase();
+  if (request.method === "GET") {
+    const profile = await getProfile(user.id);
+    return ok({
+      preferredLanguage: profile.preferredLanguage,
+      emailNotifications: profile.emailNotifications,
+    });
+  }
+  if (request.method === "PATCH") {
+    const input = settingsSchema.parse(await jsonBody(request));
+    const timestamp = now();
+    await client.execute({
+      sql: `
+        INSERT INTO user_profiles (user_id,preferred_language,email_notifications,updated_at) VALUES (?,?,?,?)
+        ON CONFLICT (user_id) DO UPDATE SET preferred_language=excluded.preferred_language,
+          email_notifications=excluded.email_notifications,updated_at=excluded.updated_at
+      `,
+      args: [user.id, input.preferredLanguage, input.emailNotifications ? 1 : 0, timestamp],
+    });
+    await writeAuditLog(client, request, user, "update_settings", "user", user.id, input);
+    return ok(input);
+  }
+  throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
 }
 
 async function handleDocuments(request: Request, path: string[]) {
@@ -1447,7 +1839,7 @@ async function handleDocuments(request: Request, path: string[]) {
 }
 
 async function handleAudit(request: Request, user: AuthUser) {
-  if (user.role !== "Admin") throw new ApiError(403, "FORBIDDEN", "Audit log hanya dapat diakses Admin.");
+  assertAccess(user, "users", "view");
   if (request.method !== "GET") throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
   const { client } = await getDatabase();
   const result = await client.execute(`
@@ -1467,16 +1859,22 @@ async function handleAudit(request: Request, user: AuthUser) {
   })));
 }
 
-async function handleSearch(request: Request) {
+async function handleSearch(request: Request, user: AuthUser) {
   if (request.method !== "GET") throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
   const query = new URL(request.url).searchParams.get("q")?.trim().toLowerCase();
   if (!query || query.length < 2) return ok([]);
   const { client } = await getDatabase();
   const pattern = `%${query}%`;
   const [projectResults, invoiceResults, vendorResults] = await Promise.all([
-    client.execute({ sql: "SELECT id,name AS title,code AS subtitle FROM projects WHERE lower(name) LIKE ? OR lower(code) LIKE ? LIMIT 6", args: [pattern, pattern] }),
-    client.execute({ sql: "SELECT id,number AS title,type AS subtitle FROM invoices WHERE lower(number) LIKE ? OR lower(type) LIKE ? LIMIT 6", args: [pattern, pattern] }),
-    client.execute({ sql: "SELECT id,name AS title,category AS subtitle FROM vendors WHERE lower(name) LIKE ? OR lower(category) LIKE ? LIMIT 6", args: [pattern, pattern] }),
+    canAccess(user.permissions, "projects")
+      ? client.execute({ sql: "SELECT id,name AS title,code AS subtitle FROM projects WHERE lower(name) LIKE ? OR lower(code) LIKE ? LIMIT 6", args: [pattern, pattern] })
+      : Promise.resolve({ rows: [] }),
+    canAccess(user.permissions, "billing")
+      ? client.execute({ sql: "SELECT id,number AS title,type AS subtitle FROM invoices WHERE lower(number) LIKE ? OR lower(type) LIKE ? LIMIT 6", args: [pattern, pattern] })
+      : Promise.resolve({ rows: [] }),
+    canAccess(user.permissions, "procurement")
+      ? client.execute({ sql: "SELECT id,name AS title,category AS subtitle FROM vendors WHERE lower(name) LIKE ? OR lower(category) LIKE ? LIMIT 6", args: [pattern, pattern] })
+      : Promise.resolve({ rows: [] }),
   ]);
   return ok([
     ...projectResults.rows.map((row) => ({ id: row.id, type: "project", title: row.title, subtitle: row.subtitle })),
@@ -1497,9 +1895,18 @@ export async function dispatchApi(request: Request, path: string[]) {
   if (resource === "auth") return handleAuth(request, path);
 
   const user = await requireUser(request);
+  const accessModule = resourceModules[resource];
+  if (accessModule) {
+    if (request.method === "GET" || request.method === "HEAD") {
+      assertAccess(user, accessModule, "view");
+    } else {
+      assertMutationAccess(user, resource);
+    }
+  }
 
   if (resource === "projects") return handleProjects(request, path, user);
   if (resource === "boq") return handleBoq(request, path, user);
+  if (resource === "quotations") return handleQuotations(request, user);
   if (resource === "invoices") return handleInvoices(request, path, user);
   if (resource === "vendors") return handleVendors(request, path, user);
   if (resource === "spks") return handleSpks(request, path, user);
@@ -1507,9 +1914,11 @@ export async function dispatchApi(request: Request, path: string[]) {
   if (resource === "transactions") return handleTransactions(request, path, user);
   if (resource === "finance" && path[1] === "summary") return handleFinance(request, user);
   if (resource === "users") return handleUsers(request, path, user);
+  if (resource === "profile") return handleProfile(request, path, user);
+  if (resource === "settings") return handleSettings(request, user);
   if (resource === "documents") return handleDocuments(request, path);
   if (resource === "audit-logs") return handleAudit(request, user);
-  if (resource === "search") return handleSearch(request);
+  if (resource === "search") return handleSearch(request, user);
 
   throw new ApiError(404, "NOT_FOUND", "Endpoint API tidak ditemukan.");
 }
