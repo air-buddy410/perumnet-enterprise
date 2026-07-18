@@ -328,6 +328,12 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     spkTransactions.find((entry) => entry.source === "SPK")?.amount,
     600_000,
   );
+  const financialPdf = await request(
+    `/api/transactions/report.pdf?projectId=${project.id}`,
+  );
+  assert.equal(financialPdf.status, 200);
+  assert.equal(financialPdf.headers.get("content-type"), "application/pdf");
+  assert.ok((await financialPdf.arrayBuffer()).byteLength > 5_000);
   await json(`/api/spks/${spk.id}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status: "Dikerjakan" }),
@@ -531,6 +537,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     }),
   })).status, 403);
   assert.equal((await request("/api/bast")).status, 403);
+  assert.equal((await request("/api/transactions/report.pdf")).status, 403);
   assert.equal((await request("/api/users")).status, 403);
   assert.equal((await request(`/api/invoices/${invoice.id}`)).status, 403);
   assert.equal(

@@ -17,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { api, messageOf } from "../api-client";
+import { api, downloadApiFile, messageOf } from "../api-client";
 import {
   formatCompactCurrency,
   formatCurrency,
@@ -154,23 +154,19 @@ export function FinanceView({ notify, projectId, projects, canManage }: FinanceV
     }
   }
 
-  function exportReport() {
-    const rows = [
-      "Tanggal,Jenis,Proyek,Deskripsi,Nominal",
-      ...transactions.map((transaction) =>
-        [transaction.date, transaction.type, transaction.project, transaction.description, transaction.amount]
-          .map((value) => `"${String(value).replaceAll('"', '""')}"`)
-          .join(","),
-      ),
-    ];
-    const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = "Laporan-Keuangan-PerumNet.csv";
-    anchor.click();
-    URL.revokeObjectURL(url);
-    notify("Laporan transaksi berhasil diekspor.");
+  async function exportReport() {
+    try {
+      const query = projectId
+        ? `?projectId=${encodeURIComponent(projectId)}`
+        : "";
+      await downloadApiFile(
+        `/api/transactions/report.pdf${query}`,
+        "Laporan-Keuangan-PerumNet.pdf",
+      );
+      notify("Laporan keuangan PDF berhasil diekspor.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
   }
 
   return (
@@ -183,7 +179,7 @@ export function FinanceView({ notify, projectId, projects, canManage }: FinanceV
         </div>
         <div className="title-actions">
           <button className="button secondary" type="button" onClick={exportReport}>
-            <Download size={16} /> Ekspor laporan
+            <Download size={16} /> Ekspor PDF
           </button>
           {canManage && <button className="button primary" type="button" onClick={() => { setTransactionProjectId(projectId || projects[0]?.id || ""); setShowTransactionForm(true); }}>
             <Plus size={16} /> Catat transaksi

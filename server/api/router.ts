@@ -35,7 +35,10 @@ import {
   noContent,
   ok,
 } from "./errors";
-import { renderBusinessPdf } from "./pdf";
+import {
+  renderBusinessPdf,
+  renderFinancialReportPdf,
+} from "./pdf";
 
 const emailSchema = z.string().trim().email().max(254).transform((value) => value.toLowerCase());
 const idSchema = z.string().trim().min(1).max(100);
@@ -1958,7 +1961,10 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
   const { client } = await getDatabase();
   const transactionId = path[1];
 
-  if (request.method === "GET" && !transactionId) {
+  if (
+    request.method === "GET" &&
+    (!transactionId || transactionId === "report.pdf")
+  ) {
     const searchParams = new URL(request.url).searchParams;
     const projectId = searchParams.get("projectId");
     const from = searchParams.get("from");
@@ -1989,7 +1995,33 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       sql: `SELECT t.*,p.name AS project_name FROM transactions t LEFT JOIN projects p ON p.id=t.project_id ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY t.date DESC,t.created_at DESC`,
       args: args as never[],
     });
-    return ok(result.rows.map((row) => mapTransaction(row as Record<string, unknown>)));
+    const transactions = result.rows.map((row) =>
+      mapTransaction(row as Record<string, unknown>),
+    );
+    if (transactionId === "report.pdf") {
+      let scopeLabel = "Seluruh proyek yang dapat diakses";
+      if (projectId) {
+        const project = await ensureExists(
+          "SELECT code,name FROM projects WHERE id=?",
+          [projectId],
+          "Proyek tidak ditemukan.",
+        );
+        scopeLabel = `${String(project.code)} - ${String(project.name)}`;
+      }
+      return renderFinancialReportPdf(
+        transactions.map((transaction) => ({
+          date: transaction.date,
+          dateIso: transaction.dateIso,
+          type: transaction.type,
+          project: transaction.project,
+          description: transaction.description,
+          amount: transaction.amount,
+          source: transaction.source,
+        })),
+        scopeLabel,
+      );
+    }
+    return ok(transactions);
   }
 
   if (request.method === "POST" && !transactionId) {
