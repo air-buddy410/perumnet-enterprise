@@ -12,7 +12,12 @@ export type ViewKey =
   | "help";
 
 export type ProjectStatus = "Aktif" | "Selesai" | "Draft";
-export type PaymentStatus = "Lunas" | "Sebagian" | "Belum Dibayar" | "Belum Ada Tagihan";
+export type PaymentStatus =
+  | "Lunas"
+  | "Sebagian"
+  | "Belum Dibayar"
+  | "Belum Ada Tagihan"
+  | "Tidak Diizinkan";
 
 export interface Project {
   id: string;
@@ -26,9 +31,13 @@ export interface Project {
   paidRatio: number;
   startDate: string;
   targetDate: string;
+  startDateIso?: string;
+  targetDateIso?: string;
   value: number;
   manager: string;
+  managerId?: string;
   team: string[];
+  teamNames?: string[];
 }
 
 export interface BoqItem {
@@ -43,10 +52,13 @@ export interface BoqItem {
 
 export interface Invoice {
   id: string;
+  projectId?: string;
   number: string;
   type: string;
   issueDate: string;
   dueDate: string;
+  issueDateIso?: string;
+  dueDateIso?: string;
   amount: number;
   status: "Lunas" | "Belum Lunas";
   paidDate?: string;
@@ -57,6 +69,8 @@ export interface Vendor {
   name: string;
   category: string;
   contact: string;
+  email?: string;
+  address?: string;
   rate: number;
   status: "Aktif" | "Nonaktif";
 }
@@ -71,12 +85,16 @@ export interface WorkOrder {
   scope: string;
   cost: number;
   status: "Draft" | "Dikirim" | "Dikerjakan" | "Selesai";
+  startDate?: string;
+  endDate?: string;
 }
 
 export interface Transaction {
   id: string;
   date: string;
+  dateIso?: string;
   type: "Pemasukan" | "Pengeluaran";
+  projectId?: string;
   project: string;
   description: string;
   amount: number;

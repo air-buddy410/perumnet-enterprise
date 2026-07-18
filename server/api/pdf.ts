@@ -91,14 +91,28 @@ async function quotationPdf(projectId: string) {
     (sum, item) => sum + asNumber(item.quantity) * asNumber(item.selling_price),
     0,
   );
-  const number = `QUO/${String(project.code).replace("PN-", "")}`;
+  const quotationResult = await client.execute({
+    sql: "SELECT number,issued_at,valid_until,total FROM quotations WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
+    args: [projectId],
+  });
+  const quotation = quotationResult.rows[0];
+  const number = quotation
+    ? String(quotation.number)
+    : `QUO/${String(project.code).replace("PN-", "")}`;
   const doc = new jsPDF();
   header(doc, "Quotation", number);
   let y = writeLines(doc, [
     { label: "Proyek", value: String(project.name), emphasis: true },
     { label: "Klien", value: String(project.client) },
     { label: "Lokasi", value: String(project.location) },
-    { label: "Berlaku sampai", value: formatDate(project.target_date) },
+    {
+      label: "Tanggal terbit",
+      value: formatDate(quotation?.issued_at ?? project.created_at),
+    },
+    {
+      label: "Berlaku sampai",
+      value: formatDate(quotation?.valid_until ?? project.target_date),
+    },
   ]);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);

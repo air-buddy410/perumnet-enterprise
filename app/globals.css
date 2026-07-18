@@ -5058,6 +5058,55 @@ h3 {
   color: #b94b43;
 }
 
+.button.danger:hover {
+  border-color: #e2a39e;
+  background: #fdebea;
+}
+
+.table-row-actions,
+.boq-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.empty-state.compact {
+  min-height: 100px;
+  padding: 18px;
+}
+
+.installed-item.editable {
+  grid-template-columns: auto minmax(220px, 1fr) minmax(150px, .55fr) auto;
+}
+
+.installed-item.editable input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 8px;
+  background: #fff;
+  color: var(--navy);
+  font: inherit;
+  font-size: 9px;
+}
+
+.installed-item.editable input:disabled {
+  border-color: transparent;
+  background: transparent;
+  color: var(--navy);
+  opacity: 1;
+}
+
+.signature-canvas[aria-disabled="true"] {
+  cursor: default;
+  touch-action: auto;
+}
+
+.spk-row {
+  grid-template-columns: auto minmax(145px, .7fr) minmax(150px, 1fr) minmax(190px, 1.2fr) minmax(95px, .5fr) auto auto auto auto;
+}
+
 @media (min-width: 961px) {
   .app-sidebar,
   .app-main {
@@ -5688,6 +5737,11 @@ h3 {
   }
 
   .installed-item > .status-badge {
+    grid-column: 2;
+  }
+
+  .installed-item.editable > input,
+  .installed-item.editable > .icon-button {
     grid-column: 2;
   }
 

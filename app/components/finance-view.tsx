@@ -21,33 +21,26 @@ import { api, messageOf } from "../api-client";
 import {
   formatCompactCurrency,
   formatCurrency,
-  initialTransactions,
+  Project,
   Transaction,
 } from "../data";
 
 interface FinanceViewProps {
   notify: (message: string) => void;
   projectId?: string;
+  projects: Project[];
+  canManage: boolean;
 }
 
-const chartData = [
-  { month: "Feb", income: 82, expense: 51 },
-  { month: "Mar", income: 64, expense: 42 },
-  { month: "Apr", income: 105, expense: 69 },
-  { month: "Mei", income: 91, expense: 57 },
-  { month: "Jun", income: 136, expense: 78 },
-  { month: "Jul", income: 123, expense: 77 },
-];
-
-export function FinanceView({ notify, projectId }: FinanceViewProps) {
-  const [transactions, setTransactions] = useState(initialTransactions);
+export function FinanceView({ notify, projectId, projects, canManage }: FinanceViewProps) {
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [period, setPeriod] = useState("6 bulan");
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<"Semua" | Transaction["type"]>("Semua");
   const [filterOpen, setFilterOpen] = useState(false);
   const [showTransactionForm, setShowTransactionForm] = useState(false);
   const [transactionType, setTransactionType] = useState<Transaction["type"]>("Pemasukan");
-  const [project, setProject] = useState("Implementasi WiFi Resort Ubud");
+  const [transactionProjectId, setTransactionProjectId] = useState(projectId ?? "");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState(0);
 
@@ -73,6 +66,52 @@ export function FinanceView({ notify, projectId }: FinanceViewProps) {
     return { income, expense, profit: income - expense };
   }, [transactions]);
 
+  const chartData = useMemo(() => {
+    const months = new Map<string, { income: number; expense: number }>();
+    for (const transaction of transactions) {
+      const key = transaction.dateIso?.slice(0, 7);
+      if (!key) continue;
+      const current = months.get(key) ?? { income: 0, expense: 0 };
+      if (transaction.type === "Pemasukan") current.income += transaction.amount;
+      else current.expense += transaction.amount;
+      months.set(key, current);
+    }
+    return Array.from(months.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .slice(-6)
+      .map(([month, values]) => ({
+        month: new Intl.DateTimeFormat("id-ID", {
+          month: "short",
+          timeZone: "UTC",
+        }).format(new Date(`${month}-01T00:00:00.000Z`)),
+        income: values.income / 1_000_000,
+        expense: values.expense / 1_000_000,
+      }));
+  }, [transactions]);
+
+  const projectProfits = useMemo(() => {
+    const grouped = new Map<string, { income: number; expense: number }>();
+    for (const transaction of transactions) {
+      const current = grouped.get(transaction.project) ?? { income: 0, expense: 0 };
+      if (transaction.type === "Pemasukan") current.income += transaction.amount;
+      else current.expense += transaction.amount;
+      grouped.set(transaction.project, current);
+    }
+    return Array.from(grouped.entries())
+      .map(([name, values]) => ({
+        name,
+        profit: values.income - values.expense,
+        margin: values.income
+          ? ((values.income - values.expense) / values.income) * 100
+          : 0,
+      }))
+      .sort((left, right) => right.profit - left.profit);
+  }, [transactions]);
+  const chartMax = Math.max(
+    1,
+    ...chartData.flatMap((item) => [item.income, item.expense]),
+  );
+
   const visibleTransactions = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return transactions.filter(
@@ -89,16 +128,15 @@ export function FinanceView({ notify, projectId }: FinanceViewProps) {
   async function addTransaction(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!description.trim() || amount <= 0) return;
-    const projectIds: Record<string, string> = {
-      "Implementasi WiFi Resort Ubud": "project-1",
-      "CCTV & Network Warehouse": "project-2",
-      "Managed Service Kantor Cabang": "project-3",
-    };
+    if (!transactionProjectId) {
+      notify("Pilih proyek untuk transaksi ini.");
+      return;
+    }
     try {
       const transaction = await api<Transaction>("/api/transactions", {
         method: "POST",
         body: JSON.stringify({
-          projectId: projectIds[project],
+          projectId: transactionProjectId,
           date: new Date().toISOString().slice(0, 10),
           type: transactionType,
           description: description.trim(),
@@ -147,9 +185,9 @@ export function FinanceView({ notify, projectId }: FinanceViewProps) {
           <button className="button secondary" type="button" onClick={exportReport}>
             <Download size={16} /> Ekspor laporan
           </button>
-          <button className="button primary" type="button" onClick={() => setShowTransactionForm(true)}>
+          {canManage && <button className="button primary" type="button" onClick={() => { setTransactionProjectId(projectId || projects[0]?.id || ""); setShowTransactionForm(true); }}>
             <Plus size={16} /> Catat transaksi
-          </button>
+          </button>}
         </div>
       </section>
 
@@ -170,9 +208,9 @@ export function FinanceView({ notify, projectId }: FinanceViewProps) {
           <div><span className={`metric-change ${totals.profit >= 0 ? "positive" : "negative"}`}>{totals.income ? ((totals.profit / totals.income) * 100).toFixed(1) : 0}% margin</span><small>periode berjalan</small></div>
         </article>
         <article className="finance-kpi receivable">
-          <div className="finance-kpi-head"><span>Piutang berjalan</span><span className="metric-icon blue"><ReceiptText size={19} /></span></div>
-          <strong>{formatCurrency(93_725_000)}</strong>
-          <div><span className="metric-change warning-text">2 invoice</span><small>menunggu pembayaran</small></div>
+          <div className="finance-kpi-head"><span>Transaksi tercatat</span><span className="metric-icon blue"><ReceiptText size={19} /></span></div>
+          <strong>{transactions.length}</strong>
+          <div><span className="metric-change">{projectId ? "Proyek aktif" : "Semua proyek"}</span><small>sesuai otoritas akun</small></div>
         </article>
       </section>
 
@@ -194,14 +232,14 @@ export function FinanceView({ notify, projectId }: FinanceViewProps) {
             <small>Dalam juta rupiah</small>
           </div>
           <div className="bar-chart" aria-label={`Grafik arus kas ${period}`}>
-            <div className="chart-y-axis"><span>150</span><span>100</span><span>50</span><span>0</span></div>
+            <div className="chart-y-axis"><span>{Math.ceil(chartMax)}</span><span>{Math.ceil(chartMax * 0.67)}</span><span>{Math.ceil(chartMax * 0.33)}</span><span>0</span></div>
             <div className="chart-plot">
               <div className="chart-grid-lines"><span /><span /><span /><span /></div>
               {chartData.map((item) => (
                 <div className="chart-group" key={item.month}>
                   <div className="chart-bars">
-                    <span className="chart-bar income" style={{ height: `${(item.income / 150) * 100}%` }} title={`Pemasukan ${item.income} juta`} />
-                    <span className="chart-bar expense" style={{ height: `${(item.expense / 150) * 100}%` }} title={`Pengeluaran ${item.expense} juta`} />
+                    <span className="chart-bar income" style={{ height: `${(item.income / chartMax) * 100}%` }} title={`Pemasukan ${item.income} juta`} />
+                    <span className="chart-bar expense" style={{ height: `${(item.expense / chartMax) * 100}%` }} title={`Pengeluaran ${item.expense} juta`} />
                   </div>
                   <strong>{item.month}</strong>
                 </div>
@@ -213,25 +251,18 @@ export function FinanceView({ notify, projectId }: FinanceViewProps) {
         <aside className="panel profit-project-panel">
           <div className="panel-head"><div><span className="eyebrow">PROFITABILITAS</span><h2>Per proyek</h2></div><BarChart3 size={19} /></div>
           <div className="project-profit-list">
-            <div>
-              <span className="profit-rank">1</span>
-              <div><strong>WiFi Resort Ubud</strong><span>Margin 31,7%</span></div>
-              <strong>{formatCompactCurrency(59_400_000)}</strong>
-            </div>
-            <div>
-              <span className="profit-rank">2</span>
-              <div><strong>Fiber Villa Complex</strong><span>Margin 28,4%</span></div>
-              <strong>{formatCompactCurrency(40_600_000)}</strong>
-            </div>
-            <div>
-              <span className="profit-rank">3</span>
-              <div><strong>CCTV Warehouse</strong><span>Margin 20,1%</span></div>
-              <strong>{formatCompactCurrency(19_500_000)}</strong>
-            </div>
+            {projectProfits.slice(0, 5).map((item, index) => (
+              <div key={item.name}>
+                <span className="profit-rank">{index + 1}</span>
+                <div><strong>{item.name}</strong><span>Margin {item.margin.toFixed(1)}%</span></div>
+                <strong>{formatCompactCurrency(item.profit)}</strong>
+              </div>
+            ))}
+            {!projectProfits.length && <div className="empty-state compact"><span>Belum ada transaksi proyek.</span></div>}
           </div>
           <div className="profit-insight">
             <TrendingUp size={18} />
-            <div><strong>Margin sehat</strong><span>Rata-rata margin proyek 26,7% pada periode ini.</span></div>
+            <div><strong>Ringkasan otomatis</strong><span>Laba dihitung dari transaksi Invoice, SPK, dan transaksi manual.</span></div>
           </div>
         </aside>
       </section>
@@ -284,7 +315,7 @@ export function FinanceView({ notify, projectId }: FinanceViewProps) {
                 <button className={transactionType === "Pemasukan" ? "active income" : ""} type="button" onClick={() => setTransactionType("Pemasukan")}><ArrowDownRight size={17} /> Pemasukan</button>
                 <button className={transactionType === "Pengeluaran" ? "active expense" : ""} type="button" onClick={() => setTransactionType("Pengeluaran")}><ArrowUpRight size={17} /> Pengeluaran</button>
               </div>
-              <label className="field full"><span>Proyek terkait</span><select value={project} onChange={(event) => setProject(event.target.value)}><option>Implementasi WiFi Resort Ubud</option><option>CCTV & Network Warehouse</option><option>Managed Service Kantor Cabang</option></select></label>
+              <label className="field full"><span>Proyek terkait</span><select required value={transactionProjectId} onChange={(event) => setTransactionProjectId(event.target.value)}><option value="">Pilih proyek</option>{projects.map((projectItem) => <option value={projectItem.id} key={projectItem.id}>{projectItem.code} · {projectItem.name}</option>)}</select></label>
               <label className="field full"><span>Deskripsi transaksi</span><input required value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Contoh: Pembayaran invoice DP" /></label>
               <label className="field full"><span>Nominal</span><input type="number" min="1" required value={amount || ""} onChange={(event) => setAmount(Number(event.target.value))} placeholder="0" /></label>
               <div className="transaction-preview full"><WalletCards size={18} /><div><span>{transactionType}</span><strong>{formatCurrency(amount)}</strong></div></div>

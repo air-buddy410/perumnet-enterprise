@@ -26,13 +26,14 @@ import {
   type AccessPermissions,
 } from "@/shared/access";
 import { api, messageOf } from "../api-client";
-import { initialUsers, TeamUser } from "../data";
+import { TeamUser } from "../data";
 import type { AppLanguage } from "../i18n";
 
 interface UsersViewProps {
   notify: (message: string) => void;
   language: AppLanguage;
   currentUserId: string;
+  canManage: boolean;
 }
 
 const roles: TeamUser["role"][] = ["Admin", "Project Manager", "Engineer", "Finance"];
@@ -48,8 +49,8 @@ function withPermissions(user: TeamUser): TeamUser {
   return { ...user, permissions: user.permissions ?? defaultPermissions(user.role) };
 }
 
-export function UsersView({ notify, language, currentUserId }: UsersViewProps) {
-  const [users, setUsers] = useState(initialUsers.map(withPermissions));
+export function UsersView({ notify, language, currentUserId, canManage }: UsersViewProps) {
+  const [users, setUsers] = useState<TeamUser[]>([]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("Semua peran");
   const [editing, setEditing] = useState<TeamUser | "new" | null>(null);
@@ -172,7 +173,7 @@ export function UsersView({ notify, language, currentUserId }: UsersViewProps) {
     <div className="page-stack" data-testid="users-view">
       <section className="page-title-row">
         <div><span className="eyebrow">{id ? "AKSES & OTORISASI" : "ACCESS & AUTHORIZATION"}</span><h1>{id ? "Manajemen Pengguna" : "User Management"}</h1><p>{id ? "Buat akun dan tentukan akses setiap modul secara rinci." : "Create accounts and configure detailed module access."}</p></div>
-        <button className="button primary" type="button" onClick={openNewUser}><Plus size={16} /> {id ? "Tambah pengguna" : "Add user"}</button>
+        {canManage && <button className="button primary" type="button" onClick={openNewUser}><Plus size={16} /> {id ? "Tambah pengguna" : "Add user"}</button>}
       </section>
 
       <section className="metric-grid user-metrics">
@@ -198,8 +199,8 @@ export function UsersView({ notify, language, currentUserId }: UsersViewProps) {
               <span className={`role-chip ${roleClass(user.role)}`}>{user.role}</span>
               <div className="user-last-active"><span>{id ? "Aktivitas terakhir" : "Last activity"}</span><strong>{user.lastActive}</strong></div>
               <span className={`status-badge ${user.status === "Aktif" ? "success" : "neutral"}`}><span className="badge-dot" /> {user.status}</span>
-              <button className={`button small ${user.status === "Aktif" ? "subtle" : "secondary"}`} type="button" disabled={user.id === currentUserId} onClick={() => toggleUser(user)}>{user.status === "Aktif" ? <UserRoundX size={15} /> : <UserCheck size={15} />}{user.status === "Aktif" ? (id ? "Nonaktifkan" : "Disable") : (id ? "Aktifkan" : "Enable")}</button>
-              <button className="icon-button" type="button" aria-label={`${id ? "Atur" : "Edit"} ${user.name}`} onClick={() => openEditUser(user)}><MoreHorizontal size={17} /></button>
+              {canManage && <button className={`button small ${user.status === "Aktif" ? "subtle" : "secondary"}`} type="button" disabled={user.id === currentUserId} onClick={() => toggleUser(user)}>{user.status === "Aktif" ? <UserRoundX size={15} /> : <UserCheck size={15} />}{user.status === "Aktif" ? (id ? "Nonaktifkan" : "Disable") : (id ? "Aktifkan" : "Enable")}</button>}
+              {canManage && <button className="icon-button" type="button" aria-label={`${id ? "Atur" : "Edit"} ${user.name}`} onClick={() => openEditUser(user)}><MoreHorizontal size={17} /></button>}
             </article>
           ))}
         </div>

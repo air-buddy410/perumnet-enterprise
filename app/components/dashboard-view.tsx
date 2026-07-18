@@ -22,7 +22,6 @@ import {
   formatCompactCurrency,
   formatCurrency,
   Project,
-  projects as seedProjects,
   ProjectStatus,
   ViewKey,
 } from "../data";
@@ -32,6 +31,11 @@ interface DashboardViewProps {
   notify: (message: string) => void;
   selectedProjectId?: string;
   userName: string;
+  canManage: boolean;
+  canUseBoq: boolean;
+  canUseBilling: boolean;
+  onSelectProject: (projectId: string) => void;
+  onProjectCreated: (project: Project) => void;
 }
 
 const filters = ["Semua", "Aktif", "Selesai", "Draft"] as const;
@@ -49,8 +53,18 @@ function paymentClass(payment: Project["payment"]) {
   return "neutral";
 }
 
-export function DashboardView({ navigate, notify, selectedProjectId = "", userName }: DashboardViewProps) {
-  const [projectList, setProjectList] = useState(seedProjects);
+export function DashboardView({
+  navigate,
+  notify,
+  selectedProjectId = "",
+  userName,
+  canManage,
+  canUseBoq,
+  canUseBilling,
+  onSelectProject,
+  onProjectCreated,
+}: DashboardViewProps) {
+  const [projectList, setProjectList] = useState<Project[]>([]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<(typeof filters)[number]>("Semua");
   const [showNewProject, setShowNewProject] = useState(false);
@@ -101,6 +115,25 @@ export function DashboardView({ navigate, notify, selectedProjectId = "", userNa
     );
     return { active, completed, value, paid };
   }, [projectList, selectedProjectId]);
+  const scopedProjects = selectedProjectId
+    ? projectList.filter((project) => project.id === selectedProjectId)
+    : projectList;
+  const attentionProjects = scopedProjects
+    .filter(
+      (project) =>
+        project.status !== "Selesai" &&
+        (project.payment === "Belum Dibayar" ||
+          project.payment === "Sebagian" ||
+          project.progress < 100),
+    )
+    .slice(0, 3);
+  const visibleTeam = Array.from(
+    new Set(
+      scopedProjects.flatMap(
+        (project) => project.teamNames ?? [project.manager].filter(Boolean),
+      ),
+    ),
+  ).slice(0, 3);
 
   async function addProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -117,6 +150,8 @@ export function DashboardView({ navigate, notify, selectedProjectId = "", userNa
         }),
       });
       setProjectList((items) => [newProject, ...items]);
+      onProjectCreated(newProject);
+      onSelectProject(newProject.id);
       setProjectName("");
       setClientName("");
       setLocation("");
@@ -135,9 +170,11 @@ export function DashboardView({ navigate, notify, selectedProjectId = "", userNa
           <h1>Selamat sore, {firstName}.</h1>
           <p>Berikut ringkasan operasional proyek PerumNet hari ini.</p>
         </div>
-        <button className="button primary" type="button" onClick={() => setShowNewProject(true)}>
-          <Plus size={17} /> Proyek baru
-        </button>
+        {canManage && (
+          <button className="button primary" type="button" onClick={() => setShowNewProject(true)}>
+            <Plus size={17} /> Proyek baru
+          </button>
+        )}
       </section>
 
       <section className="metric-grid" aria-label="Ringkasan operasional">
@@ -155,7 +192,7 @@ export function DashboardView({ navigate, notify, selectedProjectId = "", userNa
             <span>Nilai proyek berjalan</span>
             <strong>{formatCompactCurrency(stats.value)}</strong>
           </div>
-          <span className="metric-change">3 kontrak berjalan</span>
+          <span className="metric-change">{stats.active} kontrak berjalan</span>
         </article>
         <article className="metric-card">
           <span className="metric-icon orange"><Clock3 size={20} /></span>
@@ -163,7 +200,7 @@ export function DashboardView({ navigate, notify, selectedProjectId = "", userNa
             <span>Piutang diterima</span>
             <strong>{formatCompactCurrency(stats.paid)}</strong>
           </div>
-          <span className="metric-change warning-text">2 invoice jatuh tempo</span>
+          <span className="metric-change warning-text">Sesuai pembayaran terkonfirmasi</span>
         </article>
         <article className="metric-card">
           <span className="metric-icon green"><CheckCircle2 size={20} /></span>
@@ -239,21 +276,25 @@ export function DashboardView({ navigate, notify, selectedProjectId = "", userNa
                 </div>
                 <div className="project-finance">
                   <span>Nilai proyek</span>
-                  <strong>{project.value ? formatCurrency(project.value) : "Belum ditentukan"}</strong>
+                  <strong>{project.payment === "Tidak Diizinkan" ? "Akses terbatas" : project.value ? formatCurrency(project.value) : "Belum ditentukan"}</strong>
                   <span className={`status-badge ${paymentClass(project.payment)}`}>
                     {project.payment === "Sebagian" ? `Terbayar ${project.paidRatio}%` : project.payment}
                   </span>
                 </div>
                 <div className="project-actions">
-                  <button className="quick-action" type="button" onClick={() => navigate("boq")}>
-                    <FileSpreadsheet size={16} />
-                    <span>BoQ</span>
-                  </button>
-                  <button className="quick-action" type="button" onClick={() => navigate("billing")}>
-                    <FileText size={16} />
-                    <span>Quotation</span>
-                  </button>
-                  <button className="quick-action primary-link" type="button" onClick={() => navigate("project")}>
+                  {canUseBoq && (
+                    <button className="quick-action" type="button" onClick={() => { onSelectProject(project.id); navigate("boq"); }}>
+                      <FileSpreadsheet size={16} />
+                      <span>BoQ</span>
+                    </button>
+                  )}
+                  {canUseBilling && (
+                    <button className="quick-action" type="button" onClick={() => { onSelectProject(project.id); navigate("billing"); }}>
+                      <FileText size={16} />
+                      <span>Quotation</span>
+                    </button>
+                  )}
+                  <button className="quick-action primary-link" type="button" onClick={() => { onSelectProject(project.id); navigate("project"); }}>
                     <span>Detail</span>
                     <ArrowRight size={16} />
                   </button>
@@ -277,32 +318,19 @@ export function DashboardView({ navigate, notify, selectedProjectId = "", userNa
                 <span className="eyebrow">PERLU PERHATIAN</span>
                 <h2>Tindak lanjut</h2>
               </div>
-              <span className="count-badge">3</span>
+              <span className="count-badge">{attentionProjects.length}</span>
             </div>
-            <button className="attention-item" type="button" onClick={() => navigate("billing")}>
-              <span className="attention-icon danger"><FileText size={17} /></span>
-              <span>
-                <strong>Invoice jatuh tempo</strong>
-                <small>INV/PN/VII/2026/044 · 2 Agu</small>
-              </span>
-              <ArrowRight size={15} />
-            </button>
-            <button className="attention-item" type="button" onClick={() => navigate("project")}>
-              <span className="attention-icon warning"><Clock3 size={17} /></span>
-              <span>
-                <strong>2 tugas terlambat</strong>
-                <small>Warehouse · backbone network</small>
-              </span>
-              <ArrowRight size={15} />
-            </button>
-            <button className="attention-item" type="button" onClick={() => navigate("bast")}>
-              <span className="attention-icon info"><CheckCircle2 size={17} /></span>
-              <span>
-                <strong>BAST siap ditandatangani</strong>
-                <small>Villa Complex · 100% selesai</small>
-              </span>
-              <ArrowRight size={15} />
-            </button>
+            {attentionProjects.map((project) => (
+              <button className="attention-item" type="button" key={project.id} onClick={() => { onSelectProject(project.id); navigate(project.payment === "Belum Dibayar" || project.payment === "Sebagian" ? "billing" : "project"); }}>
+                <span className={`attention-icon ${project.payment === "Belum Dibayar" ? "danger" : project.payment === "Sebagian" ? "warning" : "info"}`}><FileText size={17} /></span>
+                <span>
+                  <strong>{project.name}</strong>
+                  <small>{project.payment} · progres {project.progress}%</small>
+                </span>
+                <ArrowRight size={15} />
+              </button>
+            ))}
+            {!attentionProjects.length && <div className="empty-state compact"><CheckCircle2 size={24} /><p>Tidak ada tindak lanjut mendesak.</p></div>}
           </section>
 
           <section className="panel team-panel">
@@ -312,30 +340,13 @@ export function DashboardView({ navigate, notify, selectedProjectId = "", userNa
                 <h2>Aktivitas hari ini</h2>
               </div>
             </div>
-            <div className="team-activity">
-              <div className="avatar small">AS</div>
-              <div>
-                <strong>Agus Suardana</strong>
-                <span>Upload 8 foto dokumentasi</span>
+            {visibleTeam.map((name, index) => (
+              <div className="team-activity" key={name}>
+                <div className={`avatar small ${index === 1 ? "coral" : index === 2 ? "navy" : ""}`}>{name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("")}</div>
+                <div><strong>{name}</strong><span>Anggota proyek yang dapat diakses</span></div>
               </div>
-              <small>14:28</small>
-            </div>
-            <div className="team-activity">
-              <div className="avatar small coral">KP</div>
-              <div>
-                <strong>Kadek Putra</strong>
-                <span>Menyelesaikan terminasi AP</span>
-              </div>
-              <small>12:06</small>
-            </div>
-            <div className="team-activity">
-              <div className="avatar small navy">AP</div>
-              <div>
-                <strong>Ayu Pramesti</strong>
-                <span>Memperbarui timeline proyek</span>
-              </div>
-              <small>09:42</small>
-            </div>
+            ))}
+            {!visibleTeam.length && <div className="empty-state compact"><UsersRound size={24} /><p>Belum ada anggota proyek.</p></div>}
           </section>
         </aside>
       </section>

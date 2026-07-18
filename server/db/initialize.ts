@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS quotations (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS quotations_project_unique ON quotations(project_id);
 
 CREATE TABLE IF NOT EXISTS invoices (
   id TEXT PRIMARY KEY,
@@ -227,6 +228,7 @@ CREATE TABLE IF NOT EXISTS basts (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS basts_project_idx ON basts(project_id);
+CREATE UNIQUE INDEX IF NOT EXISTS basts_project_unique ON basts(project_id);
 
 CREATE TABLE IF NOT EXISTS transactions (
   id TEXT PRIMARY KEY,
@@ -243,6 +245,9 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 CREATE INDEX IF NOT EXISTS transactions_project_idx ON transactions(project_id);
 CREATE INDEX IF NOT EXISTS transactions_date_idx ON transactions(date);
+CREATE UNIQUE INDEX IF NOT EXISTS transactions_source_reference_unique
+  ON transactions(source, reference_id)
+  WHERE reference_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,

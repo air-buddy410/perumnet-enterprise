@@ -6,14 +6,35 @@ import { PointerEvent, useEffect, useRef, useState } from "react";
 interface SignaturePadProps {
   label: string;
   signer: string;
+  value?: string;
+  disabled?: boolean;
   onChange: (dataUrl: string) => void;
 }
 
-export function SignaturePad({ label, signer, onChange }: SignaturePadProps) {
+export function SignaturePad({ label, signer, value = "", disabled = false, onChange }: SignaturePadProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawingRef = useRef(false);
   const lastPointRef = useRef({ x: 0, y: 0 });
-  const [hasSignature, setHasSignature] = useState(false);
+  const [hasLocalSignature, setHasLocalSignature] = useState(false);
+  const hasSignature = Boolean(value) || hasLocalSignature;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (!value) {
+      canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    const image = new Image();
+    image.onload = () => {
+      const rect = canvas.getBoundingClientRect();
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, rect.width, rect.height);
+    };
+    image.src = value;
+  }, [value]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -51,6 +72,7 @@ export function SignaturePad({ label, signer, onChange }: SignaturePadProps) {
   }
 
   function startDrawing(event: PointerEvent<HTMLCanvasElement>) {
+    if (disabled) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     drawingRef.current = true;
     lastPointRef.current = pointFromEvent(event);
@@ -66,7 +88,7 @@ export function SignaturePad({ label, signer, onChange }: SignaturePadProps) {
     context.lineTo(point.x, point.y);
     context.stroke();
     lastPointRef.current = point;
-    setHasSignature(true);
+    setHasLocalSignature(true);
   }
 
   function finishDrawing(event: PointerEvent<HTMLCanvasElement>) {
@@ -80,7 +102,7 @@ export function SignaturePad({ label, signer, onChange }: SignaturePadProps) {
     if (!canvas) return;
     const context = canvas.getContext("2d");
     context?.clearRect(0, 0, canvas.width, canvas.height);
-    setHasSignature(false);
+    setHasLocalSignature(false);
     onChange("");
   }
 
@@ -91,13 +113,16 @@ export function SignaturePad({ label, signer, onChange }: SignaturePadProps) {
           <span>{label}</span>
           <strong>{signer || "Nama penanda tangan"}</strong>
         </div>
-        <button className="button subtle small" type="button" onClick={clearSignature}>
-          <Eraser size={15} /> Hapus
-        </button>
+        {!disabled && (
+          <button className="button subtle small" type="button" onClick={clearSignature}>
+            <Eraser size={15} /> Hapus
+          </button>
+        )}
       </div>
       <canvas
         ref={canvasRef}
         className="signature-canvas"
+        aria-disabled={disabled}
         aria-label={`Area tanda tangan ${label}`}
         onPointerDown={startDrawing}
         onPointerMove={draw}

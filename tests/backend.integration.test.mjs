@@ -186,13 +186,38 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   assert.equal(sentQuotation.status, "Sent");
   assert.equal((await json(`/api/quotations?projectId=${project.id}`)).status, "Sent");
 
+  const updatedBoqItem = await json(
+    `/api/boq/items/${boqItem.id}?projectId=${project.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        description: "Instalasi integrasi terkelola",
+        sellingPrice: 1_800_000,
+      }),
+    },
+  );
+  assert.equal(updatedBoqItem.sellingPrice, 1_800_000);
+  const synchronizedQuotation = await json(`/api/quotations?projectId=${project.id}`);
+  assert.equal(synchronizedQuotation.status, "Draft");
+  assert.equal(synchronizedQuotation.total, 1_800_000);
+  assert.equal((await json(`/api/projects/${project.id}`)).value, 1_800_000);
+  const editedQuotation = await json(`/api/quotations?projectId=${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status: "Sent",
+      issuedAt: "2026-07-19",
+      validUntil: "2026-08-05",
+    }),
+  });
+  assert.equal(editedQuotation.validUntil, "2026-08-05");
+
   const template = await json(
     "/api/boq/templates",
     {
       method: "POST",
       body: JSON.stringify({
         name: "Template Integrasi",
-        items: boq.items,
+        items: [updatedBoqItem],
       }),
     },
     201,
@@ -213,11 +238,42 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     },
     201,
   );
-  const paidInvoice = await json(`/api/invoices/${invoice.id}/payment`, {
+  const paidInvoice = await json(`/api/invoices/${invoice.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      type: "DP Tahap 1",
+      amount: 800_000,
+      dueDate: "2026-07-28",
+    }),
+  });
+  assert.equal(paidInvoice.amount, 800_000);
+  const excessiveInvoice = await request("/api/invoices", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId: project.id,
+      type: "Melebihi Quotation",
+      issueDate: "2026-07-18",
+      dueDate: "2026-07-25",
+      amount: 1_100_000,
+    }),
+  });
+  assert.equal(excessiveInvoice.status, 409);
+  const confirmedInvoice = await json(`/api/invoices/${invoice.id}/payment`, {
     method: "POST",
     body: JSON.stringify({ paidDate: "2026-07-18" }),
   });
-  assert.equal(paidInvoice.status, "Lunas");
+  assert.equal(confirmedInvoice.status, "Lunas");
+  const editedPaidInvoice = await json(`/api/invoices/${invoice.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ amount: 850_000 }),
+  });
+  assert.equal(editedPaidInvoice.amount, 850_000);
+  assert.equal(
+    (await json(`/api/transactions?projectId=${project.id}`)).find(
+      (entry) => entry.source === "Invoice",
+    )?.amount,
+    850_000,
+  );
   const invoicePdf = await request(`/api/invoices/${invoice.id}/pdf`);
   assert.equal(invoicePdf.status, 200);
   assert.equal(Buffer.from(await invoicePdf.arrayBuffer()).subarray(0, 4).toString(), "%PDF");
@@ -257,8 +313,38 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     })).status,
     "Dikerjakan",
   );
+  const editedSpk = await json(`/api/spks/${spk.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      scope: "Pekerjaan integrasi jaringan dan dokumentasi",
+      cost: 600_000,
+      status: "Selesai",
+      endDate: "2026-07-29",
+    }),
+  });
+  assert.equal(editedSpk.cost, 600_000);
+  let spkTransactions = await json(`/api/transactions?projectId=${project.id}`);
+  assert.equal(
+    spkTransactions.find((entry) => entry.source === "SPK")?.amount,
+    600_000,
+  );
+  await json(`/api/spks/${spk.id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Dikerjakan" }),
+  });
+  spkTransactions = await json(`/api/transactions?projectId=${project.id}`);
+  assert.equal(
+    spkTransactions.some((entry) => entry.source === "SPK"),
+    false,
+  );
+  await json(`/api/spks/${spk.id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Selesai" }),
+  });
   assert.equal((await request(`/api/spks/${spk.id}/pdf`)).status, 200);
 
+  const signature =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
   const bast = await json(
     "/api/bast",
     {
@@ -272,13 +358,30 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
         ],
         clientName: "Klien Pengujian",
         clientRole: "Manager",
+        clientSignature: signature,
         engineerName: "Dewa Mahardika",
+        engineerSignature: signature,
         status: "Final",
       }),
     },
     201,
   );
   assert.equal((await request(`/api/bast/${bast.id}/pdf`)).status, 200);
+  const editedBast = await json(`/api/bast/${bast.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      notes: "BAST telah ditinjau dan diperbarui oleh kedua pihak.",
+      installedItems: [
+        {
+          name: "Instalasi integrasi terkelola",
+          quantity: "1 paket",
+          status: "Terpasang dan diuji",
+        },
+      ],
+    }),
+  });
+  assert.match(editedBast.notes, /diperbarui/);
+  assert.equal(editedBast.installedItems[0].name, "Instalasi integrasi terkelola");
 
   const transaction = await json(
     "/api/transactions",
@@ -297,9 +400,9 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   );
   assert.equal(transaction.project, "Proyek Integrasi Backend");
   const finance = await json(`/api/finance/summary?projectId=${project.id}`);
-  assert.equal(finance.income, 750_000);
-  assert.equal(finance.expense, 125_000);
-  assert.equal(finance.profit, 625_000);
+  assert.equal(finance.income, 850_000);
+  assert.equal(finance.expense, 725_000);
+  assert.equal(finance.profit, 125_000);
 
   const users = await json("/api/users");
   assert.ok(users.some((user) => user.role === "Finance"));
@@ -372,7 +475,12 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   const audit = await json("/api/audit-logs");
   assert.ok(audit.some((entry) => entry.entity === "invoice"));
 
-  await json(`/api/boq/items/${boqItem.id}?projectId=${project.id}`, { method: "DELETE" }, 204);
+  assert.equal(
+    (await request(`/api/boq/items/${boqItem.id}?projectId=${project.id}`, {
+      method: "DELETE",
+    })).status,
+    409,
+  );
   await json(`/api/boq/templates/${template.id}`, { method: "DELETE" }, 204);
 
   await json("/api/auth/logout", { method: "POST" });
@@ -386,7 +494,8 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     }),
   });
   assert.equal(viewerLogin.user.permissions.projects, "view");
-  assert.equal((await request("/api/projects")).status, 200);
+  assert.deepEqual(await json("/api/projects"), []);
+  assert.equal((await request(`/api/projects/${project.id}`)).status, 404);
   assert.equal((await request("/api/projects", {
     method: "POST",
     body: JSON.stringify({
@@ -399,7 +508,13 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   })).status, 403);
   assert.equal((await request("/api/bast")).status, 403);
   assert.equal((await request("/api/users")).status, 403);
+  assert.equal((await request(`/api/invoices/${invoice.id}`)).status, 403);
+  assert.equal(
+    (await request("/api/profile/avatar/user-1")).status,
+    403,
+  );
   assert.deepEqual(await json("/api/search?q=Vendor"), []);
+  assert.deepEqual(await json("/api/search?q=Proyek%20Integrasi"), []);
 
   await json("/api/auth/logout", { method: "POST" });
   cookie = "";
@@ -413,5 +528,39 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   });
   assert.equal((await request("/api/finance/summary")).status, 403);
   assert.equal((await request("/api/users")).status, 403);
-  assert.equal((await request("/api/projects")).status, 200);
+  const engineerProjects = await json("/api/projects");
+  assert.deepEqual(
+    engineerProjects.map((item) => item.id).sort(),
+    ["project-1", "project-2", "project-4"],
+  );
+  assert.equal(engineerProjects[0].value, 0);
+  assert.equal(engineerProjects[0].payment, "Tidak Diizinkan");
+  assert.equal(
+    (await request("/api/projects/project-1/quotation.pdf")).status,
+    403,
+  );
+  assert.equal((await request(`/api/boq?projectId=${project.id}`)).status, 404);
+  assert.equal((await request(`/api/spks/${spk.id}/pdf`)).status, 404);
+
+  await json("/api/auth/logout", { method: "POST" });
+  cookie = "";
+  await json("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "admin@perumnet.id",
+      password: "perumnet123",
+      remember: false,
+    }),
+  });
+  await json(`/api/projects/${project.id}`, { method: "DELETE" }, 204);
+  assert.equal((await request(`/api/projects/${project.id}`)).status, 404);
+  assert.equal((await request(`/api/invoices/${invoice.id}`)).status, 404);
+  assert.equal((await request(`/api/spks/${spk.id}`)).status, 404);
+  assert.equal((await request(`/api/bast/${bast.id}`)).status, 404);
+  assert.equal(
+    (await json("/api/transactions")).some(
+      (entry) => entry.projectId === project.id,
+    ),
+    false,
+  );
 }, { timeout: 45_000 });

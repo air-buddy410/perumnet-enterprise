@@ -26,7 +26,7 @@ import {
 } from "../auth";
 import { getDatabase } from "../db/client";
 import { asNumber, formatDate, initials, parseJson } from "../format";
-import { readProjectFile, storeProjectFile } from "../storage";
+import { deleteProjectFile, readProjectFile, storeProjectFile } from "../storage";
 import {
   ApiError,
   assertSameOrigin,
@@ -84,6 +84,12 @@ const invoiceSchema = z.object({
   issueDate: isoDateSchema.default(() => new Date().toISOString().slice(0, 10)),
   dueDate: isoDateSchema,
   amount: positiveMoney,
+});
+
+const quotationSchema = z.object({
+  status: z.enum(["Draft", "Sent"]).default("Draft"),
+  issuedAt: isoDateSchema.default(() => new Date().toISOString().slice(0, 10)),
+  validUntil: isoDateSchema.optional(),
 });
 
 const vendorSchema = z.object({
@@ -178,6 +184,16 @@ function now() {
   return new Date().toISOString();
 }
 
+function assertDateOrder(
+  start: unknown,
+  end: unknown,
+  message = "Tanggal selesai tidak boleh lebih awal dari tanggal mulai.",
+) {
+  if (start && end && String(end) < String(start)) {
+    throw new ApiError(422, "INVALID_DATE_RANGE", message);
+  }
+}
+
 function applicationPath(path: string) {
   const configuredBasePath = process.env.NEXT_PUBLIC_BASE_PATH?.trim() ?? "";
   const basePath =
@@ -250,6 +266,198 @@ function assertMutationAccess(user: AuthUser, resource: string) {
   if (!mutationRoles(resource).includes(user.role) && user.role !== "Admin") {
     throw new ApiError(403, "FORBIDDEN", "Peran Anda tidak dapat menjalankan tindakan ini.");
   }
+}
+
+function hasGlobalProjectScope(user: AuthUser) {
+  return user.role === "Admin" || user.role === "Finance";
+}
+
+function projectScopeCondition(user: AuthUser, projectAlias = "p") {
+  if (hasGlobalProjectScope(user)) return { sql: "", args: [] as unknown[] };
+  return {
+    sql: `(
+      ${projectAlias}.created_by = ?
+      OR ${projectAlias}.manager_id = ?
+      OR EXISTS (
+        SELECT 1 FROM project_members access_pm
+        WHERE access_pm.project_id = ${projectAlias}.id AND access_pm.user_id = ?
+      )
+    )`,
+    args: [user.id, user.id, user.id] as unknown[],
+  };
+}
+
+async function assertProjectAccess(user: AuthUser, projectId: string) {
+  const { client } = await getDatabase();
+  const scope = projectScopeCondition(user, "p");
+  const result = await client.execute({
+    sql: `SELECT p.id FROM projects p WHERE p.id = ?${scope.sql ? ` AND ${scope.sql}` : ""} LIMIT 1`,
+    args: [projectId, ...scope.args],
+  });
+  if (!result.rows.length) {
+    // Return the same response for a missing and an inaccessible project so an
+    // account cannot enumerate project IDs that belong to another team.
+    throw new ApiError(404, "NOT_FOUND", "Proyek tidak ditemukan.");
+  }
+}
+
+async function syncCommercialValues(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  projectId: string,
+) {
+  const totalResult = await client.execute({
+    sql: `
+      SELECT COALESCE(SUM(i.quantity * i.selling_price), 0) AS total
+      FROM boq_items i
+      JOIN boqs b ON b.id = i.boq_id
+      WHERE b.project_id = ?
+    `,
+    args: [projectId],
+  });
+  const total = asNumber(totalResult.rows[0]?.total);
+  const timestamp = now();
+  await client.batch(
+    [
+      {
+        sql: "UPDATE projects SET value=?,updated_at=? WHERE id=?",
+        args: [total, timestamp, projectId],
+      },
+      {
+        sql: "UPDATE quotations SET total=?,status='Draft',updated_at=? WHERE project_id=?",
+        args: [total, timestamp, projectId],
+      },
+    ],
+    "write",
+  );
+  return total;
+}
+
+async function assertBoqTotalCoversInvoices(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  projectId: string,
+  proposedTotal: number,
+) {
+  const result = await client.execute({
+    sql: "SELECT COALESCE(SUM(amount),0) AS total FROM invoices WHERE project_id=?",
+    args: [projectId],
+  });
+  const invoicedTotal = asNumber(result.rows[0]?.total);
+  if (proposedTotal < invoicedTotal) {
+    throw new ApiError(
+      409,
+      "BOQ_BELOW_INVOICED_TOTAL",
+      `Nilai BoQ tidak boleh lebih kecil dari total Invoice yang sudah diterbitkan (${invoicedTotal}). Edit atau hapus Invoice terlebih dahulu.`,
+    );
+  }
+}
+
+async function syncInvoiceTransaction(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  invoiceId: string,
+  userId: string,
+) {
+  const invoice = await ensureExists(
+    "SELECT * FROM invoices WHERE id=?",
+    [invoiceId],
+    "Invoice tidak ditemukan.",
+  );
+  if (invoice.status !== "Lunas") {
+    await client.execute({
+      sql: "DELETE FROM transactions WHERE source='Invoice' AND reference_id=?",
+      args: [invoiceId],
+    });
+    return;
+  }
+  const timestamp = now();
+  const existing = await client.execute({
+    sql: "SELECT id FROM transactions WHERE source='Invoice' AND reference_id=? LIMIT 1",
+    args: [invoiceId],
+  });
+  if (existing.rows[0]) {
+    await client.execute({
+      sql: "UPDATE transactions SET project_id=?,date=?,type='Pemasukan',description=?,amount=?,updated_at=? WHERE id=?",
+      args: [
+        invoice.project_id,
+        invoice.paid_date ?? invoice.issue_date,
+        `Pembayaran ${invoice.number}`,
+        invoice.amount,
+        timestamp,
+        existing.rows[0].id,
+      ],
+    });
+    return;
+  }
+  await client.execute({
+    sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,reference_id,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    args: [
+      randomUUID(),
+      invoice.project_id,
+      invoice.paid_date ?? invoice.issue_date,
+      "Pemasukan",
+      `Pembayaran ${invoice.number}`,
+      invoice.amount,
+      "Invoice",
+      invoiceId,
+      userId,
+      timestamp,
+      timestamp,
+    ],
+  });
+}
+
+async function syncSpkTransaction(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  spkId: string,
+  userId: string,
+) {
+  const spk = await ensureExists(
+    "SELECT * FROM spks WHERE id=?",
+    [spkId],
+    "SPK tidak ditemukan.",
+  );
+  if (spk.status !== "Selesai") {
+    await client.execute({
+      sql: "DELETE FROM transactions WHERE source='SPK' AND reference_id=?",
+      args: [spkId],
+    });
+    return;
+  }
+  const timestamp = now();
+  const transactionDate = spk.end_date ?? timestamp.slice(0, 10);
+  const existing = await client.execute({
+    sql: "SELECT id FROM transactions WHERE source='SPK' AND reference_id=? LIMIT 1",
+    args: [spkId],
+  });
+  if (existing.rows[0]) {
+    await client.execute({
+      sql: "UPDATE transactions SET project_id=?,date=?,type='Pengeluaran',description=?,amount=?,updated_at=? WHERE id=?",
+      args: [
+        spk.project_id,
+        transactionDate,
+        `Biaya ${spk.number}`,
+        spk.cost,
+        timestamp,
+        existing.rows[0].id,
+      ],
+    });
+    return;
+  }
+  await client.execute({
+    sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,reference_id,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    args: [
+      randomUUID(),
+      spk.project_id,
+      transactionDate,
+      "Pengeluaran",
+      `Biaya ${spk.number}`,
+      spk.cost,
+      "SPK",
+      spkId,
+      userId,
+      timestamp,
+      timestamp,
+    ],
+  });
 }
 
 async function sendResetEmail(email: string, token: string) {
@@ -348,12 +556,17 @@ async function handleAuth(request: Request, path: string[]) {
   throw new ApiError(404, "NOT_FOUND", "Endpoint autentikasi tidak ditemukan.");
 }
 
-async function listProjects(searchParams: URLSearchParams) {
+async function listProjects(searchParams: URLSearchParams, user: AuthUser) {
   const { client } = await getDatabase();
   const status = searchParams.get("status");
   const query = searchParams.get("q")?.trim();
   const conditions: string[] = [];
   const args: unknown[] = [];
+  const scope = projectScopeCondition(user, "p");
+  if (scope.sql) {
+    conditions.push(scope.sql);
+    args.push(...scope.args);
+  }
   if (status && status !== "Semua") {
     conditions.push("p.status = ?");
     args.push(status);
@@ -379,6 +592,9 @@ async function listProjects(searchParams: URLSearchParams) {
     `,
     args: args as never[],
   });
+  const canViewCommercial =
+    canAccess(user.permissions, "billing") ||
+    canAccess(user.permissions, "finance");
 
   return result.rows.map((row) => {
     const taskCount = asNumber(row.task_count);
@@ -409,13 +625,13 @@ async function listProjects(searchParams: URLSearchParams) {
       location: String(row.location),
       status: String(row.status),
       progress,
-      payment,
-      paidRatio,
+      payment: canViewCommercial ? payment : "Tidak Diizinkan",
+      paidRatio: canViewCommercial ? paidRatio : 0,
       startDate: formatDate(row.start_date),
       targetDate: row.target_date ? formatDate(row.target_date) : "Belum ditentukan",
       startDateIso: row.start_date,
       targetDateIso: row.target_date,
-      value: asNumber(row.value),
+      value: canViewCommercial ? asNumber(row.value) : 0,
       manager: row.manager_name ? String(row.manager_name) : "Belum ditentukan",
       managerId: row.manager_id,
       team: teamNames.map(initials),
@@ -431,16 +647,24 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
   const childId = path[3];
 
   if (request.method === "GET" && !projectId) {
-    return ok(await listProjects(new URL(request.url).searchParams));
+    return ok(await listProjects(new URL(request.url).searchParams, user));
   }
 
   if (request.method === "POST" && !projectId) {
     if (!mutationRoles("projects").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Hanya Admin atau Project Manager yang dapat membuat proyek.");
     const input = projectSchema.parse(await jsonBody(request));
+    assertDateOrder(input.startDate, input.targetDate);
     const id = randomUUID();
     const count = await client.execute("SELECT COUNT(*) AS count FROM projects");
     const code = `PN-${new Date().getUTCFullYear().toString().slice(-2)}${String(new Date().getUTCMonth() + 1).padStart(2, "0")}-${String(asNumber(count.rows[0]?.count) + 1).padStart(3, "0")}`;
     const timestamp = now();
+    if (input.managerId) {
+      await ensureExists(
+        "SELECT id FROM users WHERE id=? AND status='Aktif'",
+        [input.managerId],
+        "Project Manager aktif tidak ditemukan.",
+      );
+    }
     await client.batch(
       [
         {
@@ -451,16 +675,20 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
           sql: "INSERT INTO project_members (project_id,user_id,created_at) VALUES (?,?,?) ON CONFLICT (project_id,user_id) DO NOTHING",
           args: [id, input.managerId ?? user.id, timestamp],
         },
+        {
+          sql: "INSERT INTO project_members (project_id,user_id,created_at) VALUES (?,?,?) ON CONFLICT (project_id,user_id) DO NOTHING",
+          args: [id, user.id, timestamp],
+        },
       ],
       "write",
     );
     await writeAuditLog(client, request, user, "create", "project", id, input);
-    const projects = await listProjects(new URLSearchParams());
+    const projects = await listProjects(new URLSearchParams(), user);
     return created(projects.find((project) => project.id === id));
   }
 
   if (projectId && child === "tasks") {
-    await ensureExists("SELECT id FROM projects WHERE id = ?", [projectId], "Proyek tidak ditemukan.");
+    await assertProjectAccess(user, projectId);
 
     if (request.method === "GET" && !childId) {
       const result = await client.execute({
@@ -487,6 +715,7 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
 
     if (request.method === "POST" && !childId) {
       const input = taskSchema.parse(await jsonBody(request));
+      assertDateOrder(input.startDate, input.endDate);
       const id = randomUUID();
       const count = await client.execute({
         sql: "SELECT COUNT(*) AS count FROM project_tasks WHERE project_id = ?",
@@ -497,6 +726,12 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         sql: "INSERT INTO project_tasks (id,project_id,name,owner_id,owner_name,start_date,end_date,status,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         args: [id, projectId, input.name, input.ownerId ?? null, input.owner, input.startDate ?? null, input.endDate ?? null, input.status, asNumber(count.rows[0]?.count), timestamp, timestamp],
       });
+      if (input.ownerId) {
+        await client.execute({
+          sql: "INSERT INTO project_members (project_id,user_id,created_at) VALUES (?,?,?) ON CONFLICT (project_id,user_id) DO NOTHING",
+          args: [projectId, input.ownerId, timestamp],
+        });
+      }
       await writeAuditLog(client, request, user, "create", "project_task", id, { projectId });
       return created({ id, ...input });
     }
@@ -507,6 +742,10 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         "SELECT * FROM project_tasks WHERE id = ? AND project_id = ?",
         [childId, projectId],
         "Tugas tidak ditemukan.",
+      );
+      assertDateOrder(
+        input.startDate === undefined ? current.start_date : input.startDate,
+        input.endDate === undefined ? current.end_date : input.endDate,
       );
       await client.execute({
         sql: "UPDATE project_tasks SET name=?,owner_id=?,owner_name=?,start_date=?,end_date=?,status=?,updated_at=? WHERE id=? AND project_id=?",
@@ -534,7 +773,7 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
   }
 
   if (projectId && child === "documents") {
-    await ensureExists("SELECT id FROM projects WHERE id = ?", [projectId], "Proyek tidak ditemukan.");
+    await assertProjectAccess(user, projectId);
     if (request.method === "GET") {
       const result = await client.execute({
         sql: "SELECT id,name,mime_type,size,uploader_name,created_at,storage_url FROM project_documents WHERE project_id = ? ORDER BY created_at DESC",
@@ -573,11 +812,14 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
   }
 
   if (projectId && child === "quotation.pdf" && request.method === "GET") {
+    assertAccess(user, "billing", "view");
+    await assertProjectAccess(user, projectId);
     return renderBusinessPdf("quotation", projectId);
   }
 
   if (projectId && !child && request.method === "GET") {
-    const projects = await listProjects(new URLSearchParams());
+    await assertProjectAccess(user, projectId);
+    const projects = await listProjects(new URLSearchParams(), user);
     const project = projects.find((item) => item.id === projectId);
     if (!project) throw new ApiError(404, "NOT_FOUND", "Proyek tidak ditemukan.");
     return ok(project);
@@ -585,8 +827,13 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
 
   if (projectId && !child && request.method === "PATCH") {
     if (!mutationRoles("projects").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah proyek.");
+    await assertProjectAccess(user, projectId);
     const input = projectSchema.partial().parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM projects WHERE id = ?", [projectId], "Proyek tidak ditemukan.");
+    assertDateOrder(
+      input.startDate === undefined ? current.start_date : input.startDate,
+      input.targetDate === undefined ? current.target_date : input.targetDate,
+    );
     await client.execute({
       sql: "UPDATE projects SET name=?,client=?,location=?,status=?,start_date=?,target_date=?,value=?,manager_id=?,updated_at=? WHERE id=?",
       args: [
@@ -602,13 +849,38 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         projectId,
       ],
     });
+    if (input.managerId) {
+      await client.execute({
+        sql: "INSERT INTO project_members (project_id,user_id,created_at) VALUES (?,?,?) ON CONFLICT (project_id,user_id) DO NOTHING",
+        args: [projectId, input.managerId, now()],
+      });
+    }
     await writeAuditLog(client, request, user, "update", "project", projectId, input);
-    const projects = await listProjects(new URLSearchParams());
+    const projects = await listProjects(new URLSearchParams(), user);
     return ok(projects.find((project) => project.id === projectId));
   }
 
   if (projectId && !child && request.method === "DELETE") {
-    await client.execute({ sql: "DELETE FROM projects WHERE id = ?", args: [projectId] });
+    if (user.role !== "Admin") {
+      throw new ApiError(403, "FORBIDDEN", "Hanya Admin yang dapat menghapus proyek.");
+    }
+    await assertProjectAccess(user, projectId);
+    const documents = await client.execute({
+      sql: "SELECT storage_url FROM project_documents WHERE project_id=?",
+      args: [projectId],
+    });
+    await client.batch(
+      [
+        { sql: "DELETE FROM transactions WHERE project_id=?", args: [projectId] },
+        { sql: "DELETE FROM projects WHERE id = ?", args: [projectId] },
+      ],
+      "write",
+    );
+    await Promise.allSettled(
+      documents.rows.map((document) =>
+        deleteProjectFile(document.storage_url ? String(document.storage_url) : null),
+      ),
+    );
     await writeAuditLog(client, request, user, "delete", "project", projectId);
     return noContent();
   }
@@ -697,7 +969,7 @@ async function ensureBoq(projectId: string) {
 async function handleBoq(request: Request, path: string[], user: AuthUser) {
   const { client } = await getDatabase();
   const searchParams = new URL(request.url).searchParams;
-  const projectId = searchParams.get("projectId") ?? "project-1";
+  const projectId = searchParams.get("projectId");
   const child = path[1];
   const childId = path[2];
 
@@ -776,7 +1048,10 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
     }
   }
 
-  await ensureExists("SELECT id FROM projects WHERE id = ?", [projectId], "Proyek tidak ditemukan.");
+  if (!projectId) {
+    throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
+  }
+  await assertProjectAccess(user, projectId);
 
   if (request.method === "GET" && !child) {
     return ok(await getBoq(projectId));
@@ -791,6 +1066,11 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
         items: z.array(boqItemSchema.extend({ id: idSchema.optional() })).max(500),
       })
       .parse(await jsonBody(request));
+    const proposedTotal = input.items.reduce(
+      (sum, item) => sum + item.quantity * item.sellingPrice,
+      0,
+    );
+    await assertBoqTotalCoversInvoices(client, projectId, proposedTotal);
     const boqId = await ensureBoq(projectId);
     const timestamp = now();
     const statements = [
@@ -805,6 +1085,7 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
       })),
     ];
     await client.batch(statements, "write");
+    await syncCommercialValues(client, projectId);
     await writeAuditLog(client, request, user, "replace", "boq", boqId, { projectId, itemCount: input.items.length });
     return ok(await getBoq(projectId));
   }
@@ -823,6 +1104,7 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
       sql: "INSERT INTO boq_items (id,boq_id,category,description,quantity,unit,cost_price,selling_price,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
       args: [id, boqId, input.category, input.description, input.quantity, input.unit, input.costPrice, input.sellingPrice, asNumber(count.rows[0]?.count), timestamp, timestamp],
     });
+    await syncCommercialValues(client, projectId);
     await writeAuditLog(client, request, user, "create", "boq_item", id, { projectId });
     return created({ id, ...input });
   }
@@ -835,6 +1117,13 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
       [childId, projectId],
       "Item BoQ tidak ditemukan.",
     );
+    const currentBoq = await getBoq(projectId);
+    const proposedTotal =
+      currentBoq.totals.selling -
+      asNumber(current.quantity) * asNumber(current.selling_price) +
+      (input.quantity ?? asNumber(current.quantity)) *
+        (input.sellingPrice ?? asNumber(current.selling_price));
+    await assertBoqTotalCoversInvoices(client, projectId, proposedTotal);
     await client.execute({
       sql: "UPDATE boq_items SET category=?,description=?,quantity=?,unit=?,cost_price=?,selling_price=?,updated_at=? WHERE id=?",
       args: [
@@ -848,13 +1137,45 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
         childId,
       ],
     });
+    await syncCommercialValues(client, projectId);
     await writeAuditLog(client, request, user, "update", "boq_item", childId, input);
-    return ok({ id: childId, ...input });
+    const updated = await ensureExists(
+      "SELECT * FROM boq_items WHERE id=?",
+      [childId],
+      "Item BoQ tidak ditemukan.",
+    );
+    return ok({
+      id: String(updated.id),
+      category: String(updated.category),
+      description: String(updated.description),
+      quantity: asNumber(updated.quantity),
+      unit: String(updated.unit),
+      costPrice: asNumber(updated.cost_price),
+      sellingPrice: asNumber(updated.selling_price),
+    });
   }
 
   if (child === "items" && childId && request.method === "DELETE") {
     if (!mutationRoles("boq").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menghapus item BoQ.");
+    await ensureExists(
+      "SELECT i.id FROM boq_items i JOIN boqs b ON b.id=i.boq_id WHERE i.id=? AND b.project_id=?",
+      [childId, projectId],
+      "Item BoQ tidak ditemukan.",
+    );
+    const item = await ensureExists(
+      "SELECT quantity,selling_price FROM boq_items WHERE id=?",
+      [childId],
+      "Item BoQ tidak ditemukan.",
+    );
+    const currentBoq = await getBoq(projectId);
+    await assertBoqTotalCoversInvoices(
+      client,
+      projectId,
+      currentBoq.totals.selling -
+        asNumber(item.quantity) * asNumber(item.selling_price),
+    );
     await client.execute({ sql: "DELETE FROM boq_items WHERE id = ?", args: [childId] });
+    await syncCommercialValues(client, projectId);
     await writeAuditLog(client, request, user, "delete", "boq_item", childId, { projectId });
     return noContent();
   }
@@ -866,7 +1187,7 @@ async function handleQuotations(request: Request, user: AuthUser) {
   const { client } = await getDatabase();
   const projectId = new URL(request.url).searchParams.get("projectId");
   if (!projectId) throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
-  await ensureExists("SELECT id FROM projects WHERE id=?", [projectId], "Proyek tidak ditemukan.");
+  await assertProjectAccess(user, projectId);
 
   if (request.method === "GET") {
     const result = await client.execute({
@@ -881,37 +1202,75 @@ async function handleQuotations(request: Request, user: AuthUser) {
       issuedAt: String(row.issued_at),
       validUntil: row.valid_until ? String(row.valid_until) : null,
       total: asNumber(row.total),
-    } : { status: "Draft" });
+    } : {
+      id: null,
+      number: null,
+      status: "Draft",
+      issuedAt: new Date().toISOString().slice(0, 10),
+      validUntil: null,
+      total: (await getBoq(projectId)).totals.selling,
+    });
   }
 
   if (request.method === "PATCH") {
     assertAccess(user, "billing", "manage");
-    const input = z.object({ status: z.enum(["Draft", "Sent"]) }).parse(await jsonBody(request));
+    const input = quotationSchema.partial().parse(await jsonBody(request));
+    const boq = await getBoq(projectId);
+    if (!boq.items.length || boq.totals.selling <= 0) {
+      throw new ApiError(
+        409,
+        "EMPTY_BOQ",
+        "Tambahkan item BoQ terlebih dahulu sebelum membuat Quotation.",
+      );
+    }
     const current = await client.execute({
-      sql: "SELECT id FROM quotations WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
+      sql: "SELECT * FROM quotations WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
       args: [projectId],
     });
     const timestamp = now();
     let quotationId = current.rows[0] ? String(current.rows[0].id) : "";
     if (quotationId) {
+      const quotation = current.rows[0];
+      assertDateOrder(
+        input.issuedAt ?? quotation.issued_at,
+        input.validUntil === undefined ? quotation.valid_until : input.validUntil,
+        "Masa berlaku Quotation tidak boleh lebih awal dari tanggal terbit.",
+      );
       await client.execute({
-        sql: "UPDATE quotations SET status=?,updated_at=? WHERE id=?",
-        args: [input.status, timestamp, quotationId],
+        sql: "UPDATE quotations SET status=?,issued_at=?,valid_until=?,total=?,updated_at=? WHERE id=?",
+        args: [
+          input.status ?? quotation.status,
+          input.issuedAt ?? quotation.issued_at,
+          input.validUntil === undefined ? quotation.valid_until : input.validUntil,
+          boq.totals.selling,
+          timestamp,
+          quotationId,
+        ],
       });
-      await writeAuditLog(client, request, user, "update_status", "quotation", quotationId, input);
+      await writeAuditLog(client, request, user, "update", "quotation", quotationId, input);
     } else {
-      const boq = await getBoq(projectId);
       const count = await client.execute("SELECT COUNT(*) AS count FROM quotations");
       quotationId = randomUUID();
+      const issuedAt = input.issuedAt ?? timestamp.slice(0, 10);
+      const validUntil =
+        input.validUntil ??
+        new Date(new Date(`${issuedAt}T00:00:00.000Z`).getTime() + 14 * 86_400_000)
+          .toISOString()
+          .slice(0, 10);
+      assertDateOrder(
+        issuedAt,
+        validUntil,
+        "Masa berlaku Quotation tidak boleh lebih awal dari tanggal terbit.",
+      );
       await client.execute({
         sql: "INSERT INTO quotations (id,project_id,number,status,issued_at,valid_until,total,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
         args: [
           quotationId,
           projectId,
           makeSequence("QUO", asNumber(count.rows[0]?.count)),
-          input.status,
-          timestamp.slice(0, 10),
-          new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10),
+          input.status ?? "Draft",
+          issuedAt,
+          validUntil,
           boq.totals.selling,
           timestamp,
           timestamp,
@@ -932,6 +1291,32 @@ async function handleQuotations(request: Request, user: AuthUser) {
       validUntil: row.valid_until ? String(row.valid_until) : null,
       total: asNumber(row.total),
     });
+  }
+
+  if (request.method === "DELETE") {
+    assertAccess(user, "billing", "manage");
+    const result = await client.execute({
+      sql: "SELECT id FROM quotations WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
+      args: [projectId],
+    });
+    const quotationId = result.rows[0]?.id;
+    if (!quotationId) throw new ApiError(404, "NOT_FOUND", "Quotation tidak ditemukan.");
+    const invoiceUsage = await client.execute({
+      sql: "SELECT id FROM invoices WHERE project_id=? LIMIT 1",
+      args: [projectId],
+    });
+    if (invoiceUsage.rows.length) {
+      throw new ApiError(
+        409,
+        "QUOTATION_IN_USE",
+        "Quotation tidak dapat dihapus karena sudah memiliki Invoice.",
+      );
+    }
+    await client.execute({ sql: "DELETE FROM quotations WHERE id=?", args: [quotationId] });
+    await writeAuditLog(client, request, user, "delete", "quotation", String(quotationId), {
+      projectId,
+    });
+    return noContent();
   }
 
   throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
@@ -963,6 +1348,41 @@ async function getInvoice(client: Awaited<ReturnType<typeof getDatabase>>["clien
   return mapInvoice(result.rows[0] as Record<string, unknown>);
 }
 
+async function assertInvoiceAmountWithinQuotation(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  projectId: string,
+  amount: number,
+  excludeInvoiceId?: string,
+) {
+  const boq = await getBoq(projectId);
+  const quotation = await client.execute({
+    sql: "SELECT total FROM quotations WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
+    args: [projectId],
+  });
+  const commercialTotal = quotation.rows[0]
+    ? asNumber(quotation.rows[0].total)
+    : boq.totals.selling;
+  if (commercialTotal <= 0) {
+    throw new ApiError(
+      409,
+      "QUOTATION_REQUIRED",
+      "BoQ atau Quotation proyek belum memiliki nilai yang dapat ditagihkan.",
+    );
+  }
+  const existing = await client.execute({
+    sql: `SELECT COALESCE(SUM(amount),0) AS total FROM invoices WHERE project_id=?${excludeInvoiceId ? " AND id<>?" : ""}`,
+    args: excludeInvoiceId ? [projectId, excludeInvoiceId] : [projectId],
+  });
+  const committed = asNumber(existing.rows[0]?.total);
+  if (committed + amount > commercialTotal) {
+    throw new ApiError(
+      409,
+      "INVOICE_EXCEEDS_QUOTATION",
+      `Total Invoice melebihi nilai Quotation. Sisa yang dapat ditagihkan adalah ${Math.max(0, commercialTotal - committed)}.`,
+    );
+  }
+}
+
 async function handleInvoices(request: Request, path: string[], user: AuthUser) {
   const { client } = await getDatabase();
   const invoiceId = path[1];
@@ -970,9 +1390,21 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
 
   if (request.method === "GET" && !invoiceId) {
     const projectId = new URL(request.url).searchParams.get("projectId");
+    if (projectId) await assertProjectAccess(user, projectId);
+    const scope = projectScopeCondition(user, "p");
+    const conditions: string[] = [];
+    const args: unknown[] = [];
+    if (projectId) {
+      conditions.push("i.project_id=?");
+      args.push(projectId);
+    }
+    if (scope.sql) {
+      conditions.push(scope.sql);
+      args.push(...scope.args);
+    }
     const result = await client.execute({
-      sql: `SELECT i.*,p.name AS project_name FROM invoices i JOIN projects p ON p.id=i.project_id ${projectId ? "WHERE i.project_id=?" : ""} ORDER BY i.issue_date DESC,i.created_at DESC`,
-      args: projectId ? [projectId] : [],
+      sql: `SELECT i.*,p.name AS project_name FROM invoices i JOIN projects p ON p.id=i.project_id ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY i.issue_date DESC,i.created_at DESC`,
+      args,
     });
     return ok(result.rows.map((row) => mapInvoice(row as Record<string, unknown>)));
   }
@@ -980,7 +1412,13 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
   if (request.method === "POST" && !invoiceId) {
     if (!mutationRoles("invoices").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat membuat invoice.");
     const input = invoiceSchema.parse(await jsonBody(request));
-    await ensureExists("SELECT id FROM projects WHERE id=?", [input.projectId], "Proyek tidak ditemukan.");
+    assertDateOrder(
+      input.issueDate,
+      input.dueDate,
+      "Jatuh tempo Invoice tidak boleh lebih awal dari tanggal terbit.",
+    );
+    await assertProjectAccess(user, input.projectId);
+    await assertInvoiceAmountWithinQuotation(client, input.projectId, input.amount);
     const count = await client.execute("SELECT COUNT(*) AS count FROM invoices");
     const id = randomUUID();
     const timestamp = now();
@@ -994,6 +1432,8 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
   }
 
   if (invoiceId && action === "pdf" && request.method === "GET") {
+    const invoice = await ensureExists("SELECT project_id FROM invoices WHERE id=?", [invoiceId], "Invoice tidak ditemukan.");
+    await assertProjectAccess(user, String(invoice.project_id));
     return renderBusinessPdf("invoice", invoiceId);
   }
 
@@ -1004,27 +1444,22 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
       [invoiceId],
       "Invoice tidak ditemukan.",
     );
+    await assertProjectAccess(user, String(invoice.project_id));
     if (invoice.status === "Lunas") return ok(await getInvoice(client, invoiceId));
     const input = z.object({ paidDate: isoDateSchema.default(() => new Date().toISOString().slice(0, 10)) }).parse(await jsonBody(request));
     const timestamp = now();
-    await client.batch(
-      [
-        {
-          sql: "UPDATE invoices SET status='Lunas',paid_date=?,updated_at=? WHERE id=?",
-          args: [input.paidDate, timestamp, invoiceId],
-        },
-        {
-          sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,reference_id,created_by,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM transactions WHERE reference_id=?)",
-          args: [randomUUID(), invoice.project_id, input.paidDate, "Pemasukan", `Pembayaran ${invoice.number}`, invoice.amount, "Invoice", invoiceId, user.id, timestamp, timestamp, invoiceId],
-        },
-      ],
-      "write",
-    );
+    await client.execute({
+      sql: "UPDATE invoices SET status='Lunas',paid_date=?,updated_at=? WHERE id=?",
+      args: [input.paidDate, timestamp, invoiceId],
+    });
+    await syncInvoiceTransaction(client, invoiceId, user.id);
     await writeAuditLog(client, request, user, "confirm_payment", "invoice", invoiceId, input);
     return ok(await getInvoice(client, invoiceId));
   }
 
   if (invoiceId && !action && request.method === "GET") {
+    const invoice = await ensureExists("SELECT project_id FROM invoices WHERE id=?", [invoiceId], "Invoice tidak ditemukan.");
+    await assertProjectAccess(user, String(invoice.project_id));
     return ok(await getInvoice(client, invoiceId));
   }
 
@@ -1032,17 +1467,41 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
     if (!mutationRoles("invoices").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah invoice.");
     const input = invoiceSchema.omit({ projectId: true }).partial().parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM invoices WHERE id=?", [invoiceId], "Invoice tidak ditemukan.");
+    await assertProjectAccess(user, String(current.project_id));
+    assertDateOrder(
+      input.issueDate ?? current.issue_date,
+      input.dueDate ?? current.due_date,
+      "Jatuh tempo Invoice tidak boleh lebih awal dari tanggal terbit.",
+    );
+    await assertInvoiceAmountWithinQuotation(
+      client,
+      String(current.project_id),
+      input.amount ?? asNumber(current.amount),
+      invoiceId,
+    );
     await client.execute({
       sql: "UPDATE invoices SET type=?,issue_date=?,due_date=?,amount=?,updated_at=? WHERE id=?",
       args: [input.type ?? current.type, input.issueDate ?? current.issue_date, input.dueDate ?? current.due_date, input.amount ?? current.amount, now(), invoiceId],
     });
+    await syncInvoiceTransaction(client, invoiceId, user.id);
     await writeAuditLog(client, request, user, "update", "invoice", invoiceId, input);
     return ok(await getInvoice(client, invoiceId));
   }
 
   if (invoiceId && !action && request.method === "DELETE") {
     if (!mutationRoles("invoices").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menghapus invoice.");
-    await client.execute({ sql: "DELETE FROM invoices WHERE id=?", args: [invoiceId] });
+    const invoice = await ensureExists("SELECT project_id FROM invoices WHERE id=?", [invoiceId], "Invoice tidak ditemukan.");
+    await assertProjectAccess(user, String(invoice.project_id));
+    await client.batch(
+      [
+        {
+          sql: "DELETE FROM transactions WHERE source='Invoice' AND reference_id=?",
+          args: [invoiceId],
+        },
+        { sql: "DELETE FROM invoices WHERE id=?", args: [invoiceId] },
+      ],
+      "write",
+    );
     await writeAuditLog(client, request, user, "delete", "invoice", invoiceId);
     return noContent();
   }
@@ -1173,19 +1632,37 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
   const action = path[2];
 
   if (request.method === "GET" && !spkId) {
-    const result = await client.execute(`
+    const projectId = new URL(request.url).searchParams.get("projectId");
+    if (projectId) await assertProjectAccess(user, projectId);
+    const scope = projectScopeCondition(user, "p");
+    const conditions: string[] = [];
+    const args: unknown[] = [];
+    if (projectId) {
+      conditions.push("s.project_id=?");
+      args.push(projectId);
+    }
+    if (scope.sql) {
+      conditions.push(scope.sql);
+      args.push(...scope.args);
+    }
+    const result = await client.execute({
+      sql: `
       SELECT s.*,v.name AS vendor_name,p.name AS project_name
       FROM spks s JOIN vendors v ON v.id=s.vendor_id JOIN projects p ON p.id=s.project_id
+      ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
       ORDER BY s.created_at DESC
-    `);
+    `,
+      args,
+    });
     return ok(result.rows.map((row) => mapSpk(row as Record<string, unknown>)));
   }
 
   if (request.method === "POST" && !spkId) {
     if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat membuat SPK.");
     const input = spkSchema.parse(await jsonBody(request));
+    assertDateOrder(input.startDate, input.endDate);
     await ensureExists("SELECT id FROM vendors WHERE id=? AND status='Aktif'", [input.vendorId], "Vendor aktif tidak ditemukan.");
-    await ensureExists("SELECT id FROM projects WHERE id=?", [input.projectId], "Proyek tidak ditemukan.");
+    await assertProjectAccess(user, input.projectId);
     const count = await client.execute("SELECT COUNT(*) AS count FROM spks");
     const id = randomUUID();
     const number = makeSequence("SPK", asNumber(count.rows[0]?.count));
@@ -1199,19 +1676,25 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
   }
 
   if (spkId && action === "pdf" && request.method === "GET") {
+    const spk = await ensureExists("SELECT project_id FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
+    await assertProjectAccess(user, String(spk.project_id));
     return renderBusinessPdf("spk", spkId);
   }
 
   if (spkId && action === "status" && request.method === "PATCH") {
     if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah status SPK.");
     const input = z.object({ status: z.enum(["Draft", "Dikirim", "Dikerjakan", "Selesai"]) }).parse(await jsonBody(request));
-    await ensureExists("SELECT id FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
+    const spk = await ensureExists("SELECT project_id FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
+    await assertProjectAccess(user, String(spk.project_id));
     await client.execute({ sql: "UPDATE spks SET status=?,updated_at=? WHERE id=?", args: [input.status, now(), spkId] });
+    await syncSpkTransaction(client, spkId, user.id);
     await writeAuditLog(client, request, user, "update_status", "spk", spkId, input);
     return ok(await getSpk(spkId));
   }
 
   if (spkId && !action && request.method === "GET") {
+    const spk = await ensureExists("SELECT project_id FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
+    await assertProjectAccess(user, String(spk.project_id));
     return ok(await getSpk(spkId));
   }
 
@@ -1219,6 +1702,21 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
     if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah SPK.");
     const input = spkSchema.partial().parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
+    await assertProjectAccess(user, String(current.project_id));
+    assertDateOrder(
+      input.startDate === undefined ? current.start_date : input.startDate,
+      input.endDate === undefined ? current.end_date : input.endDate,
+    );
+    if (input.projectId && input.projectId !== current.project_id) {
+      await assertProjectAccess(user, input.projectId);
+    }
+    if (input.vendorId) {
+      await ensureExists(
+        "SELECT id FROM vendors WHERE id=? AND status='Aktif'",
+        [input.vendorId],
+        "Vendor aktif tidak ditemukan.",
+      );
+    }
     await client.execute({
       sql: "UPDATE spks SET vendor_id=?,project_id=?,scope=?,cost=?,status=?,start_date=?,end_date=?,updated_at=? WHERE id=?",
       args: [
@@ -1233,13 +1731,25 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
         spkId,
       ],
     });
+    await syncSpkTransaction(client, spkId, user.id);
     await writeAuditLog(client, request, user, "update", "spk", spkId, input);
     return ok(await getSpk(spkId));
   }
 
   if (spkId && !action && request.method === "DELETE") {
     if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menghapus SPK.");
-    await client.execute({ sql: "DELETE FROM spks WHERE id=?", args: [spkId] });
+    const spk = await ensureExists("SELECT project_id FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
+    await assertProjectAccess(user, String(spk.project_id));
+    await client.batch(
+      [
+        {
+          sql: "DELETE FROM transactions WHERE source='SPK' AND reference_id=?",
+          args: [spkId],
+        },
+        { sql: "DELETE FROM spks WHERE id=?", args: [spkId] },
+      ],
+      "write",
+    );
     await writeAuditLog(client, request, user, "delete", "spk", spkId);
     return noContent();
   }
@@ -1284,9 +1794,21 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
 
   if (request.method === "GET" && !bastId) {
     const projectId = new URL(request.url).searchParams.get("projectId");
+    if (projectId) await assertProjectAccess(user, projectId);
+    const scope = projectScopeCondition(user, "p");
+    const conditions: string[] = [];
+    const args: unknown[] = [];
+    if (projectId) {
+      conditions.push("b.project_id=?");
+      args.push(projectId);
+    }
+    if (scope.sql) {
+      conditions.push(scope.sql);
+      args.push(...scope.args);
+    }
     const result = await client.execute({
-      sql: `SELECT b.*,p.name AS project_name,p.client AS project_client,p.location AS project_location FROM basts b JOIN projects p ON p.id=b.project_id ${projectId ? "WHERE b.project_id=?" : ""} ORDER BY b.created_at DESC`,
-      args: projectId ? [projectId] : [],
+      sql: `SELECT b.*,p.name AS project_name,p.client AS project_client,p.location AS project_location FROM basts b JOIN projects p ON p.id=b.project_id ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY b.created_at DESC`,
+      args,
     });
     return ok(result.rows.map((row) => mapBast(row as Record<string, unknown>)));
   }
@@ -1294,7 +1816,28 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
   if (request.method === "POST" && !bastId) {
     if (!mutationRoles("bast").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat membuat BAST.");
     const input = bastSchema.parse(await jsonBody(request));
-    await ensureExists("SELECT id FROM projects WHERE id=?", [input.projectId], "Proyek tidak ditemukan.");
+    await assertProjectAccess(user, input.projectId);
+    const existing = await client.execute({
+      sql: "SELECT id FROM basts WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
+      args: [input.projectId],
+    });
+    if (existing.rows.length) {
+      throw new ApiError(
+        409,
+        "BAST_EXISTS",
+        "Proyek ini sudah memiliki BAST. Buka dan edit dokumen yang sudah ada.",
+      );
+    }
+    if (
+      input.status === "Final" &&
+      (!input.clientSignature || !input.engineerSignature)
+    ) {
+      throw new ApiError(
+        409,
+        "SIGNATURES_REQUIRED",
+        "Tanda tangan klien dan PerumNet wajib lengkap sebelum BAST difinalkan.",
+      );
+    }
     const count = await client.execute("SELECT COUNT(*) AS count FROM basts");
     const id = randomUUID();
     const number = makeSequence("BAST", asNumber(count.rows[0]?.count));
@@ -1303,15 +1846,25 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
       sql: "INSERT INTO basts (id,number,project_id,completion_date,notes,installed_items_json,client_name,client_role,client_signature,engineer_name,engineer_signature,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
       args: [id, number, input.projectId, input.completionDate, input.notes, JSON.stringify(input.installedItems), input.clientName, input.clientRole, input.clientSignature ?? null, input.engineerName, input.engineerSignature ?? null, input.status, timestamp, timestamp],
     });
+    if (input.status === "Final") {
+      await client.execute({
+        sql: "UPDATE projects SET status='Selesai',updated_at=? WHERE id=?",
+        args: [timestamp, input.projectId],
+      });
+    }
     await writeAuditLog(client, request, user, "create", "bast", id, { projectId: input.projectId, status: input.status });
     return created(await getBast(id));
   }
 
   if (bastId && action === "pdf" && request.method === "GET") {
+    const bast = await ensureExists("SELECT project_id FROM basts WHERE id=?", [bastId], "BAST tidak ditemukan.");
+    await assertProjectAccess(user, String(bast.project_id));
     return renderBusinessPdf("bast", bastId);
   }
 
   if (bastId && !action && request.method === "GET") {
+    const bast = await ensureExists("SELECT project_id FROM basts WHERE id=?", [bastId], "BAST tidak ditemukan.");
+    await assertProjectAccess(user, String(bast.project_id));
     return ok(await getBast(bastId));
   }
 
@@ -1319,6 +1872,23 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
     if (!mutationRoles("bast").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah BAST.");
     const input = bastSchema.omit({ projectId: true }).partial().parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM basts WHERE id=?", [bastId], "BAST tidak ditemukan.");
+    await assertProjectAccess(user, String(current.project_id));
+    const nextClientSignature =
+      input.clientSignature === undefined ? current.client_signature : input.clientSignature;
+    const nextEngineerSignature =
+      input.engineerSignature === undefined
+        ? current.engineer_signature
+        : input.engineerSignature;
+    if (
+      input.status === "Final" &&
+      (!nextClientSignature || !nextEngineerSignature)
+    ) {
+      throw new ApiError(
+        409,
+        "SIGNATURES_REQUIRED",
+        "Tanda tangan klien dan PerumNet wajib lengkap sebelum BAST difinalkan.",
+      );
+    }
     await client.execute({
       sql: "UPDATE basts SET completion_date=?,notes=?,installed_items_json=?,client_name=?,client_role=?,client_signature=?,engineer_name=?,engineer_signature=?,status=?,updated_at=? WHERE id=?",
       args: [
@@ -1335,12 +1905,20 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
         bastId,
       ],
     });
+    if (input.status === "Final") {
+      await client.execute({
+        sql: "UPDATE projects SET status='Selesai',updated_at=? WHERE id=?",
+        args: [now(), current.project_id],
+      });
+    }
     await writeAuditLog(client, request, user, "update", "bast", bastId, { status: input.status });
     return ok(await getBast(bastId));
   }
 
   if (bastId && !action && request.method === "DELETE") {
     if (!mutationRoles("bast").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menghapus BAST.");
+    const bast = await ensureExists("SELECT project_id FROM basts WHERE id=?", [bastId], "BAST tidak ditemukan.");
+    await assertProjectAccess(user, String(bast.project_id));
     await client.execute({ sql: "DELETE FROM basts WHERE id=?", args: [bastId] });
     await writeAuditLog(client, request, user, "delete", "bast", bastId);
     return noContent();
@@ -1376,8 +1954,16 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     const conditions: string[] = [];
     const args: unknown[] = [];
     if (projectId) {
+      await assertProjectAccess(user, projectId);
       conditions.push("t.project_id=?");
       args.push(projectId);
+    }
+    const scope = projectScopeCondition(user, "p");
+    if (scope.sql) {
+      conditions.push(
+        `EXISTS (SELECT 1 FROM projects p WHERE p.id=t.project_id AND ${scope.sql})`,
+      );
+      args.push(...scope.args);
     }
     if (from) {
       conditions.push("t.date>=?");
@@ -1396,7 +1982,14 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
 
   if (request.method === "POST" && !transactionId) {
     const input = transactionSchema.parse(await jsonBody(request));
-    if (input.projectId) await ensureExists("SELECT id FROM projects WHERE id=?", [input.projectId], "Proyek tidak ditemukan.");
+    if (input.projectId) await assertProjectAccess(user, input.projectId);
+    if (!input.projectId && !hasGlobalProjectScope(user)) {
+      throw new ApiError(
+        403,
+        "FORBIDDEN",
+        "Akun Anda hanya dapat mencatat transaksi untuk proyek yang ditugaskan.",
+      );
+    }
     const id = randomUUID();
     const timestamp = now();
     await client.execute({
@@ -1411,6 +2004,15 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
   if (transactionId && request.method === "PATCH") {
     const input = transactionSchema.partial().parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM transactions WHERE id=?", [transactionId], "Transaksi tidak ditemukan.");
+    if (current.project_id) await assertProjectAccess(user, String(current.project_id));
+    if (current.reference_id && (current.source === "Invoice" || current.source === "SPK")) {
+      throw new ApiError(
+        409,
+        "SYSTEM_TRANSACTION",
+        "Transaksi otomatis harus diperbarui dari dokumen Invoice atau SPK asalnya.",
+      );
+    }
+    if (input.projectId) await assertProjectAccess(user, input.projectId);
     await client.execute({
       sql: "UPDATE transactions SET project_id=?,date=?,type=?,description=?,amount=?,source=?,updated_at=? WHERE id=?",
       args: [
@@ -1430,6 +2032,15 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
   }
 
   if (transactionId && request.method === "DELETE") {
+    const current = await ensureExists("SELECT * FROM transactions WHERE id=?", [transactionId], "Transaksi tidak ditemukan.");
+    if (current.project_id) await assertProjectAccess(user, String(current.project_id));
+    if (current.reference_id && (current.source === "Invoice" || current.source === "SPK")) {
+      throw new ApiError(
+        409,
+        "SYSTEM_TRANSACTION",
+        "Transaksi otomatis hanya dapat dihapus bersama Invoice atau SPK asalnya.",
+      );
+    }
     await client.execute({ sql: "DELETE FROM transactions WHERE id=?", args: [transactionId] });
     await writeAuditLog(client, request, user, "delete", "transaction", transactionId);
     return noContent();
@@ -1449,8 +2060,16 @@ async function handleFinance(request: Request, user: AuthUser) {
   const conditions: string[] = [];
   const args: unknown[] = [];
   if (projectId) {
+    await assertProjectAccess(user, projectId);
     conditions.push("project_id=?");
     args.push(projectId);
+  }
+  const scope = projectScopeCondition(user, "p");
+  if (scope.sql) {
+    conditions.push(
+      `EXISTS (SELECT 1 FROM projects p WHERE p.id=transactions.project_id AND ${scope.sql})`,
+    );
+    args.push(...scope.args);
   }
   if (from) {
     conditions.push("date>=?");
@@ -1507,6 +2126,13 @@ function mapUser(row: Record<string, unknown>) {
 
 async function handleUsers(request: Request, path: string[], user: AuthUser) {
   assertAccess(user, "users", request.method === "GET" ? "view" : "manage");
+  if (request.method !== "GET" && user.role !== "Admin") {
+    throw new ApiError(
+      403,
+      "FORBIDDEN",
+      "Hanya Admin yang dapat membuat atau mengubah akun dan hak akses.",
+    );
+  }
   const { client } = await getDatabase();
   const userId = path[1];
 
@@ -1680,6 +2306,7 @@ async function handleProfile(request: Request, path: string[], user: AuthUser) {
 
   if (action === "avatar" && request.method === "GET") {
     const targetId = path[2] ?? user.id;
+    if (targetId !== user.id) assertAccess(user, "users", "view");
     const row = await ensureExists(
       "SELECT avatar_mime_type,avatar_storage_url,avatar_content_base64 FROM user_profiles WHERE user_id=?",
       [targetId],
@@ -1783,6 +2410,7 @@ async function handleProfile(request: Request, path: string[], user: AuthUser) {
 }
 
 async function handleSettings(request: Request, user: AuthUser) {
+  assertAccess(user, "settings", "view");
   const { client } = await getDatabase();
   if (request.method === "GET") {
     const profile = await getProfile(user.id);
@@ -1809,13 +2437,14 @@ async function handleSettings(request: Request, user: AuthUser) {
   throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
 }
 
-async function handleDocuments(request: Request, path: string[]) {
+async function handleDocuments(request: Request, path: string[], user: AuthUser) {
   if (request.method !== "GET" || path[2] !== "content") throw new ApiError(404, "NOT_FOUND", "Dokumen tidak ditemukan.");
   const row = await ensureExists(
-    "SELECT name,mime_type,storage_url,content_base64 FROM project_documents WHERE id=?",
+    "SELECT project_id,name,mime_type,storage_url,content_base64 FROM project_documents WHERE id=?",
     [path[1]],
     "Dokumen tidak ditemukan.",
   );
+  await assertProjectAccess(user, String(row.project_id));
   if (row.storage_url && /^https?:\/\//.test(String(row.storage_url))) {
     return Response.redirect(String(row.storage_url));
   }
@@ -1866,12 +2495,19 @@ async function handleSearch(request: Request, user: AuthUser) {
   if (!query || query.length < 2) return ok([]);
   const { client } = await getDatabase();
   const pattern = `%${query}%`;
+  const scope = projectScopeCondition(user, "p");
   const [projectResults, invoiceResults, vendorResults] = await Promise.all([
     canAccess(user.permissions, "projects")
-      ? client.execute({ sql: "SELECT id,name AS title,code AS subtitle FROM projects WHERE lower(name) LIKE ? OR lower(code) LIKE ? LIMIT 6", args: [pattern, pattern] })
+      ? client.execute({
+          sql: `SELECT p.id,p.name AS title,p.code AS subtitle FROM projects p WHERE (lower(p.name) LIKE ? OR lower(p.code) LIKE ?)${scope.sql ? ` AND ${scope.sql}` : ""} LIMIT 6`,
+          args: [pattern, pattern, ...scope.args],
+        })
       : Promise.resolve({ rows: [] }),
     canAccess(user.permissions, "billing")
-      ? client.execute({ sql: "SELECT id,number AS title,type AS subtitle FROM invoices WHERE lower(number) LIKE ? OR lower(type) LIKE ? LIMIT 6", args: [pattern, pattern] })
+      ? client.execute({
+          sql: `SELECT i.id,i.number AS title,i.type AS subtitle FROM invoices i JOIN projects p ON p.id=i.project_id WHERE (lower(i.number) LIKE ? OR lower(i.type) LIKE ?)${scope.sql ? ` AND ${scope.sql}` : ""} LIMIT 6`,
+          args: [pattern, pattern, ...scope.args],
+        })
       : Promise.resolve({ rows: [] }),
     canAccess(user.permissions, "procurement")
       ? client.execute({ sql: "SELECT id,name AS title,category AS subtitle FROM vendors WHERE lower(name) LIKE ? OR lower(category) LIKE ? LIMIT 6", args: [pattern, pattern] })
@@ -1917,7 +2553,7 @@ export async function dispatchApi(request: Request, path: string[]) {
   if (resource === "users") return handleUsers(request, path, user);
   if (resource === "profile") return handleProfile(request, path, user);
   if (resource === "settings") return handleSettings(request, user);
-  if (resource === "documents") return handleDocuments(request, path);
+  if (resource === "documents") return handleDocuments(request, path, user);
   if (resource === "audit-logs") return handleAudit(request, user);
   if (resource === "search") return handleSearch(request, user);
 

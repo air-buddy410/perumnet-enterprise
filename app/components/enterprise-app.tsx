@@ -53,9 +53,9 @@ interface NavigationItem {
 
 const mainNavigation: NavigationItem[] = [
   { id: "dashboard", labelKey: "dashboard", module: "dashboard", icon: LayoutDashboard },
-  { id: "project", labelKey: "projects", module: "projects", icon: FolderKanban, badge: "3" },
+  { id: "project", labelKey: "projects", module: "projects", icon: FolderKanban },
   { id: "boq", labelKey: "boq", module: "boq", icon: FileSpreadsheet },
-  { id: "billing", labelKey: "billing", module: "billing", icon: ReceiptText, badge: "2" },
+  { id: "billing", labelKey: "billing", module: "billing", icon: ReceiptText },
 ];
 
 const operationsNavigation: NavigationItem[] = [
@@ -141,6 +141,29 @@ function SidebarNavigation({
   );
 }
 
+function ProjectContextEmpty({
+  language,
+  onDashboard,
+}: {
+  language: AppLanguage;
+  onDashboard: () => void;
+}) {
+  return (
+    <section className="panel empty-state">
+      <FolderKanban size={32} />
+      <h2>{language === "id" ? "Pilih proyek terlebih dahulu" : "Select a project first"}</h2>
+      <p>
+        {language === "id"
+          ? "Pilih workspace proyek dari sidebar atau buka proyek melalui Dashboard."
+          : "Choose a project workspace from the sidebar or open one from the Dashboard."}
+      </p>
+      <button className="button primary" type="button" onClick={onDashboard}>
+        {language === "id" ? "Buka Dashboard" : "Open Dashboard"}
+      </button>
+    </section>
+  );
+}
+
 export function EnterpriseApp() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
@@ -219,11 +242,27 @@ export function EnterpriseApp() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function selectProject(projectId: string) {
+  const selectProject = useCallback((projectId: string) => {
     setSelectedProjectId(projectId);
     window.localStorage.setItem("perumnet-workspace", projectId);
     notify(language === "id" ? "Workspace proyek aktif diperbarui." : "Active project workspace updated.");
-  }
+  }, [language, notify]);
+
+  const projectCreated = useCallback((project: Project) => {
+    setProjects((current) => [
+      project,
+      ...current.filter((item) => item.id !== project.id),
+    ]);
+  }, []);
+
+  const projectDeleted = useCallback((projectId: string) => {
+    setProjects((current) => current.filter((project) => project.id !== projectId));
+    setSelectedProjectId((current) => {
+      if (current !== projectId) return current;
+      window.localStorage.removeItem("perumnet-workspace");
+      return "";
+    });
+  }, []);
 
   async function logout() {
     await api("/api/auth/logout", { method: "POST" }).catch(() => undefined);
@@ -241,9 +280,10 @@ export function EnterpriseApp() {
     return <AuthScreen onLogin={(loggedInUser) => { setUser(loggedInUser); setLanguage(loggedInUser.preferredLanguage); }} />;
   }
 
-  const activeProjectId = selectedProjectId || projects.find((project) => project.id === "project-1")?.id || projects[0]?.id || "project-1";
+  const activeProjectId = selectedProjectId;
   const meta = viewMeta(language, currentView);
   const canUse = (module: AccessModule) => canAccess(user.permissions, module);
+  const canManage = (module: AccessModule) => canAccess(user.permissions, module, "manage");
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
@@ -274,7 +314,7 @@ export function EnterpriseApp() {
                 <div className="topbar-dropdown search-dropdown">
                   <div className="dropdown-head"><strong>{translate(language, "searchResults")}</strong></div>
                   {searchResults.filter((result) => result.type === "project" ? canUse("projects") : result.type === "invoice" ? canUse("billing") : canUse("procurement")).map((result) => (
-                    <button type="button" key={`${result.type}-${result.id}`} onClick={() => { navigate(result.type === "project" ? "project" : result.type === "invoice" ? "billing" : "procurement"); setSearchQuery(""); setSearchResults([]); }}>
+                    <button type="button" key={`${result.type}-${result.id}`} onClick={() => { if (result.type === "project") selectProject(result.id); navigate(result.type === "project" ? "project" : result.type === "invoice" ? "billing" : "procurement"); setSearchQuery(""); setSearchResults([]); }}>
                       <Search size={15} /><span><strong>{result.title}</strong><small>{result.subtitle}</small></span>
                     </button>
                   ))}
@@ -286,9 +326,9 @@ export function EnterpriseApp() {
               {notificationsOpen && (
                 <div className="topbar-dropdown notifications-dropdown">
                   <div className="dropdown-head"><strong>{translate(language, "notifications")}</strong><button className="text-button" type="button" onClick={() => setNotificationsOpen(false)}>{translate(language, "markRead")}</button></div>
-                  {canUse("billing") && <button type="button" onClick={() => navigate("billing")}><span className="notification-icon warning"><ReceiptText size={16} /></span><span><strong>{language === "id" ? "Invoice jatuh tempo" : "Invoice due"}</strong><small>{language === "id" ? "Pelunasan WiFi Resort jatuh tempo 2 Agu." : "WiFi Resort balance is due Aug 2."}</small></span></button>}
-                  {canUse("projects") && <button type="button" onClick={() => navigate("project")}><span className="notification-icon info"><FolderKanban size={16} /></span><span><strong>{language === "id" ? "Dokumentasi baru" : "New documentation"}</strong><small>{language === "id" ? "Agus mengunggah 8 foto lapangan." : "Agus uploaded 8 field photos."}</small></span></button>}
-                  {canUse("bast") && <button type="button" onClick={() => navigate("bast")}><span className="notification-icon success"><ClipboardSignature size={16} /></span><span><strong>{language === "id" ? "BAST siap" : "Handover ready"}</strong><small>{language === "id" ? "Villa Complex menunggu tanda tangan." : "Villa Complex is awaiting signatures."}</small></span></button>}
+                  {canUse("billing") && <button type="button" onClick={() => navigate("billing")}><span className="notification-icon warning"><ReceiptText size={16} /></span><span><strong>{language === "id" ? "Pantau penagihan" : "Review billing"}</strong><small>{language === "id" ? "Periksa invoice proyek yang dapat Anda akses." : "Review invoices for projects you can access."}</small></span></button>}
+                  {canUse("projects") && <button type="button" onClick={() => navigate("project")}><span className="notification-icon info"><FolderKanban size={16} /></span><span><strong>{language === "id" ? "Dokumentasi proyek" : "Project documentation"}</strong><small>{language === "id" ? `${projects.length} proyek tersedia sesuai akses Anda.` : `${projects.length} projects are available to your account.`}</small></span></button>}
+                  {canUse("bast") && <button type="button" onClick={() => navigate("bast")}><span className="notification-icon success"><ClipboardSignature size={16} /></span><span><strong>{language === "id" ? "Serah terima proyek" : "Project handover"}</strong><small>{language === "id" ? "Pilih workspace sebelum membuka atau menandatangani BAST." : "Select a workspace before opening or signing a handover."}</small></span></button>}
                 </div>
               )}
             </div>
@@ -301,7 +341,7 @@ export function EnterpriseApp() {
                 <div className="topbar-dropdown profile-dropdown">
                   <div className="profile-dropdown-head"><UserAvatar name={user.name} avatarUrl={user.avatarUrl} /><div><strong>{user.name}</strong><small>{user.email}</small></div></div>
                   <button type="button" onClick={() => navigate("profile")}><CircleUserRound size={16} /> {translate(language, "profile")}</button>
-                  <button type="button" onClick={() => navigate("settings")}><Settings size={16} /> {translate(language, "accountSettings")}</button>
+                  {canUse("settings") && <button type="button" onClick={() => navigate("settings")}><Settings size={16} /> {translate(language, "accountSettings")}</button>}
                   <button type="button" onClick={() => navigate("help")}><BookOpenCheck size={16} /> {translate(language, "help")}</button>
                   <div className="dropdown-separator" />
                   <button className="logout-action" type="button" onClick={logout}><LogOut size={16} /> {translate(language, "logout")}</button>
@@ -312,16 +352,16 @@ export function EnterpriseApp() {
         </header>
 
         <main className="app-content">
-          {currentView === "dashboard" && canUse("dashboard") && <DashboardView navigate={navigate} notify={notify} selectedProjectId={selectedProjectId} userName={user.name} />}
-          {currentView === "project" && canUse("projects") && <ProjectView navigate={navigate} notify={notify} projectId={activeProjectId} project={projects.find((item) => item.id === activeProjectId)} />}
-          {currentView === "boq" && canUse("boq") && <BoqView navigate={navigate} notify={notify} projectId={activeProjectId} />}
-          {currentView === "billing" && canUse("billing") && <BillingView notify={notify} projectId={activeProjectId} />}
-          {currentView === "procurement" && canUse("procurement") && <ProcurementView notify={notify} projectId={activeProjectId} />}
-          {currentView === "bast" && canUse("bast") && <BastView notify={notify} projectId={activeProjectId} />}
-          {currentView === "finance" && canUse("finance") && <FinanceView notify={notify} projectId={selectedProjectId} />}
-          {currentView === "users" && canUse("users") && <UsersView notify={notify} language={language} currentUserId={user.id} />}
+          {currentView === "dashboard" && canUse("dashboard") && <DashboardView navigate={navigate} notify={notify} selectedProjectId={selectedProjectId} userName={user.name} canManage={canManage("projects")} canUseBoq={canUse("boq")} canUseBilling={canUse("billing")} onSelectProject={selectProject} onProjectCreated={projectCreated} />}
+          {currentView === "project" && canUse("projects") && (activeProjectId ? <ProjectView navigate={navigate} notify={notify} projectId={activeProjectId} project={projects.find((item) => item.id === activeProjectId)} canManage={canManage("projects")} canDelete={user.role === "Admin"} onProjectDeleted={projectDeleted} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "boq" && canUse("boq") && (activeProjectId ? <BoqView navigate={navigate} notify={notify} projectId={activeProjectId} canManage={canManage("boq")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "billing" && canUse("billing") && (activeProjectId ? <BillingView notify={notify} projectId={activeProjectId} canManage={canManage("billing")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "procurement" && canUse("procurement") && (activeProjectId ? <ProcurementView notify={notify} projectId={activeProjectId} canManage={canManage("procurement")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "bast" && canUse("bast") && (activeProjectId ? <BastView notify={notify} projectId={activeProjectId} canManage={canManage("bast")} userName={user.name} userRole={user.role} onProjectUpdated={projectCreated} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "finance" && canUse("finance") && <FinanceView notify={notify} projectId={selectedProjectId} projects={projects} canManage={canManage("finance")} />}
+          {currentView === "users" && canUse("users") && <UsersView notify={notify} language={language} currentUserId={user.id} canManage={user.role === "Admin"} />}
           {currentView === "profile" && <ProfileView language={language} user={user} notify={notify} onUserChange={setUser} />}
-          {currentView === "settings" && <SettingsView language={language} notify={notify} onLanguageChange={(next) => { setLanguage(next); setUser((current) => current ? { ...current, preferredLanguage: next } : current); }} />}
+          {currentView === "settings" && canUse("settings") && <SettingsView language={language} notify={notify} onLanguageChange={(next) => { setLanguage(next); setUser((current) => current ? { ...current, preferredLanguage: next } : current); }} />}
           {currentView === "help" && <HelpView language={language} />}
         </main>
       </div>

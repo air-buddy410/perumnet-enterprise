@@ -10,10 +10,12 @@ import {
   Mail,
   MapPin,
   MoreHorizontal,
+  Pencil,
   Phone,
   Plus,
   Search,
   Store,
+  Trash2,
   UsersRound,
   X,
 } from "lucide-react";
@@ -21,8 +23,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api, downloadApiFile, messageOf } from "../api-client";
 import {
   formatCurrency,
-  initialVendors,
-  initialWorkOrders,
+  Project,
   Vendor,
   WorkOrder,
 } from "../data";
@@ -30,6 +31,7 @@ import {
 interface ProcurementViewProps {
   notify: (message: string) => void;
   projectId: string;
+  canManage: boolean;
 }
 
 type ProcurementTab = "vendor" | "spk";
@@ -43,10 +45,11 @@ function spkStatusClass(status: WorkOrder["status"]) {
   return "neutral";
 }
 
-export function ProcurementView({ notify, projectId }: ProcurementViewProps) {
+export function ProcurementView({ notify, projectId, canManage }: ProcurementViewProps) {
   const [activeTab, setActiveTab] = useState<ProcurementTab>("vendor");
-  const [vendors, setVendors] = useState(initialVendors);
-  const [workOrders, setWorkOrders] = useState(initialWorkOrders);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
+  const [project, setProject] = useState<Project | null>(null);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("Semua kategori");
   const [showVendorForm, setShowVendorForm] = useState(false);
@@ -56,24 +59,33 @@ export function ProcurementView({ notify, projectId }: ProcurementViewProps) {
   const [vendorCategory, setVendorCategory] = useState("Teknisi Jaringan");
   const [vendorContact, setVendorContact] = useState("");
   const [vendorRate, setVendorRate] = useState(0);
-  const [spkVendor, setSpkVendor] = useState(initialVendors[0].name);
+  const [spkVendor, setSpkVendor] = useState("");
   const [spkScope, setSpkScope] = useState("");
   const [spkCost, setSpkCost] = useState(0);
+  const [editingSpkId, setEditingSpkId] = useState("");
+  const [spkStatus, setSpkStatus] = useState<WorkOrder["status"]>("Draft");
+  const [spkStartDate, setSpkStartDate] = useState("");
+  const [spkEndDate, setSpkEndDate] = useState("");
 
   useEffect(() => {
     let active = true;
-    Promise.all([api<Vendor[]>("/api/vendors"), api<WorkOrder[]>("/api/spks")])
-      .then(([vendorData, spkData]) => {
+    Promise.all([
+      api<Vendor[]>("/api/vendors"),
+      api<WorkOrder[]>(`/api/spks?projectId=${encodeURIComponent(projectId)}`),
+      api<Project>(`/api/projects/${encodeURIComponent(projectId)}`),
+    ])
+      .then(([vendorData, spkData, projectData]) => {
         if (!active) return;
         setVendors(vendorData);
         setWorkOrders(spkData);
+        setProject(projectData);
         if (vendorData[0]) setSpkVendor(vendorData[0].name);
       })
       .catch((error) => notify(messageOf(error)));
     return () => {
       active = false;
     };
-  }, [notify]);
+  }, [notify, projectId]);
 
   const filteredVendors = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -87,9 +99,7 @@ export function ProcurementView({ notify, projectId }: ProcurementViewProps) {
   }, [category, query, vendors]);
 
   const categories = ["Semua kategori", ...Array.from(new Set(vendors.map((vendor) => vendor.category)))];
-  const scopedWorkOrders = workOrders.filter(
-    (workOrder) => !projectId || !workOrder.projectId || workOrder.projectId === projectId,
-  );
+  const scopedWorkOrders = workOrders;
 
   function openNewVendor() {
     setEditingVendorId("");
@@ -107,6 +117,28 @@ export function ProcurementView({ notify, projectId }: ProcurementViewProps) {
     setVendorContact(vendor.contact);
     setVendorRate(vendor.rate);
     setShowVendorForm(true);
+  }
+
+  function openNewSpk(vendor?: Vendor) {
+    setEditingSpkId("");
+    setSpkVendor(vendor?.name ?? vendors.find((item) => item.status === "Aktif")?.name ?? "");
+    setSpkScope("");
+    setSpkCost(vendor?.rate ?? 0);
+    setSpkStatus("Draft");
+    setSpkStartDate("");
+    setSpkEndDate("");
+    setShowSpkForm(true);
+  }
+
+  function openEditSpk(workOrder: WorkOrder) {
+    setEditingSpkId(workOrder.id);
+    setSpkVendor(workOrder.vendor);
+    setSpkScope(workOrder.scope);
+    setSpkCost(workOrder.cost);
+    setSpkStatus(workOrder.status);
+    setSpkStartDate(workOrder.startDate ?? "");
+    setSpkEndDate(workOrder.endDate ?? "");
+    setShowSpkForm(true);
   }
 
   async function addVendor(event: FormEvent<HTMLFormElement>) {
@@ -137,28 +169,46 @@ export function ProcurementView({ notify, projectId }: ProcurementViewProps) {
     }
   }
 
-  async function createSpk(event: FormEvent<HTMLFormElement>) {
+  async function persistSpk(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!spkScope.trim() || spkCost <= 0) return;
     const vendor = vendors.find((item) => item.name === spkVendor);
     if (!vendor) return;
     try {
-      const workOrder = await api<WorkOrder>("/api/spks", {
-        method: "POST",
+      const workOrder = await api<WorkOrder>(
+        editingSpkId ? `/api/spks/${editingSpkId}` : "/api/spks",
+        {
+        method: editingSpkId ? "PATCH" : "POST",
         body: JSON.stringify({
           vendorId: vendor.id,
           projectId,
           scope: spkScope.trim(),
           cost: spkCost,
-          status: "Draft",
+          status: spkStatus,
+          startDate: spkStartDate || undefined,
+          endDate: spkEndDate || undefined,
         }),
       });
-      setWorkOrders((current) => [workOrder, ...current]);
+      setWorkOrders((current) => editingSpkId
+        ? current.map((item) => item.id === workOrder.id ? workOrder : item)
+        : [workOrder, ...current]);
       setSpkScope("");
       setSpkCost(0);
       setShowSpkForm(false);
+      setEditingSpkId("");
       setActiveTab("spk");
-      notify("SPK berhasil dibuat sebagai draft.");
+      notify(editingSpkId ? "SPK dan pembukuan terkait berhasil diperbarui." : "SPK berhasil dibuat sebagai draft.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
+  }
+
+  async function deleteSpk(workOrder: WorkOrder) {
+    if (!window.confirm(`Hapus ${workOrder.number}?`)) return;
+    try {
+      await api(`/api/spks/${workOrder.id}`, { method: "DELETE" });
+      setWorkOrders((current) => current.filter((item) => item.id !== workOrder.id));
+      notify("SPK dan transaksi otomatis terkait berhasil dihapus.");
     } catch (error) {
       notify(messageOf(error));
     }
@@ -195,12 +245,16 @@ export function ProcurementView({ notify, projectId }: ProcurementViewProps) {
           <p>Kelola mitra kerja dan Surat Perintah Kerja secara terpusat.</p>
         </div>
         <div className="title-actions">
-          <button className="button secondary" type="button" onClick={() => { setActiveTab("vendor"); openNewVendor(); }}>
-            <Plus size={16} /> Tambah vendor
-          </button>
-          <button className="button primary" type="button" onClick={() => { setActiveTab("spk"); setShowSpkForm(true); }}>
-            <FilePlus2 size={16} /> Buat SPK
-          </button>
+          {canManage && (
+            <>
+              <button className="button secondary" type="button" onClick={() => { setActiveTab("vendor"); openNewVendor(); }}>
+                <Plus size={16} /> Tambah vendor
+              </button>
+              <button className="button primary" type="button" onClick={() => { setActiveTab("spk"); openNewSpk(); }}>
+                <FilePlus2 size={16} /> Buat SPK
+              </button>
+            </>
+          )}
         </div>
       </section>
 
@@ -208,12 +262,12 @@ export function ProcurementView({ notify, projectId }: ProcurementViewProps) {
         <article className="metric-card">
           <span className="metric-icon teal"><Store size={20} /></span>
           <div className="metric-main"><span>Vendor aktif</span><strong>{vendors.filter((vendor) => vendor.status === "Aktif").length}</strong></div>
-          <span className="metric-change">4 kategori layanan</span>
+          <span className="metric-change">{new Set(vendors.map((vendor) => vendor.category)).size} kategori layanan</span>
         </article>
         <article className="metric-card">
           <span className="metric-icon blue"><FileText size={20} /></span>
           <div className="metric-main"><span>SPK berjalan</span><strong>{scopedWorkOrders.filter((item) => item.status === "Dikerjakan").length}</strong></div>
-          <span className="metric-change">2 proyek</span>
+          <span className="metric-change">{new Set(scopedWorkOrders.map((item) => item.projectId)).size} proyek terkait</span>
         </article>
         <article className="metric-card">
           <span className="metric-icon orange"><UsersRound size={20} /></span>
@@ -258,7 +312,7 @@ export function ProcurementView({ notify, projectId }: ProcurementViewProps) {
                 <div className="vendor-card-head">
                   <span className={`vendor-logo variant-${index % 4}`}><Building2 size={21} /></span>
                   <span className={`status-badge ${vendor.status === "Aktif" ? "success" : "neutral"}`}>{vendor.status}</span>
-                  <button className="icon-button" type="button" aria-label={`Edit ${vendor.name}`} onClick={() => openEditVendor(vendor)}><MoreHorizontal size={17} /></button>
+                  {canManage && <button className="icon-button" type="button" aria-label={`Edit ${vendor.name}`} onClick={() => openEditVendor(vendor)}><MoreHorizontal size={17} /></button>}
                 </div>
                 <div className="vendor-card-copy">
                   <strong>{vendor.name}</strong>
@@ -266,16 +320,16 @@ export function ProcurementView({ notify, projectId }: ProcurementViewProps) {
                 </div>
                 <div className="vendor-contact-list">
                   <span><Phone size={14} /> {vendor.contact}</span>
-                  <span><Mail size={14} /> procurement@vendor.id</span>
-                  <span><MapPin size={14} /> Bali</span>
+                  <span><Mail size={14} /> {vendor.email || "Email belum diisi"}</span>
+                  <span><MapPin size={14} /> {vendor.address || "Alamat belum diisi"}</span>
                 </div>
                 <div className="vendor-rate">
                   <span>Tarif standar</span>
                   <strong>{vendor.rate ? `${formatCurrency(vendor.rate)} / hari` : "Sesuai quotation"}</strong>
                 </div>
-                <button className="button subtle full-width" type="button" onClick={() => { setSpkVendor(vendor.name); setShowSpkForm(true); }}>
+                {canManage && <button className="button subtle full-width" type="button" onClick={() => openNewSpk(vendor)}>
                   <FilePlus2 size={15} /> Buat SPK untuk vendor
-                </button>
+                </button>}
               </article>
             ))}
           </div>
@@ -289,7 +343,7 @@ export function ProcurementView({ notify, projectId }: ProcurementViewProps) {
         <section className="panel">
           <div className="panel-head">
             <div><span className="eyebrow">SURAT PERINTAH KERJA</span><h2>Daftar SPK</h2></div>
-            <button className="button primary small" type="button" onClick={() => setShowSpkForm(true)}><Plus size={15} /> SPK baru</button>
+            {canManage && <button className="button primary small" type="button" onClick={() => openNewSpk()}><Plus size={15} /> SPK baru</button>}
           </div>
           <div className="spk-list">
             {scopedWorkOrders.map((workOrder) => (
@@ -309,12 +363,14 @@ export function ProcurementView({ notify, projectId }: ProcurementViewProps) {
                 </div>
                 <div className="spk-cost"><span>Nilai</span><strong>{formatCurrency(workOrder.cost)}</strong></div>
                 <label className={`status-select ${spkStatusClass(workOrder.status)}`}>
-                  <select value={workOrder.status} onChange={(event) => updateSpkStatus(workOrder.id, event.target.value as WorkOrder["status"])}>
+                  <select disabled={!canManage} value={workOrder.status} onChange={(event) => updateSpkStatus(workOrder.id, event.target.value as WorkOrder["status"])}>
                     {spkStatuses.map((status) => <option key={status}>{status}</option>)}
                   </select>
                   <ChevronDown size={14} />
                 </label>
                 <button className="button subtle small" type="button" onClick={() => downloadSpk(workOrder)}><Download size={15} /> PDF</button>
+                {canManage && <button className="icon-button" type="button" aria-label={`Edit ${workOrder.number}`} onClick={() => openEditSpk(workOrder)}><Pencil size={15} /></button>}
+                {canManage && <button className="icon-button danger" type="button" aria-label={`Hapus ${workOrder.number}`} onClick={() => deleteSpk(workOrder)}><Trash2 size={15} /></button>}
               </article>
             ))}
           </div>
@@ -343,15 +399,18 @@ export function ProcurementView({ notify, projectId }: ProcurementViewProps) {
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowSpkForm(false)}>
           <section className="modal-card wide" role="dialog" aria-modal="true" aria-labelledby="spk-form-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <div><span className="eyebrow">SPK BARU</span><h2 id="spk-form-title">Surat Perintah Kerja</h2></div>
+              <div><span className="eyebrow">{editingSpkId ? "EDIT SPK" : "SPK BARU"}</span><h2 id="spk-form-title">Surat Perintah Kerja</h2></div>
               <button className="icon-button" type="button" aria-label="Tutup" onClick={() => setShowSpkForm(false)}><X size={18} /></button>
             </div>
-            <form className="form-grid" onSubmit={createSpk}>
+            <form className="form-grid" onSubmit={persistSpk}>
               <label className="field full"><span>Vendor / pelaksana</span><select value={spkVendor} onChange={(event) => setSpkVendor(event.target.value)}>{vendors.filter((vendor) => vendor.status === "Aktif").map((vendor) => <option key={vendor.id}>{vendor.name}</option>)}</select></label>
-              <label className="field full"><span>Proyek terkait</span><select><option>Implementasi WiFi Resort Ubud</option><option>CCTV & Network Warehouse</option></select></label>
+              <label className="field full"><span>Proyek terkait</span><input value={project ? `${project.code} · ${project.name}` : projectId} readOnly /></label>
               <label className="field full"><span>Lingkup pekerjaan</span><textarea required value={spkScope} onChange={(event) => setSpkScope(event.target.value)} placeholder="Jelaskan pekerjaan, output, dan batasan tanggung jawab..." rows={4} /></label>
               <label className="field full"><span>Biaya disepakati</span><input type="number" min="1" required value={spkCost || ""} onChange={(event) => setSpkCost(Number(event.target.value))} placeholder="0" /></label>
-              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowSpkForm(false)}>Batal</button><button className="button primary" type="submit"><FilePlus2 size={16} /> Simpan sebagai draft</button></div>
+              <label className="field"><span>Tanggal mulai</span><input type="date" value={spkStartDate} onChange={(event) => setSpkStartDate(event.target.value)} /></label>
+              <label className="field"><span>Tanggal selesai</span><input type="date" value={spkEndDate} onChange={(event) => setSpkEndDate(event.target.value)} /></label>
+              <label className="field full"><span>Status</span><select value={spkStatus} onChange={(event) => setSpkStatus(event.target.value as WorkOrder["status"])}>{spkStatuses.map((status) => <option key={status}>{status}</option>)}</select></label>
+              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowSpkForm(false)}>Batal</button><button className="button primary" type="submit"><FilePlus2 size={16} /> {editingSpkId ? "Simpan perubahan" : "Simpan SPK"}</button></div>
             </form>
           </section>
         </div>

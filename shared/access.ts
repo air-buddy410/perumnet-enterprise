@@ -83,7 +83,9 @@ export function normalizePermissions(
   value?: Partial<Record<AccessModule, unknown>> | null,
 ): AccessPermissions {
   const fallback = defaultPermissions(role);
-  if (role === "Admin" && !value) return fallback;
+  // Administrator is the recovery/owner role. It must never be possible to
+  // persist a partially disabled Admin account and lock the company out.
+  if (role === "Admin") return fallback;
 
   for (const accessModule of accessModules) {
     const level = value?.[accessModule];

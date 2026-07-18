@@ -229,7 +229,10 @@ export const quotations = sqliteTable(
     total: integer("total").notNull(),
     ...timestamps,
   },
-  (table) => [uniqueIndex("quotations_number_unique").on(table.number)],
+  (table) => [
+    uniqueIndex("quotations_number_unique").on(table.number),
+    uniqueIndex("quotations_project_unique").on(table.projectId),
+  ],
 );
 
 export const invoices = sqliteTable(
@@ -311,7 +314,7 @@ export const basts = sqliteTable(
   },
   (table) => [
     uniqueIndex("basts_number_unique").on(table.number),
-    index("basts_project_idx").on(table.projectId),
+    uniqueIndex("basts_project_unique").on(table.projectId),
   ],
 );
 
@@ -332,6 +335,10 @@ export const transactions = sqliteTable(
   (table) => [
     index("transactions_project_idx").on(table.projectId),
     index("transactions_date_idx").on(table.date),
+    uniqueIndex("transactions_source_reference_unique").on(
+      table.source,
+      table.referenceId,
+    ),
   ],
 );
 

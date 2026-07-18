@@ -1,6 +1,6 @@
 import "server-only";
 
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { getCloudflareEnvironment } from "./cloudflare";
 
 function localStoragePath(id: string) {
@@ -62,4 +62,19 @@ export async function readProjectFile(storageUrl: string | null) {
     };
   }
   return null;
+}
+
+export async function deleteProjectFile(storageUrl: string | null) {
+  if (storageUrl?.startsWith("local://")) {
+    const localPath = localStoragePath(storageUrl.slice("local://".length));
+    if (!localPath) return;
+    await unlink(localPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+    return;
+  }
+  if (storageUrl?.startsWith("r2://")) {
+    const environment = await getCloudflareEnvironment();
+    await environment?.FILES?.delete(storageUrl.slice("r2://".length));
+  }
 }

@@ -15,6 +15,7 @@ import {
   MapPin,
   Paperclip,
   Plus,
+  Trash2,
   UploadCloud,
   UsersRound,
   X,
@@ -28,6 +29,9 @@ interface ProjectViewProps {
   notify: (message: string) => void;
   projectId: string;
   project?: Project;
+  canManage: boolean;
+  canDelete: boolean;
+  onProjectDeleted: (projectId: string) => void;
 }
 
 interface ProjectTask {
@@ -52,36 +56,28 @@ interface ProjectDocument {
   preview?: string;
 }
 
-const taskSeed: ProjectTask[] = [
-  { id: "task-1", name: "Site survey & mapping area", owner: "Ayu Pramesti", start: 0, duration: 15, startLabel: "08 Jul", endLabel: "10 Jul", status: "Selesai" },
-  { id: "task-2", name: "Penarikan kabel backbone", owner: "Agus Suardana", start: 12, duration: 34, startLabel: "10 Jul", endLabel: "16 Jul", status: "Selesai" },
-  { id: "task-3", name: "Terminasi & labeling kabel", owner: "Kadek Putra", start: 34, duration: 28, startLabel: "15 Jul", endLabel: "20 Jul", status: "Berjalan" },
-  { id: "task-4", name: "Instalasi access point", owner: "Agus Suardana", start: 48, duration: 31, startLabel: "18 Jul", endLabel: "24 Jul", status: "Berjalan" },
-  { id: "task-5", name: "Konfigurasi controller & SSID", owner: "Ayu Pramesti", start: 67, duration: 20, startLabel: "23 Jul", endLabel: "27 Jul", status: "Belum Mulai" },
-  { id: "task-6", name: "Testing, dokumentasi & BAST", owner: "Dewa Mahardika", start: 82, duration: 18, startLabel: "28 Jul", endLabel: "02 Agu", status: "Belum Mulai" },
-];
-
-const documentSeed: ProjectDocument[] = [
-  { id: "doc-1", name: "Rack server — lantai 1", type: "image", date: "18 Jul 2026", uploader: "Agus Suardana" },
-  { id: "doc-2", name: "Terminasi kabel AP-07", type: "image", date: "18 Jul 2026", uploader: "Kadek Putra" },
-  { id: "doc-3", name: "Topologi jaringan final.pdf", type: "file", date: "17 Jul 2026", uploader: "Ayu Pramesti" },
-  { id: "doc-4", name: "Penarikan backbone koridor", type: "image", date: "16 Jul 2026", uploader: "Agus Suardana" },
-];
-
 function taskStatusClass(status: ProjectTask["status"]) {
   if (status === "Selesai") return "success";
   if (status === "Berjalan") return "info";
   return "neutral";
 }
 
-export function ProjectView({ navigate, notify, projectId, project }: ProjectViewProps) {
-  const [tasks, setTasks] = useState(taskSeed);
-  const [documents, setDocuments] = useState(documentSeed);
+export function ProjectView({
+  navigate,
+  notify,
+  projectId,
+  project,
+  canManage,
+  canDelete,
+  onProjectDeleted,
+}: ProjectViewProps) {
+  const [tasks, setTasks] = useState<ProjectTask[]>([]);
+  const [documents, setDocuments] = useState<ProjectDocument[]>([]);
   const [viewMode, setViewMode] = useState<"timeline" | "tasks">("timeline");
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [taskName, setTaskName] = useState("");
-  const [taskOwner, setTaskOwner] = useState("Agus Suardana");
-  const [taskDate, setTaskDate] = useState("2026-07-22");
+  const [taskOwner, setTaskOwner] = useState("");
+  const [taskDate, setTaskDate] = useState(new Date().toISOString().slice(0, 10));
 
   const refreshTasks = useCallback(async () => {
     try {
@@ -107,9 +103,19 @@ export function ProjectView({ navigate, notify, projectId, project }: ProjectVie
     return () => window.clearTimeout(update);
   }, [refreshDocuments, refreshTasks]);
 
+  const availableOwners = project?.teamNames?.length
+    ? project.teamNames
+    : project?.manager
+      ? [project.manager]
+      : [];
+
   const progress = useMemo(
-    () => Math.round((tasks.filter((task) => task.status === "Selesai").length / tasks.length) * 100),
-    [tasks],
+    () => tasks.length
+      ? Math.round((tasks.filter((task) => task.status === "Selesai").length / tasks.length) * 100)
+      : project?.status === "Selesai"
+        ? 100
+        : 0,
+    [project?.status, tasks],
   );
   const completed = tasks.filter((task) => task.status === "Selesai").length;
   const active = tasks.filter((task) => task.status === "Berjalan").length;
@@ -139,7 +145,7 @@ export function ProjectView({ navigate, notify, projectId, project }: ProjectVie
         method: "POST",
         body: JSON.stringify({
           name: taskName.trim(),
-          owner: taskOwner,
+          owner: taskOwner || availableOwners[0],
           startDate: taskDate,
           status: "Belum Mulai",
         }),
@@ -172,20 +178,38 @@ export function ProjectView({ navigate, notify, projectId, project }: ProjectVie
     }
   }
 
+  async function deleteProject() {
+    if (
+      !window.confirm(
+        `Hapus proyek "${project?.name ?? projectId}" beserta BOQ, Quotation, Invoice, SPK, BAST, tugas, dan dokumentasinya?`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await api(`/api/projects/${projectId}`, { method: "DELETE" });
+      onProjectDeleted(projectId);
+      navigate("dashboard");
+      notify("Proyek dan seluruh data turunannya berhasil dihapus.");
+    } catch (error) {
+      notify(messageOf(error));
+    }
+  }
+
   return (
     <div className="page-stack" data-testid="project-view">
       <section className="project-hero">
         <div className="project-hero-main">
           <div className="project-hero-badges">
-            <span className="status-badge info"><span className="badge-dot" /> Aktif</span>
-            <span className="project-code">{project?.code ?? "PN-2607-014"}</span>
+            <span className={`status-badge ${project?.status === "Selesai" ? "success" : project?.status === "Aktif" ? "info" : "neutral"}`}><span className="badge-dot" /> {project?.status ?? "Draft"}</span>
+            <span className="project-code">{project?.code ?? "Memuat..."}</span>
           </div>
-          <h1>{project?.name ?? "Implementasi WiFi Resort Ubud"}</h1>
-          <p>{project?.client ?? "Bali Serenity Resort"}</p>
+          <h1>{project?.name ?? "Memuat proyek..."}</h1>
+          <p>{project?.client ?? "Memuat klien..."}</p>
           <div className="project-hero-meta">
             <span><MapPin size={15} /> {project?.location ?? "Ubud, Gianyar"}</span>
-            <span><CalendarDays size={15} /> 08 Jul — 02 Agu 2026</span>
-            <span><UsersRound size={15} /> 4 anggota tim</span>
+            <span><CalendarDays size={15} /> {project?.startDate ?? "Belum ditentukan"} — {project?.targetDate ?? "Belum ditentukan"}</span>
+            <span><UsersRound size={15} /> {project?.teamNames?.length ?? project?.team.length ?? 0} anggota tim</span>
           </div>
         </div>
         <div className="project-hero-progress">
@@ -194,7 +218,7 @@ export function ProjectView({ navigate, notify, projectId, project }: ProjectVie
           </div>
           <div>
             <strong>{completed} dari {tasks.length} tugas</strong>
-            <span>Target selesai 02 Agustus</span>
+            <span>Target selesai {project?.targetDate ?? "belum ditentukan"}</span>
           </div>
         </div>
         <div className="title-actions">
@@ -204,6 +228,11 @@ export function ProjectView({ navigate, notify, projectId, project }: ProjectVie
           <button className="button primary" type="button" onClick={() => navigate("bast")}>
             Buat BAST <ArrowRight size={16} />
           </button>
+          {canDelete && (
+            <button className="button danger" type="button" onClick={deleteProject}>
+              <Trash2 size={16} /> Hapus proyek
+            </button>
+          )}
         </div>
       </section>
 
@@ -241,9 +270,11 @@ export function ProjectView({ navigate, notify, projectId, project }: ProjectVie
                 <ListChecks size={15} /> Daftar
               </button>
             </div>
-            <button className="button primary small" type="button" onClick={() => setShowTaskForm(true)}>
-              <Plus size={15} /> Tambah tugas
-            </button>
+            {canManage && (
+              <button className="button primary small" type="button" onClick={() => setShowTaskForm(true)}>
+                <Plus size={15} /> Tambah tugas
+              </button>
+            )}
           </div>
         </div>
 
@@ -263,7 +294,8 @@ export function ProjectView({ navigate, notify, projectId, project }: ProjectVie
                       className={`task-check ${task.status === "Selesai" ? "checked" : ""}`}
                       type="button"
                       aria-label={`${task.status === "Selesai" ? "Batalkan selesai" : "Tandai selesai"} ${task.name}`}
-                      onClick={() => toggleTask(task.id)}
+                      onClick={() => canManage && toggleTask(task.id)}
+                      disabled={!canManage}
                     >
                       {task.status === "Selesai" ? <Check size={14} /> : <Circle size={14} />}
                     </button>
@@ -286,7 +318,7 @@ export function ProjectView({ navigate, notify, projectId, project }: ProjectVie
           <div className="task-list-view">
             {tasks.map((task) => (
               <article className="task-list-item" key={task.id}>
-                <button className={`task-check large ${task.status === "Selesai" ? "checked" : ""}`} type="button" onClick={() => toggleTask(task.id)}>
+                <button className={`task-check large ${task.status === "Selesai" ? "checked" : ""}`} type="button" disabled={!canManage} onClick={() => canManage && toggleTask(task.id)}>
                   {task.status === "Selesai" ? <Check size={16} /> : <Circle size={16} />}
                 </button>
                 <div className="task-list-primary">
@@ -310,10 +342,12 @@ export function ProjectView({ navigate, notify, projectId, project }: ProjectVie
               <span className="eyebrow">DOKUMENTASI LAPANGAN</span>
               <h2>Foto & file proyek</h2>
             </div>
-            <label className="button primary small file-upload-button">
-              <UploadCloud size={15} /> Unggah file
-              <input type="file" accept="image/*,.pdf,.doc,.docx" onChange={uploadDocument} />
-            </label>
+            {canManage && (
+              <label className="button primary small file-upload-button">
+                <UploadCloud size={15} /> Unggah file
+                <input type="file" accept="image/*,.pdf" onChange={uploadDocument} />
+              </label>
+            )}
           </div>
           <div className="document-grid">
             {documents.map((document, index) => (
@@ -349,18 +383,19 @@ export function ProjectView({ navigate, notify, projectId, project }: ProjectVie
             </div>
           </div>
           <div className="activity-timeline">
-            <div className="activity-event">
-              <span className="activity-event-icon teal"><Camera size={15} /></span>
-              <div><strong>8 foto ditambahkan</strong><span>Agus · Dokumentasi lapangan</span><small>14:28</small></div>
-            </div>
-            <div className="activity-event">
-              <span className="activity-event-icon green"><CheckCircle2 size={15} /></span>
-              <div><strong>Terminasi backbone selesai</strong><span>Kadek · Memperbarui tugas</span><small>12:06</small></div>
-            </div>
-            <div className="activity-event">
-              <span className="activity-event-icon orange"><Clock3 size={15} /></span>
-              <div><strong>Jadwal AP lantai 3 berubah</strong><span>Ayu · Timeline proyek</span><small>09:42</small></div>
-            </div>
+            {documents.slice(0, 2).map((document) => (
+              <div className="activity-event" key={document.id}>
+                <span className="activity-event-icon teal"><Camera size={15} /></span>
+                <div><strong>{document.name}</strong><span>{document.uploader} · Dokumentasi lapangan</span><small>{document.date}</small></div>
+              </div>
+            ))}
+            {tasks.slice(0, Math.max(0, 3 - documents.length)).map((task) => (
+              <div className="activity-event" key={task.id}>
+                <span className={`activity-event-icon ${task.status === "Selesai" ? "green" : "orange"}`}>{task.status === "Selesai" ? <CheckCircle2 size={15} /> : <Clock3 size={15} />}</span>
+                <div><strong>{task.name}</strong><span>{task.owner} · {task.status}</span><small>{task.startLabel}</small></div>
+              </div>
+            ))}
+            {!documents.length && !tasks.length && <div className="empty-state compact"><p>Belum ada aktivitas proyek.</p></div>}
           </div>
         </aside>
       </section>
@@ -374,7 +409,7 @@ export function ProjectView({ navigate, notify, projectId, project }: ProjectVie
             </div>
             <form className="form-grid" onSubmit={addTask}>
               <label className="field full"><span>Nama tugas</span><input required value={taskName} onChange={(event) => setTaskName(event.target.value)} placeholder="Contoh: Testing coverage area" /></label>
-              <label className="field full"><span>Penanggung jawab</span><select value={taskOwner} onChange={(event) => setTaskOwner(event.target.value)}><option>Agus Suardana</option><option>Kadek Putra</option><option>Ayu Pramesti</option><option>Dewa Mahardika</option></select></label>
+              <label className="field full"><span>Penanggung jawab</span><select required value={taskOwner || availableOwners[0] || ""} onChange={(event) => setTaskOwner(event.target.value)}>{availableOwners.map((owner) => <option key={owner}>{owner}</option>)}</select></label>
               <label className="field full"><span>Tanggal mulai</span><input type="date" value={taskDate} onChange={(event) => setTaskDate(event.target.value)} /></label>
               <div className="modal-actions full">
                 <button className="button secondary" type="button" onClick={() => setShowTaskForm(false)}>Batal</button>
