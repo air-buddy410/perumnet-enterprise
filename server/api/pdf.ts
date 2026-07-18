@@ -240,7 +240,7 @@ async function bastPdf(bastId: string) {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.text(String(bast.client_role), 15, y + 44);
-  doc.text("PerumNet Enterprise", 112, y + 44);
+  doc.text(String(bast.engineer_role ?? "Project Manager"), 112, y + 44);
   return response(doc, `${String(bast.number).replaceAll("/", "-")}.pdf`);
 }
 

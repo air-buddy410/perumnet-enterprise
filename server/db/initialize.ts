@@ -222,6 +222,7 @@ CREATE TABLE IF NOT EXISTS basts (
   client_role TEXT NOT NULL,
   client_signature TEXT,
   engineer_name TEXT NOT NULL,
+  engineer_role TEXT NOT NULL DEFAULT 'Project Manager',
   engineer_signature TEXT,
   status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Final')),
   created_at TEXT NOT NULL,
@@ -269,8 +270,24 @@ function statement(sql: string, args: unknown[] = []): DatabaseStatement {
   return { sql, args };
 }
 
+async function ensureBastEngineerRoleColumn(client: DatabaseClient) {
+  try {
+    await client.execute("SELECT engineer_role FROM basts LIMIT 1");
+  } catch {
+    try {
+      await client.execute(
+        "ALTER TABLE basts ADD COLUMN engineer_role TEXT NOT NULL DEFAULT 'Project Manager'",
+      );
+    } catch {
+      // A concurrent initializer may have completed the same migration first.
+      await client.execute("SELECT engineer_role FROM basts LIMIT 1");
+    }
+  }
+}
+
 export async function initializeDatabase(client: DatabaseClient) {
   await client.executeMultiple(schemaSql);
+  await ensureBastEngineerRoleColumn(client);
 
   const existing = await client.execute("SELECT id FROM users LIMIT 1");
   if (existing.rows.length) return;

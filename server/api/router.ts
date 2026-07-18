@@ -139,6 +139,7 @@ const bastSchema = z.object({
   clientRole: z.string().trim().min(2).max(120),
   clientSignature: z.string().max(1_500_000).optional(),
   engineerName: z.string().trim().min(2).max(120),
+  engineerRole: z.string().trim().min(2).max(120).optional(),
   engineerSignature: z.string().max(1_500_000).optional(),
   status: z.enum(["Draft", "Final"]).default("Draft"),
 });
@@ -1779,6 +1780,9 @@ function mapBast(row: Record<string, unknown>) {
     clientRole: String(row.client_role),
     clientSignature: row.client_signature ? String(row.client_signature) : "",
     engineerName: String(row.engineer_name),
+    engineerRole: row.engineer_role
+      ? String(row.engineer_role)
+      : "Project Manager",
     engineerSignature: row.engineer_signature ? String(row.engineer_signature) : "",
     status: String(row.status),
   };
@@ -1850,8 +1854,8 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
     const number = makeSequence("BAST", asNumber(count.rows[0]?.count));
     const timestamp = now();
     await client.execute({
-      sql: "INSERT INTO basts (id,number,project_id,completion_date,notes,installed_items_json,client_name,client_role,client_signature,engineer_name,engineer_signature,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      args: [id, number, input.projectId, input.completionDate, input.notes, JSON.stringify(input.installedItems), input.clientName, input.clientRole, input.clientSignature ?? null, input.engineerName, input.engineerSignature ?? null, input.status, timestamp, timestamp],
+      sql: "INSERT INTO basts (id,number,project_id,completion_date,notes,installed_items_json,client_name,client_role,client_signature,engineer_name,engineer_role,engineer_signature,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      args: [id, number, input.projectId, input.completionDate, input.notes, JSON.stringify(input.installedItems), input.clientName, input.clientRole, input.clientSignature ?? null, input.engineerName, input.engineerRole ?? "Project Manager", input.engineerSignature ?? null, input.status, timestamp, timestamp],
     });
     if (input.status === "Final") {
       await client.execute({
@@ -1897,7 +1901,7 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
       );
     }
     await client.execute({
-      sql: "UPDATE basts SET completion_date=?,notes=?,installed_items_json=?,client_name=?,client_role=?,client_signature=?,engineer_name=?,engineer_signature=?,status=?,updated_at=? WHERE id=?",
+      sql: "UPDATE basts SET completion_date=?,notes=?,installed_items_json=?,client_name=?,client_role=?,client_signature=?,engineer_name=?,engineer_role=?,engineer_signature=?,status=?,updated_at=? WHERE id=?",
       args: [
         input.completionDate ?? current.completion_date,
         input.notes ?? current.notes,
@@ -1906,6 +1910,7 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
         input.clientRole ?? current.client_role,
         input.clientSignature === undefined ? current.client_signature : input.clientSignature,
         input.engineerName ?? current.engineer_name,
+        input.engineerRole ?? current.engineer_role,
         input.engineerSignature === undefined ? current.engineer_signature : input.engineerSignature,
         input.status ?? current.status,
         now(),

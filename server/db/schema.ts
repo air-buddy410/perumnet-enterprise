@@ -308,6 +308,7 @@ export const basts = sqliteTable(
     clientRole: text("client_role").notNull(),
     clientSignature: text("client_signature"),
     engineerName: text("engineer_name").notNull(),
+    engineerRole: text("engineer_role").notNull().default("Project Manager"),
     engineerSignature: text("engineer_signature"),
     status: text("status").notNull().default("Draft"),
     ...timestamps,

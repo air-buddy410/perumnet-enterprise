@@ -360,12 +360,14 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
         clientRole: "Manager",
         clientSignature: signature,
         engineerName: "Dewa Mahardika",
+        engineerRole: "Project Manager",
         engineerSignature: signature,
         status: "Final",
       }),
     },
     201,
   );
+  assert.equal(bast.engineerRole, "Project Manager");
   assert.equal((await request(`/api/bast/${bast.id}/pdf`)).status, 200);
   const editedBast = await json(`/api/bast/${bast.id}`, {
     method: "PATCH",
@@ -378,10 +380,16 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
           status: "Terpasang dan diuji",
         },
       ],
+      engineerRole: "Engineer",
     }),
   });
   assert.match(editedBast.notes, /diperbarui/);
   assert.equal(editedBast.installedItems[0].name, "Instalasi integrasi terkelola");
+  assert.equal(editedBast.engineerRole, "Engineer");
+  assert.equal(
+    (await json(`/api/bast/${bast.id}`)).engineerRole,
+    "Engineer",
+  );
 
   const transaction = await json(
     "/api/transactions",

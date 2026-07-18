@@ -23,7 +23,6 @@ interface BastViewProps {
   projectId: string;
   canManage: boolean;
   userName: string;
-  userRole: string;
   onProjectUpdated: (project: Project) => void;
 }
 
@@ -44,6 +43,7 @@ interface BastRecord {
   clientRole: string;
   clientSignature: string;
   engineerName: string;
+  engineerRole: string;
   engineerSignature: string;
   status: "Draft" | "Final";
 }
@@ -53,7 +53,6 @@ export function BastView({
   projectId,
   canManage,
   userName,
-  userRole,
   onProjectUpdated,
 }: BastViewProps) {
   const [project, setProject] = useState<Project | null>(null);
@@ -61,6 +60,7 @@ export function BastView({
   const [clientName, setClientName] = useState("");
   const [clientRole, setClientRole] = useState("Perwakilan Klien");
   const [engineerName, setEngineerName] = useState(userName);
+  const [engineerRole, setEngineerRole] = useState("Project Manager");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState(
     "Seluruh pekerjaan telah diuji dan berfungsi sesuai lingkup pekerjaan yang disepakati.",
@@ -101,6 +101,7 @@ export function BastView({
           setClientRole(record.clientRole);
           setClientSignature(record.clientSignature);
           setEngineerName(record.engineerName);
+          setEngineerRole(record.engineerRole);
           setEngineerSignature(record.engineerSignature);
           setBastStatus(record.status);
           return;
@@ -153,6 +154,7 @@ export function BastView({
       clientRole,
       clientSignature,
       engineerName,
+      engineerRole,
       engineerSignature,
       status,
     };
@@ -330,7 +332,19 @@ export function BastView({
               <div>
                 <div className="signer-fields">
                   <label className="field"><span>Nama engineer / PM</span><input disabled={!canManage} value={engineerName} onChange={(event) => setEngineerName(event.target.value)} /></label>
-                  <label className="field"><span>Jabatan</span><input readOnly value={userRole} /></label>
+                  <label className="field">
+                    <span>Jabatan di BAST</span>
+                    <input
+                      disabled={!canManage}
+                      list="bast-engineer-roles"
+                      value={engineerRole}
+                      onChange={(event) => setEngineerRole(event.target.value)}
+                    />
+                    <datalist id="bast-engineer-roles">
+                      <option value="Project Manager" />
+                      <option value="Engineer" />
+                    </datalist>
+                  </label>
                 </div>
                 <SignaturePad label="Pihak PerumNet" signer={engineerName} value={engineerSignature} disabled={!canManage} onChange={setEngineerSignature} />
               </div>
