@@ -249,14 +249,24 @@ export async function initializeDatabase(client: DatabaseClient) {
   const existing = await client.execute("SELECT id FROM users LIMIT 1");
   if (existing.rows.length) return;
 
-  const passwordHash = await hash("perumnet123", 12);
+  const production = process.env.NODE_ENV === "production";
+  const bootstrapPassword = process.env.SEED_ADMIN_PASSWORD ?? (production ? "" : "perumnet123");
+  if (!bootstrapPassword) {
+    throw new Error(
+      "Database masih kosong. Isi SEED_ADMIN_PASSWORD sekali untuk membuat akun administrator pertama.",
+    );
+  }
+  if (production && bootstrapPassword.length < 12) {
+    throw new Error("SEED_ADMIN_PASSWORD production harus memiliki minimal 12 karakter.");
+  }
+  const passwordHash = await hash(bootstrapPassword, 12);
 
   const userRows = [
     ["user-1", "Dewa Mahardika", "admin@perumnet.id", "Admin", "Aktif"],
-    ["user-2", "Ayu Pramesti", "ayu@perumnet.id", "Project Manager", "Aktif"],
-    ["user-3", "Agus Suardana", "agus@perumnet.id", "Engineer", "Aktif"],
-    ["user-4", "Kadek Putra", "kadek@perumnet.id", "Engineer", "Aktif"],
-    ["user-5", "Luh Sri Wahyuni", "sri@perumnet.id", "Finance", "Aktif"],
+    ["user-2", "Ayu Pramesti", "ayu@perumnet.id", "Project Manager", production ? "Nonaktif" : "Aktif"],
+    ["user-3", "Agus Suardana", "agus@perumnet.id", "Engineer", production ? "Nonaktif" : "Aktif"],
+    ["user-4", "Kadek Putra", "kadek@perumnet.id", "Engineer", production ? "Nonaktif" : "Aktif"],
+    ["user-5", "Luh Sri Wahyuni", "sri@perumnet.id", "Finance", production ? "Nonaktif" : "Aktif"],
     ["user-6", "Gede Arimbawa", "gede@perumnet.id", "Engineer", "Nonaktif"],
   ];
 

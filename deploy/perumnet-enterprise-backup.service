@@ -1,0 +1,8 @@
+[Unit]
+Description=Backup PostgreSQL PerumNet Enterprise
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=postgres
+ExecStart=/usr/local/sbin/perumnet-enterprise-backup

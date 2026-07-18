@@ -1,5 +1,7 @@
 "use client";
 
+import { appPath } from "./paths";
+
 export interface SessionUser {
   id: string;
   name: string;
@@ -24,7 +26,7 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
   if (init?.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const response = await fetch(url, {
+  const response = await fetch(appPath(url), {
     ...init,
     headers,
     credentials: "same-origin",
@@ -47,7 +49,7 @@ export function messageOf(error: unknown) {
 }
 
 export async function downloadApiFile(url: string, fallbackName: string) {
-  const response = await fetch(url, { credentials: "same-origin", cache: "no-store" });
+  const response = await fetch(appPath(url), { credentials: "same-origin", cache: "no-store" });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     throw new ApiClientError(

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily backup PostgreSQL PerumNet Enterprise
+
+[Timer]
+OnCalendar=*-*-* 18:30:00 UTC
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

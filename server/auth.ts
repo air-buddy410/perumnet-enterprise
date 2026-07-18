@@ -38,7 +38,12 @@ function parseCookies(header: string | null) {
 
 function serializeCookie(name: string, value: string, maxAge: number) {
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+  const configuredBasePath = process.env.NEXT_PUBLIC_BASE_PATH?.trim() ?? "";
+  const cookiePath =
+    configuredBasePath && configuredBasePath !== "/"
+      ? `/${configuredBasePath.replace(/^\/+|\/+$/g, "")}`
+      : "/";
+  return `${name}=${encodeURIComponent(value)}; Path=${cookiePath}; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
 }
 
 export async function verifyCredentials(email: string, password: string) {

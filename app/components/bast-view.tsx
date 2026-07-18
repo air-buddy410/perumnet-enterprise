@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, downloadApiFile, messageOf } from "../api-client";
+import { appPath } from "../paths";
 import { SignaturePad } from "./signature-pad";
 
 interface BastViewProps {
@@ -152,7 +153,7 @@ export function BastView({ notify }: BastViewProps) {
         <div className="bast-main">
           <article className="panel bast-document">
             <header className="bast-letterhead">
-              <img src="/perumnet-enterprise-logo.png" alt="PerumNet Enterprise" width={120} height={126} />
+              <img src={appPath("/perumnet-enterprise-logo.png")} alt="PerumNet Enterprise" width={120} height={126} />
               <div>
                 <strong>PERUMNET ENTERPRISE</strong>
                 <span>Konsultan IT & Managed Services</span>

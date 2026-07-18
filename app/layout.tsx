@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { appPath } from "./paths";
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.APP_URL ?? "https://perumnet-enterprise.vercel.app"),
@@ -7,21 +8,21 @@ export const metadata: Metadata = {
   description:
     "Mini ERP untuk pengelolaan proyek, penawaran, invoice, vendor, BAST, dan pembukuan PerumNet Enterprise.",
   icons: {
-    icon: "/favicon.png",
-    shortcut: "/favicon.png",
-    apple: "/perumnet-mark.png",
+    icon: appPath("/favicon.png"),
+    shortcut: appPath("/favicon.png"),
+    apple: appPath("/perumnet-mark.png"),
   },
   openGraph: {
     title: "PerumNet Enterprise",
     description: "Operasional proyek IT dalam satu sistem yang terukur.",
     type: "website",
-    images: ["/og.png"],
+    images: [appPath("/og.png")],
   },
   twitter: {
     card: "summary_large_image",
     title: "PerumNet Enterprise",
     description: "Operasional proyek IT dalam satu sistem yang terukur.",
-    images: ["/og.png"],
+    images: [appPath("/og.png")],
   },
 };
 

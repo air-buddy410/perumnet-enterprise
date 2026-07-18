@@ -142,6 +142,15 @@ function now() {
   return new Date().toISOString();
 }
 
+function applicationPath(path: string) {
+  const configuredBasePath = process.env.NEXT_PUBLIC_BASE_PATH?.trim() ?? "";
+  const basePath =
+    configuredBasePath && configuredBasePath !== "/"
+      ? `/${configuredBasePath.replace(/^\/+|\/+$/g, "")}`
+      : "";
+  return `${basePath}${path}`;
+}
+
 function lastActive(value: unknown) {
   if (!value) return "Belum pernah";
   const elapsed = Date.now() - new Date(String(value)).getTime();
@@ -176,7 +185,7 @@ function mutationRoles(resource: string): UserRole[] {
 
 async function sendResetEmail(email: string, token: string) {
   if (!process.env.RESEND_API_KEY) return false;
-  const baseUrl = process.env.APP_URL ?? "http://localhost:3000";
+  const baseUrl = (process.env.APP_URL ?? "http://localhost:3000").replace(/\/+$/, "");
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -370,7 +379,7 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
           args: [id, code, input.name, input.client, input.location, input.status, input.startDate ?? null, input.targetDate ?? null, input.value, input.managerId ?? user.id, user.id, timestamp, timestamp],
         },
         {
-          sql: "INSERT OR IGNORE INTO project_members (project_id,user_id,created_at) VALUES (?,?,?)",
+          sql: "INSERT INTO project_members (project_id,user_id,created_at) VALUES (?,?,?) ON CONFLICT (project_id,user_id) DO NOTHING",
           args: [id, input.managerId ?? user.id, timestamp],
         },
       ],
@@ -472,9 +481,9 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         date: formatDate(row.created_at),
         uploader: String(row.uploader_name),
         preview:
-          row.storage_url && !String(row.storage_url).startsWith("r2://")
+          row.storage_url && /^https?:\/\//.test(String(row.storage_url))
             ? row.storage_url
-            : `/api/documents/${row.id}/content`,
+            : applicationPath(`/api/documents/${row.id}/content`),
       })));
     }
     if (request.method === "POST") {
@@ -492,7 +501,7 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         args: [id, projectId, file.name.slice(0, 240), file.type, file.size, stored.storageUrl, stored.contentBase64, user.id, user.name, now()],
       });
       await writeAuditLog(client, request, user, "upload", "project_document", id, { projectId, name: file.name, size: file.size });
-      return created({ id, name: file.name, type: file.type.startsWith("image/") ? "image" : "file", date: "Baru saja", uploader: user.name, preview: `/api/documents/${id}/content` });
+      return created({ id, name: file.name, type: file.type.startsWith("image/") ? "image" : "file", date: "Baru saja", uploader: user.name, preview: applicationPath(`/api/documents/${id}/content`) });
     }
   }
 
@@ -1414,7 +1423,7 @@ async function handleDocuments(request: Request, path: string[]) {
     [path[1]],
     "Dokumen tidak ditemukan.",
   );
-  if (row.storage_url && !String(row.storage_url).startsWith("r2://")) {
+  if (row.storage_url && /^https?:\/\//.test(String(row.storage_url))) {
     return Response.redirect(String(row.storage_url));
   }
   const stored = await readProjectFile(row.storage_url ? String(row.storage_url) : null);

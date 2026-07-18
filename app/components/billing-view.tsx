@@ -17,6 +17,7 @@ import {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api, downloadApiFile, messageOf } from "../api-client";
 import { formatCurrency, initialBoqItems, initialInvoices, Invoice } from "../data";
+import { appPath } from "../paths";
 
 interface BillingViewProps {
   notify: (message: string) => void;
@@ -174,7 +175,7 @@ export function BillingView({ notify }: BillingViewProps) {
             <article className="document-preview">
               <header className="document-letterhead">
                 <img
-                  src="/perumnet-enterprise-logo.png"
+                  src={appPath("/perumnet-enterprise-logo.png")}
                   alt="PerumNet Enterprise"
                   width={126}
                   height={132}

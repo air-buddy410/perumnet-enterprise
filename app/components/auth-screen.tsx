@@ -3,6 +3,7 @@
 import { ArrowLeft, ArrowRight, Eye, EyeOff, KeyRound, Mail, ShieldCheck, Wifi } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { api, messageOf, SessionUser } from "../api-client";
+import { appPath } from "../paths";
 
 interface AuthScreenProps {
   onLogin: (user: SessionUser) => void;
@@ -11,9 +12,10 @@ interface AuthScreenProps {
 type AuthMode = "login" | "forgot" | "reset";
 
 export function AuthScreen({ onLogin }: AuthScreenProps) {
+  const demoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
   const [mode, setMode] = useState<AuthMode>("login");
-  const [email, setEmail] = useState("admin@perumnet.id");
-  const [password, setPassword] = useState("perumnet123");
+  const [email, setEmail] = useState(demoMode ? "admin@perumnet.id" : "");
+  const [password, setPassword] = useState(demoMode ? "perumnet123" : "");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -115,7 +117,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
         <div className="auth-orbit auth-orbit-two" />
         <div className="auth-brand-top">
           <img
-            src="/perumnet-mark.png"
+            src={appPath("/perumnet-mark.png")}
             alt=""
             width={58}
             height={58}
@@ -155,7 +157,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
         <div className="auth-form-wrap">
           <div className="auth-mobile-logo">
             <img
-              src="/perumnet-enterprise-logo.png"
+              src={appPath("/perumnet-enterprise-logo.png")}
               alt="PerumNet Enterprise"
               width={190}
               height={200}
@@ -222,13 +224,15 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
                   {busy ? "Memeriksa akses..." : "Masuk ke Dashboard"} <ArrowRight size={17} />
                 </button>
               </form>
-              <div className="demo-access">
-                <span className="demo-access-icon"><ShieldCheck size={18} /></span>
-                <div>
-                  <strong>Akun demo sudah terisi</strong>
-                  <small>Klik tombol masuk untuk menjelajahi seluruh modul frontend.</small>
+              {demoMode && (
+                <div className="demo-access">
+                  <span className="demo-access-icon"><ShieldCheck size={18} /></span>
+                  <div>
+                    <strong>Akun demo sudah terisi</strong>
+                    <small>Klik tombol masuk untuk menjelajahi seluruh modul frontend.</small>
+                  </div>
                 </div>
-              </div>
+              )}
             </>
           )}
 

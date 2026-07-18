@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createClient, type Client, type InStatement } from "@libsql/client";
+import { Pool } from "pg";
 import { getCloudflareEnvironment, type D1DatabaseLike } from "../cloudflare";
 import { initializeDatabase } from "./initialize";
 
@@ -17,7 +18,7 @@ export interface DatabaseClient {
   execute(statement: string | DatabaseStatement): Promise<QueryResult>;
   batch(statements: DatabaseStatement[], mode?: "read" | "write" | "deferred"): Promise<unknown>;
   executeMultiple(sql: string): Promise<unknown>;
-  close?(): void;
+  close?(): void | Promise<void>;
 }
 
 type DatabaseState = {
@@ -81,11 +82,61 @@ function d1Adapter(database: D1DatabaseLike): DatabaseClient {
   };
 }
 
+function postgresQuery(sql: string) {
+  let parameter = 0;
+  return sql
+    .replace(/\bgroup_concat\s*\(/gi, "string_agg(")
+    .replace(/\?/g, () => `$${++parameter}`);
+}
+
+function postgresAdapter(pool: Pool): DatabaseClient {
+  return {
+    async execute(input) {
+      const statement = typeof input === "string" ? { sql: input, args: [] } : input;
+      const result = await pool.query(postgresQuery(statement.sql), statement.args ?? []);
+      return { rows: result.rows as Array<Record<string, unknown>> };
+    },
+    async batch(statements) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        for (const statement of statements) {
+          await client.query(postgresQuery(statement.sql), statement.args ?? []);
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+    async executeMultiple(sql) {
+      await pool.query(sql);
+    },
+    close() {
+      return pool.end();
+    },
+  };
+}
+
 async function createDatabaseState(): Promise<DatabaseState> {
+  const postgresUrl = process.env.DATABASE_URL;
   const remoteUrl = process.env.TURSO_DATABASE_URL;
   let client: DatabaseClient;
 
-  if (remoteUrl) {
+  if (postgresUrl) {
+    client = postgresAdapter(
+      new Pool({
+        connectionString: postgresUrl,
+        max: Number(process.env.DATABASE_POOL_SIZE ?? 10),
+        ssl:
+          process.env.DATABASE_SSL === "require"
+            ? { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== "false" }
+            : undefined,
+      }),
+    );
+  } else if (remoteUrl) {
     client = libSqlAdapter(
       createClient({
         url: remoteUrl,
@@ -100,7 +151,7 @@ async function createDatabaseState(): Promise<DatabaseState> {
       client = libSqlAdapter(createClient({ url: "file:perumnet.local.db" }));
     } else {
       throw new Error(
-        "Database belum dikonfigurasi. Hubungkan D1 atau isi TURSO_DATABASE_URL dan TURSO_AUTH_TOKEN.",
+        "Database belum dikonfigurasi. Isi DATABASE_URL, hubungkan D1, atau isi TURSO_DATABASE_URL.",
       );
     }
   }
@@ -116,6 +167,6 @@ export async function getDatabase() {
 
 export async function closeDatabaseForTests() {
   const state = await globalThis.__perumnetDatabasePromise;
-  state?.client.close?.();
+  await state?.client.close?.();
   globalThis.__perumnetDatabasePromise = undefined;
 }

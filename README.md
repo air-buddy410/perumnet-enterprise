@@ -22,20 +22,38 @@ pertama kali dipanggil. Akun demo:
 
 ## Database production
 
-Deployment serverless menggunakan libSQL/Turso agar tetap kompatibel dengan
-SQLite dan persisten:
+Deployment VPS direkomendasikan memakai PostgreSQL. Dokumen proyek disimpan di
+volume lokal, sedangkan metadata dan seluruh data operasional disimpan di
+PostgreSQL:
+
+```bash
+DATABASE_URL=postgresql://user:password@127.0.0.1:5432/perumnet_enterprise
+UPLOAD_DIR=/var/lib/perumnet-enterprise/uploads
+NEXT_PUBLIC_BASE_PATH=/admin
+APP_URL=https://enterprise.perumnet.id/admin
+SEED_ADMIN_PASSWORD=kata-sandi-awal-yang-kuat
+```
+
+`SEED_ADMIN_PASSWORD` hanya diperlukan saat database masih kosong dan sebaiknya
+dihapus setelah akun administrator berhasil dibuat. Akun selain administrator
+yang berasal dari data awal dibuat nonaktif pada production.
+
+Lihat `.env.example` untuk konfigurasi lengkap dan email reset opsional. Schema
+SQLite/libSQL Drizzle dan migration tersimpan di `server/db/schema.ts` dan
+`drizzle/`; runtime PostgreSQL menjalankan schema idempotent yang sama.
+
+Deployment serverless tetap dapat menggunakan libSQL/Turso:
 
 ```bash
 TURSO_DATABASE_URL=libsql://...
 TURSO_AUTH_TOKEN=...
-APP_URL=https://domain-aplikasi
 ```
-
-Lihat `.env.example` untuk konfigurasi email reset opsional. Schema Drizzle dan
-migration tersimpan di `server/db/schema.ts` dan `drizzle/`.
 
 Pada hosting Sites, adapter yang sama otomatis memakai D1 untuk data dan R2
 untuk dokumen proyek melalui binding di `.openai/hosting.json`.
+
+Template PM2, Nginx, dan backup harian PostgreSQL untuk VPS tersedia di folder
+`deploy/`.
 
 ## Verifikasi
 
