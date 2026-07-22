@@ -283,10 +283,17 @@ export function ProjectView({
       {canManageAccess && (
         <section className="panel project-access-panel">
           <div className="panel-head">
-            <div><span className="eyebrow">{id ? "AKSES PROYEK" : "PROJECT ACCESS"}</span><h2>{id ? "Project Manager & Engineer" : "Project Managers & Engineers"}</h2></div>
+            <div className="project-access-heading">
+              <span className="eyebrow">{id ? "AKSES PROYEK" : "PROJECT ACCESS"}</span>
+              <h2>{id ? "Project Manager & Engineer" : "Project Managers & Engineers"}</h2>
+              <p className="panel-description">
+                {id
+                  ? "Pilih Project Manager dan Engineer yang dapat mengakses proyek ini. Proyek yang dibuat oleh Project Manager otomatis tersedia bagi pengguna dengan izin modul Proyek."
+                  : "Select the Project Managers and Engineers who can access this project. Projects created by a Project Manager are automatically available to users with Project module access."}
+              </p>
+            </div>
             <button className="button primary small" type="button" onClick={saveProjectAccess}><Check size={15} /> {id ? "Simpan akses" : "Save access"}</button>
           </div>
-          <p className="panel-description">{id ? "Admin menentukan siapa yang dapat melihat proyek buatan Admin. Proyek yang dibuat Project Manager otomatis terlihat oleh semua level yang memiliki izin modul proyek." : "Admin controls who can view Admin-created projects. Projects created by a Project Manager are automatically visible to every role with project-module permission."}</p>
           <div className="project-access-grid">
             {accessUsers.map((candidate) => (
               <label className={`project-access-user ${candidate.assigned || candidate.required ? "selected" : ""}`} key={candidate.id}>
