@@ -27,7 +27,7 @@ import {
 } from "@/shared/access";
 import { api, messageOf } from "../api-client";
 import { TeamUser } from "../data";
-import type { AppLanguage } from "../i18n";
+import { localizedLabel, type AppLanguage } from "../i18n";
 
 interface UsersViewProps {
   notify: (message: string) => void;
@@ -188,7 +188,7 @@ export function UsersView({ notify, language, currentUserId, canManage }: UsersV
           <div><span className="eyebrow">{id ? "DIREKTORI TIM" : "TEAM DIRECTORY"}</span><h2>{id ? "Daftar pengguna" : "User list"}</h2></div>
           <div className="project-tools">
             <label className="search-field compact"><Search size={16} /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={id ? "Cari nama atau email..." : "Search name or email..."} /></label>
-            <label className="select-compact"><Filter size={15} /><select value={filter} onChange={(event) => setFilter(event.target.value)}><option>Semua peran</option>{roles.map((item) => <option key={item}>{item}</option>)}</select><ChevronDown size={14} /></label>
+            <label className="select-compact"><Filter size={15} /><select value={filter} onChange={(event) => setFilter(event.target.value)}><option value="Semua peran">{id ? "Semua peran" : "All roles"}</option>{roles.map((item) => <option key={item}>{item}</option>)}</select><ChevronDown size={14} /></label>
           </div>
         </div>
         <div className="user-list">
@@ -198,7 +198,7 @@ export function UsersView({ notify, language, currentUserId, canManage }: UsersV
               <div className="user-primary"><strong>{user.name}</strong><span><Mail size={13} /> {user.email}</span></div>
               <span className={`role-chip ${roleClass(user.role)}`}>{user.role}</span>
               <div className="user-last-active"><span>{id ? "Aktivitas terakhir" : "Last activity"}</span><strong>{user.lastActive}</strong></div>
-              <span className={`status-badge ${user.status === "Aktif" ? "success" : "neutral"}`}><span className="badge-dot" /> {user.status}</span>
+              <span className={`status-badge ${user.status === "Aktif" ? "success" : "neutral"}`}><span className="badge-dot" /> {localizedLabel(language, user.status)}</span>
               {canManage && <button className={`button small ${user.status === "Aktif" ? "subtle" : "secondary"}`} type="button" disabled={user.id === currentUserId} onClick={() => toggleUser(user)}>{user.status === "Aktif" ? <UserRoundX size={15} /> : <UserCheck size={15} />}{user.status === "Aktif" ? (id ? "Nonaktifkan" : "Disable") : (id ? "Aktifkan" : "Enable")}</button>}
               {canManage && <button className="icon-button" type="button" aria-label={`${id ? "Atur" : "Edit"} ${user.name}`} onClick={() => openEditUser(user)}><MoreHorizontal size={17} /></button>}
             </article>
@@ -222,7 +222,7 @@ export function UsersView({ notify, language, currentUserId, canManage }: UsersV
               <label className="field"><span>{id ? "Nama lengkap" : "Full name"}</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label>
               <label className="field"><span>Email</span><input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
               <label className="field"><span>{id ? "Peran" : "Role"}</span><select value={role} onChange={(event) => changeRole(event.target.value as TeamUser["role"])}>{roles.map((item) => <option key={item}>{item}</option>)}</select></label>
-              <label className="field"><span>Status</span><select value={status} disabled={editing !== "new" && editing.id === currentUserId} onChange={(event) => setStatus(event.target.value as TeamUser["status"])}><option>Aktif</option><option>Nonaktif</option></select></label>
+              <label className="field"><span>Status</span><select value={status} disabled={editing !== "new" && editing.id === currentUserId} onChange={(event) => setStatus(event.target.value as TeamUser["status"])}><option value="Aktif">{id ? "Aktif" : "Active"}</option><option value="Nonaktif">{id ? "Nonaktif" : "Inactive"}</option></select></label>
               <label className="field full"><span>{editing === "new" ? (id ? "Kata sandi awal" : "Initial password") : (id ? "Kata sandi baru (opsional)" : "New password (optional)")}</span><div className="password-field"><input type={showPassword ? "text" : "password"} required={editing === "new"} minLength={10} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" /><button type="button" aria-label={id ? "Tampilkan kata sandi" : "Show password"} onClick={() => setShowPassword((value) => !value)}><Eye size={16} /></button></div><small>{id ? "Minimal 10 karakter. Sampaikan secara aman kepada pengguna." : "At least 10 characters. Share it securely with the user."}</small></label>
               <div className="permission-editor full">
                 <div><ShieldCheck size={18} /><span><strong>{id ? "Hak akses modul" : "Module permissions"}</strong><small>{id ? "Tidak ada = disembunyikan, Lihat = baca saja, Kelola = dapat mengubah data." : "No access = hidden, View = read-only, Manage = can change data."}</small></span></div>

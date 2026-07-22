@@ -231,6 +231,36 @@ CREATE TABLE IF NOT EXISTS basts (
 CREATE INDEX IF NOT EXISTS basts_project_idx ON basts(project_id);
 CREATE UNIQUE INDEX IF NOT EXISTS basts_project_unique ON basts(project_id);
 
+CREATE TABLE IF NOT EXISTS project_validations (
+  id TEXT PRIMARY KEY,
+  number TEXT NOT NULL UNIQUE,
+  project_id TEXT NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Completed')),
+  notes TEXT,
+  validated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  completed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS project_validations_project_unique ON project_validations(project_id);
+
+CREATE TABLE IF NOT EXISTS project_validation_items (
+  id TEXT PRIMARY KEY,
+  validation_id TEXT NOT NULL REFERENCES project_validations(id) ON DELETE CASCADE,
+  boq_item_id TEXT REFERENCES boq_items(id) ON DELETE CASCADE,
+  category TEXT NOT NULL CHECK (category IN ('Perangkat', 'Material')),
+  description TEXT NOT NULL,
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  unit TEXT NOT NULL,
+  checked INTEGER NOT NULL DEFAULT 0 CHECK (checked IN (0, 1)),
+  notes TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS project_validation_items_validation_idx ON project_validation_items(validation_id);
+CREATE UNIQUE INDEX IF NOT EXISTS project_validation_items_boq_unique ON project_validation_items(validation_id,boq_item_id);
+
 CREATE TABLE IF NOT EXISTS transactions (
   id TEXT PRIMARY KEY,
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,

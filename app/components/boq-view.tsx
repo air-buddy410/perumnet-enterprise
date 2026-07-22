@@ -21,8 +21,10 @@ import {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api, messageOf } from "../api-client";
 import { BoqItem, formatCurrency, ViewKey } from "../data";
+import { type AppLanguage, localizedLabel } from "../i18n";
 
 interface BoqViewProps {
+  language: AppLanguage;
   navigate: (view: ViewKey) => void;
   notify: (message: string) => void;
   projectId: string;
@@ -43,7 +45,8 @@ interface BoqTemplate {
   lastUsed: string;
 }
 
-export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps) {
+export function BoqView({ language, navigate, notify, projectId, canManage }: BoqViewProps) {
+  const id = language === "id";
   const [items, setItems] = useState<BoqItem[]>([]);
   const [project, setProject] = useState({ name: "", code: "", client: "" });
   const [boqStatus, setBoqStatus] = useState("Draft");
@@ -72,11 +75,11 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
         setTemplateList(savedTemplates);
         setActiveTemplate(savedTemplates[0]?.id ?? "");
       })
-      .catch((error) => notify(messageOf(error)));
+      .catch((error) => notify(messageOf(error, language)));
     return () => {
       active = false;
     };
-  }, [notify, projectId]);
+  }, [language, notify, projectId]);
 
   const totals = useMemo(() => {
     const cost = items.reduce((sum, item) => sum + item.quantity * item.costPrice, 0);
@@ -111,9 +114,9 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
         ? current.map((currentItem) => currentItem.id === item.id ? item : currentItem)
         : [...current, item]);
       resetItemForm();
-      notify(editingItemId ? "Item BoQ berhasil diperbarui." : "Item BoQ berhasil ditambahkan.");
+      notify(editingItemId ? (id ? "Item BoQ berhasil diperbarui." : "BoQ item updated.") : (id ? "Item BoQ berhasil ditambahkan." : "BoQ item added."));
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -159,21 +162,21 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
       );
       setItems(saved.items);
       setBoqStatus(saved.status);
-      notify("BoQ tersimpan dan nilai proyek telah disinkronkan.");
+      notify(id ? "BoQ tersimpan dan nilai proyek telah disinkronkan." : "The BoQ was saved and the project value synchronized.");
       return true;
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
       return false;
     }
   }
 
-  async function deleteItem(id: string) {
+  async function deleteItem(itemId: string) {
     try {
-      await api(`/api/boq/items/${id}?projectId=${encodeURIComponent(projectId)}`, { method: "DELETE" });
-      setItems((current) => current.filter((item) => item.id !== id));
-      notify("Item dihapus dari BoQ.");
+      await api(`/api/boq/items/${itemId}?projectId=${encodeURIComponent(projectId)}`, { method: "DELETE" });
+      setItems((current) => current.filter((item) => item.id !== itemId));
+      notify(id ? "Item dihapus dari BoQ." : "The item was removed from the BoQ.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -187,16 +190,16 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
       setTemplateList((current) => [newTemplate, ...current]);
       setActiveTemplate(newTemplate.id);
       setTemplateName("");
-      notify("BoQ berhasil disimpan sebagai template.");
+      notify(id ? "BoQ berhasil disimpan sebagai template." : "The BoQ was saved as a template.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
-  async function loadTemplate(id: string) {
+  async function loadTemplate(templateId: string) {
     try {
-      const template = await api<{ id: string; items: BoqItem[] }>(`/api/boq/templates/${id}`);
-      setActiveTemplate(id);
+      const template = await api<{ id: string; items: BoqItem[] }>(`/api/boq/templates/${templateId}`);
+      setActiveTemplate(templateId);
       const nextItems = template.items.map((item, index) => ({
         category: item.category,
         description: item.description,
@@ -204,19 +207,19 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
         unit: item.unit,
         costPrice: item.costPrice,
         sellingPrice: item.sellingPrice,
-        id: `template-${id}-${index}`,
+        id: `template-${templateId}-${index}`,
       }));
       await saveBoq(nextItems);
-      notify("Template dimuat dan disimpan ke BoQ aktif.");
+      notify(id ? "Template dimuat dan disimpan ke BoQ aktif." : "The template was loaded into the active BoQ.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
   async function deleteTemplate(template: BoqTemplate) {
     if (
       !window.confirm(
-        `Hapus template "${template.name}"? Template akan dihapus permanen, tetapi BoQ proyek yang sudah memakai template ini tidak berubah.`,
+        id ? `Hapus template "${template.name}"? Template akan dihapus permanen, tetapi BoQ proyek yang sudah memakai template ini tidak berubah.` : `Delete template "${template.name}"? The template will be permanently deleted, but existing project BoQs will not change.`,
       )
     ) {
       return;
@@ -229,15 +232,15 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
       setActiveTemplate((current) =>
         current === template.id ? "" : current,
       );
-      notify(`Template "${template.name}" berhasil dihapus.`);
+      notify(id ? `Template "${template.name}" berhasil dihapus.` : `Template "${template.name}" was deleted.`);
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
   async function continueToQuotation() {
     if (!items.length) {
-      notify("Tambahkan minimal satu item sebelum membuat Quotation.");
+      notify(id ? "Tambahkan minimal satu item sebelum membuat Quotation." : "Add at least one item before creating a Quotation.");
       return;
     }
     if (canManage && !(await saveBoq())) return;
@@ -248,23 +251,23 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
     <div className="page-stack" data-testid="boq-view">
       <section className="page-title-row">
         <div>
-          <span className="eyebrow">PENAWARAN PROYEK</span>
+          <span className="eyebrow">{id ? "PENAWARAN PROYEK" : "PROJECT QUOTATION"}</span>
           <h1>BoQ Generator</h1>
-          <p>Susun kebutuhan, harga pokok, dan margin proyek secara terstruktur.</p>
+          <p>{id ? "Susun kebutuhan, harga pokok, dan margin proyek secara terstruktur." : "Structure project requirements, costs, and margins."}</p>
         </div>
         <div className="title-actions">
           {canManage && (
             <>
               <button className="button secondary" type="button" onClick={() => saveBoq()}>
-                <Save size={16} /> Simpan BoQ
+                <Save size={16} /> {id ? "Simpan BoQ" : "Save BoQ"}
               </button>
               <button className="button secondary" type="button" onClick={saveTemplate}>
-                <Save size={16} /> Simpan template
+                <Save size={16} /> {id ? "Simpan template" : "Save template"}
               </button>
             </>
           )}
           <button className="button primary" type="button" onClick={continueToQuotation}>
-            Buat quotation <ArrowRight size={16} />
+            {id ? "Buat quotation" : "Create quotation"} <ArrowRight size={16} />
           </button>
         </div>
       </section>
@@ -273,7 +276,7 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
         <div className="context-project">
           <span className="context-icon"><FileSpreadsheet size={19} /></span>
           <div>
-            <span>BoQ untuk proyek</span>
+            <span>{id ? "BoQ untuk proyek" : "BoQ for project"}</span>
             <strong>{project.name}</strong>
           </div>
         </div>
@@ -289,13 +292,13 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
           <section className="panel">
             <div className="panel-head">
               <div>
-                <span className="eyebrow">ENTRI ITEM</span>
-                <h2>Tambah kebutuhan proyek</h2>
+                <span className="eyebrow">{id ? "ENTRI ITEM" : "ITEM ENTRY"}</span>
+                <h2>{id ? "Tambah kebutuhan proyek" : "Add project requirements"}</h2>
               </div>
-              <span className="helper-copy"><Sparkles size={15} /> Total dihitung otomatis</span>
+              <span className="helper-copy"><Sparkles size={15} /> {id ? "Total dihitung otomatis" : "Totals calculated automatically"}</span>
             </div>
             <form className="boq-entry-form" onSubmit={addItem}>
-              <div className="category-selector" role="group" aria-label="Kategori item">
+              <div className="category-selector" role="group" aria-label={id ? "Kategori item" : "Item category"}>
                 {(Object.keys(categoryIcons) as BoqItem["category"][]).map((itemCategory) => {
                   const Icon = categoryIcons[itemCategory];
                   return (
@@ -306,19 +309,19 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
                       onClick={() => setCategory(itemCategory)}
                     >
                       <Icon size={17} />
-                      {itemCategory}
+                      {localizedLabel(language, itemCategory)}
                     </button>
                   );
                 })}
               </div>
               <div className="form-grid boq-form-grid">
                 <label className="field description-field">
-                  <span>Deskripsi item</span>
+                  <span>{id ? "Deskripsi item" : "Item description"}</span>
                   <input
                     required
                     value={description}
                     onChange={(event) => setDescription(event.target.value)}
-                    placeholder="Contoh: Access Point WiFi 6"
+                    placeholder={id ? "Contoh: Access Point WiFi 6" : "Example: WiFi 6 Access Point"}
                   />
                 </label>
                 <label className="field">
@@ -331,18 +334,18 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
                   />
                 </label>
                 <label className="field select-field">
-                  <span>Satuan</span>
+                  <span>{id ? "Satuan" : "Unit"}</span>
                   <select value={unit} onChange={(event) => setUnit(event.target.value)}>
                     <option value="unit">unit</option>
                     <option value="box">box</option>
                     <option value="meter">meter</option>
-                    <option value="paket">paket</option>
-                    <option value="hari">hari</option>
+                    <option value="paket">{id ? "paket" : "package"}</option>
+                    <option value="hari">{id ? "hari" : "day"}</option>
                   </select>
                   <ChevronDown size={15} />
                 </label>
                 <label className="field">
-                  <span>Harga pokok</span>
+                  <span>{id ? "Harga pokok" : "Cost price"}</span>
                   <input
                     type="number"
                     min="0"
@@ -352,7 +355,7 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
                   />
                 </label>
                 <label className="field">
-                  <span>Harga jual</span>
+                  <span>{id ? "Harga jual" : "Selling price"}</span>
                   <input
                     type="number"
                     min="0"
@@ -366,11 +369,11 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
                   <div className="boq-form-actions">
                     <button className="button primary add-item-button" type="submit">
                       {editingItemId ? <Pencil size={17} /> : <PackagePlus size={17} />}
-                      {editingItemId ? "Simpan item" : "Tambah item"}
+                      {editingItemId ? (id ? "Simpan item" : "Save item") : (id ? "Tambah item" : "Add item")}
                     </button>
                     {editingItemId && (
                       <button className="button secondary" type="button" onClick={resetItemForm}>
-                        <X size={16} /> Batal
+                        <X size={16} /> {id ? "Batal" : "Cancel"}
                       </button>
                     )}
                   </div>
@@ -382,8 +385,8 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
           <section className="panel boq-table-panel">
             <div className="panel-head">
               <div>
-                <span className="eyebrow">RINCIAN BIAYA</span>
-                <h2>Daftar item BoQ</h2>
+                <span className="eyebrow">{id ? "RINCIAN BIAYA" : "COST DETAILS"}</span>
+                <h2>{id ? "Daftar item BoQ" : "BoQ items"}</h2>
               </div>
               <span className="count-badge">{items.length} item</span>
             </div>
@@ -393,10 +396,10 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
                   <tr>
                     <th>Item</th>
                     <th>Qty</th>
-                    <th>Harga pokok</th>
-                    <th>Harga jual</th>
+                    <th>{id ? "Harga pokok" : "Cost price"}</th>
+                    <th>{id ? "Harga jual" : "Selling price"}</th>
                     <th>Subtotal</th>
-                    <th><span className="sr-only">Aksi</span></th>
+                    <th><span className="sr-only">{id ? "Aksi" : "Actions"}</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -411,14 +414,14 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
                             </span>
                             <div>
                               <strong>{item.description}</strong>
-                              <small>{item.category}</small>
+                              <small>{localizedLabel(language, item.category)}</small>
                             </div>
                           </div>
                         </td>
-                        <td>{item.quantity} {item.unit}</td>
-                        <td>{formatCurrency(item.costPrice)}</td>
-                        <td>{formatCurrency(item.sellingPrice)}</td>
-                        <td><strong>{formatCurrency(item.quantity * item.sellingPrice)}</strong></td>
+                        <td>{item.quantity} {localizedLabel(language, item.unit)}</td>
+                        <td>{formatCurrency(item.costPrice, language)}</td>
+                        <td>{formatCurrency(item.sellingPrice, language)}</td>
+                        <td><strong>{formatCurrency(item.quantity * item.sellingPrice, language)}</strong></td>
                         <td>
                           {canManage && (
                             <div className="table-row-actions">
@@ -445,8 +448,8 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
             <div className="boq-table-summary">
               {categoryTotals.map((item) => (
                 <div key={item.category}>
-                  <span>{item.category}</span>
-                  <strong>{formatCurrency(item.amount)}</strong>
+                  <span>{localizedLabel(language, item.category)}</span>
+                  <strong>{formatCurrency(item.amount, language)}</strong>
                 </div>
               ))}
             </div>
@@ -457,32 +460,32 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
           <section className="panel total-panel">
             <div className="panel-head">
               <div>
-                <span className="eyebrow">REKAPITULASI</span>
+                <span className="eyebrow">{id ? "REKAPITULASI" : "SUMMARY"}</span>
                 <h2>Total BoQ</h2>
               </div>
               <span className="metric-icon teal"><CircleDollarSign size={19} /></span>
             </div>
             <div className="total-list">
               <div>
-                <span>Total harga pokok</span>
-                <strong>{formatCurrency(totals.cost)}</strong>
+                <span>{id ? "Total harga pokok" : "Total cost"}</span>
+                <strong>{formatCurrency(totals.cost, language)}</strong>
               </div>
               <div>
-                <span>Total harga jual</span>
-                <strong>{formatCurrency(totals.selling)}</strong>
+                <span>{id ? "Total harga jual" : "Total selling price"}</span>
+                <strong>{formatCurrency(totals.selling, language)}</strong>
               </div>
               <div className="total-divider" />
               <div className="margin-total">
-                <span>Estimasi margin</span>
-                <strong>{formatCurrency(totals.margin)}</strong>
-                <small>{totals.marginPercentage.toFixed(1)}% dari nilai penawaran</small>
+                <span>{id ? "Estimasi margin" : "Estimated margin"}</span>
+                <strong>{formatCurrency(totals.margin, language)}</strong>
+                <small>{totals.marginPercentage.toFixed(1)}% {id ? "dari nilai penawaran" : "of quotation value"}</small>
               </div>
             </div>
             <div className="margin-meter">
               <span style={{ width: `${Math.min(totals.marginPercentage, 100)}%` }} />
             </div>
             <button className="button primary full-width" type="button" onClick={continueToQuotation}>
-              Buat quotation <ArrowRight size={16} />
+              {id ? "Buat quotation" : "Create quotation"} <ArrowRight size={16} />
             </button>
           </section>
 
@@ -490,7 +493,7 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
             <div className="panel-head">
               <div>
                 <span className="eyebrow">TEMPLATE</span>
-                <h2>BoQ tersimpan</h2>
+                <h2>{id ? "BoQ tersimpan" : "Saved BoQs"}</h2>
               </div>
             </div>
             <div className="template-list">
@@ -522,21 +525,21 @@ export function BoqView({ navigate, notify, projectId, canManage }: BoqViewProps
               ))}
               {!templateList.length && (
                 <div className="empty-state compact">
-                  <p>Belum ada template BoQ tersimpan.</p>
+                  <p>{id ? "Belum ada template BoQ tersimpan." : "No saved BoQ templates."}</p>
                 </div>
               )}
             </div>
             {canManage && <div className="save-template-form">
               <label className="field">
-                <span>Nama template baru</span>
+                <span>{id ? "Nama template baru" : "New template name"}</span>
                 <input
                   value={templateName}
                   onChange={(event) => setTemplateName(event.target.value)}
-                  placeholder="Nama template"
+                  placeholder={id ? "Nama template" : "Template name"}
                 />
               </label>
               <button className="button secondary full-width" type="button" onClick={saveTemplate}>
-                <Plus size={16} /> Simpan BoQ saat ini
+                <Plus size={16} /> {id ? "Simpan BoQ saat ini" : "Save current BoQ"}
               </button>
             </div>}
           </section>

@@ -4,6 +4,7 @@ export type ViewKey =
   | "billing"
   | "project"
   | "procurement"
+  | "validation"
   | "bast"
   | "finance"
   | "users"
@@ -62,6 +63,7 @@ export interface Invoice {
   amount: number;
   status: "Lunas" | "Belum Lunas";
   paidDate?: string;
+  paidDateIso?: string;
 }
 
 export interface Vendor {
@@ -428,17 +430,19 @@ export const initialUsers: TeamUser[] = [
   },
 ];
 
-export const formatCurrency = (value: number) =>
-  new Intl.NumberFormat("id-ID", {
+export const formatCurrency = (value: number, language: "id" | "en" = "id") =>
+  new Intl.NumberFormat(language === "en" ? "en-US" : "id-ID", {
     style: "currency",
     currency: "IDR",
+    currencyDisplay: language === "en" ? "code" : "symbol",
     maximumFractionDigits: 0,
   }).format(value);
 
-export const formatCompactCurrency = (value: number) =>
-  new Intl.NumberFormat("id-ID", {
+export const formatCompactCurrency = (value: number, language: "id" | "en" = "id") =>
+  new Intl.NumberFormat(language === "en" ? "en-US" : "id-ID", {
     notation: "compact",
     style: "currency",
     currency: "IDR",
+    currencyDisplay: language === "en" ? "code" : "symbol",
     maximumFractionDigits: 1,
   }).format(value);

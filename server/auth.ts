@@ -13,6 +13,7 @@ import type { DatabaseClient } from "./db/client";
 import { ApiError } from "./api/errors";
 
 export const SESSION_COOKIE = "perumnet_session";
+export const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
 
 export type UserRole = "Admin" | "Project Manager" | "Engineer" | "Finance";
 
@@ -105,10 +106,14 @@ export async function verifyCredentials(email: string, password: string) {
 }
 
 export async function createSession(userId: string, remember: boolean) {
+  // `remember` is retained in the public API for backward compatibility with
+  // older clients. Security policy is intentionally fixed: every login must be
+  // renewed after eight hours, including remembered devices.
+  void remember;
   const { client } = await getDatabase();
   const token = randomBytes(32).toString("base64url");
   const now = new Date();
-  const maxAge = remember ? 60 * 60 * 24 * 30 : 60 * 60 * 12;
+  const maxAge = SESSION_MAX_AGE_SECONDS;
   const expiresAt = new Date(now.getTime() + maxAge * 1000).toISOString();
 
   await client.batch(

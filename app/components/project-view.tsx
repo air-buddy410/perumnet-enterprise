@@ -23,15 +23,28 @@ import {
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api, messageOf } from "../api-client";
 import { Project, ViewKey } from "../data";
+import { type AppLanguage, localizedDate, localizedLabel } from "../i18n";
 
 interface ProjectViewProps {
+  language: AppLanguage;
   navigate: (view: ViewKey) => void;
   notify: (message: string) => void;
   projectId: string;
   project?: Project;
   canManage: boolean;
   canDelete: boolean;
+  canManageAccess: boolean;
   onProjectDeleted: (projectId: string) => void;
+}
+
+interface ProjectAccessUser {
+  id: string;
+  name: string;
+  email: string;
+  role: "Project Manager" | "Engineer";
+  status: "Aktif" | "Nonaktif";
+  assigned: boolean;
+  required: boolean;
 }
 
 interface ProjectTask {
@@ -63,14 +76,17 @@ function taskStatusClass(status: ProjectTask["status"]) {
 }
 
 export function ProjectView({
+  language,
   navigate,
   notify,
   projectId,
   project,
   canManage,
   canDelete,
+  canManageAccess,
   onProjectDeleted,
 }: ProjectViewProps) {
+  const id = language === "id";
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
   const [documents, setDocuments] = useState<ProjectDocument[]>([]);
   const [viewMode, setViewMode] = useState<"timeline" | "tasks">("timeline");
@@ -78,6 +94,7 @@ export function ProjectView({
   const [taskName, setTaskName] = useState("");
   const [taskOwner, setTaskOwner] = useState("");
   const [taskDate, setTaskDate] = useState(new Date().toISOString().slice(0, 10));
+  const [accessUsers, setAccessUsers] = useState<ProjectAccessUser[]>([]);
 
   const refreshTasks = useCallback(async () => {
     try {
@@ -102,6 +119,13 @@ export function ProjectView({
     }, 0);
     return () => window.clearTimeout(update);
   }, [refreshDocuments, refreshTasks]);
+
+  useEffect(() => {
+    if (!canManageAccess) return;
+    api<ProjectAccessUser[]>(`/api/projects/${projectId}/access`)
+      .then(setAccessUsers)
+      .catch((error) => notify(messageOf(error, language)));
+  }, [canManageAccess, language, notify, projectId]);
 
   const availableOwners = project?.teamNames?.length
     ? project.teamNames
@@ -131,9 +155,9 @@ export function ProjectView({
         body: JSON.stringify({ status }),
       });
       setTasks((current) => current.map((item) => (item.id === id ? { ...item, status } : item)));
-      notify("Status tugas dan progres proyek diperbarui.");
+      notify(id ? "Status tugas dan progres proyek diperbarui." : "Task status and project progress updated.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -153,9 +177,9 @@ export function ProjectView({
       await refreshTasks();
       setTaskName("");
       setShowTaskForm(false);
-      notify("Tugas baru ditambahkan ke timeline.");
+      notify(id ? "Tugas baru ditambahkan ke timeline." : "A new task was added to the timeline.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -170,9 +194,9 @@ export function ProjectView({
         body: form,
       });
       setDocuments((current) => [document, ...current]);
-      notify("Dokumentasi berhasil ditambahkan ke proyek.");
+      notify(id ? "Dokumentasi berhasil ditambahkan ke proyek." : "Documentation was added to the project.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     } finally {
       event.target.value = "";
     }
@@ -181,7 +205,9 @@ export function ProjectView({
   async function deleteProject() {
     if (
       !window.confirm(
-        `Hapus proyek "${project?.name ?? projectId}" beserta BOQ, Quotation, Invoice, SPK, BAST, tugas, dan dokumentasinya?`,
+        id
+          ? `Hapus proyek "${project?.name ?? projectId}" beserta BOQ, Quotation, Invoice, SPK, BAST, tugas, dan dokumentasinya?`
+          : `Delete project "${project?.name ?? projectId}" and its BoQ, Quotation, Invoice, Work Order, Handover, tasks, and documentation?`,
       )
     ) {
       return;
@@ -190,9 +216,24 @@ export function ProjectView({
       await api(`/api/projects/${projectId}`, { method: "DELETE" });
       onProjectDeleted(projectId);
       navigate("dashboard");
-      notify("Proyek dan seluruh data turunannya berhasil dihapus.");
+      notify(id ? "Proyek dan seluruh data turunannya berhasil dihapus." : "The project and all related data were deleted.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
+    }
+  }
+
+  async function saveProjectAccess() {
+    try {
+      const userIds = accessUsers
+        .filter((candidate) => candidate.status === "Aktif" && (candidate.assigned || candidate.required))
+        .map((candidate) => candidate.id);
+      await api(`/api/projects/${projectId}/access`, {
+        method: "PUT",
+        body: JSON.stringify({ userIds }),
+      });
+      notify(id ? "Akses proyek berhasil diperbarui." : "Project access updated.");
+    } catch (error) {
+      notify(messageOf(error, language));
     }
   }
 
@@ -201,78 +242,100 @@ export function ProjectView({
       <section className="project-hero">
         <div className="project-hero-main">
           <div className="project-hero-badges">
-            <span className={`status-badge ${project?.status === "Selesai" ? "success" : project?.status === "Aktif" ? "info" : "neutral"}`}><span className="badge-dot" /> {project?.status ?? "Draft"}</span>
-            <span className="project-code">{project?.code ?? "Memuat..."}</span>
+            <span className={`status-badge ${project?.status === "Selesai" ? "success" : project?.status === "Aktif" ? "info" : "neutral"}`}><span className="badge-dot" /> {localizedLabel(language, project?.status ?? "Draft")}</span>
+            <span className="project-code">{project?.code ?? (id ? "Memuat..." : "Loading...")}</span>
           </div>
-          <h1>{project?.name ?? "Memuat proyek..."}</h1>
-          <p>{project?.client ?? "Memuat klien..."}</p>
+          <h1>{project?.name ?? (id ? "Memuat proyek..." : "Loading project...")}</h1>
+          <p>{project?.client ?? (id ? "Memuat klien..." : "Loading client...")}</p>
           <div className="project-hero-meta">
             <span><MapPin size={15} /> {project?.location ?? "Ubud, Gianyar"}</span>
-            <span><CalendarDays size={15} /> {project?.startDate ?? "Belum ditentukan"} — {project?.targetDate ?? "Belum ditentukan"}</span>
-            <span><UsersRound size={15} /> {project?.teamNames?.length ?? project?.team.length ?? 0} anggota tim</span>
+            <span><CalendarDays size={15} /> {localizedDate(language, project?.startDateIso)} — {localizedDate(language, project?.targetDateIso)}</span>
+            <span><UsersRound size={15} /> {project?.teamNames?.length ?? project?.team.length ?? 0} {id ? "anggota tim" : "team members"}</span>
           </div>
         </div>
         <div className="project-hero-progress">
           <div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}>
-            <span><strong>{progress}%</strong><small>selesai</small></span>
+            <span><strong>{progress}%</strong><small>{id ? "selesai" : "complete"}</small></span>
           </div>
           <div>
-            <strong>{completed} dari {tasks.length} tugas</strong>
-            <span>Target selesai {project?.targetDate ?? "belum ditentukan"}</span>
+            <strong>{completed} {id ? "dari" : "of"} {tasks.length} {id ? "tugas" : "tasks"}</strong>
+            <span>{id ? "Target selesai" : "Target completion"} {localizedDate(language, project?.targetDateIso)}</span>
           </div>
         </div>
         <div className="title-actions">
           <button className="button secondary" type="button" onClick={() => navigate("boq")}>
-            <FileText size={16} /> Lihat BoQ
+            <FileText size={16} /> {id ? "Lihat BoQ" : "View BoQ"}
           </button>
-          <button className="button primary" type="button" onClick={() => navigate("bast")}>
-            Buat BAST <ArrowRight size={16} />
+          <button className="button primary" type="button" onClick={() => navigate("validation")}>
+            {id ? "Mulai validasi" : "Start validation"} <ArrowRight size={16} />
+          </button>
+          <button className="button secondary" type="button" onClick={() => navigate("bast")}>
+            {id ? "Buka BAST" : "Open handover"}
           </button>
           {canDelete && (
             <button className="button danger" type="button" onClick={deleteProject}>
-              <Trash2 size={16} /> Hapus proyek
+              <Trash2 size={16} /> {id ? "Hapus proyek" : "Delete project"}
             </button>
           )}
         </div>
       </section>
 
+      {canManageAccess && (
+        <section className="panel project-access-panel">
+          <div className="panel-head">
+            <div><span className="eyebrow">{id ? "AKSES PROYEK" : "PROJECT ACCESS"}</span><h2>{id ? "Project Manager & Engineer" : "Project Managers & Engineers"}</h2></div>
+            <button className="button primary small" type="button" onClick={saveProjectAccess}><Check size={15} /> {id ? "Simpan akses" : "Save access"}</button>
+          </div>
+          <p className="panel-description">{id ? "Admin menentukan siapa yang dapat melihat proyek buatan Admin. Proyek yang dibuat Project Manager otomatis terlihat oleh semua level yang memiliki izin modul proyek." : "Admin controls who can view Admin-created projects. Projects created by a Project Manager are automatically visible to every role with project-module permission."}</p>
+          <div className="project-access-grid">
+            {accessUsers.map((candidate) => (
+              <label className={`project-access-user ${candidate.assigned || candidate.required ? "selected" : ""}`} key={candidate.id}>
+                <input type="checkbox" checked={candidate.assigned || candidate.required} disabled={candidate.required || candidate.status !== "Aktif"} onChange={(event) => setAccessUsers((current) => current.map((item) => item.id === candidate.id ? { ...item, assigned: event.target.checked } : item))} />
+                <span className="task-check">{(candidate.assigned || candidate.required) && <Check size={14} />}</span>
+                <span><strong>{candidate.name}</strong><small>{candidate.role} · {localizedLabel(language, candidate.status)}{candidate.required ? (id ? " · Manager proyek" : " · Project manager") : ""}</small></span>
+              </label>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="project-summary-grid">
         <article>
           <span className="summary-dot success" />
-          <div><strong>{completed}</strong><span>Tugas selesai</span></div>
+          <div><strong>{completed}</strong><span>{id ? "Tugas selesai" : "Completed tasks"}</span></div>
         </article>
         <article>
           <span className="summary-dot info" />
-          <div><strong>{active}</strong><span>Sedang berjalan</span></div>
+          <div><strong>{active}</strong><span>{id ? "Sedang berjalan" : "In progress"}</span></div>
         </article>
         <article>
           <span className="summary-dot neutral" />
-          <div><strong>{remaining}</strong><span>Belum dimulai</span></div>
+          <div><strong>{remaining}</strong><span>{id ? "Belum dimulai" : "Not started"}</span></div>
         </article>
         <article>
           <span className="summary-dot warning" />
-          <div><strong>14</strong><span>Hari tersisa</span></div>
+          <div><strong>14</strong><span>{id ? "Hari tersisa" : "Days remaining"}</span></div>
         </article>
       </section>
 
       <section className="panel timeline-panel">
         <div className="panel-head timeline-head">
           <div>
-            <span className="eyebrow">JADWAL PROYEK</span>
-            <h2>Timeline & tugas lapangan</h2>
+            <span className="eyebrow">{id ? "JADWAL PROYEK" : "PROJECT SCHEDULE"}</span>
+            <h2>{id ? "Timeline & tugas lapangan" : "Timeline & field tasks"}</h2>
           </div>
           <div className="timeline-controls">
-            <div className="segmented-control icon-segmented" aria-label="Mode tampilan jadwal">
+            <div className="segmented-control icon-segmented" aria-label={id ? "Mode tampilan jadwal" : "Schedule view mode"}>
               <button className={viewMode === "timeline" ? "active" : ""} type="button" onClick={() => setViewMode("timeline")}>
                 <LayoutList size={15} /> Timeline
               </button>
               <button className={viewMode === "tasks" ? "active" : ""} type="button" onClick={() => setViewMode("tasks")}>
-                <ListChecks size={15} /> Daftar
+                <ListChecks size={15} /> {id ? "Daftar" : "List"}
               </button>
             </div>
             {canManage && (
               <button className="button primary small" type="button" onClick={() => setShowTaskForm(true)}>
-                <Plus size={15} /> Tambah tugas
+                <Plus size={15} /> {id ? "Tambah tugas" : "Add task"}
               </button>
             )}
           </div>
@@ -281,9 +344,9 @@ export function ProjectView({
         {viewMode === "timeline" ? (
           <div className="gantt-wrap">
             <div className="gantt-header">
-              <span>Tugas</span>
+              <span>{id ? "Tugas" : "Tasks"}</span>
               <div className="gantt-months">
-                <span>8 Jul</span><span>13 Jul</span><span>18 Jul</span><span>23 Jul</span><span>28 Jul</span><span>2 Agu</span>
+                <span>8 Jul</span><span>13 Jul</span><span>18 Jul</span><span>23 Jul</span><span>28 Jul</span><span>2 {id ? "Agu" : "Aug"}</span>
               </div>
             </div>
             <div className="gantt-body">
@@ -293,7 +356,7 @@ export function ProjectView({
                     <button
                       className={`task-check ${task.status === "Selesai" ? "checked" : ""}`}
                       type="button"
-                      aria-label={`${task.status === "Selesai" ? "Batalkan selesai" : "Tandai selesai"} ${task.name}`}
+                      aria-label={`${task.status === "Selesai" ? (id ? "Batalkan selesai" : "Mark incomplete") : (id ? "Tandai selesai" : "Mark complete")} ${task.name}`}
                       onClick={() => canManage && toggleTask(task.id)}
                       disabled={!canManage}
                     >
@@ -308,7 +371,7 @@ export function ProjectView({
                     >
                       <small>{task.startLabel} — {task.endLabel}</small>
                     </span>
-                    <span className="today-marker"><small>Hari ini</small></span>
+                    <span className="today-marker"><small>{id ? "Hari ini" : "Today"}</small></span>
                   </div>
                 </div>
               ))}
@@ -326,7 +389,7 @@ export function ProjectView({
                   <span>{task.owner}</span>
                 </div>
                 <div>
-                  <span className={`status-badge ${taskStatusClass(task.status)}`}>{task.status}</span>
+                  <span className={`status-badge ${taskStatusClass(task.status)}`}>{localizedLabel(language, task.status)}</span>
                 </div>
                 <div className="task-date"><CalendarDays size={14} /> {task.startLabel} — {task.endLabel}</div>
               </article>
@@ -339,12 +402,12 @@ export function ProjectView({
         <div className="panel documentation-panel">
           <div className="panel-head">
             <div>
-              <span className="eyebrow">DOKUMENTASI LAPANGAN</span>
-              <h2>Foto & file proyek</h2>
+              <span className="eyebrow">{id ? "DOKUMENTASI LAPANGAN" : "FIELD DOCUMENTATION"}</span>
+              <h2>{id ? "Foto & file proyek" : "Project photos & files"}</h2>
             </div>
             {canManage && (
               <label className="button primary small file-upload-button">
-                <UploadCloud size={15} /> Unggah file
+                <UploadCloud size={15} /> {id ? "Unggah file" : "Upload file"}
                 <input type="file" accept="image/*,.pdf" onChange={uploadDocument} />
               </label>
             )}
@@ -378,24 +441,24 @@ export function ProjectView({
         <aside className="panel project-activity-panel">
           <div className="panel-head">
             <div>
-              <span className="eyebrow">AKTIVITAS</span>
-              <h2>Pembaruan terbaru</h2>
+              <span className="eyebrow">{id ? "AKTIVITAS" : "ACTIVITY"}</span>
+              <h2>{id ? "Pembaruan terbaru" : "Latest updates"}</h2>
             </div>
           </div>
           <div className="activity-timeline">
             {documents.slice(0, 2).map((document) => (
               <div className="activity-event" key={document.id}>
                 <span className="activity-event-icon teal"><Camera size={15} /></span>
-                <div><strong>{document.name}</strong><span>{document.uploader} · Dokumentasi lapangan</span><small>{document.date}</small></div>
+                <div><strong>{document.name}</strong><span>{document.uploader} · {id ? "Dokumentasi lapangan" : "Field documentation"}</span><small>{document.date}</small></div>
               </div>
             ))}
             {tasks.slice(0, Math.max(0, 3 - documents.length)).map((task) => (
               <div className="activity-event" key={task.id}>
                 <span className={`activity-event-icon ${task.status === "Selesai" ? "green" : "orange"}`}>{task.status === "Selesai" ? <CheckCircle2 size={15} /> : <Clock3 size={15} />}</span>
-                <div><strong>{task.name}</strong><span>{task.owner} · {task.status}</span><small>{task.startLabel}</small></div>
+                <div><strong>{task.name}</strong><span>{task.owner} · {localizedLabel(language, task.status)}</span><small>{task.startLabel}</small></div>
               </div>
             ))}
-            {!documents.length && !tasks.length && <div className="empty-state compact"><p>Belum ada aktivitas proyek.</p></div>}
+            {!documents.length && !tasks.length && <div className="empty-state compact"><p>{id ? "Belum ada aktivitas proyek." : "No project activity yet."}</p></div>}
           </div>
         </aside>
       </section>
@@ -404,16 +467,16 @@ export function ProjectView({
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowTaskForm(false)}>
           <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="task-form-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <div><span className="eyebrow">TUGAS BARU</span><h2 id="task-form-title">Tambahkan tugas proyek</h2></div>
-              <button className="icon-button" type="button" aria-label="Tutup" onClick={() => setShowTaskForm(false)}><X size={18} /></button>
+              <div><span className="eyebrow">{id ? "TUGAS BARU" : "NEW TASK"}</span><h2 id="task-form-title">{id ? "Tambahkan tugas proyek" : "Add project task"}</h2></div>
+              <button className="icon-button" type="button" aria-label={id ? "Tutup" : "Close"} onClick={() => setShowTaskForm(false)}><X size={18} /></button>
             </div>
             <form className="form-grid" onSubmit={addTask}>
-              <label className="field full"><span>Nama tugas</span><input required value={taskName} onChange={(event) => setTaskName(event.target.value)} placeholder="Contoh: Testing coverage area" /></label>
-              <label className="field full"><span>Penanggung jawab</span><select required value={taskOwner || availableOwners[0] || ""} onChange={(event) => setTaskOwner(event.target.value)}>{availableOwners.map((owner) => <option key={owner}>{owner}</option>)}</select></label>
-              <label className="field full"><span>Tanggal mulai</span><input type="date" value={taskDate} onChange={(event) => setTaskDate(event.target.value)} /></label>
+              <label className="field full"><span>{id ? "Nama tugas" : "Task name"}</span><input required value={taskName} onChange={(event) => setTaskName(event.target.value)} placeholder={id ? "Contoh: Testing coverage area" : "Example: Coverage area testing"} /></label>
+              <label className="field full"><span>{id ? "Penanggung jawab" : "Owner"}</span><select required value={taskOwner || availableOwners[0] || ""} onChange={(event) => setTaskOwner(event.target.value)}>{availableOwners.map((owner) => <option key={owner}>{owner}</option>)}</select></label>
+              <label className="field full"><span>{id ? "Tanggal mulai" : "Start date"}</span><input type="date" value={taskDate} onChange={(event) => setTaskDate(event.target.value)} /></label>
               <div className="modal-actions full">
-                <button className="button secondary" type="button" onClick={() => setShowTaskForm(false)}>Batal</button>
-                <button className="button primary" type="submit"><Plus size={16} /> Tambah tugas</button>
+                <button className="button secondary" type="button" onClick={() => setShowTaskForm(false)}>{id ? "Batal" : "Cancel"}</button>
+                <button className="button primary" type="submit"><Plus size={16} /> {id ? "Tambah tugas" : "Add task"}</button>
               </div>
             </form>
           </section>

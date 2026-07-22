@@ -19,9 +19,11 @@ import {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api, downloadApiFile, messageOf } from "../api-client";
 import { BoqItem, formatCurrency, Invoice, Project } from "../data";
+import { type AppLanguage, localizedDate, localizedLabel } from "../i18n";
 import { appPath } from "../paths";
 
 interface BillingViewProps {
+  language: AppLanguage;
   notify: (message: string) => void;
   projectId: string;
   canManage: boolean;
@@ -38,21 +40,13 @@ interface Quotation {
   total: number;
 }
 
-function displayDate(value?: string | null) {
-  if (!value) return "Belum ditentukan";
-  return new Intl.DateTimeFormat("id-ID", {
-    day: "2-digit",
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${value}T00:00:00.000Z`));
-}
-
 export function BillingView({
+  language,
   notify,
   projectId,
   canManage,
 }: BillingViewProps) {
+  const id = language === "id";
   const [activeTab, setActiveTab] = useState<BillingTab>("quotation");
   const [project, setProject] = useState<Project | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -85,11 +79,11 @@ export function BillingView({
         setQuotationIssuedAt(quotationData.issuedAt);
         setQuotationValidUntil(quotationData.validUntil ?? "");
       })
-      .catch((error) => notify(messageOf(error)));
+      .catch((error) => notify(messageOf(error, language)));
     return () => {
       active = false;
     };
-  }, [notify, projectId]);
+  }, [language, notify, projectId]);
 
   const boqTotal = useMemo(
     () =>
@@ -130,9 +124,9 @@ export function BillingView({
         `/api/projects/${projectId}/quotation.pdf`,
         `${quotation?.number?.replaceAll("/", "-") ?? "Quotation-PerumNet"}.pdf`,
       );
-      notify("Quotation PDF berhasil dibuat dari BoQ proyek aktif.");
+      notify(id ? "Quotation PDF berhasil dibuat dari BoQ proyek aktif." : "The Quotation PDF was created from the active project BoQ.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -145,18 +139,18 @@ export function BillingView({
         validUntil: quotationValidUntil,
       });
       setShowQuotationForm(false);
-      notify("Quotation berhasil diperbarui.");
+      notify(id ? "Quotation berhasil diperbarui." : "Quotation updated.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
   async function markQuotationSent() {
     try {
       await updateQuotation({ status: "Sent" });
-      notify("Quotation ditandai sebagai terkirim.");
+      notify(id ? "Quotation ditandai sebagai terkirim." : "Quotation marked as sent.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -166,24 +160,24 @@ export function BillingView({
         `/api/invoices/${invoice.id}/pdf`,
         `${invoice.number.replaceAll("/", "-")}.pdf`,
       );
-      notify("Invoice PDF berhasil dibuat.");
+      notify(id ? "Invoice PDF berhasil dibuat." : "Invoice PDF created.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
-  async function confirmPayment(id: string) {
+  async function confirmPayment(invoiceId: string) {
     try {
-      const updated = await api<Invoice>(`/api/invoices/${id}/payment`, {
+      const updated = await api<Invoice>(`/api/invoices/${invoiceId}/payment`, {
         method: "POST",
         body: JSON.stringify({ paidDate: new Date().toISOString().slice(0, 10) }),
       });
       setInvoices((current) =>
-        current.map((invoice) => (invoice.id === id ? updated : invoice)),
+        current.map((invoice) => (invoice.id === invoiceId ? updated : invoice)),
       );
-      notify("Pembayaran dan transaksi pembukuan telah disinkronkan.");
+      notify(id ? "Pembayaran dan transaksi pembukuan telah disinkronkan." : "Payment and finance transaction synchronized.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -234,22 +228,22 @@ export function BillingView({
       setShowInvoiceForm(false);
       notify(
         editingInvoiceId
-          ? "Invoice dan transaksi terkait berhasil diperbarui."
-          : "Invoice baru berhasil diterbitkan.",
+          ? id ? "Invoice dan transaksi terkait berhasil diperbarui." : "Invoice and related transaction updated."
+          : id ? "Invoice baru berhasil diterbitkan." : "A new invoice was issued.",
       );
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
   async function deleteInvoice(invoice: Invoice) {
-    if (!window.confirm(`Hapus ${invoice.number}?`)) return;
+    if (!window.confirm(`${id ? "Hapus" : "Delete"} ${invoice.number}?`)) return;
     try {
       await api(`/api/invoices/${invoice.id}`, { method: "DELETE" });
       setInvoices((current) => current.filter((item) => item.id !== invoice.id));
-      notify("Invoice dan transaksi otomatis terkait berhasil dihapus.");
+      notify(id ? "Invoice dan transaksi otomatis terkait berhasil dihapus." : "Invoice and related automatic transaction deleted.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -264,10 +258,10 @@ export function BillingView({
       } else {
         await navigator.clipboard.writeText(url);
       }
-      notify("Tautan workspace dokumen berhasil dibagikan.");
+      notify(id ? "Tautan workspace dokumen berhasil dibagikan." : "Document workspace link shared.");
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -275,27 +269,27 @@ export function BillingView({
     <div className="page-stack" data-testid="billing-view">
       <section className="page-title-row">
         <div>
-          <span className="eyebrow">DOKUMEN KOMERSIAL</span>
+          <span className="eyebrow">{id ? "DOKUMEN KOMERSIAL" : "COMMERCIAL DOCUMENTS"}</span>
           <h1>Quotation & Invoice</h1>
           <p>
             {project
               ? `${project.code} · ${project.name}`
-              : "Memuat konteks proyek..."}
+              : id ? "Memuat konteks proyek..." : "Loading project context..."}
           </p>
         </div>
         <div className="title-actions">
           <button className="button secondary" type="button" onClick={shareDocument}>
-            <Send size={16} /> Bagikan
+            <Send size={16} /> {id ? "Bagikan" : "Share"}
           </button>
           {canManage && (
             <button className="button primary" type="button" onClick={openNewInvoice}>
-              <Plus size={16} /> Buat invoice
+              <Plus size={16} /> {id ? "Buat invoice" : "Create invoice"}
             </button>
           )}
         </div>
       </section>
 
-      <div className="module-tabs" role="tablist" aria-label="Dokumen penagihan">
+      <div className="module-tabs" role="tablist" aria-label={id ? "Dokumen penagihan" : "Billing documents"}>
         <button role="tab" aria-selected={activeTab === "quotation"} className={activeTab === "quotation" ? "active" : ""} type="button" onClick={() => setActiveTab("quotation")}>
           <FileText size={17} /> Quotation
         </button>
@@ -311,18 +305,18 @@ export function BillingView({
               <div>
                 <span className={`status-badge ${quotation?.status === "Sent" ? "success" : "info"}`}>
                   {quotation?.status === "Sent" ? <CircleCheck size={14} /> : <Clock3 size={14} />}
-                  {quotation?.status === "Sent" ? "Sudah dikirim" : "Draft"}
+                  {quotation?.status === "Sent" ? (id ? "Sudah dikirim" : "Sent") : "Draft"}
                 </span>
-                <span>{quotation?.number ?? "Nomor dibuat saat Quotation disimpan"}</span>
+                <span>{quotation?.number ?? (id ? "Nomor dibuat saat Quotation disimpan" : "Number created when the Quotation is saved")}</span>
               </div>
               <div className="title-actions">
                 {canManage && (
                   <button className="button secondary small" type="button" onClick={() => setShowQuotationForm(true)}>
-                    <Pencil size={15} /> Edit
+                    <Pencil size={15} /> {id ? "Edit" : "Edit"}
                   </button>
                 )}
                 <button className="button primary small" type="button" disabled={!quotationItems.length} onClick={downloadQuotation}>
-                  <Download size={15} /> Unduh PDF
+                  <Download size={15} /> {id ? "Unduh PDF" : "Download PDF"}
                 </button>
               </div>
             </div>
@@ -331,32 +325,32 @@ export function BillingView({
                 <img src={appPath("/perumnet-enterprise-logo.png")} alt="PerumNet Enterprise" width={126} height={132} />
                 <div>
                   <strong>PERUMNET ENTERPRISE</strong>
-                  <span>Konsultan IT & Managed Services</span>
+                  <span>{id ? "Konsultan IT & Managed Services" : "IT Consulting & Managed Services"}</span>
                   <small>Gianyar, Bali · it@perumnet.id · perumnet.id</small>
                 </div>
               </header>
               <div className="document-title">
-                <div><span>QUOTATION</span><h2>{project?.name ?? "Proyek"}</h2></div>
+                <div><span>QUOTATION</span><h2>{project?.name ?? (id ? "Proyek" : "Project")}</h2></div>
                 <div>
-                  <small>Nomor</small><strong>{quotation?.number ?? "DRAFT"}</strong>
-                  <small>Tanggal</small><strong>{displayDate(quotation?.issuedAt)}</strong>
+                  <small>{id ? "Nomor" : "Number"}</small><strong>{quotation?.number ?? "DRAFT"}</strong>
+                  <small>{id ? "Tanggal" : "Date"}</small><strong>{localizedDate(language, quotation?.issuedAt)}</strong>
                 </div>
               </div>
               <div className="document-recipient">
-                <span>Ditujukan kepada</span>
-                <strong>{project?.client ?? "Klien"}</strong>
-                <small>{project?.location ?? "Lokasi belum ditentukan"}</small>
+                <span>{id ? "Ditujukan kepada" : "Prepared for"}</span>
+                <strong>{project?.client ?? (id ? "Klien" : "Client")}</strong>
+                <small>{project?.location ?? (id ? "Lokasi belum ditentukan" : "Location not specified")}</small>
               </div>
               <table className="document-table">
-                <thead><tr><th>No</th><th>Deskripsi</th><th>Qty</th><th>Harga satuan</th><th>Total</th></tr></thead>
+                <thead><tr><th>No</th><th>{id ? "Deskripsi" : "Description"}</th><th>Qty</th><th>{id ? "Harga satuan" : "Unit price"}</th><th>Total</th></tr></thead>
                 <tbody>
                   {quotationItems.map((item, index) => (
                     <tr key={item.id}>
                       <td>{index + 1}</td>
-                      <td><strong>{item.description}</strong><small>{item.category}</small></td>
-                      <td>{item.quantity} {item.unit}</td>
-                      <td>{formatCurrency(item.sellingPrice)}</td>
-                      <td>{formatCurrency(item.quantity * item.sellingPrice)}</td>
+                      <td><strong>{item.description}</strong><small>{localizedLabel(language, item.category)}</small></td>
+                      <td>{item.quantity} {localizedLabel(language, item.unit)}</td>
+                      <td>{formatCurrency(item.sellingPrice, language)}</td>
+                      <td>{formatCurrency(item.quantity * item.sellingPrice, language)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -364,28 +358,28 @@ export function BillingView({
               {!quotationItems.length && (
                 <div className="empty-state compact">
                   <FileText size={24} />
-                  <p>BoQ proyek ini masih kosong. Tambahkan item sebelum membuat Quotation.</p>
+                  <p>{id ? "BoQ proyek ini masih kosong. Tambahkan item sebelum membuat Quotation." : "This project BoQ is empty. Add items before creating a Quotation."}</p>
                 </div>
               )}
-              <div className="document-total"><span>Total penawaran</span><strong>{formatCurrency(quotationTotal)}</strong></div>
+              <div className="document-total"><span>{id ? "Total penawaran" : "Quotation total"}</span><strong>{formatCurrency(quotationTotal, language)}</strong></div>
               <div className="document-notes">
-                <strong>Ketentuan penawaran</strong>
-                <p>Berlaku sampai {displayDate(quotation?.validUntil)}. Nilai akan kembali menjadi Draft bila BoQ diubah.</p>
+                <strong>{id ? "Ketentuan penawaran" : "Quotation terms"}</strong>
+                <p>{id ? "Berlaku sampai" : "Valid until"} {localizedDate(language, quotation?.validUntil)}. {id ? "Nilai akan kembali menjadi Draft bila BoQ diubah." : "The value returns to Draft when the BoQ changes."}</p>
               </div>
             </article>
           </div>
 
           <aside className="billing-side">
             <section className="panel">
-              <div className="panel-head"><div><span className="eyebrow">RINGKASAN</span><h2>Status quotation</h2></div></div>
+              <div className="panel-head"><div><span className="eyebrow">{id ? "RINGKASAN" : "SUMMARY"}</span><h2>{id ? "Status quotation" : "Quotation status"}</h2></div></div>
               <div className="document-status-list">
-                <div className={quotationItems.length ? "done" : "active"}><span><Check size={14} /></span><div><strong>BoQ</strong><small>{quotationItems.length} item · {formatCurrency(boqTotal)}</small></div></div>
-                <div className={quotation?.id ? "done" : "active"}><span><FileCheck2 size={14} /></span><div><strong>Quotation</strong><small>{quotation?.number ?? "Belum disimpan"}</small></div></div>
-                <div className={quotation?.status === "Sent" ? "done" : "active"}><span><Mail size={14} /></span><div><strong>{quotation?.status === "Sent" ? "Sudah dikirim" : "Menunggu dikirim"}</strong><small>{quotation?.status === "Sent" ? "Nilai terkunci sampai BoQ berubah" : "Periksa tanggal dan isi dokumen"}</small></div></div>
+                <div className={quotationItems.length ? "done" : "active"}><span><Check size={14} /></span><div><strong>BoQ</strong><small>{quotationItems.length} item · {formatCurrency(boqTotal, language)}</small></div></div>
+                <div className={quotation?.id ? "done" : "active"}><span><FileCheck2 size={14} /></span><div><strong>Quotation</strong><small>{quotation?.number ?? (id ? "Belum disimpan" : "Not saved")}</small></div></div>
+                <div className={quotation?.status === "Sent" ? "done" : "active"}><span><Mail size={14} /></span><div><strong>{quotation?.status === "Sent" ? (id ? "Sudah dikirim" : "Sent") : (id ? "Menunggu dikirim" : "Awaiting delivery")}</strong><small>{quotation?.status === "Sent" ? (id ? "Nilai terkunci sampai BoQ berubah" : "Value is locked until the BoQ changes") : (id ? "Periksa tanggal dan isi dokumen" : "Review dates and document content")}</small></div></div>
               </div>
               {canManage && (
                 <button className="button primary full-width" type="button" disabled={!quotationItems.length || quotation?.status === "Sent"} onClick={markQuotationSent}>
-                  <Send size={16} /> {quotation?.status === "Sent" ? "Sudah dikirim" : "Tandai sudah dikirim"}
+                  <Send size={16} /> {quotation?.status === "Sent" ? (id ? "Sudah dikirim" : "Sent") : (id ? "Tandai sudah dikirim" : "Mark as sent")}
                 </button>
               )}
             </section>
@@ -396,32 +390,32 @@ export function BillingView({
       {activeTab === "invoice" && (
         <div className="page-stack">
           <section className="metric-grid invoice-metrics">
-            <article className="metric-card"><span className="metric-icon green"><CircleCheck size={20} /></span><div className="metric-main"><span>Sudah diterima</span><strong>{formatCurrency(paidTotal)}</strong></div><span className="metric-change positive">{quotationTotal ? Math.round((paidTotal / quotationTotal) * 100) : 0}% proyek</span></article>
-            <article className="metric-card"><span className="metric-icon orange"><Clock3 size={20} /></span><div className="metric-main"><span>Belum dibayar</span><strong>{formatCurrency(outstanding)}</strong></div><span className="metric-change warning-text">{invoices.filter((invoice) => invoice.status === "Belum Lunas").length} invoice aktif</span></article>
-            <article className="metric-card"><span className="metric-icon blue"><FileCheck2 size={20} /></span><div className="metric-main"><span>Sisa dapat ditagihkan</span><strong>{formatCurrency(Math.max(0, quotationTotal - invoicedTotal))}</strong></div><span className="metric-change">Dari {formatCurrency(quotationTotal)}</span></article>
+            <article className="metric-card"><span className="metric-icon green"><CircleCheck size={20} /></span><div className="metric-main"><span>{id ? "Sudah diterima" : "Received"}</span><strong>{formatCurrency(paidTotal, language)}</strong></div><span className="metric-change positive">{quotationTotal ? Math.round((paidTotal / quotationTotal) * 100) : 0}% {id ? "proyek" : "of project"}</span></article>
+            <article className="metric-card"><span className="metric-icon orange"><Clock3 size={20} /></span><div className="metric-main"><span>{id ? "Belum dibayar" : "Outstanding"}</span><strong>{formatCurrency(outstanding, language)}</strong></div><span className="metric-change warning-text">{invoices.filter((invoice) => invoice.status === "Belum Lunas").length} {id ? "invoice aktif" : "active invoices"}</span></article>
+            <article className="metric-card"><span className="metric-icon blue"><FileCheck2 size={20} /></span><div className="metric-main"><span>{id ? "Sisa dapat ditagihkan" : "Remaining billable"}</span><strong>{formatCurrency(Math.max(0, quotationTotal - invoicedTotal), language)}</strong></div><span className="metric-change">{id ? "Dari" : "Of"} {formatCurrency(quotationTotal, language)}</span></article>
           </section>
           <section className="panel">
             <div className="panel-head">
-              <div><span className="eyebrow">TAGIHAN PROYEK</span><h2>Daftar invoice</h2></div>
-              {canManage && <button className="button primary small" type="button" disabled={!quotationTotal || invoicedTotal >= quotationTotal} onClick={openNewInvoice}><Plus size={15} /> Invoice baru</button>}
+              <div><span className="eyebrow">{id ? "TAGIHAN PROYEK" : "PROJECT BILLING"}</span><h2>{id ? "Daftar invoice" : "Invoices"}</h2></div>
+              {canManage && <button className="button primary small" type="button" disabled={!quotationTotal || invoicedTotal >= quotationTotal} onClick={openNewInvoice}><Plus size={15} /> {id ? "Invoice baru" : "New invoice"}</button>}
             </div>
             <div className="invoice-list">
               {invoices.map((invoice) => (
                 <article className="invoice-row" key={invoice.id}>
                   <span className={`invoice-status-icon ${invoice.status === "Lunas" ? "paid" : "unpaid"}`}>{invoice.status === "Lunas" ? <Check size={18} /> : <Clock3 size={18} />}</span>
-                  <div className="invoice-primary"><strong>{invoice.number}</strong><span>{invoice.type} · Terbit {invoice.issueDate}</span></div>
-                  <div className="invoice-amount"><span>Nilai tagihan</span><strong>{formatCurrency(invoice.amount)}</strong></div>
-                  <div className="invoice-due"><span>{invoice.status === "Lunas" ? "Dibayar" : "Jatuh tempo"}</span><strong>{invoice.status === "Lunas" ? invoice.paidDate : invoice.dueDate}</strong></div>
-                  <span className={`status-badge ${invoice.status === "Lunas" ? "success" : "warning"}`}>{invoice.status}</span>
+                  <div className="invoice-primary"><strong>{invoice.number}</strong><span>{invoice.type} · {id ? "Terbit" : "Issued"} {localizedDate(language, invoice.issueDateIso)}</span></div>
+                  <div className="invoice-amount"><span>{id ? "Nilai tagihan" : "Invoice amount"}</span><strong>{formatCurrency(invoice.amount, language)}</strong></div>
+                  <div className="invoice-due"><span>{invoice.status === "Lunas" ? (id ? "Dibayar" : "Paid") : (id ? "Jatuh tempo" : "Due date")}</span><strong>{invoice.status === "Lunas" ? localizedDate(language, invoice.paidDateIso ?? invoice.paidDate) : localizedDate(language, invoice.dueDateIso)}</strong></div>
+                  <span className={`status-badge ${invoice.status === "Lunas" ? "success" : "warning"}`}>{localizedLabel(language, invoice.status)}</span>
                   <div className="invoice-actions">
                     <button className="button subtle small" type="button" onClick={() => downloadInvoice(invoice)}><Download size={15} /> PDF</button>
                     {canManage && <button className="icon-button" type="button" aria-label={`Edit ${invoice.number}`} onClick={() => openEditInvoice(invoice)}><Pencil size={15} /></button>}
-                    {canManage && invoice.status === "Belum Lunas" && <button className="button primary small" type="button" onClick={() => confirmPayment(invoice.id)}><Check size={15} /> Konfirmasi</button>}
+                    {canManage && invoice.status === "Belum Lunas" && <button className="button primary small" type="button" onClick={() => confirmPayment(invoice.id)}><Check size={15} /> {id ? "Konfirmasi" : "Confirm"}</button>}
                     {canManage && <button className="icon-button danger" type="button" aria-label={`Hapus ${invoice.number}`} onClick={() => deleteInvoice(invoice)}><Trash2 size={15} /></button>}
                   </div>
                 </article>
               ))}
-              {!invoices.length && <div className="empty-state"><ReceiptText size={28} /><h3>Belum ada invoice</h3><p>Buat Invoice dari nilai Quotation proyek ini.</p></div>}
+              {!invoices.length && <div className="empty-state"><ReceiptText size={28} /><h3>{id ? "Belum ada invoice" : "No invoices yet"}</h3><p>{id ? "Buat Invoice dari nilai Quotation proyek ini." : "Create an Invoice from this project's Quotation value."}</p></div>}
             </div>
           </section>
         </div>
@@ -430,14 +424,14 @@ export function BillingView({
       {showInvoiceForm && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowInvoiceForm(false)}>
           <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="invoice-form-title" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="modal-head"><div><span className="eyebrow">{editingInvoiceId ? "EDIT INVOICE" : "INVOICE BARU"}</span><h2 id="invoice-form-title">{editingInvoiceId ? "Perbarui tagihan proyek" : "Terbitkan tagihan proyek"}</h2></div><button className="icon-button" type="button" aria-label="Tutup" onClick={() => setShowInvoiceForm(false)}><X size={18} /></button></div>
+            <div className="modal-head"><div><span className="eyebrow">{editingInvoiceId ? "EDIT INVOICE" : (id ? "INVOICE BARU" : "NEW INVOICE")}</span><h2 id="invoice-form-title">{editingInvoiceId ? (id ? "Perbarui tagihan proyek" : "Update project invoice") : (id ? "Terbitkan tagihan proyek" : "Issue project invoice")}</h2></div><button className="icon-button" type="button" aria-label={id ? "Tutup" : "Close"} onClick={() => setShowInvoiceForm(false)}><X size={18} /></button></div>
             <form className="form-grid" onSubmit={persistInvoice}>
-              <label className="field full select-field"><span>Jenis tagihan</span><select value={invoiceType} onChange={(event) => setInvoiceType(event.target.value)}><option>DP 30%</option><option>DP 50%</option><option>Termin 2</option><option>Pelunasan</option></select><ChevronDown size={15} /></label>
-              <label className="field"><span>Tanggal terbit</span><input required type="date" value={issueDate} onChange={(event) => setIssueDate(event.target.value)} /></label>
-              <label className="field"><span>Jatuh tempo</span><input required type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label>
-              <label className="field full"><span>Nominal tagihan</span><input type="number" min="1" required value={invoiceAmount || ""} onChange={(event) => setInvoiceAmount(Number(event.target.value))} /></label>
-              <div className="invoice-form-summary full"><span>Nilai Invoice</span><strong>{formatCurrency(invoiceAmount)}</strong><small>Sisa setelah disimpan: {formatCurrency(Math.max(0, quotationTotal - (invoicedTotal - (invoices.find((item) => item.id === editingInvoiceId)?.amount ?? 0)) - invoiceAmount))}</small></div>
-              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowInvoiceForm(false)}>Batal</button><button className="button primary" type="submit"><FileCheck2 size={16} /> {editingInvoiceId ? "Simpan perubahan" : "Terbitkan invoice"}</button></div>
+              <label className="field full select-field"><span>{id ? "Jenis tagihan" : "Invoice type"}</span><select value={invoiceType} onChange={(event) => setInvoiceType(event.target.value)}><option value="DP 30%">DP 30%</option><option value="DP 50%">DP 50%</option><option value="Termin 2">{id ? "Termin 2" : "Milestone 2"}</option><option value="Pelunasan">{id ? "Pelunasan" : "Final Payment"}</option></select><ChevronDown size={15} /></label>
+              <label className="field"><span>{id ? "Tanggal terbit" : "Issue date"}</span><input required type="date" value={issueDate} onChange={(event) => setIssueDate(event.target.value)} /></label>
+              <label className="field"><span>{id ? "Jatuh tempo" : "Due date"}</span><input required type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label>
+              <label className="field full"><span>{id ? "Nominal tagihan" : "Invoice amount"}</span><input type="number" min="1" required value={invoiceAmount || ""} onChange={(event) => setInvoiceAmount(Number(event.target.value))} /></label>
+              <div className="invoice-form-summary full"><span>{id ? "Nilai Invoice" : "Invoice Value"}</span><strong>{formatCurrency(invoiceAmount, language)}</strong><small>{id ? "Sisa setelah disimpan" : "Remaining after save"}: {formatCurrency(Math.max(0, quotationTotal - (invoicedTotal - (invoices.find((item) => item.id === editingInvoiceId)?.amount ?? 0)) - invoiceAmount), language)}</small></div>
+              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowInvoiceForm(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit"><FileCheck2 size={16} /> {editingInvoiceId ? (id ? "Simpan perubahan" : "Save changes") : (id ? "Terbitkan invoice" : "Issue invoice")}</button></div>
             </form>
           </section>
         </div>
@@ -446,12 +440,12 @@ export function BillingView({
       {showQuotationForm && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowQuotationForm(false)}>
           <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="quotation-form-title" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="modal-head"><div><span className="eyebrow">EDIT QUOTATION</span><h2 id="quotation-form-title">Tanggal dan masa berlaku</h2></div><button className="icon-button" type="button" aria-label="Tutup" onClick={() => setShowQuotationForm(false)}><X size={18} /></button></div>
+            <div className="modal-head"><div><span className="eyebrow">EDIT QUOTATION</span><h2 id="quotation-form-title">{id ? "Tanggal dan masa berlaku" : "Dates and validity"}</h2></div><button className="icon-button" type="button" aria-label={id ? "Tutup" : "Close"} onClick={() => setShowQuotationForm(false)}><X size={18} /></button></div>
             <form className="form-grid" onSubmit={saveQuotation}>
-              <label className="field full"><span>Tanggal terbit</span><input required type="date" value={quotationIssuedAt} onChange={(event) => setQuotationIssuedAt(event.target.value)} /></label>
-              <label className="field full"><span>Berlaku sampai</span><input required type="date" value={quotationValidUntil} onChange={(event) => setQuotationValidUntil(event.target.value)} /></label>
-              <div className="invoice-form-summary full"><span>Nilai otomatis dari BoQ</span><strong>{formatCurrency(boqTotal)}</strong></div>
-              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowQuotationForm(false)}>Batal</button><button className="button primary" type="submit"><Pencil size={16} /> Simpan Quotation</button></div>
+              <label className="field full"><span>{id ? "Tanggal terbit" : "Issue date"}</span><input required type="date" value={quotationIssuedAt} onChange={(event) => setQuotationIssuedAt(event.target.value)} /></label>
+              <label className="field full"><span>{id ? "Berlaku sampai" : "Valid until"}</span><input required type="date" value={quotationValidUntil} onChange={(event) => setQuotationValidUntil(event.target.value)} /></label>
+              <div className="invoice-form-summary full"><span>{id ? "Nilai otomatis dari BoQ" : "Automatic value from BoQ"}</span><strong>{formatCurrency(boqTotal, language)}</strong></div>
+              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowQuotationForm(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit"><Pencil size={16} /> {id ? "Simpan Quotation" : "Save Quotation"}</button></div>
             </form>
           </section>
         </div>

@@ -25,8 +25,10 @@ import {
   ProjectStatus,
   ViewKey,
 } from "../data";
+import { type AppLanguage, localizedDate, localizedLabel } from "../i18n";
 
 interface DashboardViewProps {
+  language: AppLanguage;
   navigate: (view: ViewKey) => void;
   notify: (message: string) => void;
   selectedProjectId?: string;
@@ -54,6 +56,7 @@ function paymentClass(payment: Project["payment"]) {
 }
 
 export function DashboardView({
+  language,
   navigate,
   notify,
   selectedProjectId = "",
@@ -64,6 +67,7 @@ export function DashboardView({
   onSelectProject,
   onProjectCreated,
 }: DashboardViewProps) {
+  const id = language === "id";
   const [projectList, setProjectList] = useState<Project[]>([]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<(typeof filters)[number]>("Semua");
@@ -71,7 +75,47 @@ export function DashboardView({
   const [projectName, setProjectName] = useState("");
   const [clientName, setClientName] = useState("");
   const [location, setLocation] = useState("");
-  const firstName = userName.trim().split(/\s+/)[0] || "Rekan";
+  const [serverNow, setServerNow] = useState<Date | null>(null);
+  const firstName = userName.trim().split(/\s+/)[0] || (id ? "Rekan" : "Colleague");
+
+  useEffect(() => {
+    let active = true;
+    let timer: number | undefined;
+    api<{ now: string; timeZone: string }>("/api/system/time")
+      .then((result) => {
+        if (!active) return;
+        const serverStartedAt = new Date(result.now).getTime();
+        const clientStartedAt = Date.now();
+        const update = () => setServerNow(new Date(serverStartedAt + (Date.now() - clientStartedAt)));
+        update();
+        timer = window.setInterval(update, 30_000);
+      })
+      .catch((error) => notify(messageOf(error, language)));
+    return () => {
+      active = false;
+      if (timer) window.clearInterval(timer);
+    };
+  }, [language, notify]);
+
+  const serverHour = serverNow
+    ? Number(new Intl.DateTimeFormat("en-US", { hour: "2-digit", hour12: false, timeZone: "Asia/Makassar" }).format(serverNow))
+    : 12;
+  const greeting = serverHour < 11
+    ? id ? "Selamat pagi" : "Good morning"
+    : serverHour < 15
+      ? id ? "Selamat siang" : "Good afternoon"
+      : serverHour < 19
+        ? id ? "Selamat sore" : "Good afternoon"
+        : id ? "Selamat malam" : "Good evening";
+  const serverDateLabel = serverNow
+    ? new Intl.DateTimeFormat(id ? "id-ID" : "en-US", {
+        weekday: "long",
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+        timeZone: "Asia/Makassar",
+      }).format(serverNow).toUpperCase()
+    : id ? "MEMUAT WAKTU SERVER..." : "LOADING SERVER TIME...";
 
   useEffect(() => {
     let active = true;
@@ -79,11 +123,11 @@ export function DashboardView({
       .then((data) => {
         if (active) setProjectList(data);
       })
-      .catch((error) => notify(messageOf(error)));
+      .catch((error) => notify(messageOf(error, language)));
     return () => {
       active = false;
     };
-  }, [notify]);
+  }, [language, notify]);
 
   const filteredProjects = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -156,9 +200,9 @@ export function DashboardView({
       setClientName("");
       setLocation("");
       setShowNewProject(false);
-      notify("Proyek baru berhasil ditambahkan sebagai draft.");
+      notify(id ? "Proyek baru berhasil ditambahkan sebagai draft." : "The new project was added as a draft.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -166,49 +210,49 @@ export function DashboardView({
     <div className="page-stack dashboard-view" data-testid="dashboard-view">
       <section className="welcome-strip">
         <div>
-          <span className="eyebrow">SABTU, 18 JULI 2026</span>
-          <h1>Selamat sore, {firstName}.</h1>
-          <p>Berikut ringkasan operasional proyek PerumNet hari ini.</p>
+          <span className="eyebrow">{serverDateLabel}</span>
+          <h1>{greeting}, {firstName}.</h1>
+          <p>{id ? "Berikut ringkasan operasional proyek PerumNet hari ini." : "Here is today's PerumNet project operations summary."}</p>
         </div>
         {canManage && (
           <button className="button primary" type="button" onClick={() => setShowNewProject(true)}>
-            <Plus size={17} /> Proyek baru
+            <Plus size={17} /> {id ? "Proyek baru" : "New project"}
           </button>
         )}
       </section>
 
-      <section className="metric-grid" aria-label="Ringkasan operasional">
+      <section className="metric-grid" aria-label={id ? "Ringkasan operasional" : "Operations summary"}>
         <article className="metric-card">
           <span className="metric-icon teal"><FolderKanban size={20} /></span>
           <div className="metric-main">
-            <span>Proyek aktif</span>
+            <span>{id ? "Proyek aktif" : "Active projects"}</span>
             <strong>{stats.active}</strong>
           </div>
-          <span className="metric-change positive"><TrendingUp size={13} /> 2 bulan ini</span>
+          <span className="metric-change positive"><TrendingUp size={13} /> {id ? "2 bulan ini" : "2 this month"}</span>
         </article>
         <article className="metric-card">
           <span className="metric-icon blue"><CircleDollarSign size={20} /></span>
           <div className="metric-main">
-            <span>Nilai proyek berjalan</span>
-            <strong>{formatCompactCurrency(stats.value)}</strong>
+            <span>{id ? "Nilai proyek berjalan" : "Active project value"}</span>
+            <strong>{formatCompactCurrency(stats.value, language)}</strong>
           </div>
-          <span className="metric-change">{stats.active} kontrak berjalan</span>
+          <span className="metric-change">{stats.active} {id ? "kontrak berjalan" : "active contracts"}</span>
         </article>
         <article className="metric-card">
           <span className="metric-icon orange"><Clock3 size={20} /></span>
           <div className="metric-main">
-            <span>Piutang diterima</span>
-            <strong>{formatCompactCurrency(stats.paid)}</strong>
+            <span>{id ? "Piutang diterima" : "Receivables collected"}</span>
+            <strong>{formatCompactCurrency(stats.paid, language)}</strong>
           </div>
-          <span className="metric-change warning-text">Sesuai pembayaran terkonfirmasi</span>
+          <span className="metric-change warning-text">{id ? "Sesuai pembayaran terkonfirmasi" : "Based on confirmed payments"}</span>
         </article>
         <article className="metric-card">
           <span className="metric-icon green"><CheckCircle2 size={20} /></span>
           <div className="metric-main">
-            <span>Proyek selesai</span>
+            <span>{id ? "Proyek selesai" : "Completed projects"}</span>
             <strong>{stats.completed}</strong>
           </div>
-          <span className="metric-change positive">Tepat waktu</span>
+          <span className="metric-change positive">{id ? "Tepat waktu" : "On schedule"}</span>
         </article>
       </section>
 
@@ -216,20 +260,20 @@ export function DashboardView({
         <div className="panel project-panel">
           <div className="panel-head project-panel-head">
             <div>
-              <span className="eyebrow">PORTOFOLIO</span>
-              <h2>Proyek terbaru</h2>
+              <span className="eyebrow">{id ? "PORTOFOLIO" : "PORTFOLIO"}</span>
+              <h2>{id ? "Proyek terbaru" : "Recent projects"}</h2>
             </div>
             <div className="project-tools">
               <label className="search-field compact">
                 <Search size={16} />
                 <input
                   type="search"
-                  placeholder="Cari proyek..."
+                  placeholder={id ? "Cari proyek..." : "Search projects..."}
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                 />
               </label>
-              <div className="segmented-control" aria-label="Filter status proyek">
+              <div className="segmented-control" aria-label={id ? "Filter status proyek" : "Filter project status"}>
                 {filters.map((item) => (
                   <button
                     type="button"
@@ -237,7 +281,7 @@ export function DashboardView({
                     className={filter === item ? "active" : ""}
                     onClick={() => setFilter(item)}
                   >
-                    {item}
+                    {localizedLabel(language, item)}
                   </button>
                 ))}
               </div>
@@ -252,7 +296,7 @@ export function DashboardView({
                     <div>
                       <span className={`status-badge ${statusClass(project.status)}`}>
                         <span className="badge-dot" />
-                        {project.status}
+                        {localizedLabel(language, project.status)}
                       </span>
                       <span className="project-code">{project.code}</span>
                     </div>
@@ -261,24 +305,24 @@ export function DashboardView({
                   </div>
                   <div className="project-meta">
                     <span><MapPin size={14} /> {project.location}</span>
-                    <span><CalendarDays size={14} /> {project.targetDate}</span>
+                    <span><CalendarDays size={14} /> {localizedDate(language, project.targetDateIso) }</span>
                     <span><UsersRound size={14} /> {project.manager}</span>
                   </div>
                   <div className="project-progress-row">
                     <div className="progress-copy">
-                      <span>Progres pekerjaan</span>
+                      <span>{id ? "Progres pekerjaan" : "Work progress"}</span>
                       <strong>{project.progress}%</strong>
                     </div>
-                    <div className="progress-track" aria-label={`Progres ${project.progress}%`}>
+                    <div className="progress-track" aria-label={`${id ? "Progres" : "Progress"} ${project.progress}%`}>
                       <span style={{ width: `${project.progress}%` }} />
                     </div>
                   </div>
                 </div>
                 <div className="project-finance">
-                  <span>Nilai proyek</span>
-                  <strong>{project.payment === "Tidak Diizinkan" ? "Akses terbatas" : project.value ? formatCurrency(project.value) : "Belum ditentukan"}</strong>
+                  <span>{id ? "Nilai proyek" : "Project value"}</span>
+                  <strong>{project.payment === "Tidak Diizinkan" ? (id ? "Akses terbatas" : "Restricted") : project.value ? formatCurrency(project.value, language) : (id ? "Belum ditentukan" : "Not specified")}</strong>
                   <span className={`status-badge ${paymentClass(project.payment)}`}>
-                    {project.payment === "Sebagian" ? `Terbayar ${project.paidRatio}%` : project.payment}
+                    {project.payment === "Sebagian" ? `${id ? "Terbayar" : "Paid"} ${project.paidRatio}%` : localizedLabel(language, project.payment)}
                   </span>
                 </div>
                 <div className="project-actions">
@@ -291,11 +335,11 @@ export function DashboardView({
                   {canUseBilling && (
                     <button className="quick-action" type="button" onClick={() => { onSelectProject(project.id); navigate("billing"); }}>
                       <FileText size={16} />
-                      <span>Quotation</span>
+                      <span>{id ? "Quotation" : "Quotation"}</span>
                     </button>
                   )}
                   <button className="quick-action primary-link" type="button" onClick={() => { onSelectProject(project.id); navigate("project"); }}>
-                    <span>Detail</span>
+                    <span>{id ? "Detail" : "Details"}</span>
                     <ArrowRight size={16} />
                   </button>
                 </div>
@@ -304,8 +348,8 @@ export function DashboardView({
             {!filteredProjects.length && (
               <div className="empty-state">
                 <Search size={28} />
-                <h3>Proyek tidak ditemukan</h3>
-                <p>Coba ubah kata kunci atau filter status.</p>
+                <h3>{id ? "Proyek tidak ditemukan" : "No projects found"}</h3>
+                <p>{id ? "Coba ubah kata kunci atau filter status." : "Try changing the keyword or status filter."}</p>
               </div>
             )}
           </div>
@@ -315,8 +359,8 @@ export function DashboardView({
           <section className="panel attention-panel">
             <div className="panel-head">
               <div>
-                <span className="eyebrow">PERLU PERHATIAN</span>
-                <h2>Tindak lanjut</h2>
+                <span className="eyebrow">{id ? "PERLU PERHATIAN" : "NEEDS ATTENTION"}</span>
+                <h2>{id ? "Tindak lanjut" : "Follow-up"}</h2>
               </div>
               <span className="count-badge">{attentionProjects.length}</span>
             </div>
@@ -325,28 +369,28 @@ export function DashboardView({
                 <span className={`attention-icon ${project.payment === "Belum Dibayar" ? "danger" : project.payment === "Sebagian" ? "warning" : "info"}`}><FileText size={17} /></span>
                 <span>
                   <strong>{project.name}</strong>
-                  <small>{project.payment} · progres {project.progress}%</small>
+                  <small>{localizedLabel(language, project.payment)} · {id ? "progres" : "progress"} {project.progress}%</small>
                 </span>
                 <ArrowRight size={15} />
               </button>
             ))}
-            {!attentionProjects.length && <div className="empty-state compact"><CheckCircle2 size={24} /><p>Tidak ada tindak lanjut mendesak.</p></div>}
+            {!attentionProjects.length && <div className="empty-state compact"><CheckCircle2 size={24} /><p>{id ? "Tidak ada tindak lanjut mendesak." : "No urgent follow-up."}</p></div>}
           </section>
 
           <section className="panel team-panel">
             <div className="panel-head">
               <div>
-                <span className="eyebrow">TIM LAPANGAN</span>
-                <h2>Aktivitas hari ini</h2>
+                <span className="eyebrow">{id ? "TIM LAPANGAN" : "FIELD TEAM"}</span>
+                <h2>{id ? "Aktivitas hari ini" : "Today's activity"}</h2>
               </div>
             </div>
             {visibleTeam.map((name, index) => (
               <div className="team-activity" key={name}>
                 <div className={`avatar small ${index === 1 ? "coral" : index === 2 ? "navy" : ""}`}>{name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("")}</div>
-                <div><strong>{name}</strong><span>Anggota proyek yang dapat diakses</span></div>
+                <div><strong>{name}</strong><span>{id ? "Anggota proyek yang dapat diakses" : "Accessible project member"}</span></div>
               </div>
             ))}
-            {!visibleTeam.length && <div className="empty-state compact"><UsersRound size={24} /><p>Belum ada anggota proyek.</p></div>}
+            {!visibleTeam.length && <div className="empty-state compact"><UsersRound size={24} /><p>{id ? "Belum ada anggota proyek." : "No project members yet."}</p></div>}
           </section>
         </aside>
       </section>
@@ -362,29 +406,29 @@ export function DashboardView({
           >
             <div className="modal-head">
               <div>
-                <span className="eyebrow">PROYEK BARU</span>
-                <h2 id="new-project-title">Buat draft proyek</h2>
+                <span className="eyebrow">{id ? "PROYEK BARU" : "NEW PROJECT"}</span>
+                <h2 id="new-project-title">{id ? "Buat draft proyek" : "Create project draft"}</h2>
               </div>
-              <button className="icon-button" type="button" aria-label="Tutup" onClick={() => setShowNewProject(false)}>
+              <button className="icon-button" type="button" aria-label={id ? "Tutup" : "Close"} onClick={() => setShowNewProject(false)}>
                 <X size={18} />
               </button>
             </div>
             <form className="form-grid" onSubmit={addProject}>
               <label className="field full">
-                <span>Nama proyek</span>
-                <input value={projectName} onChange={(event) => setProjectName(event.target.value)} required placeholder="Contoh: Upgrade jaringan kantor" />
+                <span>{id ? "Nama proyek" : "Project name"}</span>
+                <input value={projectName} onChange={(event) => setProjectName(event.target.value)} required placeholder={id ? "Contoh: Upgrade jaringan kantor" : "Example: Office network upgrade"} />
               </label>
               <label className="field full">
-                <span>Nama klien</span>
-                <input value={clientName} onChange={(event) => setClientName(event.target.value)} required placeholder="Nama perusahaan / klien" />
+                <span>{id ? "Nama klien" : "Client name"}</span>
+                <input value={clientName} onChange={(event) => setClientName(event.target.value)} required placeholder={id ? "Nama perusahaan / klien" : "Company / client name"} />
               </label>
               <label className="field full">
-                <span>Lokasi</span>
-                <input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Kota / kabupaten" />
+                <span>{id ? "Lokasi" : "Location"}</span>
+                <input value={location} onChange={(event) => setLocation(event.target.value)} placeholder={id ? "Kota / kabupaten" : "City / district"} />
               </label>
               <div className="modal-actions full">
-                <button className="button secondary" type="button" onClick={() => setShowNewProject(false)}>Batal</button>
-                <button className="button primary" type="submit"><Plus size={16} /> Simpan proyek</button>
+                <button className="button secondary" type="button" onClick={() => setShowNewProject(false)}>{id ? "Batal" : "Cancel"}</button>
+                <button className="button primary" type="submit"><Plus size={16} /> {id ? "Simpan proyek" : "Save project"}</button>
               </div>
             </form>
           </section>

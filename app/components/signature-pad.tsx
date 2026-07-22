@@ -4,6 +4,7 @@ import { Eraser } from "lucide-react";
 import { PointerEvent, useEffect, useRef, useState } from "react";
 
 interface SignaturePadProps {
+  language?: "id" | "en";
   label: string;
   signer: string;
   value?: string;
@@ -11,7 +12,8 @@ interface SignaturePadProps {
   onChange: (dataUrl: string) => void;
 }
 
-export function SignaturePad({ label, signer, value = "", disabled = false, onChange }: SignaturePadProps) {
+export function SignaturePad({ language = "id", label, signer, value = "", disabled = false, onChange }: SignaturePadProps) {
+  const id = language === "id";
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawingRef = useRef(false);
   const lastPointRef = useRef({ x: 0, y: 0 });
@@ -111,11 +113,11 @@ export function SignaturePad({ label, signer, value = "", disabled = false, onCh
       <div className="signature-card-head">
         <div>
           <span>{label}</span>
-          <strong>{signer || "Nama penanda tangan"}</strong>
+          <strong>{signer || (id ? "Nama penanda tangan" : "Signer's name")}</strong>
         </div>
         {!disabled && (
           <button className="button subtle small" type="button" onClick={clearSignature}>
-            <Eraser size={15} /> Hapus
+            <Eraser size={15} /> {id ? "Hapus" : "Clear"}
           </button>
         )}
       </div>
@@ -123,14 +125,14 @@ export function SignaturePad({ label, signer, value = "", disabled = false, onCh
         ref={canvasRef}
         className="signature-canvas"
         aria-disabled={disabled}
-        aria-label={`Area tanda tangan ${label}`}
+        aria-label={`${id ? "Area tanda tangan" : "Signature area"} ${label}`}
         onPointerDown={startDrawing}
         onPointerMove={draw}
         onPointerUp={finishDrawing}
         onPointerCancel={finishDrawing}
       />
       <div className="signature-line">
-        <span>{hasSignature ? "Tanda tangan tersimpan" : "Goreskan tanda tangan di area ini"}</span>
+        <span>{hasSignature ? (id ? "Tanda tangan tersimpan" : "Signature saved") : (id ? "Goreskan tanda tangan di area ini" : "Sign in this area")}</span>
       </div>
     </section>
   );

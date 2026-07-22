@@ -319,6 +319,49 @@ export const basts = sqliteTable(
   ],
 );
 
+export const projectValidations = sqliteTable(
+  "project_validations",
+  {
+    id: text("id").primaryKey(),
+    number: text("number").notNull(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("Draft"),
+    notes: text("notes"),
+    validatedBy: text("validated_by").references(() => users.id, { onDelete: "set null" }),
+    completedAt: text("completed_at"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("project_validations_number_unique").on(table.number),
+    uniqueIndex("project_validations_project_unique").on(table.projectId),
+  ],
+);
+
+export const projectValidationItems = sqliteTable(
+  "project_validation_items",
+  {
+    id: text("id").primaryKey(),
+    validationId: text("validation_id")
+      .notNull()
+      .references(() => projectValidations.id, { onDelete: "cascade" }),
+    boqItemId: text("boq_item_id").references(() => boqItems.id, { onDelete: "cascade" }),
+    category: text("category").notNull(),
+    description: text("description").notNull(),
+    quantity: integer("quantity").notNull(),
+    unit: text("unit").notNull(),
+    checked: integer("checked").notNull().default(0),
+    notes: text("notes"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps,
+  },
+  (table) => [
+    index("project_validation_items_validation_idx").on(table.validationId),
+    uniqueIndex("project_validation_items_boq_unique").on(table.validationId, table.boqItemId),
+  ],
+);
+
 export const transactions = sqliteTable(
   "transactions",
   {

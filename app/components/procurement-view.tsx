@@ -27,8 +27,10 @@ import {
   Vendor,
   WorkOrder,
 } from "../data";
+import { type AppLanguage, localizedLabel } from "../i18n";
 
 interface ProcurementViewProps {
+  language: AppLanguage;
   notify: (message: string) => void;
   projectId: string;
   canManage: boolean;
@@ -45,7 +47,8 @@ function spkStatusClass(status: WorkOrder["status"]) {
   return "neutral";
 }
 
-export function ProcurementView({ notify, projectId, canManage }: ProcurementViewProps) {
+export function ProcurementView({ language, notify, projectId, canManage }: ProcurementViewProps) {
+  const id = language === "id";
   const [activeTab, setActiveTab] = useState<ProcurementTab>("vendor");
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
@@ -81,11 +84,11 @@ export function ProcurementView({ notify, projectId, canManage }: ProcurementVie
         setProject(projectData);
         if (vendorData[0]) setSpkVendor(vendorData[0].name);
       })
-      .catch((error) => notify(messageOf(error)));
+      .catch((error) => notify(messageOf(error, language)));
     return () => {
       active = false;
     };
-  }, [notify, projectId]);
+  }, [language, notify, projectId]);
 
   const filteredVendors = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -163,9 +166,9 @@ export function ProcurementView({ notify, projectId, canManage }: ProcurementVie
       setVendorRate(0);
       setShowVendorForm(false);
       setEditingVendorId("");
-      notify(isEditing ? "Data vendor berhasil diperbarui." : "Vendor baru berhasil ditambahkan.");
+      notify(isEditing ? (id ? "Data vendor berhasil diperbarui." : "Vendor updated.") : (id ? "Vendor baru berhasil ditambahkan." : "A new vendor was added."));
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -197,42 +200,42 @@ export function ProcurementView({ notify, projectId, canManage }: ProcurementVie
       setShowSpkForm(false);
       setEditingSpkId("");
       setActiveTab("spk");
-      notify(editingSpkId ? "SPK dan pembukuan terkait berhasil diperbarui." : "SPK berhasil dibuat sebagai draft.");
+      notify(editingSpkId ? (id ? "SPK dan pembukuan terkait berhasil diperbarui." : "Work Order and related finance records updated.") : (id ? "SPK berhasil dibuat sebagai draft." : "Work Order created as a draft."));
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
   async function deleteSpk(workOrder: WorkOrder) {
-    if (!window.confirm(`Hapus ${workOrder.number}?`)) return;
+    if (!window.confirm(`${id ? "Hapus" : "Delete"} ${workOrder.number}?`)) return;
     try {
       await api(`/api/spks/${workOrder.id}`, { method: "DELETE" });
       setWorkOrders((current) => current.filter((item) => item.id !== workOrder.id));
-      notify("SPK dan transaksi otomatis terkait berhasil dihapus.");
+      notify(id ? "SPK dan transaksi otomatis terkait berhasil dihapus." : "Work Order and related automatic transaction deleted.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
-  async function updateSpkStatus(id: string, status: WorkOrder["status"]) {
+  async function updateSpkStatus(workOrderId: string, status: WorkOrder["status"]) {
     try {
-      const updated = await api<WorkOrder>(`/api/spks/${id}/status`, {
+      const updated = await api<WorkOrder>(`/api/spks/${workOrderId}/status`, {
         method: "PATCH",
         body: JSON.stringify({ status }),
       });
-      setWorkOrders((current) => current.map((workOrder) => (workOrder.id === id ? updated : workOrder)));
-      notify(`Status SPK diperbarui menjadi ${status}.`);
+      setWorkOrders((current) => current.map((workOrder) => (workOrder.id === workOrderId ? updated : workOrder)));
+      notify(id ? `Status SPK diperbarui menjadi ${status}.` : `Work Order status updated to ${localizedLabel(language, status)}.`);
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
   async function downloadSpk(workOrder: WorkOrder) {
     try {
       await downloadApiFile(`/api/spks/${workOrder.id}/pdf`, `${workOrder.number.replaceAll("/", "-")}.pdf`);
-      notify("SPK PDF berhasil dibuat.");
+      notify(id ? "SPK PDF berhasil dibuat." : "Work Order PDF created.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -240,18 +243,18 @@ export function ProcurementView({ notify, projectId, canManage }: ProcurementVie
     <div className="page-stack" data-testid="procurement-view">
       <section className="page-title-row">
         <div>
-          <span className="eyebrow">MITRA & PENUGASAN</span>
-          <h1>Procurement & Vendor</h1>
-          <p>Kelola mitra kerja dan Surat Perintah Kerja secara terpusat.</p>
+          <span className="eyebrow">{id ? "MITRA & PENUGASAN" : "PARTNERS & ASSIGNMENTS"}</span>
+          <h1>{id ? "Procurement & Vendor" : "Procurement & Vendors"}</h1>
+          <p>{id ? "Kelola mitra kerja dan Surat Perintah Kerja secara terpusat." : "Manage partners and Work Orders in one place."}</p>
         </div>
         <div className="title-actions">
           {canManage && (
             <>
               <button className="button secondary" type="button" onClick={() => { setActiveTab("vendor"); openNewVendor(); }}>
-                <Plus size={16} /> Tambah vendor
+                <Plus size={16} /> {id ? "Tambah vendor" : "Add vendor"}
               </button>
               <button className="button primary" type="button" onClick={() => { setActiveTab("spk"); openNewSpk(); }}>
-                <FilePlus2 size={16} /> Buat SPK
+                <FilePlus2 size={16} /> {id ? "Buat SPK" : "Create Work Order"}
               </button>
             </>
           )}
@@ -261,27 +264,27 @@ export function ProcurementView({ notify, projectId, canManage }: ProcurementVie
       <section className="metric-grid procurement-metrics">
         <article className="metric-card">
           <span className="metric-icon teal"><Store size={20} /></span>
-          <div className="metric-main"><span>Vendor aktif</span><strong>{vendors.filter((vendor) => vendor.status === "Aktif").length}</strong></div>
-          <span className="metric-change">{new Set(vendors.map((vendor) => vendor.category)).size} kategori layanan</span>
+          <div className="metric-main"><span>{id ? "Vendor aktif" : "Active vendors"}</span><strong>{vendors.filter((vendor) => vendor.status === "Aktif").length}</strong></div>
+          <span className="metric-change">{new Set(vendors.map((vendor) => vendor.category)).size} {id ? "kategori layanan" : "service categories"}</span>
         </article>
         <article className="metric-card">
           <span className="metric-icon blue"><FileText size={20} /></span>
-          <div className="metric-main"><span>SPK berjalan</span><strong>{scopedWorkOrders.filter((item) => item.status === "Dikerjakan").length}</strong></div>
-          <span className="metric-change">{new Set(scopedWorkOrders.map((item) => item.projectId)).size} proyek terkait</span>
+          <div className="metric-main"><span>{id ? "SPK berjalan" : "Active Work Orders"}</span><strong>{scopedWorkOrders.filter((item) => item.status === "Dikerjakan").length}</strong></div>
+          <span className="metric-change">{new Set(scopedWorkOrders.map((item) => item.projectId)).size} {id ? "proyek terkait" : "related projects"}</span>
         </article>
         <article className="metric-card">
           <span className="metric-icon orange"><UsersRound size={20} /></span>
-          <div className="metric-main"><span>Nilai SPK aktif</span><strong>{formatCurrency(scopedWorkOrders.filter((item) => item.status !== "Selesai").reduce((sum, item) => sum + item.cost, 0))}</strong></div>
-          <span className="metric-change warning-text">Perlu rekonsiliasi</span>
+          <div className="metric-main"><span>{id ? "Nilai SPK aktif" : "Active Work Order value"}</span><strong>{formatCurrency(scopedWorkOrders.filter((item) => item.status !== "Selesai").reduce((sum, item) => sum + item.cost, 0), language)}</strong></div>
+          <span className="metric-change warning-text">{id ? "Perlu rekonsiliasi" : "Reconciliation required"}</span>
         </article>
       </section>
 
       <div className="module-tabs" role="tablist" aria-label="Procurement">
         <button role="tab" aria-selected={activeTab === "vendor"} className={activeTab === "vendor" ? "active" : ""} type="button" onClick={() => setActiveTab("vendor")}>
-          <Store size={17} /> Daftar vendor <span className="tab-count">{vendors.length}</span>
+          <Store size={17} /> {id ? "Daftar vendor" : "Vendors"} <span className="tab-count">{vendors.length}</span>
         </button>
         <button role="tab" aria-selected={activeTab === "spk"} className={activeTab === "spk" ? "active" : ""} type="button" onClick={() => setActiveTab("spk")}>
-          <FileText size={17} /> Daftar SPK <span className="tab-count">{scopedWorkOrders.length}</span>
+          <FileText size={17} /> {id ? "Daftar SPK" : "Work Orders"} <span className="tab-count">{scopedWorkOrders.length}</span>
         </button>
       </div>
 
@@ -289,18 +292,18 @@ export function ProcurementView({ notify, projectId, canManage }: ProcurementVie
         <section className="panel">
           <div className="panel-head vendor-list-head">
             <div>
-              <span className="eyebrow">DIREKTORI MITRA</span>
-              <h2>Vendor & supplier</h2>
+              <span className="eyebrow">{id ? "DIREKTORI MITRA" : "PARTNER DIRECTORY"}</span>
+              <h2>{id ? "Vendor & supplier" : "Vendors & suppliers"}</h2>
             </div>
             <div className="project-tools">
               <label className="search-field compact">
                 <Search size={16} />
-                <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Cari vendor..." />
+                <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={id ? "Cari vendor..." : "Search vendors..."} />
               </label>
               <label className="select-compact">
                 <Filter size={15} />
                 <select value={category} onChange={(event) => setCategory(event.target.value)}>
-                  {categories.map((item) => <option key={item}>{item}</option>)}
+                  {categories.map((item) => <option key={item} value={item}>{item === "Semua kategori" && !id ? "All categories" : item}</option>)}
                 </select>
                 <ChevronDown size={14} />
               </label>
@@ -311,7 +314,7 @@ export function ProcurementView({ notify, projectId, canManage }: ProcurementVie
               <article className={`vendor-card ${vendor.status === "Nonaktif" ? "disabled" : ""}`} key={vendor.id}>
                 <div className="vendor-card-head">
                   <span className={`vendor-logo variant-${index % 4}`}><Building2 size={21} /></span>
-                  <span className={`status-badge ${vendor.status === "Aktif" ? "success" : "neutral"}`}>{vendor.status}</span>
+                  <span className={`status-badge ${vendor.status === "Aktif" ? "success" : "neutral"}`}>{localizedLabel(language, vendor.status)}</span>
                   {canManage && <button className="icon-button" type="button" aria-label={`Edit ${vendor.name}`} onClick={() => openEditVendor(vendor)}><MoreHorizontal size={17} /></button>}
                 </div>
                 <div className="vendor-card-copy">
@@ -320,21 +323,21 @@ export function ProcurementView({ notify, projectId, canManage }: ProcurementVie
                 </div>
                 <div className="vendor-contact-list">
                   <span><Phone size={14} /> {vendor.contact}</span>
-                  <span><Mail size={14} /> {vendor.email || "Email belum diisi"}</span>
-                  <span><MapPin size={14} /> {vendor.address || "Alamat belum diisi"}</span>
+                  <span><Mail size={14} /> {vendor.email || (id ? "Email belum diisi" : "Email not provided")}</span>
+                  <span><MapPin size={14} /> {vendor.address || (id ? "Alamat belum diisi" : "Address not provided")}</span>
                 </div>
                 <div className="vendor-rate">
-                  <span>Tarif standar</span>
-                  <strong>{vendor.rate ? `${formatCurrency(vendor.rate)} / hari` : "Sesuai quotation"}</strong>
+                  <span>{id ? "Tarif standar" : "Standard rate"}</span>
+                  <strong>{vendor.rate ? `${formatCurrency(vendor.rate, language)} / ${id ? "hari" : "day"}` : (id ? "Sesuai quotation" : "As quoted")}</strong>
                 </div>
                 {canManage && <button className="button subtle full-width" type="button" onClick={() => openNewSpk(vendor)}>
-                  <FilePlus2 size={15} /> Buat SPK untuk vendor
+                  <FilePlus2 size={15} /> {id ? "Buat SPK untuk vendor" : "Create Work Order for vendor"}
                 </button>}
               </article>
             ))}
           </div>
           {!filteredVendors.length && (
-            <div className="empty-state"><Search size={28} /><h3>Vendor tidak ditemukan</h3><p>Coba kata kunci atau kategori lain.</p></div>
+            <div className="empty-state"><Search size={28} /><h3>{id ? "Vendor tidak ditemukan" : "No vendors found"}</h3><p>{id ? "Coba kata kunci atau kategori lain." : "Try another keyword or category."}</p></div>
           )}
         </section>
       )}
@@ -342,8 +345,8 @@ export function ProcurementView({ notify, projectId, canManage }: ProcurementVie
       {activeTab === "spk" && (
         <section className="panel">
           <div className="panel-head">
-            <div><span className="eyebrow">SURAT PERINTAH KERJA</span><h2>Daftar SPK</h2></div>
-            {canManage && <button className="button primary small" type="button" onClick={() => openNewSpk()}><Plus size={15} /> SPK baru</button>}
+            <div><span className="eyebrow">{id ? "SURAT PERINTAH KERJA" : "WORK ORDERS"}</span><h2>{id ? "Daftar SPK" : "Work Orders"}</h2></div>
+            {canManage && <button className="button primary small" type="button" onClick={() => openNewSpk()}><Plus size={15} /> {id ? "SPK baru" : "New Work Order"}</button>}
           </div>
           <div className="spk-list">
             {scopedWorkOrders.map((workOrder) => (
@@ -354,17 +357,17 @@ export function ProcurementView({ notify, projectId, canManage }: ProcurementVie
                   <span>{workOrder.vendor}</span>
                 </div>
                 <div className="spk-project">
-                  <span>Proyek</span>
+                  <span>{id ? "Proyek" : "Project"}</span>
                   <strong>{workOrder.project}</strong>
                 </div>
                 <div className="spk-scope">
-                  <span>Lingkup kerja</span>
+                  <span>{id ? "Lingkup kerja" : "Scope of work"}</span>
                   <strong>{workOrder.scope}</strong>
                 </div>
-                <div className="spk-cost"><span>Nilai</span><strong>{formatCurrency(workOrder.cost)}</strong></div>
+                <div className="spk-cost"><span>{id ? "Nilai" : "Value"}</span><strong>{formatCurrency(workOrder.cost, language)}</strong></div>
                 <label className={`status-select ${spkStatusClass(workOrder.status)}`}>
                   <select disabled={!canManage} value={workOrder.status} onChange={(event) => updateSpkStatus(workOrder.id, event.target.value as WorkOrder["status"])}>
-                    {spkStatuses.map((status) => <option key={status}>{status}</option>)}
+                    {spkStatuses.map((status) => <option key={status} value={status}>{localizedLabel(language, status)}</option>)}
                   </select>
                   <ChevronDown size={14} />
                 </label>
@@ -381,15 +384,15 @@ export function ProcurementView({ notify, projectId, canManage }: ProcurementVie
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowVendorForm(false)}>
           <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="vendor-form-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <div><span className="eyebrow">{editingVendorId ? "EDIT VENDOR" : "VENDOR BARU"}</span><h2 id="vendor-form-title">{editingVendorId ? "Perbarui mitra kerja" : "Tambah mitra kerja"}</h2></div>
-              <button className="icon-button" type="button" aria-label="Tutup" onClick={() => setShowVendorForm(false)}><X size={18} /></button>
+              <div><span className="eyebrow">{editingVendorId ? "EDIT VENDOR" : (id ? "VENDOR BARU" : "NEW VENDOR")}</span><h2 id="vendor-form-title">{editingVendorId ? (id ? "Perbarui mitra kerja" : "Update partner") : (id ? "Tambah mitra kerja" : "Add partner")}</h2></div>
+              <button className="icon-button" type="button" aria-label={id ? "Tutup" : "Close"} onClick={() => setShowVendorForm(false)}><X size={18} /></button>
             </div>
             <form className="form-grid" onSubmit={addVendor}>
-              <label className="field full"><span>Nama vendor</span><input required value={vendorName} onChange={(event) => setVendorName(event.target.value)} placeholder="Nama badan usaha / teknisi" /></label>
-              <label className="field full"><span>Kategori</span><select value={vendorCategory} onChange={(event) => setVendorCategory(event.target.value)}><option>Teknisi Jaringan</option><option>Splicing Fiber Optic</option><option>Instalasi CCTV</option><option>Supplier Perangkat</option></select></label>
-              <label className="field"><span>Kontak</span><input required value={vendorContact} onChange={(event) => setVendorContact(event.target.value)} placeholder="08xx xxxx xxxx" /></label>
-              <label className="field"><span>Tarif standar / hari</span><input type="number" min="0" value={vendorRate || ""} onChange={(event) => setVendorRate(Number(event.target.value))} placeholder="0" /></label>
-              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowVendorForm(false)}>Batal</button><button className="button primary" type="submit"><Plus size={16} /> {editingVendorId ? "Simpan perubahan" : "Simpan vendor"}</button></div>
+              <label className="field full"><span>{id ? "Nama vendor" : "Vendor name"}</span><input required value={vendorName} onChange={(event) => setVendorName(event.target.value)} placeholder={id ? "Nama badan usaha / teknisi" : "Business / technician name"} /></label>
+              <label className="field full"><span>{id ? "Kategori" : "Category"}</span><select value={vendorCategory} onChange={(event) => setVendorCategory(event.target.value)}><option value="Teknisi Jaringan">{id ? "Teknisi Jaringan" : "Network Technician"}</option><option>Splicing Fiber Optic</option><option value="Instalasi CCTV">{id ? "Instalasi CCTV" : "CCTV Installation"}</option><option value="Supplier Perangkat">{id ? "Supplier Perangkat" : "Device Supplier"}</option></select></label>
+              <label className="field"><span>{id ? "Kontak" : "Contact"}</span><input required value={vendorContact} onChange={(event) => setVendorContact(event.target.value)} placeholder="08xx xxxx xxxx" /></label>
+              <label className="field"><span>{id ? "Tarif standar / hari" : "Standard rate / day"}</span><input type="number" min="0" value={vendorRate || ""} onChange={(event) => setVendorRate(Number(event.target.value))} placeholder="0" /></label>
+              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowVendorForm(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit"><Plus size={16} /> {editingVendorId ? (id ? "Simpan perubahan" : "Save changes") : (id ? "Simpan vendor" : "Save vendor")}</button></div>
             </form>
           </section>
         </div>
@@ -399,18 +402,18 @@ export function ProcurementView({ notify, projectId, canManage }: ProcurementVie
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowSpkForm(false)}>
           <section className="modal-card wide" role="dialog" aria-modal="true" aria-labelledby="spk-form-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <div><span className="eyebrow">{editingSpkId ? "EDIT SPK" : "SPK BARU"}</span><h2 id="spk-form-title">Surat Perintah Kerja</h2></div>
-              <button className="icon-button" type="button" aria-label="Tutup" onClick={() => setShowSpkForm(false)}><X size={18} /></button>
+              <div><span className="eyebrow">{editingSpkId ? "EDIT SPK" : (id ? "SPK BARU" : "NEW WORK ORDER")}</span><h2 id="spk-form-title">{id ? "Surat Perintah Kerja" : "Work Order"}</h2></div>
+              <button className="icon-button" type="button" aria-label={id ? "Tutup" : "Close"} onClick={() => setShowSpkForm(false)}><X size={18} /></button>
             </div>
             <form className="form-grid" onSubmit={persistSpk}>
-              <label className="field full"><span>Vendor / pelaksana</span><select value={spkVendor} onChange={(event) => setSpkVendor(event.target.value)}>{vendors.filter((vendor) => vendor.status === "Aktif").map((vendor) => <option key={vendor.id}>{vendor.name}</option>)}</select></label>
-              <label className="field full"><span>Proyek terkait</span><input value={project ? `${project.code} · ${project.name}` : projectId} readOnly /></label>
-              <label className="field full"><span>Lingkup pekerjaan</span><textarea required value={spkScope} onChange={(event) => setSpkScope(event.target.value)} placeholder="Jelaskan pekerjaan, output, dan batasan tanggung jawab..." rows={4} /></label>
-              <label className="field full"><span>Biaya disepakati</span><input type="number" min="1" required value={spkCost || ""} onChange={(event) => setSpkCost(Number(event.target.value))} placeholder="0" /></label>
-              <label className="field"><span>Tanggal mulai</span><input type="date" value={spkStartDate} onChange={(event) => setSpkStartDate(event.target.value)} /></label>
-              <label className="field"><span>Tanggal selesai</span><input type="date" value={spkEndDate} onChange={(event) => setSpkEndDate(event.target.value)} /></label>
-              <label className="field full"><span>Status</span><select value={spkStatus} onChange={(event) => setSpkStatus(event.target.value as WorkOrder["status"])}>{spkStatuses.map((status) => <option key={status}>{status}</option>)}</select></label>
-              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowSpkForm(false)}>Batal</button><button className="button primary" type="submit"><FilePlus2 size={16} /> {editingSpkId ? "Simpan perubahan" : "Simpan SPK"}</button></div>
+              <label className="field full"><span>{id ? "Vendor / pelaksana" : "Vendor / contractor"}</span><select value={spkVendor} onChange={(event) => setSpkVendor(event.target.value)}>{vendors.filter((vendor) => vendor.status === "Aktif").map((vendor) => <option key={vendor.id}>{vendor.name}</option>)}</select></label>
+              <label className="field full"><span>{id ? "Proyek terkait" : "Related project"}</span><input value={project ? `${project.code} · ${project.name}` : projectId} readOnly /></label>
+              <label className="field full"><span>{id ? "Lingkup pekerjaan" : "Scope of work"}</span><textarea required value={spkScope} onChange={(event) => setSpkScope(event.target.value)} placeholder={id ? "Jelaskan pekerjaan, output, dan batasan tanggung jawab..." : "Describe the work, deliverables, and responsibility limits..."} rows={4} /></label>
+              <label className="field full"><span>{id ? "Biaya disepakati" : "Agreed cost"}</span><input type="number" min="1" required value={spkCost || ""} onChange={(event) => setSpkCost(Number(event.target.value))} placeholder="0" /></label>
+              <label className="field"><span>{id ? "Tanggal mulai" : "Start date"}</span><input type="date" value={spkStartDate} onChange={(event) => setSpkStartDate(event.target.value)} /></label>
+              <label className="field"><span>{id ? "Tanggal selesai" : "End date"}</span><input type="date" value={spkEndDate} onChange={(event) => setSpkEndDate(event.target.value)} /></label>
+              <label className="field full"><span>Status</span><select value={spkStatus} onChange={(event) => setSpkStatus(event.target.value as WorkOrder["status"])}>{spkStatuses.map((status) => <option key={status} value={status}>{localizedLabel(language, status)}</option>)}</select></label>
+              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowSpkForm(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit"><FilePlus2 size={16} /> {editingSpkId ? (id ? "Simpan perubahan" : "Save changes") : (id ? "Simpan SPK" : "Save Work Order")}</button></div>
             </form>
           </section>
         </div>

@@ -7,6 +7,7 @@ import {
   ChevronDown,
   CircleUserRound,
   ClipboardSignature,
+  ClipboardCheck,
   FileSpreadsheet,
   FolderKanban,
   LayoutDashboard,
@@ -41,11 +42,12 @@ import { ProjectView } from "./project-view";
 import { SettingsView } from "./settings-view";
 import { UserAvatar } from "./user-avatar";
 import { UsersView } from "./users-view";
+import { ValidationView } from "./validation-view";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 
 interface NavigationItem {
   id: ViewKey;
-  labelKey: "dashboard" | "projects" | "boq" | "billing" | "procurement" | "bast" | "finance" | "users";
+  labelKey: "dashboard" | "projects" | "boq" | "billing" | "procurement" | "validation" | "bast" | "finance" | "users";
   module: AccessModule;
   icon: typeof LayoutDashboard;
   badge?: string;
@@ -60,6 +62,7 @@ const mainNavigation: NavigationItem[] = [
 
 const operationsNavigation: NavigationItem[] = [
   { id: "procurement", labelKey: "procurement", module: "procurement", icon: PackageSearch },
+  { id: "validation", labelKey: "validation", module: "bast", icon: ClipboardCheck },
   { id: "bast", labelKey: "bast", module: "bast", icon: ClipboardSignature },
   { id: "finance", labelKey: "finance", module: "finance", icon: WalletCards },
 ];
@@ -76,6 +79,7 @@ function viewMeta(language: AppLanguage, view: ViewKey) {
     boq: { title: "BoQ Generator", subtitle: id ? "Kalkulasi kebutuhan dan margin" : "Requirements and margin calculation" },
     billing: { title: translate(language, "billing"), subtitle: id ? "Penawaran dan penagihan proyek" : "Project quotations and billing" },
     procurement: { title: translate(language, "procurement"), subtitle: id ? "Mitra kerja dan Surat Perintah Kerja" : "Vendors and work orders" },
+    validation: { title: translate(language, "validation"), subtitle: id ? "Checklist wajib sebelum BAST" : "Required checklist before handover" },
     bast: { title: translate(language, "bast"), subtitle: id ? "Serah terima dan tanda tangan digital" : "Handover and digital signatures" },
     finance: { title: translate(language, "finance"), subtitle: id ? "Arus kas dan profitabilitas proyek" : "Project cash flow and profitability" },
     users: { title: translate(language, "users"), subtitle: id ? "Akun tim dan otorisasi per modul" : "Team accounts and module permissions" },
@@ -186,12 +190,27 @@ export function EnterpriseApp() {
       .then((result) => {
         if (!active) return;
         setUser(result.user);
-        if (result.user) setLanguage(result.user.preferredLanguage);
+        if (result.user) {
+          setLanguage(result.user.preferredLanguage);
+          window.localStorage.setItem("perumnet-language", result.user.preferredLanguage);
+        } else if (window.localStorage.getItem("perumnet-language") === "en") {
+          setLanguage("en");
+        }
       })
       .catch(() => active && setUser(null))
       .finally(() => active && setCheckingSession(false));
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    function sessionExpired() {
+      setUser(null);
+      setCurrentView("dashboard");
+      setToast(language === "id" ? "Session 8 jam telah berakhir. Silakan masuk kembali." : "Your eight-hour session has expired. Please sign in again.");
+    }
+    window.addEventListener("perumnet:session-expired", sessionExpired);
+    return () => window.removeEventListener("perumnet:session-expired", sessionExpired);
+  }, [language]);
 
   useEffect(() => {
     if (!user || !canAccess(user.permissions, "projects")) return;
@@ -277,7 +296,7 @@ export function EnterpriseApp() {
   }
 
   if (!user) {
-    return <AuthScreen onLogin={(loggedInUser) => { setUser(loggedInUser); setLanguage(loggedInUser.preferredLanguage); }} />;
+    return <AuthScreen language={language} onLogin={(loggedInUser) => { setUser(loggedInUser); setLanguage(loggedInUser.preferredLanguage); window.localStorage.setItem("perumnet-language", loggedInUser.preferredLanguage); }} />;
   }
 
   const activeProjectId = selectedProjectId;
@@ -352,16 +371,17 @@ export function EnterpriseApp() {
         </header>
 
         <main className="app-content">
-          {currentView === "dashboard" && canUse("dashboard") && <DashboardView navigate={navigate} notify={notify} selectedProjectId={selectedProjectId} userName={user.name} canManage={canManage("projects")} canUseBoq={canUse("boq")} canUseBilling={canUse("billing")} onSelectProject={selectProject} onProjectCreated={projectCreated} />}
-          {currentView === "project" && canUse("projects") && (activeProjectId ? <ProjectView navigate={navigate} notify={notify} projectId={activeProjectId} project={projects.find((item) => item.id === activeProjectId)} canManage={canManage("projects")} canDelete={user.role === "Admin"} onProjectDeleted={projectDeleted} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
-          {currentView === "boq" && canUse("boq") && (activeProjectId ? <BoqView navigate={navigate} notify={notify} projectId={activeProjectId} canManage={canManage("boq")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
-          {currentView === "billing" && canUse("billing") && (activeProjectId ? <BillingView notify={notify} projectId={activeProjectId} canManage={canManage("billing")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
-          {currentView === "procurement" && canUse("procurement") && (activeProjectId ? <ProcurementView notify={notify} projectId={activeProjectId} canManage={canManage("procurement")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
-          {currentView === "bast" && canUse("bast") && (activeProjectId ? <BastView notify={notify} projectId={activeProjectId} canManage={canManage("bast")} userName={user.name} onProjectUpdated={projectCreated} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
-          {currentView === "finance" && canUse("finance") && <FinanceView notify={notify} projectId={selectedProjectId} projects={projects} canManage={canManage("finance")} />}
+          {currentView === "dashboard" && canUse("dashboard") && <DashboardView language={language} navigate={navigate} notify={notify} selectedProjectId={selectedProjectId} userName={user.name} canManage={canManage("projects")} canUseBoq={canUse("boq")} canUseBilling={canUse("billing")} onSelectProject={selectProject} onProjectCreated={projectCreated} />}
+          {currentView === "project" && canUse("projects") && (activeProjectId ? <ProjectView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} project={projects.find((item) => item.id === activeProjectId)} canManage={canManage("projects")} canDelete={user.role === "Admin"} canManageAccess={user.role === "Admin"} onProjectDeleted={projectDeleted} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "boq" && canUse("boq") && (activeProjectId ? <BoqView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} canManage={canManage("boq")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "billing" && canUse("billing") && (activeProjectId ? <BillingView language={language} notify={notify} projectId={activeProjectId} canManage={canManage("billing")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "procurement" && canUse("procurement") && (activeProjectId ? <ProcurementView language={language} notify={notify} projectId={activeProjectId} canManage={canManage("procurement")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "validation" && canUse("bast") && (activeProjectId ? <ValidationView projectId={activeProjectId} language={language} canManage={canManage("bast")} notify={notify} navigate={navigate} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "bast" && canUse("bast") && (activeProjectId ? <BastView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} canManage={canManage("bast")} userName={user.name} onProjectUpdated={projectCreated} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "finance" && canUse("finance") && <FinanceView language={language} notify={notify} projectId={selectedProjectId} projects={projects} canManage={canManage("finance")} />}
           {currentView === "users" && canUse("users") && <UsersView notify={notify} language={language} currentUserId={user.id} canManage={user.role === "Admin"} />}
           {currentView === "profile" && <ProfileView language={language} user={user} notify={notify} onUserChange={setUser} />}
-          {currentView === "settings" && canUse("settings") && <SettingsView language={language} notify={notify} onLanguageChange={(next) => { setLanguage(next); setUser((current) => current ? { ...current, preferredLanguage: next } : current); }} />}
+          {currentView === "settings" && canUse("settings") && <SettingsView language={language} notify={notify} onLanguageChange={(next) => { setLanguage(next); window.localStorage.setItem("perumnet-language", next); setUser((current) => current ? { ...current, preferredLanguage: next } : current); }} />}
           {currentView === "help" && <HelpView language={language} />}
         </main>
       </div>

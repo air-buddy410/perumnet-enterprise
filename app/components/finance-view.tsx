@@ -24,15 +24,18 @@ import {
   Project,
   Transaction,
 } from "../data";
+import { type AppLanguage, localizedDate, localizedLabel } from "../i18n";
 
 interface FinanceViewProps {
+  language: AppLanguage;
   notify: (message: string) => void;
   projectId?: string;
   projects: Project[];
   canManage: boolean;
 }
 
-export function FinanceView({ notify, projectId, projects, canManage }: FinanceViewProps) {
+export function FinanceView({ language, notify, projectId, projects, canManage }: FinanceViewProps) {
+  const id = language === "id";
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [period, setPeriod] = useState("6 bulan");
   const [query, setQuery] = useState("");
@@ -50,11 +53,11 @@ export function FinanceView({ notify, projectId, projects, canManage }: FinanceV
       .then((data) => {
         if (active) setTransactions(data);
       })
-      .catch((error) => notify(messageOf(error)));
+      .catch((error) => notify(messageOf(error, language)));
     return () => {
       active = false;
     };
-  }, [notify, projectId]);
+  }, [language, notify, projectId]);
 
   const totals = useMemo(() => {
     const income = transactions
@@ -80,14 +83,14 @@ export function FinanceView({ notify, projectId, projects, canManage }: FinanceV
       .sort(([left], [right]) => left.localeCompare(right))
       .slice(-6)
       .map(([month, values]) => ({
-        month: new Intl.DateTimeFormat("id-ID", {
+        month: new Intl.DateTimeFormat(language === "id" ? "id-ID" : "en-US", {
           month: "short",
           timeZone: "UTC",
         }).format(new Date(`${month}-01T00:00:00.000Z`)),
         income: values.income / 1_000_000,
         expense: values.expense / 1_000_000,
       }));
-  }, [transactions]);
+  }, [language, transactions]);
 
   const projectProfits = useMemo(() => {
     const grouped = new Map<string, { income: number; expense: number }>();
@@ -129,7 +132,7 @@ export function FinanceView({ notify, projectId, projects, canManage }: FinanceV
     event.preventDefault();
     if (!description.trim() || amount <= 0) return;
     if (!transactionProjectId) {
-      notify("Pilih proyek untuk transaksi ini.");
+      notify(id ? "Pilih proyek untuk transaksi ini." : "Select a project for this transaction.");
       return;
     }
     try {
@@ -148,9 +151,9 @@ export function FinanceView({ notify, projectId, projects, canManage }: FinanceV
       setDescription("");
       setAmount(0);
       setShowTransactionForm(false);
-      notify("Transaksi berhasil dicatat.");
+      notify(id ? "Transaksi berhasil dicatat." : "Transaction recorded.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -161,11 +164,24 @@ export function FinanceView({ notify, projectId, projects, canManage }: FinanceV
         : "";
       await downloadApiFile(
         `/api/transactions/report.pdf${query}`,
-        "Laporan-Keuangan-PerumNet.pdf",
+        id ? "Laporan-Keuangan-PerumNet.pdf" : "PerumNet-Financial-Report.pdf",
       );
-      notify("Laporan keuangan PDF berhasil diekspor.");
+      notify(id ? "Laporan keuangan PDF berhasil diekspor." : "Financial report PDF exported.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
+    }
+  }
+
+  async function exportCsv() {
+    try {
+      const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+      await downloadApiFile(
+        `/api/transactions/report.csv${query}`,
+        id ? "Laporan-Keuangan-PerumNet.csv" : "PerumNet-Financial-Report.csv",
+      );
+      notify(id ? "Laporan keuangan CSV berhasil diekspor." : "Financial report CSV exported.");
+    } catch (error) {
+      notify(messageOf(error, language));
     }
   }
 
@@ -173,69 +189,72 @@ export function FinanceView({ notify, projectId, projects, canManage }: FinanceV
     <div className="page-stack" data-testid="finance-view">
       <section className="page-title-row">
         <div>
-          <span className="eyebrow">KEUANGAN PROYEK</span>
-          <h1>Pembukuan</h1>
-          <p>Pantau arus kas, laba rugi, dan transaksi setiap proyek.</p>
+          <span className="eyebrow">{id ? "KEUANGAN PROYEK" : "PROJECT FINANCE"}</span>
+          <h1>{id ? "Pembukuan" : "Finance"}</h1>
+          <p>{id ? "Pantau arus kas, laba rugi, dan transaksi setiap proyek." : "Monitor cash flow, profit and loss, and project transactions."}</p>
         </div>
         <div className="title-actions">
           <button className="button secondary" type="button" onClick={exportReport}>
-            <Download size={16} /> Ekspor PDF
+            <Download size={16} /> {id ? "Ekspor PDF" : "Export PDF"}
+          </button>
+          <button className="button secondary" type="button" onClick={exportCsv}>
+            <Download size={16} /> {id ? "Ekspor CSV" : "Export CSV"}
           </button>
           {canManage && <button className="button primary" type="button" onClick={() => { setTransactionProjectId(projectId || projects[0]?.id || ""); setShowTransactionForm(true); }}>
-            <Plus size={16} /> Catat transaksi
+            <Plus size={16} /> {id ? "Catat transaksi" : "Record transaction"}
           </button>}
         </div>
       </section>
 
       <section className="finance-kpi-grid">
         <article className="finance-kpi income">
-          <div className="finance-kpi-head"><span>Total pemasukan</span><span className="metric-icon green"><ArrowDownRight size={19} /></span></div>
-          <strong>{formatCurrency(totals.income)}</strong>
-          <div><span className="metric-change positive"><TrendingUp size={13} /> 12,4%</span><small>dari periode lalu</small></div>
+          <div className="finance-kpi-head"><span>{id ? "Total pemasukan" : "Total income"}</span><span className="metric-icon green"><ArrowDownRight size={19} /></span></div>
+          <strong>{formatCurrency(totals.income, language)}</strong>
+          <div><span className="metric-change positive"><TrendingUp size={13} /> 12.4%</span><small>{id ? "dari periode lalu" : "from previous period"}</small></div>
         </article>
         <article className="finance-kpi expense">
-          <div className="finance-kpi-head"><span>Total pengeluaran</span><span className="metric-icon orange"><ArrowUpRight size={19} /></span></div>
-          <strong>{formatCurrency(totals.expense)}</strong>
-          <div><span className="metric-change warning-text">8,1%</span><small>dari periode lalu</small></div>
+          <div className="finance-kpi-head"><span>{id ? "Total pengeluaran" : "Total expenses"}</span><span className="metric-icon orange"><ArrowUpRight size={19} /></span></div>
+          <strong>{formatCurrency(totals.expense, language)}</strong>
+          <div><span className="metric-change warning-text">8.1%</span><small>{id ? "dari periode lalu" : "from previous period"}</small></div>
         </article>
         <article className="finance-kpi profit">
-          <div className="finance-kpi-head"><span>Laba bersih</span><span className="metric-icon teal"><CircleDollarSign size={19} /></span></div>
-          <strong>{formatCurrency(totals.profit)}</strong>
-          <div><span className={`metric-change ${totals.profit >= 0 ? "positive" : "negative"}`}>{totals.income ? ((totals.profit / totals.income) * 100).toFixed(1) : 0}% margin</span><small>periode berjalan</small></div>
+          <div className="finance-kpi-head"><span>{id ? "Laba bersih" : "Net profit"}</span><span className="metric-icon teal"><CircleDollarSign size={19} /></span></div>
+          <strong>{formatCurrency(totals.profit, language)}</strong>
+          <div><span className={`metric-change ${totals.profit >= 0 ? "positive" : "negative"}`}>{totals.income ? ((totals.profit / totals.income) * 100).toFixed(1) : 0}% margin</span><small>{id ? "periode berjalan" : "current period"}</small></div>
         </article>
         <article className="finance-kpi receivable">
-          <div className="finance-kpi-head"><span>Transaksi tercatat</span><span className="metric-icon blue"><ReceiptText size={19} /></span></div>
+          <div className="finance-kpi-head"><span>{id ? "Transaksi tercatat" : "Recorded transactions"}</span><span className="metric-icon blue"><ReceiptText size={19} /></span></div>
           <strong>{transactions.length}</strong>
-          <div><span className="metric-change">{projectId ? "Proyek aktif" : "Semua proyek"}</span><small>sesuai otoritas akun</small></div>
+          <div><span className="metric-change">{projectId ? (id ? "Proyek aktif" : "Active project") : (id ? "Semua proyek" : "All projects")}</span><small>{id ? "sesuai otoritas akun" : "within account authority"}</small></div>
         </article>
       </section>
 
       <section className="finance-layout">
         <div className="panel cashflow-panel">
           <div className="panel-head">
-            <div><span className="eyebrow">ARUS KAS</span><h2>Pemasukan vs pengeluaran</h2></div>
+            <div><span className="eyebrow">{id ? "ARUS KAS" : "CASH FLOW"}</span><h2>{id ? "Pemasukan vs pengeluaran" : "Income vs expenses"}</h2></div>
             <label className="select-compact">
               <CalendarRange size={15} />
               <select value={period} onChange={(event) => setPeriod(event.target.value)}>
-                <option>3 bulan</option><option>6 bulan</option><option>12 bulan</option>
+                <option value="3 bulan">{id ? "3 bulan" : "3 months"}</option><option value="6 bulan">{id ? "6 bulan" : "6 months"}</option><option value="12 bulan">{id ? "12 bulan" : "12 months"}</option>
               </select>
               <ChevronDown size={14} />
             </label>
           </div>
           <div className="chart-legend">
-            <span><i className="legend-dot income" /> Pemasukan</span>
-            <span><i className="legend-dot expense" /> Pengeluaran</span>
-            <small>Dalam juta rupiah</small>
+            <span><i className="legend-dot income" /> {id ? "Pemasukan" : "Income"}</span>
+            <span><i className="legend-dot expense" /> {id ? "Pengeluaran" : "Expenses"}</span>
+            <small>{id ? "Dalam juta rupiah" : "In millions of rupiah"}</small>
           </div>
-          <div className="bar-chart" aria-label={`Grafik arus kas ${period}`}>
+          <div className="bar-chart" aria-label={id ? `Grafik arus kas ${period}` : `Cash flow chart ${period.replace("bulan", "months")}`}>
             <div className="chart-y-axis"><span>{Math.ceil(chartMax)}</span><span>{Math.ceil(chartMax * 0.67)}</span><span>{Math.ceil(chartMax * 0.33)}</span><span>0</span></div>
             <div className="chart-plot">
               <div className="chart-grid-lines"><span /><span /><span /><span /></div>
               {chartData.map((item) => (
                 <div className="chart-group" key={item.month}>
                   <div className="chart-bars">
-                    <span className="chart-bar income" style={{ height: `${(item.income / chartMax) * 100}%` }} title={`Pemasukan ${item.income} juta`} />
-                    <span className="chart-bar expense" style={{ height: `${(item.expense / chartMax) * 100}%` }} title={`Pengeluaran ${item.expense} juta`} />
+                    <span className="chart-bar income" style={{ height: `${(item.income / chartMax) * 100}%` }} title={id ? `Pemasukan ${item.income} juta` : `Income IDR ${item.income} million`} />
+                    <span className="chart-bar expense" style={{ height: `${(item.expense / chartMax) * 100}%` }} title={id ? `Pengeluaran ${item.expense} juta` : `Expenses IDR ${item.expense} million`} />
                   </div>
                   <strong>{item.month}</strong>
                 </div>
@@ -245,52 +264,52 @@ export function FinanceView({ notify, projectId, projects, canManage }: FinanceV
         </div>
 
         <aside className="panel profit-project-panel">
-          <div className="panel-head"><div><span className="eyebrow">PROFITABILITAS</span><h2>Per proyek</h2></div><BarChart3 size={19} /></div>
+          <div className="panel-head"><div><span className="eyebrow">{id ? "PROFITABILITAS" : "PROFITABILITY"}</span><h2>{id ? "Per proyek" : "By project"}</h2></div><BarChart3 size={19} /></div>
           <div className="project-profit-list">
             {projectProfits.slice(0, 5).map((item, index) => (
               <div key={item.name}>
                 <span className="profit-rank">{index + 1}</span>
                 <div><strong>{item.name}</strong><span>Margin {item.margin.toFixed(1)}%</span></div>
-                <strong>{formatCompactCurrency(item.profit)}</strong>
+                <strong>{formatCompactCurrency(item.profit, language)}</strong>
               </div>
             ))}
-            {!projectProfits.length && <div className="empty-state compact"><span>Belum ada transaksi proyek.</span></div>}
+            {!projectProfits.length && <div className="empty-state compact"><span>{id ? "Belum ada transaksi proyek." : "No project transactions yet."}</span></div>}
           </div>
           <div className="profit-insight">
             <TrendingUp size={18} />
-            <div><strong>Ringkasan otomatis</strong><span>Laba dihitung dari transaksi Invoice, SPK, dan transaksi manual.</span></div>
+            <div><strong>{id ? "Ringkasan otomatis" : "Automatic summary"}</strong><span>{id ? "Laba dihitung dari transaksi Invoice, SPK, dan transaksi manual." : "Profit is calculated from Invoice, Work Order, and manual transactions."}</span></div>
           </div>
         </aside>
       </section>
 
       <section className="panel transaction-panel">
         <div className="panel-head transaction-head">
-          <div><span className="eyebrow">BUKU KAS</span><h2>Riwayat transaksi</h2></div>
+          <div><span className="eyebrow">{id ? "BUKU KAS" : "CASH LEDGER"}</span><h2>{id ? "Riwayat transaksi" : "Transaction history"}</h2></div>
           <div className="project-tools">
-            <label className="search-field compact"><Search size={16} /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Cari transaksi..." /></label>
-            <button className={`button subtle small ${filterOpen ? "active" : ""}`} type="button" aria-expanded={filterOpen} onClick={() => setFilterOpen((value) => !value)}><Filter size={15} /> Filter</button>
-            {filterOpen && <label className="select-compact"><select aria-label="Filter jenis transaksi" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as typeof typeFilter)}><option>Semua</option><option>Pemasukan</option><option>Pengeluaran</option></select><ChevronDown size={14} /></label>}
+            <label className="search-field compact"><Search size={16} /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={id ? "Cari transaksi..." : "Search transactions..."} /></label>
+            <button className={`button subtle small ${filterOpen ? "active" : ""}`} type="button" aria-expanded={filterOpen} onClick={() => setFilterOpen((value) => !value)}><Filter size={15} /> {id ? "Filter" : "Filter"}</button>
+            {filterOpen && <label className="select-compact"><select aria-label={id ? "Filter jenis transaksi" : "Filter transaction type"} value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as typeof typeFilter)}><option value="Semua">{id ? "Semua" : "All"}</option><option value="Pemasukan">{id ? "Pemasukan" : "Income"}</option><option value="Pengeluaran">{id ? "Pengeluaran" : "Expense"}</option></select><ChevronDown size={14} /></label>}
           </div>
         </div>
         <div className="table-scroll">
           <table className="data-table transaction-table">
-            <thead><tr><th>Tanggal</th><th>Transaksi</th><th>Proyek</th><th>Sumber</th><th>Nominal</th></tr></thead>
+            <thead><tr><th>{id ? "Tanggal" : "Date"}</th><th>{id ? "Transaksi" : "Transaction"}</th><th>{id ? "Proyek" : "Project"}</th><th>{id ? "Sumber" : "Source"}</th><th>{id ? "Nominal" : "Amount"}</th></tr></thead>
             <tbody>
               {visibleTransactions.map((transaction) => (
                 <tr key={transaction.id}>
-                  <td>{transaction.date}</td>
+                  <td>{localizedDate(language, transaction.dateIso)}</td>
                   <td>
                     <div className="transaction-name">
                       <span className={`transaction-icon ${transaction.type === "Pemasukan" ? "income" : "expense"}`}>
                         {transaction.type === "Pemasukan" ? <ArrowDownRight size={16} /> : <ArrowUpRight size={16} />}
                       </span>
-                      <div><strong>{transaction.description}</strong><small>{transaction.type}</small></div>
+                      <div><strong>{transaction.description}</strong><small>{localizedLabel(language, transaction.type)}</small></div>
                     </div>
                   </td>
-                  <td>{transaction.project}</td>
+                  <td>{!id && transaction.project === "Umum" ? "General" : transaction.project}</td>
                   <td><span className="source-badge">{transaction.source}</span></td>
                   <td className={transaction.type === "Pemasukan" ? "amount-income" : "amount-expense"}>
-                    {transaction.type === "Pemasukan" ? "+" : "−"}{formatCurrency(transaction.amount)}
+                    {transaction.type === "Pemasukan" ? "+" : "−"}{formatCurrency(transaction.amount, language)}
                   </td>
                 </tr>
               ))}
@@ -303,19 +322,19 @@ export function FinanceView({ notify, projectId, projects, canManage }: FinanceV
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowTransactionForm(false)}>
           <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="transaction-form-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <div><span className="eyebrow">TRANSAKSI BARU</span><h2 id="transaction-form-title">Catat aliran kas</h2></div>
-              <button className="icon-button" type="button" aria-label="Tutup" onClick={() => setShowTransactionForm(false)}><X size={18} /></button>
+              <div><span className="eyebrow">{id ? "TRANSAKSI BARU" : "NEW TRANSACTION"}</span><h2 id="transaction-form-title">{id ? "Catat aliran kas" : "Record cash flow"}</h2></div>
+              <button className="icon-button" type="button" aria-label={id ? "Tutup" : "Close"} onClick={() => setShowTransactionForm(false)}><X size={18} /></button>
             </div>
             <form className="form-grid" onSubmit={addTransaction}>
               <div className="transaction-type-switch full">
-                <button className={transactionType === "Pemasukan" ? "active income" : ""} type="button" onClick={() => setTransactionType("Pemasukan")}><ArrowDownRight size={17} /> Pemasukan</button>
-                <button className={transactionType === "Pengeluaran" ? "active expense" : ""} type="button" onClick={() => setTransactionType("Pengeluaran")}><ArrowUpRight size={17} /> Pengeluaran</button>
+                <button className={transactionType === "Pemasukan" ? "active income" : ""} type="button" onClick={() => setTransactionType("Pemasukan")}><ArrowDownRight size={17} /> {id ? "Pemasukan" : "Income"}</button>
+                <button className={transactionType === "Pengeluaran" ? "active expense" : ""} type="button" onClick={() => setTransactionType("Pengeluaran")}><ArrowUpRight size={17} /> {id ? "Pengeluaran" : "Expense"}</button>
               </div>
-              <label className="field full"><span>Proyek terkait</span><select required value={transactionProjectId} onChange={(event) => setTransactionProjectId(event.target.value)}><option value="">Pilih proyek</option>{projects.map((projectItem) => <option value={projectItem.id} key={projectItem.id}>{projectItem.code} · {projectItem.name}</option>)}</select></label>
-              <label className="field full"><span>Deskripsi transaksi</span><input required value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Contoh: Pembayaran invoice DP" /></label>
-              <label className="field full"><span>Nominal</span><input type="number" min="1" required value={amount || ""} onChange={(event) => setAmount(Number(event.target.value))} placeholder="0" /></label>
-              <div className="transaction-preview full"><WalletCards size={18} /><div><span>{transactionType}</span><strong>{formatCurrency(amount)}</strong></div></div>
-              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowTransactionForm(false)}>Batal</button><button className="button primary" type="submit"><Plus size={16} /> Simpan transaksi</button></div>
+              <label className="field full"><span>{id ? "Proyek terkait" : "Related project"}</span><select required value={transactionProjectId} onChange={(event) => setTransactionProjectId(event.target.value)}><option value="">{id ? "Pilih proyek" : "Select project"}</option>{projects.map((projectItem) => <option value={projectItem.id} key={projectItem.id}>{projectItem.code} · {projectItem.name}</option>)}</select></label>
+              <label className="field full"><span>{id ? "Deskripsi transaksi" : "Transaction description"}</span><input required value={description} onChange={(event) => setDescription(event.target.value)} placeholder={id ? "Contoh: Pembayaran invoice DP" : "Example: Down payment invoice"} /></label>
+              <label className="field full"><span>{id ? "Nominal" : "Amount"}</span><input type="number" min="1" required value={amount || ""} onChange={(event) => setAmount(Number(event.target.value))} placeholder="0" /></label>
+              <div className="transaction-preview full"><WalletCards size={18} /><div><span>{localizedLabel(language, transactionType)}</span><strong>{formatCurrency(amount, language)}</strong></div></div>
+              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowTransactionForm(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit"><Plus size={16} /> {id ? "Simpan transaksi" : "Save transaction"}</button></div>
             </form>
           </section>
         </div>

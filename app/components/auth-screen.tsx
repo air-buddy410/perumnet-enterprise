@@ -6,12 +6,14 @@ import { api, messageOf, SessionUser } from "../api-client";
 import { appPath } from "../paths";
 
 interface AuthScreenProps {
+  language: "id" | "en";
   onLogin: (user: SessionUser) => void;
 }
 
 type AuthMode = "login" | "forgot" | "reset";
 
-export function AuthScreen({ onLogin }: AuthScreenProps) {
+export function AuthScreen({ language, onLogin }: AuthScreenProps) {
+  const id = language === "id";
   const demoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState(demoMode ? "admin@perumnet.id" : "");
@@ -46,7 +48,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
       });
       onLogin(result.user);
     } catch (requestError) {
-      setError(messageOf(requestError));
+      setError(messageOf(requestError, language));
     } finally {
       setBusy(false);
     }
@@ -56,7 +58,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
     event.preventDefault();
     setError("");
     if (!email.includes("@")) {
-      setError("Masukkan alamat email yang valid.");
+      setError(id ? "Masukkan alamat email yang valid." : "Enter a valid email address.");
       return;
     }
     setBusy(true);
@@ -68,7 +70,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
       setResetToken(result.resetToken ?? "");
       setSent(true);
     } catch (requestError) {
-      setError(messageOf(requestError));
+      setError(messageOf(requestError, language));
     } finally {
       setBusy(false);
     }
@@ -78,15 +80,15 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
     event.preventDefault();
     setError("");
     if (newPassword.length < 8) {
-      setError("Kata sandi minimal 8 karakter.");
+      setError(id ? "Kata sandi minimal 8 karakter." : "The password must be at least 8 characters.");
       return;
     }
     if (newPassword !== confirmPassword) {
-      setError("Konfirmasi kata sandi belum sama.");
+      setError(id ? "Konfirmasi kata sandi belum sama." : "The password confirmation does not match.");
       return;
     }
     if (!resetToken) {
-      setError("Tautan reset tidak ditemukan. Minta tautan pemulihan baru.");
+      setError(id ? "Tautan reset tidak ditemukan. Minta tautan pemulihan baru." : "Reset link not found. Request a new recovery link.");
       return;
     }
     setBusy(true);
@@ -103,7 +105,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
       window.history.replaceState({}, "", window.location.pathname);
       setMode("login");
     } catch (requestError) {
-      setError(messageOf(requestError));
+      setError(messageOf(requestError, language));
     } finally {
       setBusy(false);
     }
@@ -126,30 +128,29 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
           <span>PERUMNET ENTERPRISE</span>
         </div>
         <div className="auth-brand-copy">
-          <span className="eyebrow light">OPERASIONAL DALAM SATU SISTEM</span>
+          <span className="eyebrow light">{id ? "OPERASIONAL DALAM SATU SISTEM" : "OPERATIONS IN ONE SYSTEM"}</span>
           <h1>
-            Kelola proyek IT
+            {id ? "Kelola proyek IT" : "Manage IT projects"}
             <br />
-            <span>lebih terukur.</span>
+            <span>{id ? "lebih terukur." : "with clarity."}</span>
           </h1>
           <p>
-            Dari penawaran, pelaksanaan lapangan, hingga profitabilitas proyek—semua
-            terhubung dalam ruang kerja yang ringkas.
+            {id ? "Dari penawaran, pelaksanaan lapangan, hingga profitabilitas proyek—semua terhubung dalam ruang kerja yang ringkas." : "From quotations and field execution to project profitability, everything is connected in one focused workspace."}
           </p>
           <div className="auth-trust-card">
             <span className="auth-trust-icon">
               <ShieldCheck size={20} />
             </span>
             <div>
-              <strong>Akses aman berbasis peran</strong>
-              <small>Data operasional hanya untuk tim yang berwenang</small>
+              <strong>{id ? "Akses aman berbasis peran" : "Secure role-based access"}</strong>
+              <small>{id ? "Data operasional hanya untuk tim yang berwenang" : "Operational data is limited to authorized teams"}</small>
             </div>
             <span className="status-dot online" />
           </div>
         </div>
         <div className="auth-network-pill">
           <Wifi size={16} />
-          <span>Sistem operasional siap digunakan</span>
+          <span>{id ? "Sistem operasional siap digunakan" : "Operations system ready"}</span>
         </div>
       </section>
 
@@ -169,11 +170,11 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
               <div className="auth-heading">
                 <span className="connection-label">
                   <span className="status-dot online" />
-                  Portal operasional PerumNet
+                  {id ? "Portal operasional PerumNet" : "PerumNet operations portal"}
                 </span>
-                <span className="eyebrow">AKSES TIM</span>
-                <h2>Selamat datang kembali.</h2>
-                <p>Masuk untuk melanjutkan pekerjaan dan memantau proyek Anda.</p>
+                <span className="eyebrow">{id ? "AKSES TIM" : "TEAM ACCESS"}</span>
+                <h2>{id ? "Selamat datang kembali." : "Welcome back."}</h2>
+                <p>{id ? "Masuk untuk melanjutkan pekerjaan dan memantau proyek Anda." : "Sign in to continue your work and monitor projects."}</p>
               </div>
               <form className="auth-form" onSubmit={submitLogin}>
                 <label className="field">
@@ -190,7 +191,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
                   </span>
                 </label>
                 <label className="field">
-                  <span>Kata sandi</span>
+                  <span>{id ? "Kata sandi" : "Password"}</span>
                   <span className="input-with-icon">
                     <KeyRound size={17} />
                     <input
@@ -203,7 +204,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
                     <button
                       className="icon-button inline"
                       type="button"
-                      aria-label={showPassword ? "Sembunyikan kata sandi" : "Tampilkan kata sandi"}
+                      aria-label={showPassword ? (id ? "Sembunyikan kata sandi" : "Hide password") : (id ? "Tampilkan kata sandi" : "Show password")}
                       onClick={() => setShowPassword((value) => !value)}
                     >
                       {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
@@ -212,24 +213,24 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
                 </label>
                 <div className="auth-options">
                   <label className="checkbox-label">
-                    <input type="checkbox" defaultChecked />
-                    <span>Ingat saya</span>
+                    <input type="checkbox" checked readOnly />
+                    <span>{id ? "Session aktif 8 jam" : "Eight-hour session"}</span>
                   </label>
                   <button className="text-button" type="button" onClick={() => setMode("forgot")}>
-                    Lupa kata sandi?
+                    {id ? "Lupa kata sandi?" : "Forgot password?"}
                   </button>
                 </div>
                 {error && <p className="form-error" role="alert">{error}</p>}
                 <button className="button primary auth-submit" type="submit" disabled={busy}>
-                  {busy ? "Memeriksa akses..." : "Masuk ke Dashboard"} <ArrowRight size={17} />
+                  {busy ? (id ? "Memeriksa akses..." : "Checking access...") : (id ? "Masuk ke Dashboard" : "Sign in to Dashboard")} <ArrowRight size={17} />
                 </button>
               </form>
               {demoMode && (
                 <div className="demo-access">
                   <span className="demo-access-icon"><ShieldCheck size={18} /></span>
                   <div>
-                    <strong>Akun demo sudah terisi</strong>
-                    <small>Klik tombol masuk untuk menjelajahi seluruh modul frontend.</small>
+                    <strong>{id ? "Akun demo sudah terisi" : "Demo account is prefilled"}</strong>
+                    <small>{id ? "Klik tombol masuk untuk menjelajahi seluruh modul frontend." : "Click sign in to explore all frontend modules."}</small>
                   </div>
                 </div>
               )}
@@ -239,18 +240,18 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
           {mode === "forgot" && (
             <>
               <button className="back-button" type="button" onClick={() => { setMode("login"); setSent(false); setError(""); }}>
-                <ArrowLeft size={17} /> Kembali ke login
+                <ArrowLeft size={17} /> {id ? "Kembali ke login" : "Back to sign in"}
               </button>
               <div className="auth-heading compact">
                 <span className="auth-page-icon"><Mail size={24} /></span>
-                <span className="eyebrow">PEMULIHAN AKSES</span>
-                <h2>Lupa kata sandi?</h2>
-                <p>Kami akan mengirimkan tautan pemulihan ke email yang terdaftar.</p>
+                <span className="eyebrow">{id ? "PEMULIHAN AKSES" : "ACCESS RECOVERY"}</span>
+                <h2>{id ? "Lupa kata sandi?" : "Forgot your password?"}</h2>
+                <p>{id ? "Kami akan mengirimkan tautan pemulihan ke email yang terdaftar." : "We will send a recovery link to your registered email."}</p>
               </div>
               {!sent ? (
                 <form className="auth-form" onSubmit={submitForgot}>
                   <label className="field">
-                    <span>Email terdaftar</span>
+                    <span>{id ? "Email terdaftar" : "Registered email"}</span>
                     <span className="input-with-icon">
                       <Mail size={17} />
                       <input
@@ -263,19 +264,19 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
                   </label>
                   {error && <p className="form-error" role="alert">{error}</p>}
                   <button className="button primary auth-submit" type="submit" disabled={busy}>
-                    {busy ? "Mengirim..." : "Kirim tautan pemulihan"} <ArrowRight size={17} />
+                    {busy ? (id ? "Mengirim..." : "Sending...") : (id ? "Kirim tautan pemulihan" : "Send recovery link")} <ArrowRight size={17} />
                   </button>
                 </form>
               ) : (
                 <div className="success-panel" role="status">
                   <span className="success-panel-icon"><Mail size={25} /></span>
-                  <h3>Email pemulihan terkirim</h3>
+                  <h3>{id ? "Email pemulihan terkirim" : "Recovery email sent"}</h3>
                   <p>
-                    Tautan reset telah dikirim ke <strong>{email}</strong>.
+                    {id ? "Tautan reset telah dikirim ke" : "A reset link was sent to"} <strong>{email}</strong>.
                   </p>
                   {resetToken && (
                     <button className="button primary" type="button" onClick={() => setMode("reset")}>
-                      Buka halaman reset <ArrowRight size={17} />
+                      {id ? "Buka halaman reset" : "Open reset page"} <ArrowRight size={17} />
                     </button>
                   )}
                 </div>
@@ -286,17 +287,17 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
           {mode === "reset" && (
             <>
               <button className="back-button" type="button" onClick={() => setMode("forgot")}>
-                <ArrowLeft size={17} /> Kembali
+                <ArrowLeft size={17} /> {id ? "Kembali" : "Back"}
               </button>
               <div className="auth-heading compact">
                 <span className="auth-page-icon"><KeyRound size={24} /></span>
-                <span className="eyebrow">KATA SANDI BARU</span>
-                <h2>Amankan akun Anda.</h2>
-                <p>Gunakan minimal 8 karakter agar akun tetap terlindungi.</p>
+                <span className="eyebrow">{id ? "KATA SANDI BARU" : "NEW PASSWORD"}</span>
+                <h2>{id ? "Amankan akun Anda." : "Secure your account."}</h2>
+                <p>{id ? "Gunakan minimal 8 karakter agar akun tetap terlindungi." : "Use at least 8 characters to protect your account."}</p>
               </div>
               <form className="auth-form" onSubmit={submitReset}>
                 <label className="field">
-                  <span>Kata sandi baru</span>
+                  <span>{id ? "Kata sandi baru" : "New password"}</span>
                   <input
                     type="password"
                     value={newPassword}
@@ -305,7 +306,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
                   />
                 </label>
                 <label className="field">
-                  <span>Konfirmasi kata sandi</span>
+                  <span>{id ? "Konfirmasi kata sandi" : "Confirm password"}</span>
                   <input
                     type="password"
                     value={confirmPassword}
@@ -315,13 +316,13 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
                 </label>
                 {error && <p className="form-error" role="alert">{error}</p>}
                 <button className="button primary auth-submit" type="submit" disabled={busy}>
-                  {busy ? "Menyimpan..." : "Simpan kata sandi"} <ArrowRight size={17} />
+                  {busy ? (id ? "Menyimpan..." : "Saving...") : (id ? "Simpan kata sandi" : "Save password")} <ArrowRight size={17} />
                 </button>
               </form>
             </>
           )}
 
-          <p className="auth-footer">© 2026 PerumNet Enterprise · Konsultan IT</p>
+          <p className="auth-footer">© 2026 PerumNet Enterprise · {id ? "Konsultan IT" : "IT Consulting"}</p>
         </div>
       </section>
     </main>

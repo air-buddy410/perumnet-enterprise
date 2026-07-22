@@ -8,6 +8,7 @@ import { getDatabase } from "../db/client";
 import { asNumber, formatDate, parseJson } from "../format";
 
 type PdfKind = "quotation" | "invoice" | "spk" | "bast";
+type PdfLanguage = "id" | "en";
 type Color = [number, number, number];
 type TextAlign = "left" | "center" | "right";
 
@@ -22,6 +23,7 @@ type PdfContext = {
   doc: jsPDF;
   logo?: string;
   meta: DocumentMeta;
+  language: PdfLanguage;
 };
 
 type InfoItem = {
@@ -80,19 +82,64 @@ function cleanText(value: unknown, fallback = "-") {
   return cleaned || fallback;
 }
 
-function rupiah(value: unknown) {
-  return `Rp ${Math.round(asNumber(value)).toLocaleString("id-ID")}`;
+function tr(language: PdfLanguage, id: string, en: string) {
+  return language === "en" ? en : id;
 }
 
-function displayDate(value: unknown) {
-  return cleanText(formatDate(value));
+function localizeValue(value: unknown, language: PdfLanguage) {
+  const source = cleanText(value);
+  if (language === "id") return source;
+  const values: Record<string, string> = {
+    Aktif: "Active",
+    Nonaktif: "Inactive",
+    Selesai: "Completed",
+    Dikirim: "Sent",
+    Dikerjakan: "In Progress",
+    Lunas: "Paid",
+    "Belum Lunas": "Unpaid",
+    Pemasukan: "Income",
+    Pengeluaran: "Expense",
+    Perangkat: "Device",
+    Material: "Material",
+    Jasa: "Service",
+    Mobilitas: "Mobility",
+    Terpasang: "Installed",
+    paket: "package",
+    hari: "day",
+    Umum: "General",
+    Draft: "Draft",
+    Final: "Final",
+    Sent: "Sent",
+    Generated: "Generated",
+    Completed: "Completed",
+  };
+  return values[source] ?? source;
 }
 
-function dateRange(start: unknown, end: unknown) {
-  if (start && end) return `${displayDate(start)} s.d. ${displayDate(end)}`;
-  if (start) return `Mulai ${displayDate(start)}`;
-  if (end) return `Sampai ${displayDate(end)}`;
-  return "Belum ditentukan";
+function rupiah(value: unknown, language: PdfLanguage = "id") {
+  return new Intl.NumberFormat(language === "en" ? "en-US" : "id-ID", {
+    style: "currency",
+    currency: "IDR",
+    maximumFractionDigits: 0,
+  }).format(Math.round(asNumber(value)));
+}
+
+function displayDate(value: unknown, language: PdfLanguage = "id") {
+  const raw = String(value ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return cleanText(formatDate(value));
+  return new Intl.DateTimeFormat(language === "en" ? "en-GB" : "id-ID", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: "Asia/Makassar",
+  }).format(new Date(`${raw}T00:00:00+08:00`));
+}
+
+function dateRange(start: unknown, end: unknown, language: PdfLanguage) {
+  if (start && end) return `${displayDate(start, language)} ${tr(language, "s.d.", "to")} ${displayDate(end, language)}`;
+  if (start) return `${tr(language, "Mulai", "From")} ${displayDate(start, language)}`;
+  if (end) return `${tr(language, "Sampai", "Until")} ${displayDate(end, language)}`;
+  return tr(language, "Belum ditentukan", "Not specified");
 }
 
 function splitText(doc: jsPDF, value: unknown, width: number) {
@@ -120,20 +167,21 @@ function drawFallbackMark(doc: jsPDF) {
 function statusTone(status: string) {
   const normalized = status.toLowerCase();
   if (
-    normalized.includes("lunas") &&
-    !normalized.includes("belum")
+    (normalized.includes("lunas") && !normalized.includes("belum")) ||
+    (normalized.includes("paid") && !normalized.includes("unpaid"))
   ) {
     return { background: colors.tealSoft, foreground: colors.success };
   }
   if (
     normalized.includes("final") ||
     normalized.includes("selesai") ||
+    normalized.includes("completed") ||
     normalized.includes("sent") ||
     normalized.includes("dikirim")
   ) {
     return { background: colors.tealSoft, foreground: colors.tealDark };
   }
-  if (normalized.includes("belum") || normalized.includes("draft")) {
+  if (normalized.includes("belum") || normalized.includes("unpaid") || normalized.includes("draft")) {
     return { background: colors.warningSoft, foreground: colors.warning };
   }
   return { background: colors.paper, foreground: colors.navy };
@@ -187,18 +235,28 @@ function drawHeader(context: PdfContext, continuation = false) {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7.2);
   doc.setTextColor(...colors.tealDark);
-  doc.text("KONSULTAN IT & MANAGED SERVICES", 31, 15.5);
+  doc.text(
+    tr(context.language, "KONSULTAN IT & MANAGED SERVICES", "IT CONSULTING & MANAGED SERVICES"),
+    31,
+    15.5,
+  );
   doc.setTextColor(...colors.muted);
   doc.setFontSize(6.8);
   doc.text("it@perumnet.id  |  perumnet.id", 31, 20);
 
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(13);
+  const documentTitle = continuation
+    ? `${cleanText(meta.title).toUpperCase()} - ${tr(context.language, "LANJUTAN", "CONTINUED")}`
+    : cleanText(meta.title).toUpperCase();
+  let titleFontSize = 13;
+  doc.setFontSize(titleFontSize);
+  while (doc.getTextWidth(documentTitle) > 86 && titleFontSize > 7.5) {
+    titleFontSize -= 0.5;
+    doc.setFontSize(titleFontSize);
+  }
   doc.setTextColor(...colors.navyDark);
   doc.text(
-    continuation
-      ? `${cleanText(meta.title).toUpperCase()} - LANJUTAN`
-      : cleanText(meta.title).toUpperCase(),
+    documentTitle,
     PAGE_WIDTH - MARGIN,
     11.5,
     { align: "right" },
@@ -220,7 +278,7 @@ function drawHeader(context: PdfContext, continuation = false) {
   doc.setTextColor(...colors.ink);
 }
 
-async function createDocument(meta: DocumentMeta) {
+async function createDocument(meta: DocumentMeta, language: PdfLanguage) {
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
   doc.setProperties({
     title: `${meta.title} - ${meta.number}`,
@@ -228,7 +286,7 @@ async function createDocument(meta: DocumentMeta) {
     author: "PerumNet Enterprise",
     creator: "PerumNet Enterprise Operations",
   });
-  const context: PdfContext = { doc, logo: await loadLogo(), meta };
+  const context: PdfContext = { doc, logo: await loadLogo(), meta, language };
   drawHeader(context);
   return context;
 }
@@ -273,6 +331,11 @@ function drawInfoGrid(context: PdfContext, y: number, items: InfoItem[]) {
 
   for (let index = 0; index < items.length; index += 2) {
     const pair = items.slice(index, index + 2);
+    // Text wrapping must be measured with the same type settings used for the
+    // value itself. The header leaves a smaller font active, which otherwise
+    // makes long project names overflow into the adjacent information card.
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
     const values = pair.map((item) => splitText(doc, item.value, width - 8));
     const height = Math.max(
       17,
@@ -476,7 +539,9 @@ function drawSignaturePair(
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7);
     doc.text(
-      index === 0 ? "Pihak pertama" : "Pihak kedua",
+      index === 0
+        ? tr(context.language, "Pihak pertama", "First party")
+        : tr(context.language, "Pihak kedua", "Second party"),
       x,
       y + 8,
     );
@@ -563,7 +628,11 @@ function applyFooters(context: PdfContext) {
       287.5,
     );
     doc.text(
-      `Dokumen operasional - Halaman ${page} dari ${totalPages}`,
+      tr(
+        context.language,
+        `Dokumen operasional - Halaman ${page} dari ${totalPages}`,
+        `Operational document - Page ${page} of ${totalPages}`,
+      ),
       PAGE_WIDTH - MARGIN,
       287.5,
       { align: "right" },
@@ -583,7 +652,7 @@ function response(context: PdfContext, filename: string) {
   });
 }
 
-async function quotationPdf(projectId: string) {
+async function quotationPdf(projectId: string, language: PdfLanguage) {
   const { client } = await getDatabase();
   const projectResult = await client.execute({
     sql: "SELECT * FROM projects WHERE id=? LIMIT 1",
@@ -616,80 +685,81 @@ async function quotationPdf(projectId: string) {
   const context = await createDocument({
     title: "Quotation",
     number,
-    status: quotation ? String(quotation.status) : "Draft",
-    subject: `Penawaran untuk ${String(project.name)}`,
-  });
+    status: localizeValue(quotation ? quotation.status : "Draft", language),
+    subject: tr(language, `Penawaran untuk ${String(project.name)}`, `Quotation for ${String(project.name)}`),
+  }, language);
   let y = BODY_TOP;
 
   y = drawInfoGrid(context, y, [
-    { label: "Ditujukan kepada", value: String(project.client) },
+    { label: tr(language, "Ditujukan kepada", "Prepared for"), value: String(project.client) },
     {
-      label: "Proyek",
+      label: tr(language, "Proyek", "Project"),
       value: `${String(project.code)} - ${String(project.name)}`,
     },
-    { label: "Lokasi pekerjaan", value: String(project.location) },
+    { label: tr(language, "Lokasi pekerjaan", "Work location"), value: String(project.location) },
     {
-      label: "Masa berlaku",
+      label: tr(language, "Masa berlaku", "Validity period"),
       value: dateRange(
         quotation?.issued_at ?? project.created_at,
         quotation?.valid_until ?? project.target_date,
+        language,
       ),
     },
   ]);
   y = drawSectionTitle(
     context,
     y,
-    "Rincian Penawaran",
-    "Nilai berdasarkan Bill of Quantity proyek",
+    tr(language, "Rincian Penawaran", "Quotation Details"),
+    tr(language, "Nilai berdasarkan Bill of Quantity proyek", "Values are based on the project Bill of Quantity"),
   );
   y = drawTable(
     context,
     y,
     [
       { title: "No.", width: 12, align: "center" },
-      { title: "Deskripsi", width: 70 },
+      { title: tr(language, "Deskripsi", "Description"), width: 70 },
       { title: "Qty", width: 24, align: "center" },
-      { title: "Harga Satuan", width: 36, align: "right" },
-      { title: "Jumlah", width: 40, align: "right" },
+      { title: tr(language, "Harga Satuan", "Unit Price"), width: 36, align: "right" },
+      { title: tr(language, "Jumlah", "Amount"), width: 40, align: "right" },
     ],
     itemResult.rows.map((item, index) => [
       index + 1,
-      `${cleanText(item.description)}\n${cleanText(item.category)}`,
-      `${asNumber(item.quantity)} ${cleanText(item.unit)}`,
-      rupiah(item.selling_price),
-      rupiah(asNumber(item.quantity) * asNumber(item.selling_price)),
+      `${cleanText(item.description)}\n${localizeValue(item.category, language)}`,
+      `${asNumber(item.quantity)} ${localizeValue(item.unit, language)}`,
+      rupiah(item.selling_price, language),
+      rupiah(asNumber(item.quantity) * asNumber(item.selling_price), language),
     ]),
   );
   y = drawTotals(context, y, [
-    { label: "Subtotal", value: rupiah(total) },
-    { label: "Total penawaran", value: rupiah(total), highlight: true },
+    { label: "Subtotal", value: rupiah(total, language) },
+    { label: tr(language, "Total penawaran", "Quotation total"), value: rupiah(total, language), highlight: true },
   ]);
   y = drawCallout(
     context,
     y,
-    "Ketentuan penawaran",
-    "Harga berlaku untuk ruang lingkup yang tercantum. Perubahan spesifikasi, volume, lokasi, atau jadwal pekerjaan akan dikonfirmasi melalui revisi penawaran. Jadwal pelaksanaan disepakati setelah penawaran diterima.",
+    tr(language, "Ketentuan penawaran", "Quotation terms"),
+    tr(language, "Harga berlaku untuk ruang lingkup yang tercantum. Perubahan spesifikasi, volume, lokasi, atau jadwal pekerjaan akan dikonfirmasi melalui revisi penawaran. Jadwal pelaksanaan disepakati setelah penawaran diterima.", "Prices apply to the stated scope. Changes to specifications, quantities, location, or schedule will be confirmed through a revised quotation. The implementation schedule will be agreed after acceptance."),
     "teal",
   );
-  y = drawSectionTitle(context, y, "Persetujuan");
+  y = drawSectionTitle(context, y, tr(language, "Persetujuan", "Approval"));
   drawSignaturePair(
     context,
     y,
     {
-      heading: "Disiapkan oleh",
+      heading: tr(language, "Disiapkan oleh", "Prepared by"),
       name: "PerumNet Enterprise",
       role: "Project / Sales Representative",
     },
     {
-      heading: "Disetujui oleh",
+      heading: tr(language, "Disetujui oleh", "Approved by"),
       name: String(project.client),
-      role: "Nama, jabatan, dan tanda tangan",
+      role: tr(language, "Nama, jabatan, dan tanda tangan", "Name, title, and signature"),
     },
   );
   return response(context, `${number.replaceAll("/", "-")}.pdf`);
 }
 
-async function invoicePdf(invoiceId: string) {
+async function invoicePdf(invoiceId: string, language: PdfLanguage) {
   const { client } = await getDatabase();
   const result = await client.execute({
     sql: "SELECT i.*,p.code AS project_code,p.name AS project_name,p.client,p.location FROM invoices i JOIN projects p ON p.id=i.project_id WHERE i.id=? LIMIT 1",
@@ -702,75 +772,75 @@ async function invoicePdf(invoiceId: string) {
   const context = await createDocument({
     title: "Invoice",
     number: String(invoice.number),
-    status: String(invoice.status),
-    subject: `Tagihan ${String(invoice.project_name)}`,
-  });
+    status: localizeValue(invoice.status, language),
+    subject: tr(language, `Tagihan ${String(invoice.project_name)}`, `Invoice for ${String(invoice.project_name)}`),
+  }, language);
   let y = BODY_TOP;
   y = drawInfoGrid(context, y, [
-    { label: "Ditagihkan kepada", value: String(invoice.client) },
+    { label: tr(language, "Ditagihkan kepada", "Bill to"), value: String(invoice.client) },
     {
-      label: "Proyek",
+      label: tr(language, "Proyek", "Project"),
       value: `${String(invoice.project_code)} - ${String(invoice.project_name)}`,
     },
-    { label: "Alamat / lokasi", value: String(invoice.location) },
+    { label: tr(language, "Alamat / lokasi", "Address / location"), value: String(invoice.location) },
     {
-      label: "Tanggal invoice",
-      value: displayDate(invoice.issue_date),
+      label: tr(language, "Tanggal invoice", "Invoice date"),
+      value: displayDate(invoice.issue_date, language),
     },
-    { label: "Jatuh tempo", value: displayDate(invoice.due_date) },
+    { label: tr(language, "Jatuh tempo", "Due date"), value: displayDate(invoice.due_date, language) },
     {
-      label: "Tanggal pembayaran",
+      label: tr(language, "Tanggal pembayaran", "Payment date"),
       value: invoice.paid_date
-        ? displayDate(invoice.paid_date)
-        : "Belum dikonfirmasi",
+        ? displayDate(invoice.paid_date, language)
+        : tr(language, "Belum dikonfirmasi", "Not confirmed"),
     },
   ]);
   y = drawSectionTitle(
     context,
     y,
-    "Rincian Tagihan",
-    "Dokumen penagihan resmi PerumNet Enterprise",
+    tr(language, "Rincian Tagihan", "Invoice Details"),
+    tr(language, "Dokumen penagihan resmi PerumNet Enterprise", "Official billing document from PerumNet Enterprise"),
   );
   y = drawTable(
     context,
     y,
     [
       { title: "No.", width: 12, align: "center" },
-      { title: "Deskripsi", width: 96 },
+      { title: tr(language, "Deskripsi", "Description"), width: 96 },
       { title: "Qty", width: 22, align: "center" },
-      { title: "Jumlah", width: 52, align: "right" },
+      { title: tr(language, "Jumlah", "Amount"), width: 52, align: "right" },
     ],
     [
       [
         1,
         `${cleanText(invoice.type)}\n${cleanText(invoice.project_name)}`,
-        "1 paket",
-        rupiah(invoice.amount),
+        tr(language, "1 paket", "1 package"),
+        rupiah(invoice.amount, language),
       ],
     ],
   );
   y = drawTotals(context, y, [
-    { label: "Subtotal", value: rupiah(invoice.amount) },
-    { label: "Total tagihan", value: rupiah(invoice.amount), highlight: true },
+    { label: "Subtotal", value: rupiah(invoice.amount, language) },
+    { label: tr(language, "Total tagihan", "Invoice total"), value: rupiah(invoice.amount, language), highlight: true },
   ]);
   y = drawCallout(
     context,
     y,
-    "Instruksi pembayaran",
-    `Gunakan nomor invoice ${cleanText(invoice.number)} sebagai referensi pembayaran. Bukti pembayaran dan pertanyaan terkait tagihan dapat dikirim ke it@perumnet.id. Pembayaran dinyatakan sah setelah dikonfirmasi oleh bagian Finance PerumNet Enterprise.`,
+    tr(language, "Instruksi pembayaran", "Payment instructions"),
+    tr(language, `Gunakan nomor invoice ${cleanText(invoice.number)} sebagai referensi pembayaran. Bukti pembayaran dan pertanyaan terkait tagihan dapat dikirim ke it@perumnet.id. Pembayaran dinyatakan sah setelah dikonfirmasi oleh bagian Finance PerumNet Enterprise.`, `Use invoice number ${cleanText(invoice.number)} as the payment reference. Send payment evidence and billing questions to it@perumnet.id. Payment is valid after confirmation by PerumNet Enterprise Finance.`),
     invoice.status === "Lunas" ? "teal" : "warning",
   );
-  y = drawSectionTitle(context, y, "Otorisasi");
+  y = drawSectionTitle(context, y, tr(language, "Otorisasi", "Authorization"));
   drawSignaturePair(
     context,
     y,
     {
-      heading: "Penerima tagihan",
+      heading: tr(language, "Penerima tagihan", "Bill recipient"),
       name: String(invoice.client),
       role: "Finance / Authorized Representative",
     },
     {
-      heading: "Diterbitkan oleh",
+      heading: tr(language, "Diterbitkan oleh", "Issued by"),
       name: "PerumNet Enterprise",
       role: "Finance Department",
     },
@@ -781,7 +851,7 @@ async function invoicePdf(invoiceId: string) {
   );
 }
 
-async function spkPdf(spkId: string) {
+async function spkPdf(spkId: string, language: PdfLanguage) {
   const { client } = await getDatabase();
   const result = await client.execute({
     sql: "SELECT s.*,v.name AS vendor_name,v.category AS vendor_category,v.contact,v.email,v.address,p.code AS project_code,p.name AS project_name,p.location FROM spks s JOIN vendors v ON v.id=s.vendor_id JOIN projects p ON p.id=s.project_id WHERE s.id=? LIMIT 1",
@@ -792,100 +862,100 @@ async function spkPdf(spkId: string) {
     throw new ApiError(404, "NOT_FOUND", "SPK tidak ditemukan.");
   }
   const context = await createDocument({
-    title: "Surat Perintah Kerja",
+    title: tr(language, "Surat Perintah Kerja", "Work Order"),
     number: String(spk.number),
-    status: String(spk.status),
-    subject: `SPK ${String(spk.project_name)}`,
-  });
+    status: localizeValue(spk.status, language),
+    subject: tr(language, `SPK ${String(spk.project_name)}`, `Work Order ${String(spk.project_name)}`),
+  }, language);
   let y = BODY_TOP;
   y = drawInfoGrid(context, y, [
     {
-      label: "Vendor / pelaksana",
+      label: tr(language, "Vendor / pelaksana", "Vendor / contractor"),
       value: `${String(spk.vendor_name)} - ${String(spk.vendor_category)}`,
     },
     {
-      label: "Kontak vendor",
+      label: tr(language, "Kontak vendor", "Vendor contact"),
       value: [spk.contact, spk.email].filter(Boolean).join(" | "),
     },
     {
-      label: "Proyek",
+      label: tr(language, "Proyek", "Project"),
       value: `${String(spk.project_code)} - ${String(spk.project_name)}`,
     },
-    { label: "Lokasi pekerjaan", value: String(spk.location) },
+    { label: tr(language, "Lokasi pekerjaan", "Work location"), value: String(spk.location) },
     {
-      label: "Periode pekerjaan",
+      label: tr(language, "Periode pekerjaan", "Work period"),
       value: spk.start_date || spk.end_date
-        ? dateRange(spk.start_date, spk.end_date)
-        : "Dikoordinasikan bersama Project Manager",
+        ? dateRange(spk.start_date, spk.end_date, language)
+        : tr(language, "Dikoordinasikan bersama Project Manager", "To be coordinated with the Project Manager"),
     },
-    { label: "Nilai pekerjaan", value: rupiah(spk.cost) },
+    { label: tr(language, "Nilai pekerjaan", "Work value"), value: rupiah(spk.cost, language) },
   ]);
-  y = drawSectionTitle(context, y, "Lingkup Pekerjaan");
+  y = drawSectionTitle(context, y, tr(language, "Lingkup Pekerjaan", "Scope of Work"));
   y = drawCallout(
     context,
     y,
-    "Instruksi kerja",
+    tr(language, "Instruksi kerja", "Work instructions"),
     String(spk.scope),
     "teal",
   );
   y = drawTotals(context, y, [
     {
-      label: "Nilai pekerjaan disepakati",
-      value: rupiah(spk.cost),
+      label: tr(language, "Nilai pekerjaan disepakati", "Agreed work value"),
+      value: rupiah(spk.cost, language),
       highlight: true,
     },
   ]);
   y = drawSectionTitle(
     context,
     y,
-    "Ketentuan Pelaksanaan",
-    "Standar minimum pekerjaan vendor",
+    tr(language, "Ketentuan Pelaksanaan", "Execution Terms"),
+    tr(language, "Standar minimum pekerjaan vendor", "Minimum vendor work standards"),
   );
   y = drawTable(
     context,
     y,
     [
       { title: "No.", width: 12, align: "center" },
-      { title: "Ketentuan", width: 170 },
+      { title: tr(language, "Ketentuan", "Terms"), width: 170 },
     ],
     [
       [
         1,
-        "Pelaksana wajib mengikuti spesifikasi teknis, jadwal, dan arahan Project Manager PerumNet Enterprise.",
+        tr(language, "Pelaksana wajib mengikuti spesifikasi teknis, jadwal, dan arahan Project Manager PerumNet Enterprise.", "The contractor must follow the technical specifications, schedule, and directions from the PerumNet Enterprise Project Manager."),
       ],
       [
         2,
-        "Perubahan lingkup atau biaya harus memperoleh persetujuan tertulis sebelum dikerjakan.",
+        tr(language, "Perubahan lingkup atau biaya harus memperoleh persetujuan tertulis sebelum dikerjakan.", "Scope or cost changes require written approval before work begins."),
       ],
       [
         3,
-        "Pelaksana bertanggung jawab atas mutu pekerjaan, keselamatan kerja, kerapian area, dan dokumentasi hasil.",
+        tr(language, "Pelaksana bertanggung jawab atas mutu pekerjaan, keselamatan kerja, kerapian area, dan dokumentasi hasil.", "The contractor is responsible for quality, safety, site cleanliness, and result documentation."),
       ],
       [
         4,
-        "Penyelesaian pekerjaan diverifikasi melalui pemeriksaan lapangan dan dokumen serah terima.",
+        tr(language, "Penyelesaian pekerjaan diverifikasi melalui pemeriksaan lapangan dan dokumen serah terima.", "Work completion is verified through field inspection and handover documentation."),
       ],
     ],
   );
-  y = drawSectionTitle(context, y, "Persetujuan Para Pihak");
+  y = drawSectionTitle(context, y, tr(language, "Persetujuan Para Pihak", "Parties' Approval"));
   drawSignaturePair(
     context,
     y,
     {
-      heading: "Pemberi kerja",
+      heading: tr(language, "Pemberi kerja", "Employer"),
       name: "PerumNet Enterprise",
       role: "Project Manager / Authorized Representative",
     },
     {
-      heading: "Pelaksana",
+      heading: tr(language, "Pelaksana", "Contractor"),
       name: String(spk.vendor_name),
-      role: "Nama, jabatan, dan tanda tangan",
+      role: tr(language, "Nama, jabatan, dan tanda tangan", "Name, title, and signature"),
     },
   );
   return response(context, `${String(spk.number).replaceAll("/", "-")}.pdf`);
 }
 
-async function bastPdf(bastId: string) {
+async function bastPdf(bastId: string, language: PdfLanguage) {
   const { client } = await getDatabase();
   const result = await client.execute({
     sql: "SELECT b.*,p.code AS project_code,p.name AS project_name,p.client,p.location FROM basts b JOIN projects p ON p.id=b.project_id WHERE b.id=? LIMIT 1",
@@ -899,73 +969,73 @@ async function bastPdf(bastId: string) {
     Array<{ name: string; quantity: string; status: string }>
   >(bast.installed_items_json, []);
   const context = await createDocument({
-    title: "Berita Acara Serah Terima",
+    title: tr(language, "Berita Acara Serah Terima", "Handover Certificate"),
     number: String(bast.number),
-    status: String(bast.status),
-    subject: `Serah terima ${String(bast.project_name)}`,
-  });
+    status: localizeValue(bast.status, language),
+    subject: tr(language, `Serah terima ${String(bast.project_name)}`, `Handover of ${String(bast.project_name)}`),
+  }, language);
   let y = BODY_TOP;
   y = drawInfoGrid(context, y, [
     {
-      label: "Proyek",
+      label: tr(language, "Proyek", "Project"),
       value: `${String(bast.project_code)} - ${String(bast.project_name)}`,
     },
-    { label: "Pihak klien", value: String(bast.client) },
-    { label: "Lokasi pekerjaan", value: String(bast.location) },
-    { label: "Tanggal serah terima", value: displayDate(bast.completion_date) },
+    { label: tr(language, "Pihak klien", "Client"), value: String(bast.client) },
+    { label: tr(language, "Lokasi pekerjaan", "Work location"), value: String(bast.location) },
+    { label: tr(language, "Tanggal serah terima", "Handover date"), value: displayDate(bast.completion_date, language) },
   ]);
   y = drawCallout(
     context,
     y,
-    "Pernyataan serah terima",
-    "Para pihak menerangkan bahwa pekerjaan berikut telah diselesaikan, diperiksa, dan diserahterimakan dalam kondisi baik sesuai ruang lingkup yang disepakati.",
+    tr(language, "Pernyataan serah terima", "Handover statement"),
+    tr(language, "Para pihak menerangkan bahwa pekerjaan berikut telah diselesaikan, diperiksa, dan diserahterimakan dalam kondisi baik sesuai ruang lingkup yang disepakati.", "The parties confirm that the following work has been completed, inspected, and handed over in good condition according to the agreed scope."),
     "teal",
   );
   y = drawSectionTitle(
     context,
     y,
-    "Hasil Pekerjaan",
-    "Item terpasang dan telah diverifikasi",
+    tr(language, "Hasil Pekerjaan", "Work Results"),
+    tr(language, "Item terpasang dan telah diverifikasi", "Installed and verified items"),
   );
   y = drawTable(
     context,
     y,
     [
       { title: "No.", width: 12, align: "center" },
-      { title: "Item / Pekerjaan", width: 83 },
-      { title: "Jumlah", width: 32, align: "center" },
+      { title: tr(language, "Item / Pekerjaan", "Item / Work"), width: 83 },
+      { title: tr(language, "Jumlah", "Quantity"), width: 32, align: "center" },
       { title: "Status", width: 55 },
     ],
     items.map((item, index) => [
       index + 1,
       item.name,
       item.quantity,
-      item.status,
+      localizeValue(item.status, language),
     ]),
   );
   y = drawCallout(
     context,
     y,
-    "Catatan serah terima",
+    tr(language, "Catatan serah terima", "Handover notes"),
     String(bast.notes),
   );
   y = drawSectionTitle(
     context,
     y,
-    "Tanda Tangan",
-    "Persetujuan tersimpan sebagai bagian dari dokumen BAST",
+    tr(language, "Tanda Tangan", "Signatures"),
+    tr(language, "Persetujuan tersimpan sebagai bagian dari dokumen BAST", "Approvals are stored as part of this handover document"),
   );
   drawSignaturePair(
     context,
     y,
     {
-      heading: "Pihak klien",
+      heading: tr(language, "Pihak klien", "Client"),
       name: String(bast.client_name),
       role: String(bast.client_role),
       signature: bast.client_signature,
     },
     {
-      heading: "Pihak PerumNet",
+      heading: tr(language, "Pihak PerumNet", "PerumNet"),
       name: String(bast.engineer_name),
       role: String(bast.engineer_role ?? "Project Manager"),
       signature: bast.engineer_signature,
@@ -974,8 +1044,123 @@ async function bastPdf(bastId: string) {
   return response(context, `${String(bast.number).replaceAll("/", "-")}.pdf`);
 }
 
-function generatedDate() {
-  return new Intl.DateTimeFormat("id-ID", {
+export async function renderValidationPdf(
+  validationId: string,
+  language: PdfLanguage = "id",
+) {
+  const { client } = await getDatabase();
+  const result = await client.execute({
+    sql: `
+      SELECT v.*,p.code AS project_code,p.name AS project_name,p.client,p.location,
+        u.name AS validator_name
+      FROM project_validations v
+      JOIN projects p ON p.id=v.project_id
+      LEFT JOIN users u ON u.id=v.validated_by
+      WHERE v.id=? LIMIT 1
+    `,
+    args: [validationId],
+  });
+  const validation = result.rows[0];
+  if (!validation) {
+    throw new ApiError(404, "NOT_FOUND", "Form validasi tidak ditemukan.");
+  }
+  const items = await client.execute({
+    sql: "SELECT * FROM project_validation_items WHERE validation_id=? ORDER BY sort_order,created_at",
+    args: [validationId],
+  });
+  const completed = String(validation.status) === "Completed";
+  const context = await createDocument({
+    title: tr(language, "Form Validasi Perangkat", "Device Validation Form"),
+    number: String(validation.number),
+    status: localizeValue(validation.status, language),
+    subject: tr(language, `Validasi ${String(validation.project_name)}`, `Validation for ${String(validation.project_name)}`),
+  }, language);
+  let y = BODY_TOP;
+  y = drawInfoGrid(context, y, [
+    {
+      label: tr(language, "Proyek", "Project"),
+      value: `${String(validation.project_code)} - ${String(validation.project_name)}`,
+    },
+    { label: tr(language, "Klien", "Client"), value: String(validation.client) },
+    { label: tr(language, "Lokasi pengujian", "Test location"), value: String(validation.location) },
+    {
+      label: tr(language, "Tanggal selesai", "Completion date"),
+      value: validation.completed_at
+        ? displayDate(validation.completed_at, language)
+        : tr(language, "Belum selesai", "Not completed"),
+    },
+  ]);
+  y = drawCallout(
+    context,
+    y,
+    tr(language, "Petunjuk validasi", "Validation instructions"),
+    tr(
+      language,
+      "Centang setiap Perangkat dan Material setelah jumlah, pemasangan, fungsi, serta kondisi fisiknya diperiksa di lokasi. Seluruh item wajib lolos sebelum BAST dapat diterbitkan.",
+      "Check each Device and Material after its quantity, installation, function, and physical condition have been inspected on site. Every item must pass before the handover certificate can be issued.",
+    ),
+    completed ? "teal" : "warning",
+  );
+  y = drawSectionTitle(
+    context,
+    y,
+    tr(language, "Checklist Pengujian", "Test Checklist"),
+    tr(language, "Daftar diambil dari kategori Perangkat dan Material pada BoQ", "Items are sourced from the Device and Material categories in the BoQ"),
+  );
+  y = drawTable(
+    context,
+    y,
+    [
+      { title: tr(language, "Cek", "Check"), width: 18, align: "center" },
+      { title: tr(language, "Kategori", "Category"), width: 30 },
+      { title: tr(language, "Perangkat / Material", "Device / Material"), width: 72 },
+      { title: tr(language, "Jumlah", "Quantity"), width: 24, align: "center" },
+      { title: tr(language, "Catatan", "Notes"), width: 38 },
+    ],
+    items.rows.map((item) => [
+      asNumber(item.checked) ? "[X]" : "[ ]",
+      localizeValue(item.category, language),
+      cleanText(item.description),
+      `${asNumber(item.quantity)} ${localizeValue(item.unit, language)}`,
+      cleanText(item.notes, "-"),
+    ]),
+  );
+  const checkedCount = items.rows.filter((item) => Boolean(asNumber(item.checked))).length;
+  y = drawTotals(context, y, [
+    {
+      label: tr(language, "Item tervalidasi", "Validated items"),
+      value: `${checkedCount} / ${items.rows.length}`,
+      highlight: completed,
+    },
+  ]);
+  if (validation.notes) {
+    y = drawCallout(
+      context,
+      y,
+      tr(language, "Catatan umum", "General notes"),
+      String(validation.notes),
+    );
+  }
+  y = drawSectionTitle(context, y, tr(language, "Otorisasi Validasi", "Validation Authorization"));
+  drawSignaturePair(
+    context,
+    y,
+    {
+      heading: tr(language, "Divalidasi oleh", "Validated by"),
+      name: validation.validator_name ? String(validation.validator_name) : "-",
+      role: tr(language, "Project Manager / Engineer", "Project Manager / Engineer"),
+    },
+    {
+      heading: tr(language, "Diketahui oleh", "Acknowledged by"),
+      name: String(validation.client),
+      role: tr(language, "Perwakilan klien", "Client representative"),
+    },
+  );
+  return response(context, `${String(validation.number).replaceAll("/", "-")}.pdf`);
+}
+
+function generatedDate(language: PdfLanguage) {
+  return new Intl.DateTimeFormat(language === "en" ? "en-GB" : "id-ID", {
     day: "2-digit",
     month: "long",
     year: "numeric",
@@ -999,6 +1184,7 @@ function localIsoDate() {
 export async function renderFinancialReportPdf(
   entries: FinancialReportEntry[],
   scopeLabel: string,
+  language: PdfLanguage = "id",
 ) {
   const sortedDates = entries
     .map((entry) => entry.dateIso)
@@ -1006,8 +1192,8 @@ export async function renderFinancialReportPdf(
     .sort();
   const period =
     sortedDates.length > 0
-      ? `${displayDate(sortedDates[0])} s.d. ${displayDate(sortedDates.at(-1))}`
-      : "Belum ada transaksi";
+      ? `${displayDate(sortedDates[0], language)} ${tr(language, "s.d.", "to")} ${displayDate(sortedDates.at(-1), language)}`
+      : tr(language, "Belum ada transaksi", "No transactions yet");
   const reportDate = localIsoDate();
   const income = entries
     .filter((entry) => entry.type === "Pemasukan")
@@ -1017,35 +1203,35 @@ export async function renderFinancialReportPdf(
     .reduce((sum, entry) => sum + entry.amount, 0);
   const profit = income - expense;
   const context = await createDocument({
-    title: "Laporan Keuangan",
+    title: tr(language, "Laporan Keuangan", "Financial Report"),
     number: `FIN/${reportDate.replaceAll("-", "")}`,
     status: "Generated",
-    subject: `Laporan keuangan ${scopeLabel}`,
-  });
+    subject: tr(language, `Laporan keuangan ${scopeLabel}`, `Financial report ${scopeLabel}`),
+  }, language);
   let y = BODY_TOP;
   y = drawInfoGrid(context, y, [
-    { label: "Ruang lingkup", value: scopeLabel },
-    { label: "Periode transaksi", value: period },
-    { label: "Jumlah transaksi", value: `${entries.length} transaksi` },
-    { label: "Tanggal laporan", value: generatedDate() },
+    { label: tr(language, "Ruang lingkup", "Scope"), value: scopeLabel },
+    { label: tr(language, "Periode transaksi", "Transaction period"), value: period },
+    { label: tr(language, "Jumlah transaksi", "Transaction count"), value: `${entries.length} ${tr(language, "transaksi", "transactions")}` },
+    { label: tr(language, "Tanggal laporan", "Report date"), value: generatedDate(language) },
   ]);
   y = drawMetricCards(context, y, [
-    { label: "Total pemasukan", value: rupiah(income), tone: "income" },
-    { label: "Total pengeluaran", value: rupiah(expense), tone: "expense" },
-    { label: "Laba bersih", value: rupiah(profit), tone: "profit" },
+    { label: tr(language, "Total pemasukan", "Total income"), value: rupiah(income, language), tone: "income" },
+    { label: tr(language, "Total pengeluaran", "Total expenses"), value: rupiah(expense, language), tone: "expense" },
+    { label: tr(language, "Laba bersih", "Net profit"), value: rupiah(profit, language), tone: "profit" },
   ]);
 
   if (!entries.length) {
     drawCallout(
       context,
       y,
-      "Belum ada data",
-      "Tidak ada transaksi yang dapat ditampilkan untuk ruang lingkup laporan ini.",
+      tr(language, "Belum ada data", "No data"),
+      tr(language, "Tidak ada transaksi yang dapat ditampilkan untuk ruang lingkup laporan ini.", "There are no transactions to display for this report scope."),
       "warning",
     );
     return response(
       context,
-      `Laporan-Keuangan-PerumNet-${reportDate}.pdf`,
+      `${tr(language, "Laporan-Keuangan", "Financial-Report")}-PerumNet-${reportDate}.pdf`,
     );
   }
 
@@ -1078,46 +1264,46 @@ export async function renderFinancialReportPdf(
   y = drawSectionTitle(
     context,
     y,
-    "Arus Kas Bulanan",
-    "Perbandingan pemasukan dan pengeluaran",
+    tr(language, "Arus Kas Bulanan", "Monthly Cash Flow"),
+    tr(language, "Perbandingan pemasukan dan pengeluaran", "Income and expense comparison"),
   );
   y = drawTable(
     context,
     y,
     [
-      { title: "Periode", width: 50 },
-      { title: "Pemasukan", width: 44, align: "right" },
-      { title: "Pengeluaran", width: 44, align: "right" },
-      { title: "Arus Bersih", width: 44, align: "right" },
+      { title: tr(language, "Periode", "Period"), width: 50 },
+      { title: tr(language, "Pemasukan", "Income"), width: 44, align: "right" },
+      { title: tr(language, "Pengeluaran", "Expenses"), width: 44, align: "right" },
+      { title: tr(language, "Arus Bersih", "Net Cash"), width: 44, align: "right" },
     ],
     Array.from(monthly.entries())
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([month, value]) => [
-        new Intl.DateTimeFormat("id-ID", {
+        new Intl.DateTimeFormat(language === "en" ? "en-US" : "id-ID", {
           month: "long",
           year: "numeric",
           timeZone: "UTC",
         }).format(new Date(`${month}-01T00:00:00.000Z`)),
-        rupiah(value.income),
-        rupiah(value.expense),
-        rupiah(value.income - value.expense),
+        rupiah(value.income, language),
+        rupiah(value.expense, language),
+        rupiah(value.income - value.expense, language),
       ]),
   );
 
   y = drawSectionTitle(
     context,
     y,
-    "Profitabilitas Proyek",
-    "Ringkasan berdasarkan transaksi yang tercatat",
+    tr(language, "Profitabilitas Proyek", "Project Profitability"),
+    tr(language, "Ringkasan berdasarkan transaksi yang tercatat", "Summary based on recorded transactions"),
   );
   y = drawTable(
     context,
     y,
     [
-      { title: "Proyek", width: 74 },
-      { title: "Pemasukan", width: 36, align: "right" },
-      { title: "Pengeluaran", width: 36, align: "right" },
-      { title: "Laba / Rugi", width: 36, align: "right" },
+      { title: tr(language, "Proyek", "Project"), width: 74 },
+      { title: tr(language, "Pemasukan", "Income"), width: 36, align: "right" },
+      { title: tr(language, "Pengeluaran", "Expenses"), width: 36, align: "right" },
+      { title: tr(language, "Laba / Rugi", "Profit / Loss"), width: 36, align: "right" },
     ],
     Array.from(projects.entries())
       .sort(
@@ -1128,46 +1314,50 @@ export async function renderFinancialReportPdf(
       )
       .map(([project, value]) => [
         project,
-        rupiah(value.income),
-        rupiah(value.expense),
-        rupiah(value.income - value.expense),
+        rupiah(value.income, language),
+        rupiah(value.expense, language),
+        rupiah(value.income - value.expense, language),
       ]),
   );
 
   y = drawSectionTitle(
     context,
     y,
-    "Buku Kas",
-    "Rincian seluruh transaksi dalam laporan",
+    tr(language, "Buku Kas", "Cash Ledger"),
+    tr(language, "Rincian seluruh transaksi dalam laporan", "All transactions included in this report"),
   );
   drawTable(
     context,
     y,
     [
-      { title: "Tanggal", width: 25 },
-      { title: "Jenis", width: 25 },
-      { title: "Proyek", width: 43 },
-      { title: "Deskripsi / Sumber", width: 53 },
-      { title: "Nominal", width: 36, align: "right" },
+      { title: tr(language, "Tanggal", "Date"), width: 25 },
+      { title: tr(language, "Jenis", "Type"), width: 25 },
+      { title: tr(language, "Proyek", "Project"), width: 43 },
+      { title: tr(language, "Deskripsi / Sumber", "Description / Source"), width: 53 },
+      { title: tr(language, "Nominal", "Amount"), width: 36, align: "right" },
     ],
     entries.map((entry) => [
       entry.date,
-      entry.type,
+      localizeValue(entry.type, language),
       entry.project,
       `${entry.description}\n${entry.source}`,
-      rupiah(entry.amount),
+      rupiah(entry.amount, language),
     ]),
   );
 
   return response(
     context,
-    `Laporan-Keuangan-PerumNet-${reportDate}.pdf`,
+    `${tr(language, "Laporan-Keuangan", "Financial-Report")}-PerumNet-${reportDate}.pdf`,
   );
 }
 
-export async function renderBusinessPdf(kind: PdfKind, id: string) {
-  if (kind === "quotation") return quotationPdf(id);
-  if (kind === "invoice") return invoicePdf(id);
-  if (kind === "spk") return spkPdf(id);
-  return bastPdf(id);
+export async function renderBusinessPdf(
+  kind: PdfKind,
+  id: string,
+  language: PdfLanguage = "id",
+) {
+  if (kind === "quotation") return quotationPdf(id, language);
+  if (kind === "invoice") return invoicePdf(id, language);
+  if (kind === "spk") return spkPdf(id, language);
+  return bastPdf(id, language);
 }

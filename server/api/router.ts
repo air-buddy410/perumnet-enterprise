@@ -38,6 +38,7 @@ import {
 import {
   renderBusinessPdf,
   renderFinancialReportPdf,
+  renderValidationPdf,
 } from "./pdf";
 
 const emailSchema = z.string().trim().email().max(254).transform((value) => value.toLowerCase());
@@ -184,6 +185,24 @@ const settingsSchema = z.object({
   emailNotifications: z.boolean(),
 });
 
+const projectAccessSchema = z.object({
+  userIds: z.array(idSchema).max(250),
+});
+
+const validationUpdateSchema = z.object({
+  notes: z.string().trim().max(4_000).optional(),
+  status: z.enum(["Draft", "Completed"]).default("Draft"),
+  items: z
+    .array(
+      z.object({
+        id: idSchema,
+        checked: z.boolean(),
+        notes: z.string().trim().max(500).optional().default(""),
+      }),
+    )
+    .max(500),
+});
+
 function now() {
   return new Date().toISOString();
 }
@@ -207,13 +226,44 @@ function applicationPath(path: string) {
   return `${basePath}${path}`;
 }
 
-function lastActive(value: unknown) {
-  if (!value) return "Belum pernah";
+function localizedApiDate(value: unknown, language: AuthUser["preferredLanguage"]) {
+  if (!value) return "";
+  const date = new Date(`${String(value).slice(0, 10)}T00:00:00+08:00`);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat(language === "en" ? "en-US" : "id-ID", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: "Asia/Makassar",
+  }).format(date);
+}
+
+function lastActive(value: unknown, language: AuthUser["preferredLanguage"]) {
+  if (!value) return language === "en" ? "Never" : "Belum pernah";
   const elapsed = Date.now() - new Date(String(value)).getTime();
-  if (elapsed < 5 * 60_000) return "Baru saja";
-  if (elapsed < 60 * 60_000) return `${Math.max(1, Math.floor(elapsed / 60_000))} menit lalu`;
-  if (elapsed < 24 * 60 * 60_000) return `${Math.floor(elapsed / 3_600_000)} jam lalu`;
-  return formatDate(value);
+  if (elapsed < 5 * 60_000) return language === "en" ? "Just now" : "Baru saja";
+  if (elapsed < 60 * 60_000) {
+    const minutes = Math.max(1, Math.floor(elapsed / 60_000));
+    return language === "en" ? `${minutes} minutes ago` : `${minutes} menit lalu`;
+  }
+  if (elapsed < 24 * 60 * 60_000) {
+    const hours = Math.floor(elapsed / 3_600_000);
+    return language === "en" ? `${hours} hours ago` : `${hours} jam lalu`;
+  }
+  return localizedApiDate(value, language);
+}
+
+function localizedTransactionDescription(
+  value: unknown,
+  language: AuthUser["preferredLanguage"],
+) {
+  const description = String(value ?? "");
+  if (language !== "en") return description;
+  return description
+    .replace(/^Pembayaran\s+/i, "Payment for ")
+    .replace(/^Pembelian\s+/i, "Purchase of ")
+    .replace(/^Termin awal\s+/i, "Initial installment for ")
+    .replace(/^Biaya\s+/i, "Cost of ");
 }
 
 function makeSequence(prefix: string, count: number) {
@@ -246,6 +296,7 @@ const resourceModules: Record<string, AccessModule> = {
   users: "users",
   "audit-logs": "users",
   documents: "projects",
+  validations: "bast",
 };
 
 function assertAccess(
@@ -283,12 +334,37 @@ function projectScopeCondition(user: AuthUser, projectAlias = "p") {
       ${projectAlias}.created_by = ?
       OR ${projectAlias}.manager_id = ?
       OR EXISTS (
+        SELECT 1 FROM users project_creator
+        WHERE project_creator.id = ${projectAlias}.created_by
+          AND project_creator.role = 'Project Manager'
+      )
+      OR EXISTS (
         SELECT 1 FROM project_members access_pm
         WHERE access_pm.project_id = ${projectAlias}.id AND access_pm.user_id = ?
       )
     )`,
     args: [user.id, user.id, user.id] as unknown[],
   };
+}
+
+async function resetProjectValidation(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  projectId: string,
+) {
+  const timestamp = now();
+  await client.batch(
+    [
+      {
+        sql: "DELETE FROM project_validation_items WHERE validation_id IN (SELECT id FROM project_validations WHERE project_id=?)",
+        args: [projectId],
+      },
+      {
+        sql: "UPDATE project_validations SET status='Draft',validated_by=NULL,completed_at=NULL,updated_at=? WHERE project_id=?",
+        args: [timestamp, projectId],
+      },
+    ],
+    "write",
+  );
 }
 
 async function assertProjectAccess(user: AuthUser, projectId: string) {
@@ -631,12 +707,16 @@ async function listProjects(searchParams: URLSearchParams, user: AuthUser) {
       progress,
       payment: canViewCommercial ? payment : "Tidak Diizinkan",
       paidRatio: canViewCommercial ? paidRatio : 0,
-      startDate: formatDate(row.start_date),
-      targetDate: row.target_date ? formatDate(row.target_date) : "Belum ditentukan",
+      startDate: localizedApiDate(row.start_date, user.preferredLanguage),
+      targetDate: row.target_date
+        ? localizedApiDate(row.target_date, user.preferredLanguage)
+        : user.preferredLanguage === "en" ? "Not specified" : "Belum ditentukan",
       startDateIso: row.start_date,
       targetDateIso: row.target_date,
       value: canViewCommercial ? asNumber(row.value) : 0,
-      manager: row.manager_name ? String(row.manager_name) : "Belum ditentukan",
+      manager: row.manager_name
+        ? String(row.manager_name)
+        : user.preferredLanguage === "en" ? "Not specified" : "Belum ditentukan",
       managerId: row.manager_id,
       team: teamNames.map(initials),
       teamNames,
@@ -691,6 +771,81 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     return created(projects.find((project) => project.id === id));
   }
 
+  if (projectId && child === "access") {
+    if (user.role !== "Admin") {
+      throw new ApiError(403, "FORBIDDEN", "Hanya Admin yang dapat mengatur akses proyek.");
+    }
+    await assertProjectAccess(user, projectId);
+
+    if (request.method === "GET") {
+      const result = await client.execute({
+        sql: `
+          SELECT u.id,u.name,u.email,u.role,u.status,
+            CASE WHEN pm.user_id IS NULL THEN 0 ELSE 1 END AS assigned,
+            CASE WHEN p.manager_id=u.id THEN 1 ELSE 0 END AS required
+          FROM users u
+          CROSS JOIN projects p
+          LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=u.id
+          WHERE p.id=? AND u.role IN ('Project Manager','Engineer')
+          ORDER BY CASE u.role WHEN 'Project Manager' THEN 0 ELSE 1 END,u.name
+        `,
+        args: [projectId],
+      });
+      return ok(result.rows.map((row) => ({
+        id: String(row.id),
+        name: String(row.name),
+        email: String(row.email),
+        role: String(row.role),
+        status: String(row.status),
+        assigned: Boolean(asNumber(row.assigned)),
+        required: Boolean(asNumber(row.required)),
+      })));
+    }
+
+    if (request.method === "PUT") {
+      const input = projectAccessSchema.parse(await jsonBody(request));
+      const project = await ensureExists(
+        "SELECT p.manager_id,u.role AS manager_role FROM projects p LEFT JOIN users u ON u.id=p.manager_id WHERE p.id=?",
+        [projectId],
+        "Proyek tidak ditemukan.",
+      );
+      const uniqueIds = Array.from(new Set([
+        ...input.userIds,
+        ...(project.manager_id && ["Project Manager", "Engineer"].includes(String(project.manager_role))
+          ? [String(project.manager_id)]
+          : []),
+      ]));
+      if (uniqueIds.length) {
+        const placeholders = uniqueIds.map(() => "?").join(",");
+        const eligible = await client.execute({
+          sql: `SELECT id FROM users WHERE id IN (${placeholders}) AND role IN ('Project Manager','Engineer') AND status='Aktif'`,
+          args: uniqueIds,
+        });
+        if (eligible.rows.length !== uniqueIds.length) {
+          throw new ApiError(422, "INVALID_PROJECT_MEMBER", "Pilih Project Manager atau Engineer yang aktif.");
+        }
+      }
+      const timestamp = now();
+      await client.batch(
+        [
+          {
+            sql: "DELETE FROM project_members WHERE project_id=? AND user_id IN (SELECT id FROM users WHERE role IN ('Project Manager','Engineer'))",
+            args: [projectId],
+          },
+          ...uniqueIds.map((userId) => ({
+            sql: "INSERT INTO project_members (project_id,user_id,created_at) VALUES (?,?,?) ON CONFLICT (project_id,user_id) DO NOTHING",
+            args: [projectId, userId, timestamp],
+          })),
+        ],
+        "write",
+      );
+      await writeAuditLog(client, request, user, "update_access", "project", projectId, {
+        userIds: uniqueIds,
+      });
+      return ok({ projectId, userIds: uniqueIds });
+    }
+  }
+
   if (projectId && child === "tasks") {
     await assertProjectAccess(user, projectId);
 
@@ -708,8 +863,10 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
           ownerId: row.owner_id,
           start: Math.round((index / count) * 82),
           duration: Math.max(14, Math.round(82 / count) + 4),
-          startLabel: formatDate(row.start_date).replace(/\s+\d{4}$/, ""),
-          endLabel: row.end_date ? formatDate(row.end_date).replace(/\s+\d{4}$/, "") : "Belum diatur",
+          startLabel: localizedApiDate(row.start_date, user.preferredLanguage).replace(/,?\s+\d{4}$/, ""),
+          endLabel: row.end_date
+            ? localizedApiDate(row.end_date, user.preferredLanguage).replace(/,?\s+\d{4}$/, "")
+            : user.preferredLanguage === "en" ? "Not set" : "Belum diatur",
           startDate: row.start_date,
           endDate: row.end_date,
           status: String(row.status),
@@ -789,7 +946,8 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         type: String(row.mime_type).startsWith("image/") ? "image" : "file",
         mimeType: String(row.mime_type),
         size: asNumber(row.size),
-        date: formatDate(row.created_at),
+        date: localizedApiDate(row.created_at, user.preferredLanguage),
+        createdAt: String(row.created_at),
         uploader: String(row.uploader_name),
         preview:
           row.storage_url && /^https?:\/\//.test(String(row.storage_url))
@@ -818,7 +976,7 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
   if (projectId && child === "quotation.pdf" && request.method === "GET") {
     assertAccess(user, "billing", "view");
     await assertProjectAccess(user, projectId);
-    return renderBusinessPdf("quotation", projectId);
+    return renderBusinessPdf("quotation", projectId, user.preferredLanguage);
   }
 
   if (projectId && !child && request.method === "GET") {
@@ -990,7 +1148,7 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
         id: String(row.id),
         name: String(row.name),
         items: asNumber(row.item_count),
-        lastUsed: lastActive(row.updated_at),
+        lastUsed: lastActive(row.updated_at, user.preferredLanguage),
       })));
     }
 
@@ -1097,6 +1255,7 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
     ];
     await client.batch(statements, "write");
     await syncCommercialValues(client, projectId);
+    await resetProjectValidation(client, projectId);
     await writeAuditLog(client, request, user, "replace", "boq", boqId, { projectId, itemCount: input.items.length });
     return ok(await getBoq(projectId));
   }
@@ -1116,6 +1275,7 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
       args: [id, boqId, input.category, input.description, input.quantity, input.unit, input.costPrice, input.sellingPrice, asNumber(count.rows[0]?.count), timestamp, timestamp],
     });
     await syncCommercialValues(client, projectId);
+    await resetProjectValidation(client, projectId);
     await writeAuditLog(client, request, user, "create", "boq_item", id, { projectId });
     return created({ id, ...input });
   }
@@ -1149,6 +1309,7 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
       ],
     });
     await syncCommercialValues(client, projectId);
+    await resetProjectValidation(client, projectId);
     await writeAuditLog(client, request, user, "update", "boq_item", childId, input);
     const updated = await ensureExists(
       "SELECT * FROM boq_items WHERE id=?",
@@ -1187,6 +1348,7 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
     );
     await client.execute({ sql: "DELETE FROM boq_items WHERE id = ?", args: [childId] });
     await syncCommercialValues(client, projectId);
+    await resetProjectValidation(client, projectId);
     await writeAuditLog(client, request, user, "delete", "boq_item", childId, { projectId });
     return noContent();
   }
@@ -1347,6 +1509,7 @@ function mapInvoice(row: Record<string, unknown>) {
     amount: asNumber(row.amount),
     status: String(row.status),
     paidDate: row.paid_date ? formatDate(row.paid_date) : undefined,
+    paidDateIso: row.paid_date ? String(row.paid_date) : undefined,
   };
 }
 
@@ -1445,7 +1608,7 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
   if (invoiceId && action === "pdf" && request.method === "GET") {
     const invoice = await ensureExists("SELECT project_id FROM invoices WHERE id=?", [invoiceId], "Invoice tidak ditemukan.");
     await assertProjectAccess(user, String(invoice.project_id));
-    return renderBusinessPdf("invoice", invoiceId);
+    return renderBusinessPdf("invoice", invoiceId, user.preferredLanguage);
   }
 
   if (invoiceId && action === "payment" && request.method === "POST") {
@@ -1689,7 +1852,7 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
   if (spkId && action === "pdf" && request.method === "GET") {
     const spk = await ensureExists("SELECT project_id FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
     await assertProjectAccess(user, String(spk.project_id));
-    return renderBusinessPdf("spk", spkId);
+    return renderBusinessPdf("spk", spkId, user.preferredLanguage);
   }
 
   if (spkId && action === "status" && request.method === "PATCH") {
@@ -1768,6 +1931,226 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
   throw new ApiError(404, "NOT_FOUND", "Endpoint SPK tidak ditemukan.");
 }
 
+type ValidationRow = Record<string, unknown>;
+
+async function validationBoqItems(projectId: string) {
+  const { client } = await getDatabase();
+  const result = await client.execute({
+    sql: `
+      SELECT i.id,i.category,i.description,i.quantity,i.unit,i.sort_order
+      FROM boq_items i
+      JOIN boqs b ON b.id=i.boq_id
+      WHERE b.project_id=? AND i.category IN ('Perangkat','Material')
+      ORDER BY i.sort_order,i.created_at
+    `,
+    args: [projectId],
+  });
+  return result.rows;
+}
+
+function mapValidation(row: ValidationRow, items: ValidationRow[]) {
+  const mappedItems = items.map((item) => ({
+    id: String(item.id),
+    boqItemId: item.boq_item_id ? String(item.boq_item_id) : undefined,
+    category: String(item.category),
+    description: String(item.description),
+    quantity: asNumber(item.quantity),
+    unit: String(item.unit),
+    checked: Boolean(asNumber(item.checked)),
+    notes: item.notes ? String(item.notes) : "",
+  }));
+  return {
+    id: row.id ? String(row.id) : null,
+    number: row.number ? String(row.number) : null,
+    projectId: String(row.project_id),
+    project: row.project_name ? String(row.project_name) : undefined,
+    client: row.project_client ? String(row.project_client) : undefined,
+    location: row.project_location ? String(row.project_location) : undefined,
+    status: row.status ? String(row.status) : "Draft",
+    notes: row.notes ? String(row.notes) : "",
+    validatedBy: row.validator_name ? String(row.validator_name) : undefined,
+    completedAt: row.completed_at ? String(row.completed_at) : null,
+    items: mappedItems,
+    checkedCount: mappedItems.filter((item) => item.checked).length,
+    totalCount: mappedItems.length,
+  };
+}
+
+async function readValidation(projectId: string) {
+  const { client } = await getDatabase();
+  const result = await client.execute({
+    sql: `
+      SELECT v.*,p.name AS project_name,p.client AS project_client,p.location AS project_location,
+        u.name AS validator_name
+      FROM project_validations v
+      JOIN projects p ON p.id=v.project_id
+      LEFT JOIN users u ON u.id=v.validated_by
+      WHERE v.project_id=? LIMIT 1
+    `,
+    args: [projectId],
+  });
+  const validation = result.rows[0];
+  if (!validation) {
+    const project = await ensureExists(
+      "SELECT id AS project_id,name AS project_name,client AS project_client,location AS project_location FROM projects WHERE id=?",
+      [projectId],
+      "Proyek tidak ditemukan.",
+    );
+    const boqItems = await validationBoqItems(projectId);
+    return mapValidation(
+      { ...project, id: null, number: null, status: "Draft", notes: "" },
+      boqItems.map((item) => ({
+        ...item,
+        id: String(item.id),
+        boq_item_id: item.id,
+        checked: 0,
+        notes: "",
+      })),
+    );
+  }
+  const items = await client.execute({
+    sql: "SELECT * FROM project_validation_items WHERE validation_id=? ORDER BY sort_order,created_at",
+    args: [validation.id],
+  });
+  return mapValidation(validation as ValidationRow, items.rows as ValidationRow[]);
+}
+
+async function ensureValidation(projectId: string, userId: string) {
+  const { client } = await getDatabase();
+  const boqItems = await validationBoqItems(projectId);
+  if (!boqItems.length) {
+    throw new ApiError(
+      409,
+      "VALIDATION_ITEMS_REQUIRED",
+      "BoQ harus memiliki minimal satu Perangkat atau Material sebelum validasi dibuat.",
+    );
+  }
+  const existing = await client.execute({
+    sql: "SELECT id FROM project_validations WHERE project_id=? LIMIT 1",
+    args: [projectId],
+  });
+  const validationId = existing.rows[0]
+    ? String(existing.rows[0].id)
+    : randomUUID();
+  const timestamp = now();
+  if (!existing.rows[0]) {
+    const count = await client.execute("SELECT COUNT(*) AS count FROM project_validations");
+    await client.execute({
+      sql: "INSERT INTO project_validations (id,number,project_id,status,notes,validated_by,completed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+      args: [validationId, makeSequence("VAL", asNumber(count.rows[0]?.count)), projectId, "Draft", "", userId, null, timestamp, timestamp],
+    });
+  }
+  const existingItems = await client.execute({
+    sql: "SELECT boq_item_id FROM project_validation_items WHERE validation_id=?",
+    args: [validationId],
+  });
+  const known = new Set(existingItems.rows.map((item) => String(item.boq_item_id)));
+  const missing = boqItems.filter((item) => !known.has(String(item.id)));
+  if (missing.length) {
+    await client.batch(
+      missing.map((item) => ({
+        sql: "INSERT INTO project_validation_items (id,validation_id,boq_item_id,category,description,quantity,unit,checked,notes,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        args: [randomUUID(), validationId, item.id, item.category, item.description, item.quantity, item.unit, 0, "", item.sort_order, timestamp, timestamp],
+      })),
+      "write",
+    );
+  }
+  return readValidation(projectId);
+}
+
+async function assertCompletedValidation(projectId: string) {
+  const { client } = await getDatabase();
+  const result = await client.execute({
+    sql: "SELECT id FROM project_validations WHERE project_id=? AND status='Completed' LIMIT 1",
+    args: [projectId],
+  });
+  if (!result.rows.length) {
+    throw new ApiError(
+      409,
+      "VALIDATION_REQUIRED",
+      "Selesaikan checklist validasi Perangkat dan Material sebelum BAST diterbitkan.",
+    );
+  }
+}
+
+async function handleValidations(request: Request, path: string[], user: AuthUser) {
+  const { client } = await getDatabase();
+  const validationId = path[1];
+  const action = path[2];
+  const projectId = new URL(request.url).searchParams.get("projectId");
+
+  if (!validationId && request.method === "GET") {
+    if (!projectId) throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
+    await assertProjectAccess(user, projectId);
+    return ok(await readValidation(projectId));
+  }
+
+  if (!validationId && request.method === "POST") {
+    assertAccess(user, "bast", "manage");
+    if (!projectId) throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
+    await assertProjectAccess(user, projectId);
+    const validation = await ensureValidation(projectId, user.id);
+    await writeAuditLog(client, request, user, "create_or_sync", "project_validation", String(validation.id), { projectId });
+    return created(validation);
+  }
+
+  const validation = await ensureExists(
+    "SELECT * FROM project_validations WHERE id=?",
+    [validationId],
+    "Form validasi tidak ditemukan.",
+  );
+  await assertProjectAccess(user, String(validation.project_id));
+
+  if (validationId && action === "pdf" && request.method === "GET") {
+    return renderValidationPdf(validationId, user.preferredLanguage);
+  }
+
+  if (validationId && !action && request.method === "PATCH") {
+    assertAccess(user, "bast", "manage");
+    const input = validationUpdateSchema.parse(await jsonBody(request));
+    const rows = await client.execute({
+      sql: "SELECT id FROM project_validation_items WHERE validation_id=?",
+      args: [validationId],
+    });
+    const allowed = new Set(rows.rows.map((row) => String(row.id)));
+    if (input.items.some((item) => !allowed.has(item.id))) {
+      throw new ApiError(422, "INVALID_VALIDATION_ITEM", "Item validasi tidak sesuai dengan BoQ proyek.");
+    }
+    const timestamp = now();
+    await client.batch(
+      input.items.map((item) => ({
+        sql: "UPDATE project_validation_items SET checked=?,notes=?,updated_at=? WHERE id=? AND validation_id=?",
+        args: [item.checked ? 1 : 0, item.notes, timestamp, item.id, validationId],
+      })),
+      "write",
+    );
+    if (input.status === "Completed") {
+      const incomplete = await client.execute({
+        sql: "SELECT COUNT(*) AS count FROM project_validation_items WHERE validation_id=? AND checked=0",
+        args: [validationId],
+      });
+      const total = await client.execute({
+        sql: "SELECT COUNT(*) AS count FROM project_validation_items WHERE validation_id=?",
+        args: [validationId],
+      });
+      if (!asNumber(total.rows[0]?.count) || asNumber(incomplete.rows[0]?.count)) {
+        throw new ApiError(409, "VALIDATION_INCOMPLETE", "Centang seluruh Perangkat dan Material sebelum validasi diselesaikan.");
+      }
+    }
+    await client.execute({
+      sql: "UPDATE project_validations SET status=?,notes=?,validated_by=?,completed_at=?,updated_at=? WHERE id=?",
+      args: [input.status, input.notes ?? validation.notes ?? "", user.id, input.status === "Completed" ? timestamp : null, timestamp, validationId],
+    });
+    await writeAuditLog(client, request, user, input.status === "Completed" ? "complete" : "update", "project_validation", validationId, {
+      checked: input.items.filter((item) => item.checked).length,
+      total: rows.rows.length,
+    });
+    return ok(await readValidation(String(validation.project_id)));
+  }
+
+  throw new ApiError(404, "NOT_FOUND", "Endpoint validasi tidak ditemukan.");
+}
+
 function mapBast(row: Record<string, unknown>) {
   return {
     id: String(row.id),
@@ -1831,6 +2214,7 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
     if (!mutationRoles("bast").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat membuat BAST.");
     const input = bastSchema.parse(await jsonBody(request));
     await assertProjectAccess(user, input.projectId);
+    await assertCompletedValidation(input.projectId);
     const existing = await client.execute({
       sql: "SELECT id FROM basts WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
       args: [input.projectId],
@@ -1873,7 +2257,7 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
   if (bastId && action === "pdf" && request.method === "GET") {
     const bast = await ensureExists("SELECT project_id FROM basts WHERE id=?", [bastId], "BAST tidak ditemukan.");
     await assertProjectAccess(user, String(bast.project_id));
-    return renderBusinessPdf("bast", bastId);
+    return renderBusinessPdf("bast", bastId, user.preferredLanguage);
   }
 
   if (bastId && !action && request.method === "GET") {
@@ -1887,6 +2271,7 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
     const input = bastSchema.omit({ projectId: true }).partial().parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM basts WHERE id=?", [bastId], "BAST tidak ditemukan.");
     await assertProjectAccess(user, String(current.project_id));
+    if (input.status === "Final") await assertCompletedValidation(String(current.project_id));
     const nextClientSignature =
       input.clientSignature === undefined ? current.client_signature : input.clientSignature;
     const nextEngineerSignature =
@@ -1942,15 +2327,18 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
   throw new ApiError(404, "NOT_FOUND", "Endpoint BAST tidak ditemukan.");
 }
 
-function mapTransaction(row: Record<string, unknown>) {
+function mapTransaction(
+  row: Record<string, unknown>,
+  language: AuthUser["preferredLanguage"] = "id",
+) {
   return {
     id: String(row.id),
-    date: formatDate(row.date),
+    date: localizedApiDate(row.date, language),
     dateIso: String(row.date),
     type: String(row.type),
     projectId: row.project_id ? String(row.project_id) : undefined,
     project: row.project_name ? String(row.project_name) : "Umum",
-    description: String(row.description),
+    description: localizedTransactionDescription(row.description, language),
     amount: asNumber(row.amount),
     source: String(row.source),
   };
@@ -1963,7 +2351,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
 
   if (
     request.method === "GET" &&
-    (!transactionId || transactionId === "report.pdf")
+    (!transactionId || transactionId === "report.pdf" || transactionId === "report.csv")
   ) {
     const searchParams = new URL(request.url).searchParams;
     const projectId = searchParams.get("projectId");
@@ -1996,10 +2384,45 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       args: args as never[],
     });
     const transactions = result.rows.map((row) =>
-      mapTransaction(row as Record<string, unknown>),
+      mapTransaction(row as Record<string, unknown>, user.preferredLanguage),
     );
+    if (transactionId === "report.csv") {
+      const en = user.preferredLanguage === "en";
+      const csvCell = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+      const headers = en
+        ? ["Date", "Type", "Project", "Description", "Source", "Amount (IDR)"]
+        : ["Tanggal", "Jenis", "Proyek", "Deskripsi", "Sumber", "Nominal (IDR)"];
+      const lines = [
+        headers.map(csvCell).join(","),
+        ...transactions.map((transaction) => [
+          transaction.dateIso,
+          en
+            ? transaction.type === "Pemasukan" ? "Income" : "Expense"
+            : transaction.type,
+          en && transaction.project === "Umum" ? "General" : transaction.project,
+          transaction.description,
+          transaction.source,
+          transaction.amount,
+        ].map(csvCell).join(",")),
+      ];
+      const reportDate = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Makassar",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+      return new Response(`\uFEFF${lines.join("\r\n")}`, {
+        headers: {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${en ? "PerumNet-Financial-Report" : "Laporan-Keuangan-PerumNet"}-${reportDate}.csv"`,
+          "Cache-Control": "private, no-store",
+        },
+      });
+    }
     if (transactionId === "report.pdf") {
-      let scopeLabel = "Seluruh proyek yang dapat diakses";
+      let scopeLabel = user.preferredLanguage === "en"
+        ? "All accessible projects"
+        : "Seluruh proyek yang dapat diakses";
       if (projectId) {
         const project = await ensureExists(
           "SELECT code,name FROM projects WHERE id=?",
@@ -2019,6 +2442,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           source: transaction.source,
         })),
         scopeLabel,
+        user.preferredLanguage,
       );
     }
     return ok(transactions);
@@ -2042,7 +2466,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     });
     await writeAuditLog(client, request, user, "create", "transaction", id, input);
     const row = await ensureExists("SELECT t.*,p.name AS project_name FROM transactions t LEFT JOIN projects p ON p.id=t.project_id WHERE t.id=?", [id], "Transaksi tidak ditemukan.");
-    return created(mapTransaction(row as Record<string, unknown>));
+    return created(mapTransaction(row as Record<string, unknown>, user.preferredLanguage));
   }
 
   if (transactionId && request.method === "PATCH") {
@@ -2072,7 +2496,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     });
     await writeAuditLog(client, request, user, "update", "transaction", transactionId, input);
     const row = await ensureExists("SELECT t.*,p.name AS project_name FROM transactions t LEFT JOIN projects p ON p.id=t.project_id WHERE t.id=?", [transactionId], "Transaksi tidak ditemukan.");
-    return ok(mapTransaction(row as Record<string, unknown>));
+    return ok(mapTransaction(row as Record<string, unknown>, user.preferredLanguage));
   }
 
   if (transactionId && request.method === "DELETE") {
@@ -2147,7 +2571,10 @@ async function handleFinance(request: Request, user: AuthUser) {
   });
 }
 
-function mapUser(row: Record<string, unknown>) {
+function mapUser(
+  row: Record<string, unknown>,
+  language: AuthUser["preferredLanguage"] = "id",
+) {
   const role = String(row.role) as UserRole;
   let storedPermissions: Partial<AccessPermissions> | undefined;
   try {
@@ -2163,7 +2590,7 @@ function mapUser(row: Record<string, unknown>) {
     email: String(row.email),
     role,
     status: String(row.status),
-    lastActive: lastActive(row.last_active_at),
+    lastActive: lastActive(row.last_active_at, language),
     permissions: normalizePermissions(role, storedPermissions),
   };
 }
@@ -2187,7 +2614,7 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
       LEFT JOIN user_permissions up ON up.user_id=u.id
       ORDER BY u.status,u.name
     `);
-    return ok(result.rows.map((row) => mapUser(row as Record<string, unknown>)));
+    return ok(result.rows.map((row) => mapUser(row as Record<string, unknown>, user.preferredLanguage)));
   }
 
   if (request.method === "POST" && !userId) {
@@ -2224,7 +2651,7 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
       email: input.email,
       role: input.role,
       status: input.status,
-      lastActive: "Belum pernah",
+      lastActive: user.preferredLanguage === "en" ? "Never" : "Belum pernah",
       permissions,
     });
   }
@@ -2288,7 +2715,7 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
       [userId],
       "Pengguna tidak ditemukan.",
     );
-    return ok(mapUser(updated as Record<string, unknown>));
+    return ok(mapUser(updated as Record<string, unknown>, user.preferredLanguage));
   }
 
   if (userId && request.method === "DELETE") {
@@ -2576,6 +3003,9 @@ export async function dispatchApi(request: Request, path: string[]) {
   if (resource === "auth") return handleAuth(request, path);
 
   const user = await requireUser(request);
+  if (resource === "system" && path[1] === "time" && request.method === "GET") {
+    return ok({ now: now(), timeZone: "Asia/Makassar" }, 200, { "Cache-Control": "no-store" });
+  }
   const accessModule = resourceModules[resource];
   if (accessModule) {
     if (request.method === "GET" || request.method === "HEAD") {
@@ -2592,6 +3022,7 @@ export async function dispatchApi(request: Request, path: string[]) {
   if (resource === "vendors") return handleVendors(request, path, user);
   if (resource === "spks") return handleSpks(request, path, user);
   if (resource === "bast") return handleBast(request, path, user);
+  if (resource === "validations") return handleValidations(request, path, user);
   if (resource === "transactions") return handleTransactions(request, path, user);
   if (resource === "finance" && path[1] === "summary") return handleFinance(request, user);
   if (resource === "users") return handleUsers(request, path, user);
