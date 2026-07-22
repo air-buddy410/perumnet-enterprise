@@ -1,5 +1,8 @@
-import { EnterpriseApp } from "./components/enterprise-app";
+import { HomePage } from "./components/cms-public";
+import { getCmsContent } from "@/server/cms";
 
-export default function Home() {
-  return <EnterpriseApp />;
+export const dynamic = "force-dynamic";
+
+export default async function Page() {
+  return <HomePage content={await getCmsContent()} />;
 }

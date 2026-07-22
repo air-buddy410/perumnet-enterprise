@@ -292,12 +292,186 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 CREATE INDEX IF NOT EXISTS audit_logs_entity_idx ON audit_logs(entity, entity_id);
 CREATE INDEX IF NOT EXISTS audit_logs_created_idx ON audit_logs(created_at);
+
+CREATE TABLE IF NOT EXISTS cms_site_texts (
+  id TEXT PRIMARY KEY,
+  page_key TEXT NOT NULL,
+  content_key TEXT NOT NULL,
+  value_content TEXT NOT NULL,
+  updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS cms_site_texts_key_unique
+  ON cms_site_texts(page_key, content_key);
+
+CREATE TABLE IF NOT EXISTS cms_services (
+  id TEXT PRIMARY KEY,
+  slug TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  description TEXT NOT NULL,
+  features_json TEXT NOT NULL DEFAULT '[]',
+  icon TEXT NOT NULL DEFAULT 'wifi',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_published INTEGER NOT NULL DEFAULT 1 CHECK (is_published IN (0, 1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cms_portfolios (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL,
+  image_url TEXT,
+  image_storage_url TEXT,
+  image_mime_type TEXT,
+  location TEXT,
+  completed_at TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_published INTEGER NOT NULL DEFAULT 1 CHECK (is_published IN (0, 1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cms_testimonials (
+  id TEXT PRIMARY KEY,
+  client_name TEXT NOT NULL,
+  company_name TEXT,
+  review TEXT NOT NULL,
+  is_visible INTEGER NOT NULL DEFAULT 1 CHECK (is_visible IN (0, 1)),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cms_pages (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  slug TEXT NOT NULL UNIQUE,
+  excerpt TEXT,
+  content TEXT NOT NULL,
+  is_published INTEGER NOT NULL DEFAULT 0 CHECK (is_published IN (0, 1)),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cms_site_settings (
+  id TEXT PRIMARY KEY,
+  key_name TEXT NOT NULL UNIQUE,
+  value_content TEXT NOT NULL,
+  updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TEXT NOT NULL
+);
 `;
 
 const now = "2026-07-18T06:00:00.000Z";
 
 function statement(sql: string, args: unknown[] = []): DatabaseStatement {
   return { sql, args };
+}
+
+async function ensureCmsSeed(client: DatabaseClient) {
+  const existing = await client.execute("SELECT id FROM cms_site_settings LIMIT 1");
+  if (existing.rows.length) return;
+
+  const timestamp = new Date().toISOString();
+  const statements: DatabaseStatement[] = [];
+  const settings = [
+    ["company_name", "PerumNet Enterprise"],
+    ["company_tagline", "Konsultan IT untuk operasional yang lebih andal"],
+    ["whatsapp_number", "6285333521369"],
+    ["email", "it@perumnet.id"],
+    ["phone", "+62 853-3352-1369"],
+    ["address", "BTN Kecicang Indah Blok A5, Bungaya Kangin, Karangasem, Bali 80813"],
+    ["instagram_url", "https://instagram.com/perumnet.id"],
+    ["linkedin_url", ""],
+    ["cta_text", "Konsultasikan Kebutuhan Anda"],
+    ["business_hours", "Senin–Minggu · 24/7 support"],
+  ];
+  for (const [key, value] of settings) {
+    statements.push(statement(
+      "INSERT INTO cms_site_settings (id,key_name,value_content,updated_at) VALUES (?,?,?,?)",
+      [`cms-setting-${key}`, key, value, timestamp],
+    ));
+  }
+
+  const texts = [
+    ["home", "hero_eyebrow", "SOLUSI IT TERINTEGRASI · BALI"],
+    ["home", "hero_title", "Infrastruktur IT yang bekerja tanpa hambatan."],
+    ["home", "hero_description", "PerumNet Enterprise merancang, memasang, dan merawat jaringan WiFi, CCTV, serta IP PABX agar bisnis Anda selalu terhubung, aman, dan siap bertumbuh."],
+    ["home", "about_eyebrow", "PARTNER TEKNOLOGI ANDA"],
+    ["home", "about_title", "Satu tim untuk seluruh kebutuhan infrastruktur."],
+    ["home", "about_description", "Kami menggabungkan konsultasi, instalasi, dokumentasi, dan dukungan berkelanjutan dalam satu layanan yang mudah dipantau."],
+    ["home", "services_title", "Solusi yang dibangun untuk kebutuhan nyata."],
+    ["home", "services_description", "Dari koneksi tamu hingga keamanan area dan komunikasi internal, setiap sistem dirancang untuk stabil sejak hari pertama."],
+    ["home", "portfolio_title", "Pekerjaan rapi. Hasil yang terukur."],
+    ["home", "testimonials_title", "Dipercaya untuk menjaga operasional tetap berjalan."],
+    ["home", "closing_title", "Mulai dari survei lokasi, kami bantu sampai sistem siap digunakan."],
+    ["services", "page_title", "Infrastruktur yang siap mengikuti ritme bisnis Anda."],
+    ["services", "page_description", "Layanan konsultasi, instalasi, integrasi, dan pemeliharaan untuk jaringan WiFi, CCTV, dan IP PABX."],
+    ["portfolio", "page_title", "Pilihan proyek yang kami selesaikan bersama klien."],
+    ["portfolio", "page_description", "Setiap proyek dimulai dari kebutuhan lapangan dan ditutup dengan dokumentasi yang jelas."],
+    ["testimonials", "page_title", "Cerita dari bisnis yang bertumbuh bersama sistem yang lebih baik."],
+    ["testimonials", "page_description", "Ulasan klien tentang proses kerja, respons tim, dan hasil implementasi PerumNet Enterprise."],
+    ["contact", "page_title", "Mari bicarakan kebutuhan IT Anda."],
+    ["contact", "page_description", "Ceritakan lokasi, tantangan, dan target Anda. Tim kami akan membantu menentukan langkah pertama yang paling tepat."],
+  ];
+  texts.forEach(([pageKey, contentKey, value], index) => {
+    statements.push(statement(
+      "INSERT INTO cms_site_texts (id,page_key,content_key,value_content,updated_at) VALUES (?,?,?,?,?)",
+      [`cms-text-${index + 1}`, pageKey, contentKey, value, timestamp],
+    ));
+  });
+
+  const services = [
+    ["cms-service-wifi", "managed-wifi", "Managed WiFi", "WiFi stabil, aman, dan mudah dikelola untuk kantor, hotel, sekolah, dan area publik.", "Kami merancang cakupan, kapasitas, segmentasi jaringan, dan monitoring agar setiap pengguna mendapat pengalaman koneksi yang konsisten.", "[\"Site survey & heatmap\",\"Managed access point\",\"Guest WiFi & captive portal\",\"Monitoring dan dukungan\"]", "wifi", 1],
+    ["cms-service-cctv", "cctv", "CCTV & Surveillance", "Sistem pengawasan yang memberi visibilitas jelas dari lokasi maupun jarak jauh.", "Mulai dari penempatan kamera hingga retensi rekaman dan akses mobile, sistem CCTV disusun sesuai risiko dan alur aktivitas lokasi.", "[\"IP camera & NVR\",\"Remote monitoring\",\"Smart detection\",\"Preventive maintenance\"]", "camera", 2],
+    ["cms-service-pabx", "ip-pabx", "IP PABX", "Komunikasi internal yang profesional, fleksibel, dan siap berkembang bersama tim.", "Kami mengintegrasikan extension, IVR, call routing, dan perangkat IP phone agar komunikasi pelanggan dan tim berjalan lebih efisien.", "[\"Extension planning\",\"IVR & call routing\",\"IP phone provisioning\",\"Call recording option\"]", "phone", 3],
+  ];
+  for (const row of services) {
+    statements.push(statement(
+      "INSERT INTO cms_services (id,slug,title,summary,description,features_json,icon,sort_order,is_published,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,1,?,?)",
+      [...row, timestamp, timestamp],
+    ));
+  }
+
+  const portfolios = [
+    ["cms-portfolio-wifi", "Managed WiFi Hospitality", "Penataan ulang jaringan dan access point untuk koneksi tamu yang konsisten di seluruh area properti.", "/portfolio/network-rack.jpg", "Ubud, Gianyar", "2026-05-28", 1],
+    ["cms-portfolio-cctv", "CCTV Area Komersial", "Implementasi kamera IP, NVR, dan akses monitoring untuk area operasional dan parkir.", "/portfolio/cctv.jpg", "Denpasar, Bali", "2026-04-16", 2],
+    ["cms-portfolio-pabx", "IP PABX Kantor Cabang", "Sistem extension dan call routing yang menyatukan komunikasi antar divisi dan kantor cabang.", "/portfolio/ip-phone.jpg", "Karangasem, Bali", "2026-03-11", 3],
+  ];
+  for (const row of portfolios) {
+    statements.push(statement(
+      "INSERT INTO cms_portfolios (id,title,description,image_url,location,completed_at,sort_order,is_published,created_at,updated_at) VALUES (?,?,?,?,?,?,?,1,?,?)",
+      [...row, timestamp, timestamp],
+    ));
+  }
+
+  const testimonials = [
+    ["cms-testimonial-1", "Made Wirawan", "Bali Serenity Hospitality", "Tim PerumNet memahami kebutuhan operasional kami, bekerja rapi, dan responsif bahkan setelah instalasi selesai.", 1],
+    ["cms-testimonial-2", "Ayu Lestari", "Koperasi Dharma Bali", "Monitoring jaringan kini jauh lebih mudah. Dokumentasi lengkap dan tim kami mendapat penjelasan yang mudah dipahami.", 2],
+    ["cms-testimonial-3", "Gede Pranata", "Aruna Workspace", "Proses survei sampai serah terima jelas. Sistem CCTV dan WiFi berjalan stabil sesuai kebutuhan area kami.", 3],
+  ];
+  for (const row of testimonials) {
+    statements.push(statement(
+      "INSERT INTO cms_testimonials (id,client_name,company_name,review,is_visible,sort_order,created_at,updated_at) VALUES (?,?,?,?,1,?,?,?)",
+      [...row, timestamp, timestamp],
+    ));
+  }
+
+  const pages = [
+    ["cms-page-about", "Tentang Kami", "tentang-kami", "Mengenal PerumNet Enterprise dan cara kami bekerja.", "PerumNet Enterprise adalah konsultan IT berbasis di Bali yang membantu bisnis merancang, memasang, dan menjaga infrastruktur teknologi agar selalu siap digunakan.\n\nKami percaya pekerjaan teknis yang baik harus terasa sederhana bagi pengguna: kebutuhan dipetakan dengan jelas, instalasi terdokumentasi, dan dukungan mudah dihubungi saat diperlukan.", 1, 5],
+    ["cms-page-careers", "Karier", "karier", "Bergabung dengan tim teknis PerumNet Enterprise.", "Kami selalu terbuka untuk bertemu talenta yang menyukai pekerjaan lapangan, teknologi jaringan, dan pelayanan yang rapi.", 0, 6],
+  ];
+  for (const row of pages) {
+    statements.push(statement(
+      "INSERT INTO cms_pages (id,title,slug,excerpt,content,is_published,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+      [...row, timestamp, timestamp],
+    ));
+  }
+
+  await client.batch(statements, "write");
 }
 
 async function ensureBastEngineerRoleColumn(client: DatabaseClient) {
@@ -318,6 +492,7 @@ async function ensureBastEngineerRoleColumn(client: DatabaseClient) {
 export async function initializeDatabase(client: DatabaseClient) {
   await client.executeMultiple(schemaSql);
   await ensureBastEngineerRoleColumn(client);
+  await ensureCmsSeed(client);
 
   const existing = await client.execute("SELECT id FROM users LIMIT 1");
   if (existing.rows.length) return;

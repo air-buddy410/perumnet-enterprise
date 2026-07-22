@@ -6,26 +6,31 @@ export const metadata: Metadata = {
   metadataBase: new URL(
     process.env.APP_URL
       ? new URL(process.env.APP_URL).origin
-      : "https://perumnet-enterprise.vercel.app",
+      : "https://enterprise.perumnet.com",
   ),
-  title: "PerumNet Enterprise — Project Operations",
+  title: {
+    default: "PerumNet Enterprise — Konsultan IT Bali",
+    template: "%s — PerumNet Enterprise",
+  },
   description:
-    "Mini ERP untuk pengelolaan proyek, penawaran, invoice, vendor, BAST, dan pembukuan PerumNet Enterprise.",
+    "Konsultan IT untuk Managed WiFi, CCTV, dan IP PABX di Bali. Dari survei, instalasi, hingga dukungan operasional.",
   icons: {
     icon: appPath("/favicon.png"),
     shortcut: appPath("/favicon.png"),
     apple: appPath("/perumnet-mark.png"),
   },
   openGraph: {
-    title: "PerumNet Enterprise",
-    description: "Operasional proyek IT dalam satu sistem yang terukur.",
+    title: "PerumNet Enterprise — Konsultan IT Bali",
+    description: "Managed WiFi, CCTV, dan IP PABX yang dirancang untuk operasional bisnis modern.",
+    url: "/",
+    siteName: "PerumNet Enterprise",
     type: "website",
     images: [appPath("/og.png")],
   },
   twitter: {
     card: "summary_large_image",
-    title: "PerumNet Enterprise",
-    description: "Operasional proyek IT dalam satu sistem yang terukur.",
+    title: "PerumNet Enterprise — Konsultan IT Bali",
+    description: "Managed WiFi, CCTV, dan IP PABX yang dirancang untuk operasional bisnis modern.",
     images: [appPath("/og.png")],
   },
 };

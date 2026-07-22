@@ -403,3 +403,86 @@ export const auditLogs = sqliteTable(
     index("audit_logs_created_idx").on(table.createdAt),
   ],
 );
+
+export const cmsSiteTexts = sqliteTable(
+  "cms_site_texts",
+  {
+    id: text("id").primaryKey(),
+    pageKey: text("page_key").notNull(),
+    contentKey: text("content_key").notNull(),
+    valueContent: text("value_content").notNull(),
+    updatedBy: text("updated_by").references(() => users.id, { onDelete: "set null" }),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("cms_site_texts_key_unique").on(table.pageKey, table.contentKey),
+  ],
+);
+
+export const cmsServices = sqliteTable(
+  "cms_services",
+  {
+    id: text("id").primaryKey(),
+    slug: text("slug").notNull(),
+    title: text("title").notNull(),
+    summary: text("summary").notNull(),
+    description: text("description").notNull(),
+    featuresJson: text("features_json").notNull().default("[]"),
+    icon: text("icon").notNull().default("wifi"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    isPublished: integer("is_published").notNull().default(1),
+    ...timestamps,
+  },
+  (table) => [uniqueIndex("cms_services_slug_unique").on(table.slug)],
+);
+
+export const cmsPortfolios = sqliteTable("cms_portfolios", {
+  id: text("id").primaryKey(),
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  imageUrl: text("image_url"),
+  imageStorageUrl: text("image_storage_url"),
+  imageMimeType: text("image_mime_type"),
+  location: text("location"),
+  completedAt: text("completed_at"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  isPublished: integer("is_published").notNull().default(1),
+  ...timestamps,
+});
+
+export const cmsTestimonials = sqliteTable("cms_testimonials", {
+  id: text("id").primaryKey(),
+  clientName: text("client_name").notNull(),
+  companyName: text("company_name"),
+  review: text("review").notNull(),
+  isVisible: integer("is_visible").notNull().default(1),
+  sortOrder: integer("sort_order").notNull().default(0),
+  ...timestamps,
+});
+
+export const cmsPages = sqliteTable(
+  "cms_pages",
+  {
+    id: text("id").primaryKey(),
+    title: text("title").notNull(),
+    slug: text("slug").notNull(),
+    excerpt: text("excerpt"),
+    content: text("content").notNull(),
+    isPublished: integer("is_published").notNull().default(0),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps,
+  },
+  (table) => [uniqueIndex("cms_pages_slug_unique").on(table.slug)],
+);
+
+export const cmsSiteSettings = sqliteTable(
+  "cms_site_settings",
+  {
+    id: text("id").primaryKey(),
+    keyName: text("key_name").notNull(),
+    valueContent: text("value_content").notNull(),
+    updatedBy: text("updated_by").references(() => users.id, { onDelete: "set null" }),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [uniqueIndex("cms_site_settings_key_unique").on(table.keyName)],
+);
