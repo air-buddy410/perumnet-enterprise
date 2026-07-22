@@ -542,7 +542,11 @@ async function syncSpkTransaction(
 
 async function sendResetEmail(email: string, token: string) {
   if (!process.env.RESEND_API_KEY) return false;
-  const baseUrl = (process.env.APP_URL ?? "http://localhost:3000").replace(/\/+$/, "");
+  const appOrigin = new URL(process.env.APP_URL ?? "http://localhost:3000").origin;
+  const resetUrl = new URL(
+    applicationPath(`/?resetToken=${encodeURIComponent(token)}`),
+    appOrigin,
+  ).toString();
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -553,7 +557,7 @@ async function sendResetEmail(email: string, token: string) {
       from: process.env.EMAIL_FROM ?? "PerumNet Enterprise <noreply@perumnet.id>",
       to: [email],
       subject: "Pemulihan kata sandi PerumNet Enterprise",
-      html: `<p>Gunakan tautan berikut dalam 30 menit untuk mengatur ulang kata sandi:</p><p><a href="${baseUrl}/?resetToken=${encodeURIComponent(token)}">Atur ulang kata sandi</a></p>`,
+      html: `<p>Gunakan tautan berikut dalam 30 menit untuk mengatur ulang kata sandi:</p><p><a href="${resetUrl}">Atur ulang kata sandi</a></p>`,
     }),
   });
   if (!response.ok) console.error("Gagal mengirim email reset:", await response.text());

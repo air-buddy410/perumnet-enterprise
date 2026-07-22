@@ -3,7 +3,11 @@ import "./globals.css";
 import { appPath } from "./paths";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.APP_URL ?? "https://perumnet-enterprise.vercel.app"),
+  metadataBase: new URL(
+    process.env.APP_URL
+      ? new URL(process.env.APP_URL).origin
+      : "https://perumnet-enterprise.vercel.app",
+  ),
   title: "PerumNet Enterprise — Project Operations",
   description:
     "Mini ERP untuk pengelolaan proyek, penawaran, invoice, vendor, BAST, dan pembukuan PerumNet Enterprise.",
