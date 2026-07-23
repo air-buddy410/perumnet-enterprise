@@ -266,6 +266,7 @@ html {
   min-width: 320px;
   overflow-x: hidden;
   scroll-behavior: smooth;
+  scroll-padding-top: 96px;
 }
 
 body {
@@ -275,7 +276,7 @@ body {
   background: var(--background);
   color: var(--ink);
   font-family: "DM Sans", Arial, sans-serif;
-  font-size: 14px;
+  font-size: 15px;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }

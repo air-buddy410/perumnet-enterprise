@@ -322,7 +322,7 @@ export function BillingView({
             </div>
             <article className="document-preview">
               <header className="document-letterhead">
-                <img src={appPath("/perumnet-enterprise-logo.png")} alt="PerumNet Enterprise" width={126} height={132} />
+                <img src={appPath("/perumnet-enterprise-brand.png")} alt="PerumNet Enterprise" width={126} height={132} />
                 <div>
                   <strong>PERUMNET ENTERPRISE</strong>
                   <span>{id ? "Konsultan IT & Managed Services" : "IT Consulting & Managed Services"}</span>

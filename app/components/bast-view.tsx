@@ -327,7 +327,7 @@ export function BastView({
         <div className="bast-main">
           <article className="panel bast-document">
             <header className="bast-letterhead">
-              <img src={appPath("/perumnet-enterprise-logo.png")} alt="PerumNet Enterprise" width={120} height={126} />
+              <img src={appPath("/perumnet-enterprise-brand.png")} alt="PerumNet Enterprise" width={120} height={126} />
               <div><strong>PERUMNET ENTERPRISE</strong><span>{id ? "Konsultan IT & Managed Services" : "IT Consulting & Managed Services"}</span><small>Gianyar, Bali · it@perumnet.id</small></div>
               <span className="status-badge info"><ShieldCheck size={14} /> {bastStatus}</span>
             </header>

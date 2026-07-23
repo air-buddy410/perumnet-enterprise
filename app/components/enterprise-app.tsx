@@ -124,7 +124,7 @@ function SidebarNavigation({
   return (
     <>
       <div className="sidebar-brand">
-        <img src={appPath("/perumnet-mark.png")} alt="" width={42} height={42} />
+        <img src={appPath("/perumnet-enterprise-brand.png")} alt="" width={42} height={42} />
         <div><strong>PerumNet</strong><span>Enterprise</span></div>
         <button className="icon-button sidebar-close" type="button" aria-label={language === "id" ? "Tutup navigasi" : "Close navigation"} onClick={onClose}><X size={18} /></button>
       </div>
@@ -292,7 +292,7 @@ export function EnterpriseApp() {
   }
 
   if (checkingSession) {
-    return <main className="auth-shell"><section className="auth-form-panel"><div className="auth-form-wrap"><img src={appPath("/perumnet-enterprise-logo.png")} alt="PerumNet Enterprise" width={190} height={200} /><p>{translate(language, "loading")}</p></div></section></main>;
+    return <main className="auth-shell"><section className="auth-form-panel"><div className="auth-form-wrap"><img src={appPath("/perumnet-enterprise-brand.png")} alt="PerumNet Enterprise" width={190} height={200} /><p>{translate(language, "loading")}</p></div></section></main>;
   }
 
   if (!user) {

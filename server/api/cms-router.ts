@@ -19,6 +19,27 @@ import {
 const shortText = z.string().trim().min(1).max(180);
 const longText = z.string().trim().min(1).max(8_000);
 const optionalText = z.string().trim().max(1_000).optional().default("");
+const externalUrl = z.string().trim().max(500).refine((value) => {
+  if (!value) return true;
+  try {
+    return ["http:", "https:"].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}, "URL harus menggunakan http atau https.");
+
+const siteSettingsSchema = z.object({
+  company_name: z.string().trim().min(1).max(180),
+  company_tagline: z.string().trim().min(1).max(300),
+  whatsapp_number: z.string().trim().regex(/^(?:0|62)\d{9,14}$/, "Nomor WhatsApp belum valid."),
+  email: z.string().trim().email().max(254),
+  phone: z.string().trim().min(6).max(50),
+  address: z.string().trim().min(4).max(1_000),
+  instagram_url: externalUrl,
+  linkedin_url: externalUrl,
+  cta_text: z.string().trim().min(1).max(180),
+  business_hours: z.string().trim().min(1).max(180),
+}).partial().strict();
 
 const serviceSchema = z.object({
   slug: z.string().trim().min(2).max(100).optional(),
@@ -117,7 +138,7 @@ async function updateTexts(request: Request, user: AuthUser) {
 
 async function updateSettings(request: Request, user: AuthUser) {
   const input = z.object({
-    settings: z.record(z.string().min(1).max(100), z.string().trim().max(2_000)),
+    settings: siteSettingsSchema,
   }).parse(await jsonBody(request));
   const { client } = await getDatabase();
   const timestamp = new Date().toISOString();

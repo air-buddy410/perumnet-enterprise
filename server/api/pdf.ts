@@ -148,7 +148,7 @@ function splitText(doc: jsPDF, value: unknown, width: number) {
 
 async function loadLogo() {
   logoDataPromise ??= readFile(
-    join(process.cwd(), "public", "perumnet-enterprise-logo.png"),
+    join(process.cwd(), "public", "perumnet-enterprise-brand.png"),
   )
     .then((buffer) => `data:image/png;base64,${buffer.toString("base64")}`)
     .catch(() => undefined);
@@ -218,7 +218,7 @@ function drawHeader(context: PdfContext, continuation = false) {
         6.5,
         13,
         14,
-        "perumnet-enterprise-logo",
+        "perumnet-enterprise-brand",
         "FAST",
       );
     } catch {

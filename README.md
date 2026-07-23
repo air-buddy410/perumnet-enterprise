@@ -29,8 +29,9 @@ PostgreSQL:
 ```bash
 DATABASE_URL=postgresql://user:password@127.0.0.1:5432/perumnet_enterprise
 UPLOAD_DIR=/var/lib/perumnet-enterprise/uploads
-NEXT_PUBLIC_BASE_PATH=/admin
-APP_URL=https://enterprise.perumnet.id/admin
+NEXT_PUBLIC_BASE_PATH=
+APP_URL=https://enterprise.perumnet.com
+APP_ALLOWED_ORIGINS=https://enterprise.perumnet.id
 SEED_ADMIN_PASSWORD=kata-sandi-awal-yang-kuat
 ```
 

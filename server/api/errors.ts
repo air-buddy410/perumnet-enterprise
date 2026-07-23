@@ -80,8 +80,23 @@ export function assertSameOrigin(request: Request) {
   if (!origin) return;
 
   const requestOrigin = new URL(request.url).origin;
-  const allowedOrigin = process.env.APP_URL ? new URL(process.env.APP_URL).origin : requestOrigin;
-  if (origin !== requestOrigin && origin !== allowedOrigin) {
+  const allowedOrigins = new Set([requestOrigin]);
+  const configuredOrigins = [
+    process.env.APP_URL,
+    ...(process.env.APP_ALLOWED_ORIGINS?.split(",") ?? []),
+  ];
+
+  for (const configuredOrigin of configuredOrigins) {
+    const value = configuredOrigin?.trim();
+    if (!value) continue;
+    try {
+      allowedOrigins.add(new URL(value).origin);
+    } catch {
+      console.error(`Origin aplikasi tidak valid: ${value}`);
+    }
+  }
+
+  if (!allowedOrigins.has(origin)) {
     throw new ApiError(403, "INVALID_ORIGIN", "Request ditolak karena origin tidak sesuai.");
   }
 }

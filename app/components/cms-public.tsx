@@ -15,12 +15,17 @@ import {
   Sparkles,
   Wifi,
 } from "lucide-react";
+import { FaLinkedinIn } from "react-icons/fa6";
+import { SiInstagram } from "react-icons/si";
 import type {
   CmsContent,
   CmsPortfolio,
   CmsService,
   CmsTestimonial,
 } from "@/server/cms";
+import { PublicMobileMenu } from "./public-mobile-menu";
+import { PublicNavLink } from "./public-nav-link";
+import { PublicPortfolioImage } from "./public-portfolio-image";
 import styles from "../site.module.css";
 
 const serviceIcons = {
@@ -36,15 +41,20 @@ function text(content: CmsContent, page: string, key: string, fallback: string) 
 }
 
 function waLink(content: CmsContent, message?: string) {
-  const number = (content.settings.whatsapp_number || "6285333521369").replace(/\D/g, "");
+  const rawNumber = (content.settings.whatsapp_number || "085155026889").replace(/\D/g, "");
+  const number = rawNumber.startsWith("0") ? `62${rawNumber.slice(1)}` : rawNumber;
   const greeting = message || "Halo PerumNet Enterprise, saya ingin berkonsultasi mengenai kebutuhan IT.";
   return `https://wa.me/${number}?text=${encodeURIComponent(greeting)}`;
+}
+
+function mapsLink(content: CmsContent) {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(content.settings.address || "Karangasem, Bali")}`;
 }
 
 function Brand() {
   return (
     <Link href="/" className={styles.brand} aria-label="PerumNet Enterprise — Beranda">
-      <img src="/perumnet-mark.png" alt="" width="46" height="46" />
+      <img src="/perumnet-enterprise-brand.png" alt="" width="54" height="54" />
       <span>
         <strong>PERUMNET ENTERPRISE</strong>
         <small>KONSULTAN IT</small>
@@ -62,40 +72,36 @@ export function PublicShell({
   active?: string;
   children: React.ReactNode;
 }) {
+  const onLandingPage = active === "home";
   const nav = [
-    { href: "/", label: "Beranda", key: "home" },
-    { href: "/services", label: "Layanan", key: "services" },
-    { href: "/portfolio", label: "Portofolio", key: "portfolio" },
-    { href: "/testimonials", label: "Testimoni", key: "testimonials" },
+    { href: onLandingPage ? "#top" : "/", label: "Beranda", key: "home" },
+    { href: onLandingPage ? "#layanan" : "/services", label: "Layanan", key: "services" },
+    { href: onLandingPage ? "#portofolio" : "/portfolio", label: "Portofolio", key: "portfolio" },
+    { href: onLandingPage ? "#testimoni" : "/testimonials", label: "Testimoni", key: "testimonials" },
     ...content.pages.map((page) => ({ href: `/${page.slug}`, label: page.title, key: page.slug })),
     { href: "/contact", label: "Kontak", key: "contact" },
   ];
   return (
-    <div className={styles.siteRoot}>
+    <div className={styles.siteRoot} id="top">
       <header className={styles.header}>
         <div className={styles.navWrap}>
           <Brand />
           <nav className={styles.desktopNav} aria-label="Navigasi utama">
             {nav.map((item) => (
-              <Link
+              <PublicNavLink
                 href={item.href}
                 key={item.key}
                 className={active === item.key ? styles.activeNav : undefined}
+                current={active === item.key}
               >
                 {item.label}
-              </Link>
+              </PublicNavLink>
             ))}
           </nav>
           <a className={styles.headerCta} href={waLink(content)} target="_blank" rel="noreferrer">
             <MessageCircle size={17} /> Hubungi Kami
           </a>
-          <details className={styles.mobileMenu}>
-            <summary aria-label="Buka menu"><span /><span /><span /></summary>
-            <nav aria-label="Navigasi seluler">
-              {nav.map((item) => <Link href={item.href} key={item.key}>{item.label}</Link>)}
-              <a href={waLink(content)} target="_blank" rel="noreferrer">WhatsApp <ArrowRight size={16} /></a>
-            </nav>
-          </details>
+          <PublicMobileMenu items={nav} whatsappUrl={waLink(content)} />
         </div>
       </header>
       <main>{children}</main>
@@ -105,30 +111,29 @@ export function PublicShell({
             <Brand />
             <p>{content.settings.company_tagline || "Konsultan IT untuk operasional yang lebih andal"}</p>
             <div className={styles.socials}>
-              {content.settings.instagram_url && <a href={content.settings.instagram_url} aria-label="Instagram" target="_blank" rel="noreferrer"><span aria-hidden="true">IG</span></a>}
-              {content.settings.linkedin_url && <a href={content.settings.linkedin_url} aria-label="LinkedIn" target="_blank" rel="noreferrer"><span aria-hidden="true">in</span></a>}
+              {content.settings.instagram_url && <a href={content.settings.instagram_url} aria-label="Instagram PerumNet" target="_blank" rel="noreferrer"><SiInstagram size={18} aria-hidden="true" /></a>}
+              {content.settings.linkedin_url && <a href={content.settings.linkedin_url} aria-label="LinkedIn PerumNet" target="_blank" rel="noreferrer"><FaLinkedinIn size={18} aria-hidden="true" /></a>}
             </div>
           </div>
           <div>
             <h3>Jelajahi</h3>
-            <ul>{nav.slice(0, 5).map((item) => <li key={item.key}><Link href={item.href}>{item.label}</Link></li>)}</ul>
+            <ul>{nav.slice(0, 5).map((item) => <li key={item.key}><PublicNavLink href={item.href}>{item.label}</PublicNavLink></li>)}</ul>
           </div>
           <div>
             <h3>Layanan</h3>
-            <ul>{content.services.map((service) => <li key={service.id}><Link href="/services">{service.title}</Link></li>)}</ul>
+            <ul>{content.services.map((service) => <li key={service.id}><Link href={`/services#${service.slug}`}>{service.title}</Link></li>)}</ul>
           </div>
           <div>
             <h3>Kontak</h3>
             <ul className={styles.contactList}>
-              <li><MapPin size={17} /> <span>{content.settings.address}</span></li>
+              <li><MapPin size={17} /> <a href={mapsLink(content)} target="_blank" rel="noreferrer">{content.settings.address}</a></li>
               <li><Mail size={17} /> <a href={`mailto:${content.settings.email}`}>{content.settings.email}</a></li>
-              <li><Phone size={17} /> <span>{content.settings.phone}</span></li>
+              <li><Phone size={17} /> <a href={waLink(content)} target="_blank" rel="noreferrer">{content.settings.phone}</a></li>
             </ul>
           </div>
         </div>
         <div className={styles.footerBottom}>
-          <span>© {new Date().getFullYear()} PerumNet Enterprise</span>
-          <span>Dirancang untuk koneksi yang lebih baik.</span>
+          <span>PerumNet Enterprise © 2026 PerumNet Enterprise. All Rights Reserved.</span>
           <Link href="/panel">Panel CMS</Link>
         </div>
       </footer>
@@ -142,12 +147,12 @@ export function PublicShell({
 export function ServiceCard({ service, index = 0 }: { service: CmsService; index?: number }) {
   const Icon = serviceIcons[service.icon as keyof typeof serviceIcons] || Network;
   return (
-    <article className={styles.serviceCard}>
+    <Link className={styles.serviceCard} href={`/services#${service.slug}`} aria-label={`Pelajari layanan ${service.title}`}>
       <div className={styles.cardTopline}><span>0{index + 1}</span><Icon size={26} /></div>
       <h3>{service.title}</h3>
       <p>{service.summary}</p>
       <span className={styles.cardLink}>Pelajari layanan <ArrowRight size={16} /></span>
-    </article>
+    </Link>
   );
 }
 
@@ -155,7 +160,7 @@ export function PortfolioCard({ item }: { item: CmsPortfolio }) {
   return (
     <article className={styles.portfolioCard}>
       <div className={styles.portfolioImage}>
-        {item.imageUrl ? <img src={item.imageUrl} alt={item.title} loading="lazy" /> : <div className={styles.imageFallback}><Network size={42} /></div>}
+        <PublicPortfolioImage src={item.imageUrl} alt={item.title} />
         {item.location && <span><MapPin size={13} /> {item.location}</span>}
       </div>
       <div className={styles.portfolioCopy}>
@@ -196,7 +201,7 @@ export function HomePage({ content }: { content: CmsContent }) {
             <div className={styles.visualGlow} />
             <div className={`${styles.orbit} ${styles.orbitOne}`} />
             <div className={`${styles.orbit} ${styles.orbitTwo}`} />
-            <div className={styles.visualCenter}><img src="/perumnet-mark.png" alt="PerumNet Enterprise" /></div>
+            <div className={styles.visualCenter}><img src="/perumnet-enterprise-brand.png" alt="PerumNet Enterprise" /></div>
             <div className={`${styles.visualNode} ${styles.nodeWifi}`}><Wifi size={24} /><span>Managed WiFi</span><small>Online</small></div>
             <div className={`${styles.visualNode} ${styles.nodeCamera}`}><Camera size={24} /><span>CCTV</span><small>Protected</small></div>
             <div className={`${styles.visualNode} ${styles.nodePhone}`}><Phone size={24} /><span>IP PABX</span><small>Connected</small></div>
@@ -222,7 +227,7 @@ export function HomePage({ content }: { content: CmsContent }) {
         </div>
       </section>
 
-      <section className={styles.servicesSection}>
+      <section className={styles.servicesSection} id="layanan">
         <div className={styles.sectionHeader}>
           <div><span className={styles.eyebrowDark}>LAYANAN UTAMA</span><h2>{text(content, "home", "services_title", "Solusi yang dibangun untuk kebutuhan nyata.")}</h2></div>
           <p>{text(content, "home", "services_description", "Setiap sistem dirancang untuk stabil sejak hari pertama.")}</p>
@@ -231,7 +236,7 @@ export function HomePage({ content }: { content: CmsContent }) {
         <Link className={styles.inlineButton} href="/services">Lihat seluruh layanan <ArrowRight size={17} /></Link>
       </section>
 
-      <section className={styles.processSection}>
+      <section className={styles.processSection} id="proses">
         <div><span className={styles.eyebrowLight}>CARA KAMI BEKERJA</span><h2>Sederhana untuk Anda, terukur untuk tim kami.</h2></div>
         <ol>
           <li><span>01</span><div><strong>Survei & pemetaan</strong><p>Kami memahami lokasi, pengguna, risiko, dan target operasional.</p></div></li>
@@ -240,7 +245,7 @@ export function HomePage({ content }: { content: CmsContent }) {
         </ol>
       </section>
 
-      <section className={styles.portfolioSection}>
+      <section className={styles.portfolioSection} id="portofolio">
         <div className={styles.sectionHeader}>
           <div><span className={styles.eyebrowDark}>PORTOFOLIO PILIHAN</span><h2>{text(content, "home", "portfolio_title", "Pekerjaan rapi. Hasil yang terukur.")}</h2></div>
           <Link href="/portfolio">Lihat semua proyek <ArrowRight size={17} /></Link>
@@ -248,7 +253,7 @@ export function HomePage({ content }: { content: CmsContent }) {
         <div className={styles.portfolioGrid}>{content.portfolios.slice(0, 3).map((item) => <PortfolioCard key={item.id} item={item} />)}</div>
       </section>
 
-      <section className={styles.testimonialSection}>
+      <section className={styles.testimonialSection} id="testimoni">
         <div className={styles.sectionIntro}><span className={styles.eyebrowLight}>CERITA KLIEN</span><h2>{text(content, "home", "testimonials_title", "Dipercaya untuk menjaga operasional tetap berjalan.")}</h2></div>
         <div className={styles.testimonialGrid}>{content.testimonials.slice(0, 3).map((item) => <TestimonialCard key={item.id} item={item} />)}</div>
       </section>
@@ -262,7 +267,7 @@ export function HomePage({ content }: { content: CmsContent }) {
 }
 
 export function PageHero({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
-  return <section className={styles.pageHero}><span className={styles.eyebrow}>{eyebrow}</span><h1>{title}</h1><p>{description}</p><div className={styles.pageHeroMark}><img src="/perumnet-mark.png" alt="" /></div></section>;
+  return <section className={styles.pageHero}><span className={styles.eyebrow}>{eyebrow}</span><h1>{title}</h1><p>{description}</p><div className={styles.pageHeroMark}><img src="/perumnet-enterprise-brand.png" alt="" /></div></section>;
 }
 
 export function ServicesPage({ content }: { content: CmsContent }) {
@@ -270,7 +275,7 @@ export function ServicesPage({ content }: { content: CmsContent }) {
     <PageHero eyebrow="LAYANAN PERUMNET ENTERPRISE" title={text(content, "services", "page_title", "Infrastruktur yang siap mengikuti ritme bisnis Anda.")} description={text(content, "services", "page_description", "Layanan konsultasi, instalasi, integrasi, dan pemeliharaan.")} />
     <section className={styles.detailList}>{content.services.map((service, index) => {
       const Icon = serviceIcons[service.icon as keyof typeof serviceIcons] || Network;
-      return <article key={service.id} className={styles.serviceDetail}>
+      return <article key={service.id} id={service.slug} className={styles.serviceDetail}>
         <div className={styles.detailNumber}>0{index + 1}</div>
         <div className={styles.detailIcon}><Icon size={34} /></div>
         <div><h2>{service.title}</h2><p className={styles.detailLead}>{service.summary}</p><p>{service.description}</p></div>
@@ -302,7 +307,7 @@ export function ContactPage({ content }: { content: CmsContent }) {
       <div className={styles.contactCards}>
         <a href={waLink(content)} target="_blank" rel="noreferrer"><MessageCircle size={24} /><div><span>WhatsApp</span><strong>{content.settings.phone}</strong><small>Respons tercepat untuk konsultasi awal</small></div><ArrowRight size={18} /></a>
         <a href={`mailto:${content.settings.email}`}><Mail size={24} /><div><span>Email</span><strong>{content.settings.email}</strong><small>Untuk kebutuhan proposal dan dokumen</small></div><ArrowRight size={18} /></a>
-        <div><MapPin size={24} /><div><span>Lokasi</span><strong>Karangasem, Bali</strong><small>{content.settings.address}</small></div></div>
+        <a href={mapsLink(content)} target="_blank" rel="noreferrer"><MapPin size={24} /><div><span>Lokasi</span><strong>Karangasem, Bali</strong><small>{content.settings.address}</small></div><ArrowRight size={18} /></a>
         <div><Clock3 size={24} /><div><span>Jam operasional</span><strong>{content.settings.business_hours}</strong><small>Dukungan disesuaikan dengan layanan</small></div></div>
       </div>
       <div className={styles.contactPanel}>
