@@ -72,6 +72,25 @@ export const userProfiles = sqliteTable("user_profiles", {
   updatedAt: text("updated_at").notNull(),
 });
 
+export const emailDeliveries = sqliteTable(
+  "email_deliveries",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
+    eventType: text("event_type").notNull(),
+    recipient: text("recipient").notNull(),
+    subject: text("subject").notNull(),
+    status: text("status").notNull(),
+    providerId: text("provider_id"),
+    errorMessage: text("error_message"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("email_deliveries_user_idx").on(table.userId, table.createdAt),
+    index("email_deliveries_status_idx").on(table.status, table.createdAt),
+  ],
+);
+
 export const userPermissions = sqliteTable("user_permissions", {
   userId: text("user_id")
     .primaryKey()
@@ -283,6 +302,8 @@ export const spks = sqliteTable(
     scope: text("scope").notNull(),
     cost: integer("cost").notNull(),
     status: text("status").notNull().default("Draft"),
+    paymentStatus: text("payment_status").notNull().default("Belum Dibayar"),
+    paidDate: text("paid_date"),
     startDate: text("start_date"),
     endDate: text("end_date"),
     ...timestamps,
@@ -362,6 +383,54 @@ export const projectValidationItems = sqliteTable(
   ],
 );
 
+export const bankAccounts = sqliteTable(
+  "bank_accounts",
+  {
+    id: text("id").primaryKey(),
+    bankName: text("bank_name").notNull(),
+    accountName: text("account_name").notNull(),
+    accountNumberMasked: text("account_number_masked").notNull(),
+    externalAccountId: text("external_account_id"),
+    currency: text("currency").notNull().default("IDR"),
+    openingBalance: integer("opening_balance").notNull().default(0),
+    currentBalance: integer("current_balance").notNull().default(0),
+    syncMode: text("sync_mode").notNull().default("Manual"),
+    status: text("status").notNull().default("Aktif"),
+    lastSyncedAt: text("last_synced_at"),
+    balanceUpdatedAt: text("balance_updated_at"),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (table) => [
+    index("bank_accounts_status_idx").on(table.status, table.bankName),
+  ],
+);
+
+export const bankStatementImports = sqliteTable(
+  "bank_statement_imports",
+  {
+    id: text("id").primaryKey(),
+    bankAccountId: text("bank_account_id")
+      .notNull()
+      .references(() => bankAccounts.id, { onDelete: "cascade" }),
+    filename: text("filename").notNull(),
+    fileHash: text("file_hash").notNull(),
+    statementMonth: text("statement_month"),
+    rowCount: integer("row_count").notNull().default(0),
+    importedCount: integer("imported_count").notNull().default(0),
+    duplicateCount: integer("duplicate_count").notNull().default(0),
+    errorCount: integer("error_count").notNull().default(0),
+    importedBy: text("imported_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("bank_statement_imports_account_idx").on(
+      table.bankAccountId,
+      table.createdAt,
+    ),
+  ],
+);
+
 export const transactions = sqliteTable(
   "transactions",
   {
@@ -373,6 +442,7 @@ export const transactions = sqliteTable(
     amount: integer("amount").notNull(),
     source: text("source").notNull(),
     referenceId: text("reference_id"),
+    category: text("category").notNull().default("Lainnya"),
     createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
     ...timestamps,
   },
@@ -383,6 +453,46 @@ export const transactions = sqliteTable(
       table.source,
       table.referenceId,
     ),
+  ],
+);
+
+export const bankStatementEntries = sqliteTable(
+  "bank_statement_entries",
+  {
+    id: text("id").primaryKey(),
+    bankAccountId: text("bank_account_id")
+      .notNull()
+      .references(() => bankAccounts.id, { onDelete: "cascade" }),
+    importId: text("import_id").references(() => bankStatementImports.id, {
+      onDelete: "set null",
+    }),
+    transactionId: text("transaction_id").references(() => transactions.id, {
+      onDelete: "set null",
+    }),
+    date: text("date").notNull(),
+    description: text("description").notNull(),
+    type: text("type").notNull(),
+    amount: integer("amount").notNull(),
+    runningBalance: integer("running_balance"),
+    reference: text("reference"),
+    fingerprint: text("fingerprint").notNull(),
+    reconciliationStatus: text("reconciliation_status")
+      .notNull()
+      .default("Imported"),
+    source: text("source").notNull(),
+    rawJson: text("raw_json"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("bank_statement_entries_fingerprint_unique").on(
+      table.bankAccountId,
+      table.fingerprint,
+    ),
+    index("bank_statement_entries_account_date_idx").on(
+      table.bankAccountId,
+      table.date,
+    ),
+    index("bank_statement_entries_transaction_idx").on(table.transactionId),
   ],
 );
 

@@ -2,6 +2,7 @@
 
 import {
   Building2,
+  CircleDollarSign,
   ChevronDown,
   Download,
   FilePlus2,
@@ -34,6 +35,7 @@ interface ProcurementViewProps {
   notify: (message: string) => void;
   projectId: string;
   canManage: boolean;
+  canManagePayments: boolean;
 }
 
 type ProcurementTab = "vendor" | "spk";
@@ -47,7 +49,7 @@ function spkStatusClass(status: WorkOrder["status"]) {
   return "neutral";
 }
 
-export function ProcurementView({ language, notify, projectId, canManage }: ProcurementViewProps) {
+export function ProcurementView({ language, notify, projectId, canManage, canManagePayments }: ProcurementViewProps) {
   const id = language === "id";
   const [activeTab, setActiveTab] = useState<ProcurementTab>("vendor");
   const [vendors, setVendors] = useState<Vendor[]>([]);
@@ -69,6 +71,11 @@ export function ProcurementView({ language, notify, projectId, canManage }: Proc
   const [spkStatus, setSpkStatus] = useState<WorkOrder["status"]>("Draft");
   const [spkStartDate, setSpkStartDate] = useState("");
   const [spkEndDate, setSpkEndDate] = useState("");
+  const [payingSpkId, setPayingSpkId] = useState("");
+  const [serverToday, setServerToday] = useState("");
+  const [paymentWorkOrder, setPaymentWorkOrder] =
+    useState<WorkOrder | null>(null);
+  const [paymentDate, setPaymentDate] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -89,6 +96,18 @@ export function ProcurementView({ language, notify, projectId, canManage }: Proc
       active = false;
     };
   }, [language, notify, projectId]);
+
+  useEffect(() => {
+    let active = true;
+    api<{ today: string }>("/api/system/time")
+      .then((result) => {
+        if (active) setServerToday(result.today);
+      })
+      .catch((error) => notify(messageOf(error, language)));
+    return () => {
+      active = false;
+    };
+  }, [language, notify]);
 
   const filteredVendors = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -230,6 +249,81 @@ export function ProcurementView({ language, notify, projectId, canManage }: Proc
     }
   }
 
+  function openSpkPayment(workOrder: WorkOrder) {
+    setPaymentWorkOrder(workOrder);
+    setPaymentDate(
+      workOrder.paidDate ??
+        (workOrder.paymentStatus === "Belum Dibayar" ? serverToday : ""),
+    );
+  }
+
+  async function persistSpkPayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!paymentWorkOrder || !paymentDate) return;
+    setPayingSpkId(paymentWorkOrder.id);
+    try {
+      const updated = await api<WorkOrder>(
+        `/api/spks/${paymentWorkOrder.id}/payment`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            status: "Dibayar",
+            paidDate: paymentDate,
+          }),
+        },
+      );
+      setWorkOrders((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      setPaymentWorkOrder(null);
+      notify(
+        id
+          ? "Pembayaran vendor dikonfirmasi dan arus kas diperbarui."
+          : "Vendor payment confirmed and cash flow updated.",
+      );
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setPayingSpkId("");
+    }
+  }
+
+  async function cancelSpkPayment() {
+    if (!paymentWorkOrder) return;
+    if (
+      !window.confirm(
+        id
+          ? `Batalkan konfirmasi pembayaran ${paymentWorkOrder.number}? Mutasi bank yang sudah dicocokkan tetap dipertahankan untuk ditinjau.`
+          : `Cancel payment confirmation for ${paymentWorkOrder.number}? Any matched bank statement remains available for review.`,
+      )
+    ) {
+      return;
+    }
+    setPayingSpkId(paymentWorkOrder.id);
+    try {
+      const updated = await api<WorkOrder>(
+        `/api/spks/${paymentWorkOrder.id}/payment`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ status: "Belum Dibayar" }),
+        },
+      );
+      setWorkOrders((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      setPaymentWorkOrder(null);
+      notify(
+        id
+          ? "Konfirmasi pembayaran dibatalkan dan arus kas dikoreksi."
+          : "Payment confirmation cancelled and cash flow corrected.",
+      );
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setPayingSpkId("");
+    }
+  }
+
   async function downloadSpk(workOrder: WorkOrder) {
     try {
       await downloadApiFile(`/api/spks/${workOrder.id}/pdf`, `${workOrder.number.replaceAll("/", "-")}.pdf`);
@@ -274,8 +368,8 @@ export function ProcurementView({ language, notify, projectId, canManage }: Proc
         </article>
         <article className="metric-card">
           <span className="metric-icon orange"><UsersRound size={20} /></span>
-          <div className="metric-main"><span>{id ? "Nilai SPK aktif" : "Active Work Order value"}</span><strong>{formatCurrency(scopedWorkOrders.filter((item) => item.status !== "Selesai").reduce((sum, item) => sum + item.cost, 0), language)}</strong></div>
-          <span className="metric-change warning-text">{id ? "Perlu rekonsiliasi" : "Reconciliation required"}</span>
+          <div className="metric-main"><span>{id ? "SPK belum dibayar" : "Unpaid Work Orders"}</span><strong>{formatCurrency(scopedWorkOrders.filter((item) => item.paymentStatus !== "Dibayar").reduce((sum, item) => sum + item.cost, 0), language)}</strong></div>
+          <span className="metric-change warning-text">{scopedWorkOrders.filter((item) => item.paymentStatus !== "Dibayar").length} {id ? "pembayaran tertunda" : "pending payments"}</span>
         </article>
       </section>
 
@@ -364,21 +458,64 @@ export function ProcurementView({ language, notify, projectId, canManage }: Proc
                   <span>{id ? "Lingkup kerja" : "Scope of work"}</span>
                   <strong>{workOrder.scope}</strong>
                 </div>
-                <div className="spk-cost"><span>{id ? "Nilai" : "Value"}</span><strong>{formatCurrency(workOrder.cost, language)}</strong></div>
+                <div className="spk-cost">
+                  <span>{id ? "Nilai" : "Value"}</span>
+                  <strong>{formatCurrency(workOrder.cost, language)}</strong>
+                  <small className={`spk-payment-status ${workOrder.paymentStatus === "Dibayar" ? "paid" : "unpaid"}`}>
+                    {workOrder.paymentStatus === "Dibayar"
+                      ? id ? "Sudah dibayar" : "Paid"
+                      : id ? "Belum dibayar" : "Unpaid"}
+                  </small>
+                </div>
                 <label className={`status-select ${spkStatusClass(workOrder.status)}`}>
                   <select disabled={!canManage} value={workOrder.status} onChange={(event) => updateSpkStatus(workOrder.id, event.target.value as WorkOrder["status"])}>
                     {spkStatuses.map((status) => <option key={status} value={status}>{localizedLabel(language, status)}</option>)}
                   </select>
                   <ChevronDown size={14} />
                 </label>
+                {canManagePayments && (
+                  <button
+                    className={`button small ${workOrder.paymentStatus === "Dibayar" ? "subtle" : "secondary"}`}
+                    type="button"
+                    disabled={payingSpkId === workOrder.id}
+                    onClick={() => openSpkPayment(workOrder)}
+                  >
+                    <CircleDollarSign size={15} />
+                    {payingSpkId === workOrder.id
+                      ? id ? "Memproses..." : "Processing..."
+                      : workOrder.paymentStatus === "Dibayar"
+                        ? id ? "Koreksi bayar" : "Correct payment"
+                        : id ? "Konfirmasi bayar" : "Confirm payment"}
+                  </button>
+                )}
                 <button className="button subtle small" type="button" onClick={() => downloadSpk(workOrder)}><Download size={15} /> PDF</button>
-                {canManage && <button className="icon-button" type="button" aria-label={`Edit ${workOrder.number}`} onClick={() => openEditSpk(workOrder)}><Pencil size={15} /></button>}
-                {canManage && <button className="icon-button danger" type="button" aria-label={`Hapus ${workOrder.number}`} onClick={() => deleteSpk(workOrder)}><Trash2 size={15} /></button>}
+                {canManage && (workOrder.paymentStatus !== "Dibayar" || canManagePayments) && <button className="icon-button" type="button" aria-label={`Edit ${workOrder.number}`} onClick={() => openEditSpk(workOrder)}><Pencil size={15} /></button>}
+                {canManage && (workOrder.paymentStatus !== "Dibayar" || canManagePayments) && <button className="icon-button danger" type="button" aria-label={`Hapus ${workOrder.number}`} onClick={() => deleteSpk(workOrder)}><Trash2 size={15} /></button>}
               </article>
             ))}
           </div>
         </section>
       )}
+
+      {paymentWorkOrder ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setPaymentWorkOrder(null)}>
+          <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="spk-payment-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div><span className="eyebrow">{id ? "PEMBAYARAN VENDOR" : "VENDOR PAYMENT"}</span><h2 id="spk-payment-title">{paymentWorkOrder.number}</h2></div>
+              <button className="icon-button" type="button" aria-label={id ? "Tutup" : "Close"} onClick={() => setPaymentWorkOrder(null)}><X size={18} /></button>
+            </div>
+            <form className="form-grid" onSubmit={persistSpkPayment}>
+              <label className="field full"><span>{id ? "Tanggal dana keluar" : "Payment date"}</span><input type="date" required max={serverToday || undefined} value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} /></label>
+              <div className="statement-guidance full"><CircleDollarSign size={18} /><span><strong>{id ? "Gunakan tanggal mutasi rekening" : "Use the bank statement date"}</strong><small>{id ? "Tanggal ini menentukan periode arus kas dan kandidat rekonsiliasi bank." : "This date determines the cash-flow period and bank reconciliation candidates."}</small></span></div>
+              <div className="modal-actions full">
+                {paymentWorkOrder.paymentStatus === "Dibayar" ? <button className="button danger" type="button" disabled={Boolean(payingSpkId)} onClick={cancelSpkPayment}>{id ? "Batalkan pembayaran" : "Cancel payment"}</button> : null}
+                <button className="button secondary" type="button" onClick={() => setPaymentWorkOrder(null)}>{id ? "Tutup" : "Close"}</button>
+                <button className="button primary" type="submit" disabled={Boolean(payingSpkId) || !paymentDate}><CircleDollarSign size={15} /> {payingSpkId ? (id ? "Menyimpan..." : "Saving...") : paymentWorkOrder.paymentStatus === "Dibayar" ? (id ? "Simpan koreksi" : "Save correction") : (id ? "Konfirmasi pembayaran" : "Confirm payment")}</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
 
       {showVendorForm && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowVendorForm(false)}>

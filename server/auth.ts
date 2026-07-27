@@ -28,6 +28,13 @@ export interface AuthUser {
   avatarUrl?: string;
 }
 
+export function avatarUrlForUser(userId: unknown, version: unknown) {
+  const suffix = version
+    ? `?v=${encodeURIComponent(String(version))}`
+    : "";
+  return `/api/profile/avatar/${String(userId)}${suffix}`;
+}
+
 function authUserFromRow(row: Record<string, unknown>): AuthUser {
   const role = String(row.role) as EnterpriseRole;
   let storedPermissions: Partial<AccessPermissions> | undefined;
@@ -48,7 +55,14 @@ function authUserFromRow(row: Record<string, unknown>): AuthUser {
       ? normalizePermissions(role, storedPermissions)
       : defaultPermissions(role),
     preferredLanguage: row.preferred_language === "en" ? "en" : "id",
-    ...(row.avatar_mime_type ? { avatarUrl: `/api/profile/avatar/${String(row.id)}` } : {}),
+    ...(row.avatar_mime_type
+      ? {
+          avatarUrl: avatarUrlForUser(
+            row.id,
+            row.profile_updated_at ?? row.updated_at,
+          ),
+        }
+      : {}),
   };
 }
 
@@ -85,7 +99,8 @@ export async function verifyCredentials(email: string, password: string) {
   const result = await client.execute({
     sql: `
       SELECT u.id,u.name,u.email,u.password_hash,u.role,u.status,
-        p.preferred_language,p.avatar_mime_type,up.permissions_json
+        p.preferred_language,p.avatar_mime_type,p.updated_at AS profile_updated_at,
+        up.permissions_json
       FROM users u
       LEFT JOIN user_profiles p ON p.user_id=u.id
       LEFT JOIN user_permissions up ON up.user_id=u.id
@@ -155,7 +170,8 @@ export async function getSessionUser(request: Request): Promise<AuthUser | null>
   const result = await client.execute({
     sql: `
       SELECT u.id,u.name,u.email,u.role,u.status,
-        p.preferred_language,p.avatar_mime_type,up.permissions_json
+        p.preferred_language,p.avatar_mime_type,p.updated_at AS profile_updated_at,
+        up.permissions_json
       FROM sessions s
       JOIN users u ON u.id = s.user_id
       LEFT JOIN user_profiles p ON p.user_id=u.id

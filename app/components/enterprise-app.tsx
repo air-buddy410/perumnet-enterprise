@@ -53,6 +53,13 @@ interface NavigationItem {
   badge?: string;
 }
 
+interface EmailDeliveryNotification {
+  id: string;
+  subject: string;
+  status: "sent" | "failed" | "skipped";
+  createdAt: string;
+}
+
 const mainNavigation: NavigationItem[] = [
   { id: "dashboard", labelKey: "dashboard", module: "dashboard", icon: LayoutDashboard },
   { id: "project", labelKey: "projects", module: "projects", icon: FolderKanban },
@@ -81,7 +88,7 @@ function viewMeta(language: AppLanguage, view: ViewKey) {
     procurement: { title: translate(language, "procurement"), subtitle: id ? "Mitra kerja dan Surat Perintah Kerja" : "Vendors and work orders" },
     validation: { title: translate(language, "validation"), subtitle: id ? "Checklist wajib sebelum BAST" : "Required checklist before handover" },
     bast: { title: translate(language, "bast"), subtitle: id ? "Serah terima dan tanda tangan digital" : "Handover and digital signatures" },
-    finance: { title: translate(language, "finance"), subtitle: id ? "Arus kas dan profitabilitas proyek" : "Project cash flow and profitability" },
+    finance: { title: translate(language, "finance"), subtitle: id ? "Arus kas dan rekonsiliasi" : "Cash flow and reconciliation" },
     users: { title: translate(language, "users"), subtitle: id ? "Akun tim dan otorisasi per modul" : "Team accounts and module permissions" },
     profile: { title: translate(language, "profile"), subtitle: id ? "Foto dan informasi pribadi" : "Photo and personal information" },
     settings: { title: translate(language, "settings"), subtitle: id ? "Bahasa, notifikasi, dan keamanan" : "Language, notifications, and security" },
@@ -124,7 +131,7 @@ function SidebarNavigation({
   return (
     <>
       <div className="sidebar-brand">
-        <img src={appPath("/perumnet-enterprise-brand.png")} alt="" width={42} height={42} />
+        <img src={appPath("/perumnet-mark.png")} alt="" width={42} height={42} />
         <div><strong>PerumNet</strong><span>Enterprise</span></div>
         <button className="icon-button sidebar-close" type="button" aria-label={language === "id" ? "Tutup navigasi" : "Close navigation"} onClick={onClose}><X size={18} /></button>
       </div>
@@ -182,6 +189,8 @@ export function EnterpriseApp() {
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Array<{ id: string; type: "project" | "invoice" | "vendor"; title: string; subtitle: string }>>([]);
+  const [emailNotifications, setEmailNotifications] = useState<EmailDeliveryNotification[]>([]);
+  const [notificationsReadAt, setNotificationsReadAt] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -225,6 +234,25 @@ export function EnterpriseApp() {
       })
       .catch(() => setProjects([]));
     return () => { active = false; };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !canAccess(user.permissions, "settings")) return;
+    let active = true;
+    api<EmailDeliveryNotification[]>("/api/notifications/email")
+      .then((deliveries) => {
+        if (!active) return;
+        setEmailNotifications(deliveries);
+        setNotificationsReadAt(
+          Number(window.localStorage.getItem(`perumnet-notifications-read-${user.id}`) ?? 0),
+        );
+      })
+      .catch(() => {
+        if (active) setEmailNotifications([]);
+      });
+    return () => {
+      active = false;
+    };
   }, [user]);
 
   useEffect(() => {
@@ -291,6 +319,24 @@ export function EnterpriseApp() {
     notify("");
   }
 
+  async function refreshEmailNotifications() {
+    if (!user || !canAccess(user.permissions, "settings")) return;
+    const deliveries = await api<EmailDeliveryNotification[]>("/api/notifications/email")
+      .catch(() => []);
+    setEmailNotifications(deliveries);
+  }
+
+  function markNotificationsRead() {
+    if (!user) return;
+    const timestamp = Date.now();
+    setNotificationsReadAt(timestamp);
+    window.localStorage.setItem(
+      `perumnet-notifications-read-${user.id}`,
+      String(timestamp),
+    );
+    setNotificationsOpen(false);
+  }
+
   if (checkingSession) {
     return <main className="auth-shell"><section className="auth-form-panel"><div className="auth-form-wrap"><img src={appPath("/perumnet-enterprise-brand.png")} alt="PerumNet Enterprise" width={190} height={200} /><p>{translate(language, "loading")}</p></div></section></main>;
   }
@@ -303,6 +349,9 @@ export function EnterpriseApp() {
   const meta = viewMeta(language, currentView);
   const canUse = (module: AccessModule) => canAccess(user.permissions, module);
   const canManage = (module: AccessModule) => canAccess(user.permissions, module, "manage");
+  const hasUnreadNotifications = emailNotifications.some(
+    (delivery) => new Date(delivery.createdAt).getTime() > notificationsReadAt,
+  );
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
@@ -341,13 +390,39 @@ export function EnterpriseApp() {
               )}
             </div>
             <div className="dropdown-anchor">
-              <button className={`icon-button notification-button ${notificationsOpen ? "active" : ""}`} type="button" aria-label={translate(language, "notifications")} aria-expanded={notificationsOpen} onClick={() => { setNotificationsOpen((value) => !value); setProfileOpen(false); }}><Bell size={18} /><span /></button>
+              <button className={`icon-button notification-button ${notificationsOpen ? "active" : ""}`} type="button" aria-label={translate(language, "notifications")} aria-expanded={notificationsOpen} onClick={() => { const next = !notificationsOpen; setNotificationsOpen(next); setProfileOpen(false); if (next) void refreshEmailNotifications(); }}><Bell size={18} />{hasUnreadNotifications ? <span /> : null}</button>
               {notificationsOpen && (
                 <div className="topbar-dropdown notifications-dropdown">
-                  <div className="dropdown-head"><strong>{translate(language, "notifications")}</strong><button className="text-button" type="button" onClick={() => setNotificationsOpen(false)}>{translate(language, "markRead")}</button></div>
-                  {canUse("billing") && <button type="button" onClick={() => navigate("billing")}><span className="notification-icon warning"><ReceiptText size={16} /></span><span><strong>{language === "id" ? "Pantau penagihan" : "Review billing"}</strong><small>{language === "id" ? "Periksa invoice proyek yang dapat Anda akses." : "Review invoices for projects you can access."}</small></span></button>}
-                  {canUse("projects") && <button type="button" onClick={() => navigate("project")}><span className="notification-icon info"><FolderKanban size={16} /></span><span><strong>{language === "id" ? "Dokumentasi proyek" : "Project documentation"}</strong><small>{language === "id" ? `${projects.length} proyek tersedia sesuai akses Anda.` : `${projects.length} projects are available to your account.`}</small></span></button>}
-                  {canUse("bast") && <button type="button" onClick={() => navigate("bast")}><span className="notification-icon success"><ClipboardSignature size={16} /></span><span><strong>{language === "id" ? "Serah terima proyek" : "Project handover"}</strong><small>{language === "id" ? "Pilih workspace sebelum membuka atau menandatangani BAST." : "Select a workspace before opening or signing a handover."}</small></span></button>}
+                  <div className="dropdown-head"><strong>{translate(language, "notifications")}</strong><button className="text-button" type="button" onClick={markNotificationsRead}>{translate(language, "markRead")}</button></div>
+                  {emailNotifications.slice(0, 5).map((delivery) => (
+                    <button type="button" key={delivery.id} onClick={() => navigate("settings")}>
+                      <span className={`notification-icon ${delivery.status === "sent" ? "success" : delivery.status === "failed" ? "warning" : "info"}`}>
+                        {delivery.status === "sent" ? <Check size={16} /> : delivery.status === "failed" ? <Bell size={16} /> : <ReceiptText size={16} />}
+                      </span>
+                      <span>
+                        <strong>{delivery.subject}</strong>
+                        <small>
+                          {delivery.status === "sent"
+                            ? language === "id" ? "Terkirim" : "Sent"
+                            : delivery.status === "failed"
+                              ? language === "id" ? "Gagal dikirim" : "Failed"
+                              : language === "id" ? "Dilewati" : "Skipped"}
+                          {" · "}
+                          {new Intl.DateTimeFormat(language === "id" ? "id-ID" : "en-US", {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                            timeZone: "Asia/Makassar",
+                          }).format(new Date(delivery.createdAt))}
+                        </small>
+                      </span>
+                    </button>
+                  ))}
+                  {!emailNotifications.length ? (
+                    <div className="notification-empty">
+                      <Bell size={19} />
+                      <span>{language === "id" ? "Belum ada aktivitas notifikasi email." : "No email notification activity yet."}</span>
+                    </div>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -374,11 +449,23 @@ export function EnterpriseApp() {
           {currentView === "dashboard" && canUse("dashboard") && <DashboardView language={language} navigate={navigate} notify={notify} selectedProjectId={selectedProjectId} userName={user.name} canManage={canManage("projects")} canUseBoq={canUse("boq")} canUseBilling={canUse("billing")} onSelectProject={selectProject} onProjectCreated={projectCreated} />}
           {currentView === "project" && canUse("projects") && (activeProjectId ? <ProjectView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} project={projects.find((item) => item.id === activeProjectId)} canManage={canManage("projects")} canDelete={user.role === "Admin"} canManageAccess={user.role === "Admin"} onProjectDeleted={projectDeleted} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "boq" && canUse("boq") && (activeProjectId ? <BoqView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} canManage={canManage("boq")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
-          {currentView === "billing" && canUse("billing") && (activeProjectId ? <BillingView language={language} notify={notify} projectId={activeProjectId} canManage={canManage("billing")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
-          {currentView === "procurement" && canUse("procurement") && (activeProjectId ? <ProcurementView language={language} notify={notify} projectId={activeProjectId} canManage={canManage("procurement")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "billing" && canUse("billing") && (activeProjectId ? <BillingView language={language} notify={notify} projectId={activeProjectId} canManage={canManage("billing")} canManagePayments={canManage("billing") && canManage("finance")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "procurement" && canUse("procurement") && (activeProjectId ? <ProcurementView language={language} notify={notify} projectId={activeProjectId} canManage={canManage("procurement")} canManagePayments={canManage("procurement") && canManage("finance")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "validation" && canUse("bast") && (activeProjectId ? <ValidationView projectId={activeProjectId} language={language} canManage={canManage("bast")} notify={notify} navigate={navigate} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "bast" && canUse("bast") && (activeProjectId ? <BastView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} canManage={canManage("bast")} userName={user.name} onProjectUpdated={projectCreated} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
-          {currentView === "finance" && canUse("finance") && <FinanceView language={language} notify={notify} projectId={selectedProjectId} projects={projects} canManage={canManage("finance")} />}
+          {currentView === "finance" && canUse("finance") && (
+            <FinanceView
+              language={language}
+              notify={notify}
+              projectId={selectedProjectId}
+              projects={projects}
+              canManage={canManage("finance")}
+              canUseBanking={user.role === "Admin" || user.role === "Finance"}
+              canConfigureBanking={
+                user.role === "Admin" && canManage("finance")
+              }
+            />
+          )}
           {currentView === "users" && canUse("users") && <UsersView notify={notify} language={language} currentUserId={user.id} canManage={user.role === "Admin"} />}
           {currentView === "profile" && <ProfileView language={language} user={user} notify={notify} onUserChange={setUser} />}
           {currentView === "settings" && canUse("settings") && <SettingsView language={language} notify={notify} onLanguageChange={(next) => { setLanguage(next); window.localStorage.setItem("perumnet-language", next); setUser((current) => current ? { ...current, preferredLanguage: next } : current); }} />}

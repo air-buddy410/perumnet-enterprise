@@ -1,6 +1,17 @@
 "use client";
 
-import { Bell, Languages, LockKeyhole, Save, ShieldCheck } from "lucide-react";
+import {
+  Bell,
+  CheckCircle2,
+  Clock3,
+  Languages,
+  LockKeyhole,
+  MailCheck,
+  RefreshCw,
+  Save,
+  ShieldCheck,
+  TriangleAlert,
+} from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { api, messageOf } from "../api-client";
 import type { AppLanguage } from "../i18n";
@@ -11,10 +22,22 @@ interface SettingsViewProps {
   onLanguageChange: (language: AppLanguage) => void;
 }
 
+interface EmailDelivery {
+  id: string;
+  eventType: string;
+  recipient: string;
+  subject: string;
+  status: "sent" | "failed" | "skipped";
+  error?: string;
+  createdAt: string;
+}
+
 export function SettingsView({ language, notify, onLanguageChange }: SettingsViewProps) {
   const [selectedLanguage, setSelectedLanguage] = useState<AppLanguage>(language);
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [emailDeliveryConfigured, setEmailDeliveryConfigured] = useState(false);
+  const [emailDeliveries, setEmailDeliveries] = useState<EmailDelivery[]>([]);
+  const [testingEmail, setTestingEmail] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -22,16 +45,55 @@ export function SettingsView({ language, notify, onLanguageChange }: SettingsVie
 
   useEffect(() => {
     let active = true;
-    api<{ preferredLanguage: AppLanguage; emailNotifications: boolean; emailDeliveryConfigured: boolean }>("/api/settings")
-      .then((settings) => {
+    Promise.all([
+      api<{ preferredLanguage: AppLanguage; emailNotifications: boolean; emailDeliveryConfigured: boolean }>("/api/settings"),
+      api<EmailDelivery[]>("/api/notifications/email"),
+    ])
+      .then(([settings, deliveries]) => {
         if (!active) return;
         setSelectedLanguage(settings.preferredLanguage);
         setEmailNotifications(settings.emailNotifications);
         setEmailDeliveryConfigured(settings.emailDeliveryConfigured);
+        setEmailDeliveries(deliveries);
       })
-      .catch((error) => notify(messageOf(error)));
+      .catch((error) => notify(messageOf(error, language)));
     return () => { active = false; };
-  }, [notify]);
+  }, [language, notify]);
+
+  async function refreshEmailDeliveries() {
+    try {
+      setEmailDeliveries(await api<EmailDelivery[]>("/api/notifications/email"));
+    } catch (error) {
+      notify(messageOf(error, language));
+    }
+  }
+
+  async function sendTestNotification() {
+    setTestingEmail(true);
+    try {
+      const result = await api<{
+        configured: boolean;
+        status: EmailDelivery["status"];
+        error?: string;
+      }>("/api/notifications/email/test", { method: "POST" });
+      await refreshEmailDeliveries();
+      if (result.status === "sent") {
+        notify(id ? "Email uji berhasil dikirim." : "Test email sent successfully.");
+      } else if (!result.configured) {
+        notify(
+          id
+            ? "Provider email belum dikonfigurasi di server."
+            : "The email provider is not configured on the server.",
+        );
+      } else {
+        notify(result.error ?? (id ? "Email uji gagal dikirim." : "Test email failed."));
+      }
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setTestingEmail(false);
+    }
+  }
 
   async function savePreferences(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -43,7 +105,7 @@ export function SettingsView({ language, notify, onLanguageChange }: SettingsVie
       onLanguageChange(selectedLanguage);
       notify(selectedLanguage === "id" ? "Pengaturan berhasil disimpan." : "Settings saved successfully.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -63,7 +125,7 @@ export function SettingsView({ language, notify, onLanguageChange }: SettingsVie
       setConfirmPassword("");
       notify(id ? "Kata sandi berhasil diperbarui." : "Password updated successfully.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -80,8 +142,62 @@ export function SettingsView({ language, notify, onLanguageChange }: SettingsVie
             <label className={selectedLanguage === "en" ? "active" : ""}><input type="radio" name="language" checked={selectedLanguage === "en"} onChange={() => setSelectedLanguage("en")} /><span><strong>English</strong><small>Use the interface in English</small></span></label>
           </div>
           <div className="settings-divider" />
-          <label className="toggle-setting"><span className="metric-icon blue"><Bell size={19} /></span><span><strong>{id ? "Notifikasi email" : "Email notifications"}</strong><small>{id ? "Terima pembaruan penting tentang proyek dan tagihan." : "Receive important project and billing updates."}</small></span><input type="checkbox" checked={emailNotifications} onChange={(event) => setEmailNotifications(event.target.checked)} /></label>
-          <div className={`email-delivery-status ${emailDeliveryConfigured ? "configured" : "pending"}`}><span className="badge-dot" /><span><strong>{emailDeliveryConfigured ? (id ? "Pengiriman email aktif" : "Email delivery active") : (id ? "Pengiriman email belum aktif" : "Email delivery not active")}</strong><small>{emailDeliveryConfigured ? (id ? "Provider email sudah terhubung ke aplikasi." : "An email provider is connected to the application.") : (id ? "Preferensi tetap tersimpan, tetapi email baru akan terkirim setelah provider email dikonfigurasi." : "Your preference is saved, but emails will only be sent after an email provider is configured.")}</small></span></div>
+          <label className="toggle-setting"><span className="metric-icon blue"><Bell size={19} /></span><span><strong>{id ? "Notifikasi email" : "Email notifications"}</strong><small>{id ? "Terima pembaruan saat akun dibuat, proyek ditugaskan, invoice dibayar, validasi selesai, dan BAST difinalkan." : "Receive updates when accounts are created, projects assigned, invoices paid, validations completed, and handovers finalized."}</small></span><input type="checkbox" checked={emailNotifications} onChange={(event) => setEmailNotifications(event.target.checked)} /></label>
+          <div className={`email-delivery-status ${emailDeliveryConfigured ? "configured" : "pending"}`}><span className="badge-dot" /><span><strong>{emailDeliveryConfigured ? (id ? "Konfigurasi provider terdeteksi" : "Provider configuration detected") : (id ? "Provider email belum dikonfigurasi" : "Email provider is not configured")}</strong><small>{emailDeliveryConfigured ? (id ? "Kirim email uji untuk memastikan API key, domain pengirim, dan alamat tujuan valid." : "Send a test email to verify the API key, sender domain, and recipient.") : (id ? "Riwayat tetap dicatat sebagai dilewati sampai RESEND_API_KEY tersedia di server." : "Attempts remain logged as skipped until RESEND_API_KEY is available on the server.")}</small></span></div>
+          <div className="email-test-actions">
+            <button className="button secondary" type="button" disabled={testingEmail} onClick={sendTestNotification}>
+              {testingEmail ? <RefreshCw className="spin" size={16} /> : <MailCheck size={16} />}
+              {testingEmail
+                ? id ? "Mengirim..." : "Sending..."
+                : id ? "Kirim email uji" : "Send test email"}
+            </button>
+            <span>{id ? "Email dikirim ke alamat akun Anda." : "The email is sent to your account address."}</span>
+          </div>
+          <div className="email-delivery-history">
+            <div className="email-history-head">
+              <div>
+                <strong>{id ? "Riwayat pengiriman terbaru" : "Recent delivery history"}</strong>
+                <span>{id ? "Status aktual dari proses pengiriman aplikasi." : "Actual status from application delivery attempts."}</span>
+              </div>
+              <button className="icon-button" type="button" aria-label={id ? "Muat ulang riwayat" : "Refresh history"} onClick={refreshEmailDeliveries}><RefreshCw size={15} /></button>
+            </div>
+            <div className="email-history-list">
+              {emailDeliveries.slice(0, 5).map((delivery) => (
+                <article key={delivery.id}>
+                  <span className={`email-status-icon ${delivery.status}`}>
+                    {delivery.status === "sent"
+                      ? <CheckCircle2 size={15} />
+                      : delivery.status === "failed"
+                        ? <TriangleAlert size={15} />
+                        : <Clock3 size={15} />}
+                  </span>
+                  <div>
+                    <strong>{delivery.subject}</strong>
+                    <small>
+                      {delivery.status === "sent"
+                        ? id ? "Terkirim" : "Sent"
+                        : delivery.status === "failed"
+                          ? id ? "Gagal" : "Failed"
+                          : id ? "Dilewati" : "Skipped"}
+                      {" · "}
+                      {new Intl.DateTimeFormat(id ? "id-ID" : "en-US", {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                        timeZone: "Asia/Makassar",
+                      }).format(new Date(delivery.createdAt))}
+                    </small>
+                    {delivery.error ? <small>{delivery.error}</small> : null}
+                  </div>
+                </article>
+              ))}
+              {!emailDeliveries.length ? (
+                <div className="empty-state compact">
+                  <MailCheck size={20} />
+                  <span>{id ? "Belum ada aktivitas email." : "No email activity yet."}</span>
+                </div>
+              ) : null}
+            </div>
+          </div>
           <div className="settings-form-actions"><button className="button primary" type="submit"><Save size={16} /> {id ? "Simpan preferensi" : "Save preferences"}</button></div>
         </form>
         <form className="panel settings-card" onSubmit={changePassword}>

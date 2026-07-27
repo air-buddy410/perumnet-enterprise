@@ -2,7 +2,8 @@
 
 Mini ERP full-stack untuk operasional proyek IT PerumNet Enterprise. Aplikasi
 mencakup dashboard proyek, BoQ, quotation dan invoice, procurement, BAST
-digital, pembukuan, serta manajemen pengguna berbasis peran.
+digital, pembukuan dan rekonsiliasi rekening, serta manajemen pengguna berbasis
+peran.
 
 ## Menjalankan aplikasi
 
@@ -56,6 +57,63 @@ untuk dokumen proyek melalui binding di `.openai/hosting.json`.
 Template PM2, Nginx, dan backup harian PostgreSQL untuk VPS tersedia di folder
 `deploy/`.
 
+## Rekening bank dan arus kas
+
+Admin dapat menambahkan rekening BCA atau bank lain dari modul Finance. Finance
+dapat memperbarui saldo dan mutasi melalui dua jalur:
+
+- Upload CSV bulanan. Parser menerima format BCA/generic dengan kolom tanggal,
+  keterangan, mutasi atau debit/kredit, saldo, dan referensi. Impor bersifat
+  idempoten; baris duplikat dilewati dan transaksi Invoice/SPK yang cocok
+  dalam jendela settlement tiga hari direkonsiliasi agar tidak dihitung dua
+  kali. Kasus ambigu dapat ditinjau, dicocokkan, atau dikecualikan secara
+  manual dari tabel mutasi.
+- Konektor API read-only. Isi `BANK_SYNC_API_URL` dan `BANK_SYNC_API_TOKEN` pada
+  environment server. Credential bank tidak pernah dikirim ke browser atau
+  disimpan di tabel aplikasi.
+
+Endpoint connector menerima:
+
+```json
+{
+  "accountId": "provider-account-id",
+  "from": "2026-07-01",
+  "to": "2026-07-27"
+}
+```
+
+dan mengembalikan:
+
+```json
+{
+  "balance": 125000000,
+  "balanceUpdatedAt": "2026-07-27T10:30:00.000Z",
+  "entries": [
+    {
+      "date": "2026-07-27",
+      "description": "PEMBAYARAN INVOICE",
+      "direction": "credit",
+      "amount": 15000000,
+      "balance": 125000000,
+      "reference": "BANK-REFERENCE"
+    }
+  ]
+}
+```
+
+Integrasi langsung BCA SNAP tetap memerlukan proses onboarding serta credential
+resmi dari BCA. Gunakan adapter server pada `BANK_SYNC_API_URL`; jangan pernah
+menaruh client secret, private key, atau access token BCA di frontend.
+
+## Notifikasi email
+
+Jika `RESEND_API_KEY` tersedia, aplikasi mengirim dan mencatat notifikasi untuk
+pembuatan akun, perubahan akses proyek, quotation terkirim, invoice dibuat atau
+dibayar, SPK dibuat/dikirim/selesai/dibayar, validasi selesai, dan BAST final.
+Setiap pengguna dapat menonaktifkan notifikasi bisnis, mengirim email uji, serta
+melihat status pengiriman terbaru. Email keamanan reset kata sandi tetap
+dikirim terlepas dari preferensi notifikasi.
+
 ## Verifikasi
 
 ```bash
@@ -76,7 +134,10 @@ autentikasi, RBAC, CRUD modul, kalkulasi keuangan, audit log, dan PDF.
 - Validasi request menggunakan Zod dengan respons error terstruktur.
 - Progress proyek dihitung dari tugas dan status pembayaran dihitung dari
   invoice.
-- Konfirmasi pembayaran otomatis membuat transaksi pemasukan.
+- Konfirmasi pembayaran Invoice membuat kas masuk; penyelesaian pekerjaan SPK
+  tidak dianggap kas keluar sampai pembayaran vendor dikonfirmasi terpisah.
+- Konfirmasi dan koreksi pembayaran membutuhkan izin `finance:manage`, memakai
+  tanggal mutasi aktual, dan mempertahankan mutasi bank yang sudah direkonsiliasi.
 - Dokumen proyek menerima JPG, PNG, WebP, atau PDF hingga 5 MB.
 - Quotation, invoice, SPK, dan BAST dibuat sebagai PDF di server.
 - Semua mutasi penting dicatat pada audit log.

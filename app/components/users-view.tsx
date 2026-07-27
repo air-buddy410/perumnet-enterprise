@@ -28,6 +28,7 @@ import {
 import { api, messageOf } from "../api-client";
 import { TeamUser } from "../data";
 import { localizedLabel, type AppLanguage } from "../i18n";
+import { UserAvatar } from "./user-avatar";
 
 interface UsersViewProps {
   notify: (message: string) => void;
@@ -69,9 +70,9 @@ export function UsersView({ notify, language, currentUserId, canManage }: UsersV
       .then((data) => {
         if (active) setUsers(data.map(withPermissions));
       })
-      .catch((error) => notify(messageOf(error)));
+      .catch((error) => notify(messageOf(error, language)));
     return () => { active = false; };
-  }, [notify]);
+  }, [language, notify]);
 
   const visibleUsers = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -137,7 +138,7 @@ export function UsersView({ notify, language, currentUserId, canManage }: UsersV
       setEditing(null);
       setPassword("");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -150,7 +151,7 @@ export function UsersView({ notify, language, currentUserId, canManage }: UsersV
       setUsers((current) => current.map((item) => item.id === user.id ? updated : item));
       notify(id ? "Status akses pengguna diperbarui." : "User access status updated.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -163,7 +164,7 @@ export function UsersView({ notify, language, currentUserId, canManage }: UsersV
       setEditing(null);
       notify(id ? "Akun pengguna berhasil dihapus." : "User account deleted.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     }
   }
 
@@ -194,7 +195,11 @@ export function UsersView({ notify, language, currentUserId, canManage }: UsersV
         <div className="user-list">
           {visibleUsers.map((user) => (
             <article className={`user-row ${user.status === "Nonaktif" ? "disabled" : ""}`} key={user.id}>
-              <div className={`avatar user-avatar ${roleClass(user.role)}`}>{user.name.split(" ").slice(0, 2).map((part) => part[0]).join("")}</div>
+              <UserAvatar
+                name={user.name}
+                avatarUrl={user.avatarUrl}
+                className={`user-avatar ${roleClass(user.role)}`}
+              />
               <div className="user-primary"><strong>{user.name}</strong><span><Mail size={13} /> {user.email}</span></div>
               <span className={`role-chip ${roleClass(user.role)}`}>{user.role}</span>
               <div className="user-last-active"><span>{id ? "Aktivitas terakhir" : "Last activity"}</span><strong>{user.lastActive}</strong></div>

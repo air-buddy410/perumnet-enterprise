@@ -279,6 +279,27 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     )?.amount,
     850_000,
   );
+  const correctedInvoice = await json(
+    `/api/invoices/${invoice.id}/payment`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ status: "Belum Lunas" }),
+    },
+  );
+  assert.equal(correctedInvoice.status, "Belum Lunas");
+  assert.equal(
+    (await json(`/api/transactions?projectId=${project.id}`)).some(
+      (entry) => entry.source === "Invoice",
+    ),
+    false,
+  );
+  await json(`/api/invoices/${invoice.id}/payment`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status: "Lunas",
+      paidDate: "2026-07-18",
+    }),
+  });
   const invoicePdf = await request(`/api/invoices/${invoice.id}/pdf`);
   assert.equal(invoicePdf.status, 200);
   assert.equal(Buffer.from(await invoicePdf.arrayBuffer()).subarray(0, 4).toString(), "%PDF");
@@ -329,6 +350,21 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   });
   assert.equal(editedSpk.cost, 600_000);
   let spkTransactions = await json(`/api/transactions?projectId=${project.id}`);
+  assert.equal(editedSpk.paymentStatus, "Belum Dibayar");
+  assert.equal(
+    spkTransactions.some((entry) => entry.source === "SPK"),
+    false,
+  );
+  const paidSpk = await json(`/api/spks/${spk.id}/payment`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status: "Dibayar",
+      paidDate: "2026-07-29",
+    }),
+  });
+  assert.equal(paidSpk.paymentStatus, "Dibayar");
+  assert.equal(paidSpk.paidDate, "2026-07-29");
+  spkTransactions = await json(`/api/transactions?projectId=${project.id}`);
   assert.equal(
     spkTransactions.find((entry) => entry.source === "SPK")?.amount,
     600_000,
@@ -346,11 +382,43 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   spkTransactions = await json(`/api/transactions?projectId=${project.id}`);
   assert.equal(
     spkTransactions.some((entry) => entry.source === "SPK"),
-    false,
+    true,
+  );
+  const unpaidSpk = await json(`/api/spks/${spk.id}/payment`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Belum Dibayar" }),
+  });
+  assert.equal(unpaidSpk.paymentStatus, "Belum Dibayar");
+  spkTransactions = await json(`/api/transactions?projectId=${project.id}`);
+  assert.equal(spkTransactions.some((entry) => entry.source === "SPK"), false);
+  await json(`/api/spks/${spk.id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Selesai" }),
+  });
+  const completedSpkDeliveries = (
+    await json("/api/notifications/email")
+  ).filter((delivery) => delivery.eventType === "spk_completed");
+  assert.ok(completedSpkDeliveries.length > 0);
+  assert.ok(
+    completedSpkDeliveries.every(
+      (delivery) =>
+        delivery.subject.includes(spk.number) &&
+        !delivery.subject.includes("undefined"),
+    ),
   );
   await json(`/api/spks/${spk.id}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status: "Selesai" }),
+  });
+  assert.equal(
+    (await json("/api/notifications/email")).filter(
+      (delivery) => delivery.eventType === "spk_completed",
+    ).length,
+    completedSpkDeliveries.length,
+  );
+  await json(`/api/spks/${spk.id}/payment`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Dibayar", paidDate: "2026-07-29" }),
   });
   assert.equal((await request(`/api/spks/${spk.id}/pdf`)).status, 200);
 
@@ -446,15 +514,353 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
         description: "Biaya pengujian",
         amount: 125_000,
         source: "Operasional",
+        category: "Operasional",
       }),
     },
     201,
   );
   assert.equal(transaction.project, "Proyek Integrasi Backend");
+  assert.equal(transaction.category, "Operasional");
   const finance = await json(`/api/finance/summary?projectId=${project.id}`);
   assert.equal(finance.income, 850_000);
   assert.equal(finance.expense, 725_000);
-  assert.equal(finance.profit, 125_000);
+  assert.equal(finance.netCash, 125_000);
+
+  const bankAccount = await json(
+    "/api/bank-accounts",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        bankName: "BCA",
+        accountName: "PerumNet Enterprise",
+        accountNumber: "1234567890",
+        openingBalance: 1_000_000,
+        syncMode: "Manual",
+      }),
+    },
+    201,
+  );
+  assert.equal(bankAccount.accountNumberMasked, "•••• 7890");
+  assert.equal(bankAccount.currentBalance, 1_000_000);
+  assert.equal(bankAccount.apiConfigured, false);
+
+  const statementFile = [
+    "MUTASI REKENING BCA",
+    "Nomor Rekening,1234567890",
+    "Tanggal,Keterangan,Mutasi,Saldo,Referensi",
+    "19/07/2026,TRANSFER MASUK,250000 CR,1250000,TRX-001",
+    "20/07/2026,BIAYA ADMIN,2500 DB,1247500,TRX-002",
+  ].join("\r\n");
+  const statementForm = new FormData();
+  statementForm.set(
+    "file",
+    new File([statementFile], "Mutasi-BCA-Juli-2026.csv", {
+      type: "text/csv",
+    }),
+  );
+  statementForm.set("statementMonth", "2026-07");
+  const importedStatement = await json(
+    `/api/bank-accounts/${bankAccount.id}/import`,
+    { method: "POST", body: statementForm },
+    201,
+  );
+  assert.equal(importedStatement.importedCount, 2);
+  assert.equal(importedStatement.duplicateCount, 0);
+  assert.equal(importedStatement.currentBalance, 1_247_500);
+
+  const repeatedStatementForm = new FormData();
+  repeatedStatementForm.set(
+    "file",
+    new File([statementFile], "Mutasi-BCA-Juli-2026.csv", {
+      type: "text/csv",
+    }),
+  );
+  repeatedStatementForm.set("statementMonth", "2026-07");
+  const repeatedImport = await json(
+    `/api/bank-accounts/${bankAccount.id}/import`,
+    { method: "POST", body: repeatedStatementForm },
+    201,
+  );
+  assert.equal(repeatedImport.importedCount, 0);
+  assert.equal(repeatedImport.duplicateCount, 2);
+
+  const bankAccounts = await json("/api/bank-accounts");
+  assert.equal(
+    bankAccounts.find((account) => account.id === bankAccount.id).currentBalance,
+    1_247_500,
+  );
+  const bankEntries = await json(
+    `/api/bank-accounts/${bankAccount.id}/entries`,
+  );
+  assert.equal(bankEntries.length, 2);
+  assert.deepEqual(
+    bankEntries.map((entry) => entry.type).sort(),
+    ["Pemasukan", "Pengeluaran"].sort(),
+  );
+  const generatedBankTransaction = (
+    await json("/api/transactions")
+  ).find(
+    (entry) =>
+      entry.source === "Bank: BCA" &&
+      entry.description === "TRANSFER MASUK",
+  );
+  assert.ok(generatedBankTransaction);
+  assert.equal(
+    (
+      await request(`/api/transactions/${generatedBankTransaction.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ description: "Tidak boleh diubah" }),
+      })
+    ).status,
+    409,
+  );
+  assert.equal(
+    (
+      await request(`/api/transactions/${generatedBankTransaction.id}`, {
+        method: "DELETE",
+      })
+    ).status,
+    409,
+  );
+
+  const olderStatementForm = new FormData();
+  olderStatementForm.set(
+    "file",
+    new File(
+      [
+        [
+          "Tanggal,Keterangan,Mutasi,Saldo,Referensi",
+          "30/06/2026,SALDO BULAN LAMA,100000 CR,900000,TRX-OLD",
+        ].join("\r\n"),
+      ],
+      "Mutasi-BCA-Juni-2026.csv",
+      { type: "text/csv" },
+    ),
+  );
+  olderStatementForm.set("statementMonth", "2026-06");
+  await json(
+    `/api/bank-accounts/${bankAccount.id}/import`,
+    { method: "POST", body: olderStatementForm },
+    201,
+  );
+  assert.equal(
+    (
+      await json("/api/bank-accounts")
+    ).find((account) => account.id === bankAccount.id).currentBalance,
+    1_247_500,
+  );
+
+  const settlementTransaction = await json(
+    "/api/transactions",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        date: "2026-07-10",
+        type: "Pemasukan",
+        description: "Settlement H+1",
+        amount: 333_123,
+        source: "Manual",
+        category: "Penjualan",
+      }),
+    },
+    201,
+  );
+  const settlementForm = new FormData();
+  settlementForm.set(
+    "file",
+    new File(
+      [
+        [
+          "Tanggal,Keterangan,Mutasi,Saldo,Referensi",
+          "11/07/2026,SETTLEMENT H+1,333123 CR,1333123,TRX-H1",
+        ].join("\r\n"),
+      ],
+      "Settlement-H1.csv",
+      { type: "text/csv" },
+    ),
+  );
+  settlementForm.set("statementMonth", "2026-07");
+  const settlementImport = await json(
+    `/api/bank-accounts/${bankAccount.id}/import`,
+    { method: "POST", body: settlementForm },
+    201,
+  );
+  assert.equal(settlementImport.matchedCount, 1);
+  const settlementEntry = (
+    await json(`/api/bank-accounts/${bankAccount.id}/entries`)
+  ).find((entry) => entry.reference === "TRX-H1");
+  assert.equal(settlementEntry.reconciliationStatus, "Matched");
+  assert.equal(settlementEntry.transactionId, settlementTransaction.id);
+  assert.equal(
+    (await json("/api/transactions")).filter(
+      (entry) =>
+        entry.amount === 333_123 && entry.source.startsWith("Bank:"),
+    ).length,
+    0,
+  );
+
+  const ambiguousTransactions = await Promise.all(
+    ["2026-07-14", "2026-07-16"].map((date, index) =>
+      json(
+        "/api/transactions",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            projectId: project.id,
+            date,
+            type: "Pemasukan",
+            description: `Kandidat rekonsiliasi ${index + 1}`,
+            amount: 444_123,
+            source: "Manual",
+            category: "Penjualan",
+          }),
+        },
+        201,
+      ),
+    ),
+  );
+  const ambiguousForm = new FormData();
+  ambiguousForm.set(
+    "file",
+    new File(
+      [
+        [
+          "Tanggal,Keterangan,Mutasi,Saldo,Referensi",
+          "15/07/2026,TRANSFER AMBIGU,444123 CR,1444123,TRX-AMB",
+        ].join("\r\n"),
+      ],
+      "Mutasi-Ambigu.csv",
+      { type: "text/csv" },
+    ),
+  );
+  ambiguousForm.set("statementMonth", "2026-07");
+  const ambiguousImport = await json(
+    `/api/bank-accounts/${bankAccount.id}/import`,
+    { method: "POST", body: ambiguousForm },
+    201,
+  );
+  assert.equal(ambiguousImport.matchedCount, 0);
+  const ambiguousEntry = (
+    await json(`/api/bank-accounts/${bankAccount.id}/entries`)
+  ).find((entry) => entry.reference === "TRX-AMB");
+  assert.equal(ambiguousEntry.reconciliationStatus, "Imported");
+  const candidates = await json(
+    `/api/bank-accounts/${bankAccount.id}/entries/${ambiguousEntry.id}/candidates`,
+  );
+  assert.deepEqual(
+    candidates.map((candidate) => candidate.id).sort(),
+    ambiguousTransactions.map((candidate) => candidate.id).sort(),
+  );
+  await json(
+    `/api/bank-accounts/${bankAccount.id}/entries/${ambiguousEntry.id}/reconcile`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        action: "match",
+        transactionId: ambiguousTransactions[0].id,
+      }),
+    },
+  );
+  let reconciledEntry = (
+    await json(`/api/bank-accounts/${bankAccount.id}/entries`)
+  ).find((entry) => entry.id === ambiguousEntry.id);
+  assert.equal(reconciledEntry.reconciliationStatus, "Matched");
+  assert.equal(reconciledEntry.transactionId, ambiguousTransactions[0].id);
+  await json(
+    `/api/bank-accounts/${bankAccount.id}/entries/${ambiguousEntry.id}/reconcile`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ action: "exclude" }),
+    },
+  );
+  reconciledEntry = (
+    await json(`/api/bank-accounts/${bankAccount.id}/entries`)
+  ).find((entry) => entry.id === ambiguousEntry.id);
+  assert.equal(reconciledEntry.reconciliationStatus, "Excluded");
+  assert.equal(reconciledEntry.transactionId, undefined);
+  await json(
+    `/api/bank-accounts/${bankAccount.id}/entries/${ambiguousEntry.id}/reconcile`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ action: "restore" }),
+    },
+  );
+  reconciledEntry = (
+    await json(`/api/bank-accounts/${bankAccount.id}/entries`)
+  ).find((entry) => entry.id === ambiguousEntry.id);
+  assert.equal(reconciledEntry.reconciliationStatus, "Imported");
+  assert.ok(reconciledEntry.transactionId);
+
+  const paidSpkStatementForm = new FormData();
+  paidSpkStatementForm.set(
+    "file",
+    new File(
+      [
+        [
+          "Tanggal,Keterangan,Mutasi,Saldo,Referensi",
+          "30/07/2026,PEMBAYARAN VENDOR SPK,600000 DB,647500,TRX-SPK",
+        ].join("\r\n"),
+      ],
+      "Mutasi-SPK.csv",
+      { type: "text/csv" },
+    ),
+  );
+  paidSpkStatementForm.set("statementMonth", "2026-07");
+  const paidSpkImport = await json(
+    `/api/bank-accounts/${bankAccount.id}/import`,
+    { method: "POST", body: paidSpkStatementForm },
+    201,
+  );
+  assert.equal(paidSpkImport.matchedCount, 1);
+  let paidSpkEntry = (
+    await json(`/api/bank-accounts/${bankAccount.id}/entries`)
+  ).find((entry) => entry.reference === "TRX-SPK");
+  assert.equal(paidSpkEntry.reconciliationStatus, "Matched");
+  await json(`/api/spks/${spk.id}/payment`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Belum Dibayar" }),
+  });
+  paidSpkEntry = (
+    await json(`/api/bank-accounts/${bankAccount.id}/entries`)
+  ).find((entry) => entry.reference === "TRX-SPK");
+  assert.equal(paidSpkEntry.reconciliationStatus, "Imported");
+  assert.ok(
+    (await json("/api/transactions")).some(
+      (entry) =>
+        entry.id === paidSpkEntry.transactionId &&
+        entry.source === "Bank: BCA",
+    ),
+  );
+  await json(`/api/spks/${spk.id}/payment`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Dibayar", paidDate: "2026-07-29" }),
+  });
+  paidSpkEntry = (
+    await json(`/api/bank-accounts/${bankAccount.id}/entries`)
+  ).find((entry) => entry.reference === "TRX-SPK");
+  assert.equal(paidSpkEntry.reconciliationStatus, "Matched");
+  assert.equal(
+    (await json("/api/transactions")).filter(
+      (entry) => entry.source === "SPK" && entry.amount === 600_000,
+    ).length,
+    1,
+  );
+  assert.equal(
+    (await json("/api/transactions")).filter(
+      (entry) => entry.source.startsWith("Bank:") && entry.amount === 600_000,
+    ).length,
+    0,
+  );
+
+  assert.equal(
+    (
+      await request(`/api/bank-accounts/${bankAccount.id}/sync`, {
+        method: "POST",
+      })
+    ).status,
+    409,
+  );
 
   const users = await json("/api/users");
   assert.ok(users.some((user) => user.role === "Finance"));
@@ -500,9 +906,20 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   );
   const avatar = await json("/api/profile/avatar", { method: "POST", body: avatarForm });
   assert.match(avatar.avatarUrl, /^\/api\/profile\/avatar\//);
+  assert.match(avatar.avatarUrl, /\?v=/);
   const avatarResponse = await request(avatar.avatarUrl);
   assert.equal(avatarResponse.status, 200);
   assert.equal(avatarResponse.headers.get("content-type"), "image/png");
+  assert.match(
+    avatarResponse.headers.get("cache-control"),
+    /private, max-age=3600, immutable/,
+  );
+  assert.match((await json("/api/profile")).avatarUrl, /\?v=/);
+  assert.match((await json("/api/auth/session")).user.avatarUrl, /\?v=/);
+  assert.match(
+    (await json("/api/users")).find((entry) => entry.id === "user-1").avatarUrl,
+    /\?v=/,
+  );
 
   const readOnlyUser = await json(
     "/api/users",
@@ -531,6 +948,20 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   );
   assert.equal(readOnlyUser.permissions.projects, "view");
   assert.equal(readOnlyUser.permissions.bast, "none");
+  const emailDeliveries = await json("/api/notifications/email");
+  assert.ok(
+    emailDeliveries.some(
+      (delivery) =>
+        delivery.recipient === "viewer.integration@perumnet.id" &&
+        delivery.eventType === "account_created" &&
+        delivery.status === "skipped",
+    ),
+  );
+  const testEmail = await json("/api/notifications/email/test", {
+    method: "POST",
+  });
+  assert.equal(testEmail.configured, false);
+  assert.equal(testEmail.status, "skipped");
   await json(`/api/projects/${project.id}/access`, {
     method: "PUT",
     body: JSON.stringify({ userIds: [readOnlyUser.id] }),
@@ -574,6 +1005,64 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
       remember: false,
     }),
   });
+  assert.equal(
+    (
+      await request(`/api/invoices/${invoice.id}/payment`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: "Lunas",
+          paidDate: "2026-07-29",
+        }),
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request(`/api/spks/${spk.id}/payment`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: "Dibayar",
+          paidDate: "2026-07-29",
+        }),
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request(`/api/invoices/${invoice.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ amount: 860_000 }),
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request(`/api/invoices/${invoice.id}`, {
+        method: "DELETE",
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request(`/api/spks/${spk.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ scope: "Tidak boleh mengubah kas" }),
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request(`/api/spks/${spk.id}`, {
+        method: "DELETE",
+      })
+    ).status,
+    403,
+  );
   const projectManagerProject = await json("/api/projects", {
     method: "POST",
     body: JSON.stringify({
@@ -615,6 +1104,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   })).status, 403);
   assert.equal((await request("/api/bast")).status, 403);
   assert.equal((await request("/api/transactions/report.pdf")).status, 403);
+  assert.equal((await request("/api/bank-accounts")).status, 403);
   assert.equal((await request("/api/users")).status, 403);
   assert.equal((await request(`/api/invoices/${invoice.id}`)).status, 403);
   assert.equal(

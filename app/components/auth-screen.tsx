@@ -119,7 +119,7 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
         <div className="auth-orbit auth-orbit-two" />
         <div className="auth-brand-top">
           <img
-            src={appPath("/perumnet-enterprise-brand.png")}
+            src={appPath("/perumnet-mark.png")}
             alt=""
             width={58}
             height={58}
@@ -135,7 +135,7 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
             <span>{id ? "lebih terukur." : "with clarity."}</span>
           </h1>
           <p>
-            {id ? "Dari penawaran, pelaksanaan lapangan, hingga profitabilitas proyek—semua terhubung dalam ruang kerja yang ringkas." : "From quotations and field execution to project profitability, everything is connected in one focused workspace."}
+            {id ? "Dari penawaran, pelaksanaan lapangan, hingga arus kas proyek—semua terhubung dalam ruang kerja yang ringkas." : "From quotations and field execution to project cash flow, everything is connected in one focused workspace."}
           </p>
           <div className="auth-trust-card">
             <span className="auth-trust-icon">

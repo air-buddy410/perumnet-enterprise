@@ -87,6 +87,8 @@ export interface WorkOrder {
   scope: string;
   cost: number;
   status: "Draft" | "Dikirim" | "Dikerjakan" | "Selesai";
+  paymentStatus: "Belum Dibayar" | "Dibayar";
+  paidDate?: string;
   startDate?: string;
   endDate?: string;
 }
@@ -101,6 +103,44 @@ export interface Transaction {
   description: string;
   amount: number;
   source: string;
+  category: string;
+}
+
+export interface BankAccount {
+  id: string;
+  bankName: string;
+  accountName: string;
+  accountNumberMasked: string;
+  currency: string;
+  openingBalance: number;
+  currentBalance: number;
+  syncMode: "Manual" | "API";
+  status: "Aktif" | "Nonaktif";
+  lastSyncedAt?: string;
+  balanceUpdatedAt?: string;
+  entryCount: number;
+  unmatchedCount: number;
+  latestEntryDate?: string;
+  hasExternalAccountId: boolean;
+  apiConfigured: boolean;
+}
+
+export interface BankStatementEntry {
+  id: string;
+  bankAccountId: string;
+  date: string;
+  description: string;
+  type: Transaction["type"];
+  amount: number;
+  runningBalance?: number;
+  reference?: string;
+  reconciliationStatus: "Matched" | "Imported" | "Excluded";
+  source: "Manual Upload" | "API";
+  transactionId?: string;
+  projectId?: string;
+  project: string;
+  category: string;
+  createdAt: string;
 }
 
 export interface TeamUser {
@@ -110,6 +150,7 @@ export interface TeamUser {
   role: "Admin" | "Project Manager" | "Engineer" | "Finance";
   status: "Aktif" | "Nonaktif";
   lastActive: string;
+  avatarUrl?: string;
   permissions?: import("../shared/access").AccessPermissions;
 }
 
@@ -310,6 +351,7 @@ export const initialWorkOrders: WorkOrder[] = [
     scope: "Penarikan dan terminasi kabel UTP lantai 1–3",
     cost: 12_500_000,
     status: "Dikerjakan",
+    paymentStatus: "Belum Dibayar",
   },
   {
     id: "spk-2",
@@ -319,6 +361,7 @@ export const initialWorkOrders: WorkOrder[] = [
     scope: "Splicing backbone fiber dan OTDR test",
     cost: 7_800_000,
     status: "Dikirim",
+    paymentStatus: "Belum Dibayar",
   },
   {
     id: "spk-3",
@@ -328,6 +371,7 @@ export const initialWorkOrders: WorkOrder[] = [
     scope: "Instalasi CCTV area entrance dan parkir",
     cost: 9_250_000,
     status: "Selesai",
+    paymentStatus: "Belum Dibayar",
   },
 ];
 
@@ -340,6 +384,7 @@ export const initialTransactions: Transaction[] = [
     description: "Pembelian access point tahap 2",
     amount: 29_400_000,
     source: "Material",
+    category: "Vendor",
   },
   {
     id: "trx-2",
@@ -349,6 +394,7 @@ export const initialTransactions: Transaction[] = [
     description: "Pembayaran invoice DP 30%",
     amount: 29_040_000,
     source: "Invoice",
+    category: "Penjualan",
   },
   {
     id: "trx-3",
@@ -358,6 +404,7 @@ export const initialTransactions: Transaction[] = [
     description: "Pembayaran invoice DP 50%",
     amount: 93_725_000,
     source: "Invoice",
+    category: "Penjualan",
   },
   {
     id: "trx-4",
@@ -367,6 +414,7 @@ export const initialTransactions: Transaction[] = [
     description: "Termin awal teknisi jaringan",
     amount: 6_250_000,
     source: "SPK",
+    category: "Vendor",
   },
   {
     id: "trx-5",
@@ -376,6 +424,7 @@ export const initialTransactions: Transaction[] = [
     description: "Pembelian kamera dan NVR",
     amount: 41_750_000,
     source: "Material",
+    category: "Vendor",
   },
 ];
 

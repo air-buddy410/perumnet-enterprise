@@ -17,7 +17,7 @@ export const metadata: Metadata = {
   icons: {
     icon: appPath("/favicon.png"),
     shortcut: appPath("/favicon.png"),
-    apple: appPath("/perumnet-enterprise-brand.png"),
+    apple: appPath("/apple-touch-icon.png"),
   },
   openGraph: {
     title: "PerumNet Enterprise — Konsultan IT Bali",

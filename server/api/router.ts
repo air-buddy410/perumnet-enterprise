@@ -12,6 +12,7 @@ import {
 } from "@/shared/access";
 import { writeAuditLog } from "../audit";
 import {
+  avatarUrlForUser,
   createPasswordResetToken,
   createSession,
   getSessionUser,
@@ -25,6 +26,13 @@ import {
   type UserRole,
 } from "../auth";
 import { getDatabase } from "../db/client";
+import {
+  emailDeliveryConfigured,
+  notifyProjectStakeholders,
+  sendAccountCreatedEmail,
+  sendPasswordResetEmail,
+  sendTestEmail,
+} from "../email";
 import { asNumber, formatDate, initials, parseJson } from "../format";
 import { deleteProjectFile, readProjectFile, storeProjectFile } from "../storage";
 import {
@@ -40,6 +48,7 @@ import {
   renderFinancialReportPdf,
   renderValidationPdf,
 } from "./pdf";
+import { handleBankAccounts } from "./bank-router";
 
 const emailSchema = z.string().trim().email().max(254).transform((value) => value.toLowerCase());
 const idSchema = z.string().trim().min(1).max(100);
@@ -123,6 +132,17 @@ const transactionSchema = z.object({
   description: z.string().trim().min(2).max(300),
   amount: positiveMoney,
   source: z.string().trim().min(2).max(80),
+  category: z
+    .enum([
+      "Penjualan",
+      "Operasional",
+      "Vendor",
+      "Pajak",
+      "Gaji",
+      "Modal",
+      "Lainnya",
+    ])
+    .default("Lainnya"),
 });
 
 const bastSchema = z.object({
@@ -207,6 +227,19 @@ function now() {
   return new Date().toISOString();
 }
 
+function makassarToday(value = now()) {
+  const parts = new Intl.DateTimeFormat("en", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Asia/Makassar",
+  }).formatToParts(new Date(value));
+  const values = Object.fromEntries(
+    parts.map((part) => [part.type, part.value]),
+  );
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 function assertDateOrder(
   start: unknown,
   end: unknown,
@@ -266,6 +299,24 @@ function localizedTransactionDescription(
     .replace(/^Biaya\s+/i, "Cost of ");
 }
 
+function localizedTransactionCategory(
+  value: unknown,
+  language: AuthUser["preferredLanguage"],
+) {
+  const category = String(value ?? "Lainnya");
+  if (language !== "en") return category;
+  const categories: Record<string, string> = {
+    Penjualan: "Sales",
+    Operasional: "Operations",
+    Vendor: "Vendor",
+    Pajak: "Tax",
+    Gaji: "Payroll",
+    Modal: "Capital",
+    Lainnya: "Other",
+  };
+  return categories[category] ?? category;
+}
+
 function makeSequence(prefix: string, count: number) {
   const date = new Date();
   return `${prefix}/PN/${String(date.getUTCMonth() + 1).padStart(2, "0")}/${date.getUTCFullYear()}/${String(count + 1).padStart(3, "0")}`;
@@ -293,8 +344,10 @@ const resourceModules: Record<string, AccessModule> = {
   bast: "bast",
   transactions: "finance",
   finance: "finance",
+  "bank-accounts": "finance",
   users: "users",
   "audit-logs": "users",
+  notifications: "settings",
   documents: "projects",
   validations: "bast",
 };
@@ -431,6 +484,134 @@ async function assertBoqTotalCoversInvoices(
   }
 }
 
+async function detachOrDeleteSystemTransaction(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  source: "Invoice" | "SPK",
+  referenceId: string,
+) {
+  const result = await client.execute({
+    sql: `
+      SELECT t.id,e.id AS entry_id,e.date AS entry_date,
+        e.description AS entry_description,e.type AS entry_type,
+        e.amount AS entry_amount,a.bank_name
+      FROM transactions t
+      LEFT JOIN bank_statement_entries e ON e.transaction_id=t.id
+      LEFT JOIN bank_accounts a ON a.id=e.bank_account_id
+      WHERE t.source=? AND t.reference_id=?
+      LIMIT 1
+    `,
+    args: [source, referenceId],
+  });
+  const transaction = result.rows[0];
+  if (!transaction) return;
+  if (!transaction.entry_id) {
+    await client.execute({
+      sql: "DELETE FROM transactions WHERE id=?",
+      args: [transaction.id],
+    });
+    return;
+  }
+  await client.batch(
+    [
+      {
+        sql: `
+          UPDATE transactions SET
+            date=?,type=?,description=?,amount=?,source=?,reference_id=?,updated_at=?
+          WHERE id=?
+        `,
+        args: [
+          transaction.entry_date,
+          transaction.entry_type,
+          transaction.entry_description,
+          transaction.entry_amount,
+          `Bank: ${String(transaction.bank_name)}`,
+          transaction.entry_id,
+          now(),
+          transaction.id,
+        ],
+      },
+      {
+        sql: `
+          UPDATE bank_statement_entries
+          SET reconciliation_status='Imported'
+          WHERE transaction_id=?
+        `,
+        args: [transaction.id],
+      },
+    ],
+    "write",
+  );
+}
+
+async function reattachImportedBankTransaction(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  input: {
+    projectId: string;
+    date: string;
+    type: "Pemasukan" | "Pengeluaran";
+    amount: number;
+    source: "Invoice" | "SPK";
+    referenceId: string;
+    description: string;
+    category: string;
+  },
+) {
+  const result = await client.execute({
+    sql: `
+      SELECT t.id,e.id AS entry_id,e.date AS entry_date
+      FROM transactions t
+      JOIN bank_statement_entries e ON e.transaction_id=t.id
+      WHERE t.project_id=? AND t.type=? AND t.amount=?
+        AND t.source LIKE 'Bank:%'
+        AND e.reconciliation_status='Imported'
+      ORDER BY e.date DESC,e.created_at DESC
+      LIMIT 50
+    `,
+    args: [input.projectId, input.type, input.amount],
+  });
+  const candidates = result.rows.filter((candidate) => {
+    const left = Date.parse(`${input.date}T00:00:00.000Z`);
+    const right = Date.parse(`${String(candidate.entry_date)}T00:00:00.000Z`);
+    return Math.abs(left - right) / 86_400_000 <= 14;
+  });
+  if (candidates.length !== 1) return false;
+  const candidate = candidates[0];
+  await client.batch(
+    [
+      {
+        sql: `
+          UPDATE transactions SET
+            project_id=?,date=?,type=?,description=?,amount=?,source=?,
+            reference_id=?,category=?,updated_at=?
+          WHERE id=?
+        `,
+        args: [
+          input.projectId,
+          input.date,
+          input.type,
+          input.description,
+          input.amount,
+          input.source,
+          input.referenceId,
+          input.category,
+          now(),
+          candidate.id,
+        ],
+      },
+      {
+        sql: `
+          UPDATE bank_statement_entries
+          SET reconciliation_status='Matched'
+          WHERE id=?
+        `,
+        args: [candidate.entry_id],
+      },
+    ],
+    "write",
+  );
+  return true;
+}
+
 async function syncInvoiceTransaction(
   client: Awaited<ReturnType<typeof getDatabase>>["client"],
   invoiceId: string,
@@ -442,10 +623,7 @@ async function syncInvoiceTransaction(
     "Invoice tidak ditemukan.",
   );
   if (invoice.status !== "Lunas") {
-    await client.execute({
-      sql: "DELETE FROM transactions WHERE source='Invoice' AND reference_id=?",
-      args: [invoiceId],
-    });
+    await detachOrDeleteSystemTransaction(client, "Invoice", invoiceId);
     return;
   }
   const timestamp = now();
@@ -455,7 +633,7 @@ async function syncInvoiceTransaction(
   });
   if (existing.rows[0]) {
     await client.execute({
-      sql: "UPDATE transactions SET project_id=?,date=?,type='Pemasukan',description=?,amount=?,updated_at=? WHERE id=?",
+      sql: "UPDATE transactions SET project_id=?,date=?,type='Pemasukan',description=?,amount=?,category='Penjualan',updated_at=? WHERE id=?",
       args: [
         invoice.project_id,
         invoice.paid_date ?? invoice.issue_date,
@@ -467,8 +645,22 @@ async function syncInvoiceTransaction(
     });
     return;
   }
+  if (
+    await reattachImportedBankTransaction(client, {
+      projectId: String(invoice.project_id),
+      date: String(invoice.paid_date ?? invoice.issue_date),
+      type: "Pemasukan",
+      amount: asNumber(invoice.amount),
+      source: "Invoice",
+      referenceId: invoiceId,
+      description: `Pembayaran ${String(invoice.number)}`,
+      category: "Penjualan",
+    })
+  ) {
+    return;
+  }
   await client.execute({
-    sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,reference_id,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,reference_id,category,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
     args: [
       randomUUID(),
       invoice.project_id,
@@ -478,6 +670,7 @@ async function syncInvoiceTransaction(
       invoice.amount,
       "Invoice",
       invoiceId,
+      "Penjualan",
       userId,
       timestamp,
       timestamp,
@@ -495,26 +688,23 @@ async function syncSpkTransaction(
     [spkId],
     "SPK tidak ditemukan.",
   );
-  if (spk.status !== "Selesai") {
-    await client.execute({
-      sql: "DELETE FROM transactions WHERE source='SPK' AND reference_id=?",
-      args: [spkId],
-    });
+  if (spk.payment_status !== "Dibayar") {
+    await detachOrDeleteSystemTransaction(client, "SPK", spkId);
     return;
   }
   const timestamp = now();
-  const transactionDate = spk.end_date ?? timestamp.slice(0, 10);
+  const transactionDate = spk.paid_date ?? timestamp.slice(0, 10);
   const existing = await client.execute({
     sql: "SELECT id FROM transactions WHERE source='SPK' AND reference_id=? LIMIT 1",
     args: [spkId],
   });
   if (existing.rows[0]) {
     await client.execute({
-      sql: "UPDATE transactions SET project_id=?,date=?,type='Pengeluaran',description=?,amount=?,updated_at=? WHERE id=?",
+      sql: "UPDATE transactions SET project_id=?,date=?,type='Pengeluaran',description=?,amount=?,category='Vendor',updated_at=? WHERE id=?",
       args: [
         spk.project_id,
         transactionDate,
-        `Biaya ${spk.number}`,
+        `Pembayaran vendor ${spk.number}`,
         spk.cost,
         timestamp,
         existing.rows[0].id,
@@ -522,46 +712,37 @@ async function syncSpkTransaction(
     });
     return;
   }
+  if (
+    await reattachImportedBankTransaction(client, {
+      projectId: String(spk.project_id),
+      date: String(transactionDate),
+      type: "Pengeluaran",
+      amount: asNumber(spk.cost),
+      source: "SPK",
+      referenceId: spkId,
+      description: `Pembayaran vendor ${String(spk.number)}`,
+      category: "Vendor",
+    })
+  ) {
+    return;
+  }
   await client.execute({
-    sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,reference_id,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,reference_id,category,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
     args: [
       randomUUID(),
       spk.project_id,
       transactionDate,
       "Pengeluaran",
-      `Biaya ${spk.number}`,
+      `Pembayaran vendor ${spk.number}`,
       spk.cost,
       "SPK",
       spkId,
+      "Vendor",
       userId,
       timestamp,
       timestamp,
     ],
   });
-}
-
-async function sendResetEmail(email: string, token: string) {
-  if (!process.env.RESEND_API_KEY) return false;
-  const appOrigin = new URL(process.env.APP_URL ?? "http://localhost:3000").origin;
-  const resetUrl = new URL(
-    applicationPath(`/?resetToken=${encodeURIComponent(token)}`),
-    appOrigin,
-  ).toString();
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: process.env.EMAIL_FROM ?? "PerumNet Enterprise <noreply@perumnet.id>",
-      to: [email],
-      subject: "Pemulihan kata sandi PerumNet Enterprise",
-      html: `<p>Gunakan tautan berikut dalam 30 menit untuk mengatur ulang kata sandi:</p><p><a href="${resetUrl}">Atur ulang kata sandi</a></p>`,
-    }),
-  });
-  if (!response.ok) console.error("Gagal mengirim email reset:", await response.text());
-  return response.ok;
 }
 
 async function handleAuth(request: Request, path: string[]) {
@@ -586,14 +767,29 @@ async function handleAuth(request: Request, path: string[]) {
     const input = z.object({ email: emailSchema }).parse(await jsonBody(request));
     const { client } = await getDatabase();
     const result = await client.execute({
-      sql: "SELECT id,email FROM users WHERE lower(email) = lower(?) AND status = 'Aktif' LIMIT 1",
+      sql: `
+        SELECT u.id,u.email,COALESCE(up.preferred_language,'id') AS preferred_language
+        FROM users u
+        LEFT JOIN user_profiles up ON up.user_id=u.id
+        WHERE lower(u.email) = lower(?) AND u.status = 'Aktif'
+        LIMIT 1
+      `,
       args: [input.email],
     });
 
     let developmentToken: string | undefined;
     if (result.rows[0]) {
       const token = await createPasswordResetToken(client, String(result.rows[0].id));
-      await sendResetEmail(String(result.rows[0].email), token);
+      await sendPasswordResetEmail(
+        client,
+        {
+          id: String(result.rows[0].id),
+          email: String(result.rows[0].email),
+          preferredLanguage:
+            String(result.rows[0].preferred_language) === "en" ? "en" : "id",
+        },
+        token,
+      );
       if (process.env.NODE_ENV !== "production" && !process.env.RESEND_API_KEY) {
         developmentToken = token;
       }
@@ -771,6 +967,14 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
       "write",
     );
     await writeAuditLog(client, request, user, "create", "project", id, input);
+    await notifyProjectStakeholders(client, {
+      projectId: id,
+      eventType: "project_created",
+      subject: `Proyek baru: ${input.name}`,
+      message: `proyek ${input.name} untuk ${input.client} telah dibuat dan tersedia sesuai akses Anda.`,
+      subjectEn: `New project: ${input.name}`,
+      messageEn: `project ${input.name} for ${input.client} has been created and is available according to your access.`,
+    });
     const projects = await listProjects(new URLSearchParams(), user);
     return created(projects.find((project) => project.id === id));
   }
@@ -809,7 +1013,7 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     if (request.method === "PUT") {
       const input = projectAccessSchema.parse(await jsonBody(request));
       const project = await ensureExists(
-        "SELECT p.manager_id,u.role AS manager_role FROM projects p LEFT JOIN users u ON u.id=p.manager_id WHERE p.id=?",
+        "SELECT p.name,p.manager_id,u.role AS manager_role FROM projects p LEFT JOIN users u ON u.id=p.manager_id WHERE p.id=?",
         [projectId],
         "Proyek tidak ditemukan.",
       );
@@ -845,6 +1049,14 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
       );
       await writeAuditLog(client, request, user, "update_access", "project", projectId, {
         userIds: uniqueIds,
+      });
+      await notifyProjectStakeholders(client, {
+        projectId,
+        eventType: "project_access_updated",
+        subject: `Akses proyek ${String(project.name)} diperbarui`,
+        message: `akses tim untuk proyek ${String(project.name)} telah diperbarui oleh Administrator.`,
+        subjectEn: `Project access updated for ${String(project.name)}`,
+        messageEn: `team access for project ${String(project.name)} was updated by an Administrator.`,
       });
       return ok({ projectId, userIds: uniqueIds });
     }
@@ -1404,6 +1616,7 @@ async function handleQuotations(request: Request, user: AuthUser) {
       sql: "SELECT * FROM quotations WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
       args: [projectId],
     });
+    const wasSent = String(current.rows[0]?.status ?? "") === "Sent";
     const timestamp = now();
     let quotationId = current.rows[0] ? String(current.rows[0].id) : "";
     if (quotationId) {
@@ -1460,6 +1673,17 @@ async function handleQuotations(request: Request, user: AuthUser) {
       args: [quotationId],
     });
     const row = result.rows[0];
+    if (String(row.status) === "Sent" && !wasSent) {
+      await notifyProjectStakeholders(client, {
+        projectId,
+        eventType: "quotation_sent",
+        subject: `Quotation ${String(row.number)} siap dikirim`,
+        message: `quotation ${String(row.number)} sebesar Rp ${asNumber(row.total).toLocaleString("id-ID")} telah ditandai terkirim.`,
+        subjectEn: `Quotation ${String(row.number)} is ready`,
+        messageEn: `quotation ${String(row.number)} for IDR ${asNumber(row.total).toLocaleString("en-US")} has been marked as sent.`,
+        includeFinance: true,
+      });
+    }
     return ok({
       id: String(row.id),
       number: String(row.number),
@@ -1606,6 +1830,15 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
       args: [id, input.projectId, number, input.type, input.issueDate, input.dueDate, input.amount, "Belum Lunas", timestamp, timestamp],
     });
     await writeAuditLog(client, request, user, "create", "invoice", id, input);
+    await notifyProjectStakeholders(client, {
+      projectId: input.projectId,
+      eventType: "invoice_created",
+      subject: `Invoice ${number} diterbitkan`,
+      message: `invoice ${number} sebesar Rp ${input.amount.toLocaleString("id-ID")} telah diterbitkan dengan jatuh tempo ${input.dueDate}.`,
+      subjectEn: `Invoice ${number} issued`,
+      messageEn: `invoice ${number} for IDR ${input.amount.toLocaleString("en-US")} was issued with a due date of ${input.dueDate}.`,
+      includeFinance: true,
+    });
     return created(await getInvoice(client, id));
   }
 
@@ -1615,23 +1848,55 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
     return renderBusinessPdf("invoice", invoiceId, user.preferredLanguage);
   }
 
-  if (invoiceId && action === "payment" && request.method === "POST") {
+  if (
+    invoiceId &&
+    action === "payment" &&
+    ["POST", "PATCH"].includes(request.method)
+  ) {
     if (!mutationRoles("invoices").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengonfirmasi pembayaran.");
+    assertAccess(user, "finance", "manage");
     const invoice = await ensureExists(
       "SELECT * FROM invoices WHERE id=?",
       [invoiceId],
       "Invoice tidak ditemukan.",
     );
     await assertProjectAccess(user, String(invoice.project_id));
-    if (invoice.status === "Lunas") return ok(await getInvoice(client, invoiceId));
-    const input = z.object({ paidDate: isoDateSchema.default(() => new Date().toISOString().slice(0, 10)) }).parse(await jsonBody(request));
+    const input = z
+      .object({
+        status: z.enum(["Belum Lunas", "Lunas"]).default("Lunas"),
+        paidDate: isoDateSchema.optional(),
+      })
+      .parse(await jsonBody(request));
+    const paidDate =
+      input.status === "Lunas"
+        ? input.paidDate ?? invoice.paid_date ?? now().slice(0, 10)
+        : null;
     const timestamp = now();
     await client.execute({
-      sql: "UPDATE invoices SET status='Lunas',paid_date=?,updated_at=? WHERE id=?",
-      args: [input.paidDate, timestamp, invoiceId],
+      sql: "UPDATE invoices SET status=?,paid_date=?,updated_at=? WHERE id=?",
+      args: [input.status, paidDate, timestamp, invoiceId],
     });
     await syncInvoiceTransaction(client, invoiceId, user.id);
-    await writeAuditLog(client, request, user, "confirm_payment", "invoice", invoiceId, input);
+    await writeAuditLog(
+      client,
+      request,
+      user,
+      input.status === "Lunas" ? "confirm_payment" : "cancel_payment",
+      "invoice",
+      invoiceId,
+      { status: input.status, paidDate },
+    );
+    if (input.status === "Lunas" && invoice.status !== "Lunas") {
+      await notifyProjectStakeholders(client, {
+        projectId: String(invoice.project_id),
+        eventType: "invoice_paid",
+        subject: `Pembayaran ${String(invoice.number)} diterima`,
+        message: `pembayaran invoice ${String(invoice.number)} sebesar Rp ${asNumber(invoice.amount).toLocaleString("id-ID")} telah dikonfirmasi.`,
+        subjectEn: `Payment for ${String(invoice.number)} received`,
+        messageEn: `invoice ${String(invoice.number)} payment of IDR ${asNumber(invoice.amount).toLocaleString("en-US")} has been confirmed.`,
+        includeFinance: true,
+      });
+    }
     return ok(await getInvoice(client, invoiceId));
   }
 
@@ -1645,6 +1910,9 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
     if (!mutationRoles("invoices").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah invoice.");
     const input = invoiceSchema.omit({ projectId: true }).partial().parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM invoices WHERE id=?", [invoiceId], "Invoice tidak ditemukan.");
+    if (current.status === "Lunas") {
+      assertAccess(user, "finance", "manage");
+    }
     await assertProjectAccess(user, String(current.project_id));
     assertDateOrder(
       input.issueDate ?? current.issue_date,
@@ -1668,18 +1936,16 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
 
   if (invoiceId && !action && request.method === "DELETE") {
     if (!mutationRoles("invoices").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menghapus invoice.");
-    const invoice = await ensureExists("SELECT project_id FROM invoices WHERE id=?", [invoiceId], "Invoice tidak ditemukan.");
+    const invoice = await ensureExists("SELECT project_id,status FROM invoices WHERE id=?", [invoiceId], "Invoice tidak ditemukan.");
+    if (invoice.status === "Lunas") {
+      assertAccess(user, "finance", "manage");
+    }
     await assertProjectAccess(user, String(invoice.project_id));
-    await client.batch(
-      [
-        {
-          sql: "DELETE FROM transactions WHERE source='Invoice' AND reference_id=?",
-          args: [invoiceId],
-        },
-        { sql: "DELETE FROM invoices WHERE id=?", args: [invoiceId] },
-      ],
-      "write",
-    );
+    await detachOrDeleteSystemTransaction(client, "Invoice", invoiceId);
+    await client.execute({
+      sql: "DELETE FROM invoices WHERE id=?",
+      args: [invoiceId],
+    });
     await writeAuditLog(client, request, user, "delete", "invoice", invoiceId);
     return noContent();
   }
@@ -1789,6 +2055,8 @@ function mapSpk(row: Record<string, unknown>) {
     scope: String(row.scope),
     cost: asNumber(row.cost),
     status: String(row.status),
+    paymentStatus: String(row.payment_status ?? "Belum Dibayar"),
+    paidDate: row.paid_date ? String(row.paid_date) : undefined,
     startDate: row.start_date,
     endDate: row.end_date,
   };
@@ -1850,23 +2118,118 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
       args: [id, number, input.vendorId, input.projectId, input.scope, input.cost, input.status, input.startDate ?? null, input.endDate ?? null, timestamp, timestamp],
     });
     await writeAuditLog(client, request, user, "create", "spk", id, input);
+    await notifyProjectStakeholders(client, {
+      projectId: input.projectId,
+      eventType: "spk_created",
+      subject: `SPK ${number} dibuat`,
+      message: `SPK ${number} untuk vendor telah dibuat dengan nilai Rp ${input.cost.toLocaleString("id-ID")}.`,
+      subjectEn: `Work Order ${number} created`,
+      messageEn: `Work Order ${number} was created for a vendor with a value of IDR ${input.cost.toLocaleString("en-US")}.`,
+      includeFinance: true,
+    });
     return created(await getSpk(id));
   }
 
   if (spkId && action === "pdf" && request.method === "GET") {
-    const spk = await ensureExists("SELECT project_id FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
+    const spk = await ensureExists("SELECT project_id,status,number FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
     await assertProjectAccess(user, String(spk.project_id));
     return renderBusinessPdf("spk", spkId, user.preferredLanguage);
+  }
+
+  if (spkId && action === "payment" && request.method === "PATCH") {
+    if (!mutationRoles("procurement").includes(user.role)) {
+      throw new ApiError(
+        403,
+        "FORBIDDEN",
+        "Anda tidak dapat mengubah status pembayaran SPK.",
+      );
+    }
+    assertAccess(user, "finance", "manage");
+    const input = z
+      .object({
+        status: z.enum(["Belum Dibayar", "Dibayar"]),
+        paidDate: isoDateSchema.optional(),
+      })
+      .parse(await jsonBody(request));
+    const spk = await ensureExists(
+      "SELECT project_id,number,cost,payment_status FROM spks WHERE id=?",
+      [spkId],
+      "SPK tidak ditemukan.",
+    );
+    await assertProjectAccess(user, String(spk.project_id));
+    const paidDate =
+      input.status === "Dibayar"
+        ? input.paidDate ?? now().slice(0, 10)
+        : null;
+    await client.execute({
+      sql: "UPDATE spks SET payment_status=?,paid_date=?,updated_at=? WHERE id=?",
+      args: [input.status, paidDate, now(), spkId],
+    });
+    await syncSpkTransaction(client, spkId, user.id);
+    await writeAuditLog(
+      client,
+      request,
+      user,
+      input.status === "Dibayar" ? "confirm_payment" : "cancel_payment",
+      "spk",
+      spkId,
+      { status: input.status, paidDate },
+    );
+    if (
+      input.status === "Dibayar" &&
+      String(spk.payment_status) !== "Dibayar"
+    ) {
+      await notifyProjectStakeholders(client, {
+        projectId: String(spk.project_id),
+        eventType: "spk_paid",
+        subject: `Pembayaran SPK ${String(spk.number)} dikonfirmasi`,
+        message: `pembayaran vendor sebesar Rp ${asNumber(spk.cost).toLocaleString("id-ID")} untuk SPK ${String(spk.number)} telah dicatat.`,
+        subjectEn: `Work Order ${String(spk.number)} payment confirmed`,
+        messageEn: `vendor payment of IDR ${asNumber(spk.cost).toLocaleString("en-US")} for Work Order ${String(spk.number)} was recorded.`,
+        includeFinance: true,
+      });
+    }
+    return ok(await getSpk(spkId));
   }
 
   if (spkId && action === "status" && request.method === "PATCH") {
     if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah status SPK.");
     const input = z.object({ status: z.enum(["Draft", "Dikirim", "Dikerjakan", "Selesai"]) }).parse(await jsonBody(request));
-    const spk = await ensureExists("SELECT project_id FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
+    const spk = await ensureExists(
+      "SELECT project_id,status,number FROM spks WHERE id=?",
+      [spkId],
+      "SPK tidak ditemukan.",
+    );
     await assertProjectAccess(user, String(spk.project_id));
     await client.execute({ sql: "UPDATE spks SET status=?,updated_at=? WHERE id=?", args: [input.status, now(), spkId] });
     await syncSpkTransaction(client, spkId, user.id);
     await writeAuditLog(client, request, user, "update_status", "spk", spkId, input);
+    if (
+      input.status !== String(spk.status) &&
+      ["Dikirim", "Selesai"].includes(input.status)
+    ) {
+      await notifyProjectStakeholders(client, {
+        projectId: String(spk.project_id),
+        eventType: input.status === "Selesai" ? "spk_completed" : "spk_sent",
+        subject:
+          input.status === "Selesai"
+            ? `SPK ${String(spk.number)} selesai`
+            : `SPK ${String(spk.number)} dikirim`,
+        message:
+          input.status === "Selesai"
+            ? `pekerjaan pada SPK ${String(spk.number)} telah ditandai selesai.`
+            : `SPK ${String(spk.number)} telah dikirim untuk pelaksanaan.`,
+        subjectEn:
+          input.status === "Selesai"
+            ? `Work Order ${String(spk.number)} completed`
+            : `Work Order ${String(spk.number)} sent`,
+        messageEn:
+          input.status === "Selesai"
+            ? `the work in Work Order ${String(spk.number)} has been marked completed.`
+            : `Work Order ${String(spk.number)} has been sent for execution.`,
+        includeFinance: true,
+      });
+    }
     return ok(await getSpk(spkId));
   }
 
@@ -1880,6 +2243,9 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
     if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah SPK.");
     const input = spkSchema.partial().parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
+    if (current.payment_status === "Dibayar") {
+      assertAccess(user, "finance", "manage");
+    }
     await assertProjectAccess(user, String(current.project_id));
     assertDateOrder(
       input.startDate === undefined ? current.start_date : input.startDate,
@@ -1916,18 +2282,16 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
 
   if (spkId && !action && request.method === "DELETE") {
     if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menghapus SPK.");
-    const spk = await ensureExists("SELECT project_id FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
+    const spk = await ensureExists("SELECT project_id,payment_status FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
+    if (spk.payment_status === "Dibayar") {
+      assertAccess(user, "finance", "manage");
+    }
     await assertProjectAccess(user, String(spk.project_id));
-    await client.batch(
-      [
-        {
-          sql: "DELETE FROM transactions WHERE source='SPK' AND reference_id=?",
-          args: [spkId],
-        },
-        { sql: "DELETE FROM spks WHERE id=?", args: [spkId] },
-      ],
-      "write",
-    );
+    await detachOrDeleteSystemTransaction(client, "SPK", spkId);
+    await client.execute({
+      sql: "DELETE FROM spks WHERE id=?",
+      args: [spkId],
+    });
     await writeAuditLog(client, request, user, "delete", "spk", spkId);
     return noContent();
   }
@@ -2149,6 +2513,16 @@ async function handleValidations(request: Request, path: string[], user: AuthUse
       checked: input.items.filter((item) => item.checked).length,
       total: rows.rows.length,
     });
+    if (input.status === "Completed" && validation.status !== "Completed") {
+      await notifyProjectStakeholders(client, {
+        projectId: String(validation.project_id),
+        eventType: "validation_completed",
+        subject: "Validasi perangkat dan material selesai",
+        message: "seluruh item perangkat dan material sudah divalidasi. BAST kini dapat diterbitkan.",
+        subjectEn: "Device and material validation completed",
+        messageEn: "all device and material items have been validated. The handover document can now be issued.",
+      });
+    }
     return ok(await readValidation(String(validation.project_id)));
   }
 
@@ -2255,6 +2629,17 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
       });
     }
     await writeAuditLog(client, request, user, "create", "bast", id, { projectId: input.projectId, status: input.status });
+    if (input.status === "Final") {
+      await notifyProjectStakeholders(client, {
+        projectId: input.projectId,
+        eventType: "bast_finalized",
+        subject: `BAST ${number} telah final`,
+        message: `BAST ${number} sudah ditandatangani dan proyek ditandai selesai.`,
+        subjectEn: `Handover ${number} finalized`,
+        messageEn: `handover ${number} has been signed and the project is marked completed.`,
+        includeFinance: true,
+      });
+    }
     return created(await getBast(id));
   }
 
@@ -2316,6 +2701,17 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
       });
     }
     await writeAuditLog(client, request, user, "update", "bast", bastId, { status: input.status });
+    if (input.status === "Final" && current.status !== "Final") {
+      await notifyProjectStakeholders(client, {
+        projectId: String(current.project_id),
+        eventType: "bast_finalized",
+        subject: `BAST ${String(current.number)} telah final`,
+        message: `BAST ${String(current.number)} sudah ditandatangani dan proyek ditandai selesai.`,
+        subjectEn: `Handover ${String(current.number)} finalized`,
+        messageEn: `handover ${String(current.number)} has been signed and the project is marked completed.`,
+        includeFinance: true,
+      });
+    }
     return ok(await getBast(bastId));
   }
 
@@ -2345,6 +2741,7 @@ function mapTransaction(
     description: localizedTransactionDescription(row.description, language),
     amount: asNumber(row.amount),
     source: String(row.source),
+    category: localizedTransactionCategory(row.category, language),
   };
 }
 
@@ -2394,8 +2791,8 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       const en = user.preferredLanguage === "en";
       const csvCell = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
       const headers = en
-        ? ["Date", "Type", "Project", "Description", "Source", "Amount (IDR)"]
-        : ["Tanggal", "Jenis", "Proyek", "Deskripsi", "Sumber", "Nominal (IDR)"];
+        ? ["Date", "Type", "Project", "Category", "Description", "Source", "Amount (IDR)"]
+        : ["Tanggal", "Jenis", "Proyek", "Kategori", "Deskripsi", "Sumber", "Nominal (IDR)"];
       const lines = [
         headers.map(csvCell).join(","),
         ...transactions.map((transaction) => [
@@ -2404,6 +2801,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
             ? transaction.type === "Pemasukan" ? "Income" : "Expense"
             : transaction.type,
           en && transaction.project === "Umum" ? "General" : transaction.project,
+          transaction.category,
           transaction.description,
           transaction.source,
           transaction.amount,
@@ -2435,6 +2833,27 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         );
         scopeLabel = `${String(project.code)} - ${String(project.name)}`;
       }
+      const bankAccounts = ["Admin", "Finance"].includes(user.role)
+        ? (
+            await client.execute(`
+              SELECT bank_name,account_name,account_number_masked,
+                opening_balance,current_balance,balance_updated_at,sync_mode
+              FROM bank_accounts
+              WHERE status='Aktif'
+              ORDER BY bank_name,account_name
+            `)
+          ).rows.map((row) => ({
+            bankName: String(row.bank_name),
+            accountName: String(row.account_name),
+            accountNumberMasked: String(row.account_number_masked),
+            openingBalance: asNumber(row.opening_balance),
+            currentBalance: asNumber(row.current_balance),
+            balanceUpdatedAt: row.balance_updated_at
+              ? String(row.balance_updated_at)
+              : undefined,
+            syncMode: String(row.sync_mode),
+          }))
+        : [];
       return renderFinancialReportPdf(
         transactions.map((transaction) => ({
           date: transaction.date,
@@ -2444,9 +2863,11 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           description: transaction.description,
           amount: transaction.amount,
           source: transaction.source,
+          category: transaction.category,
         })),
         scopeLabel,
         user.preferredLanguage,
+        bankAccounts,
       );
     }
     return ok(transactions);
@@ -2454,6 +2875,16 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
 
   if (request.method === "POST" && !transactionId) {
     const input = transactionSchema.parse(await jsonBody(request));
+    if (
+      ["invoice", "spk"].includes(input.source.toLowerCase()) ||
+      input.source.toLowerCase().startsWith("bank:")
+    ) {
+      throw new ApiError(
+        422,
+        "RESERVED_TRANSACTION_SOURCE",
+        "Sumber Invoice, SPK, dan Bank hanya dibuat oleh sistem.",
+      );
+    }
     if (input.projectId) await assertProjectAccess(user, input.projectId);
     if (!input.projectId && !hasGlobalProjectScope(user)) {
       throw new ApiError(
@@ -2465,8 +2896,8 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     const id = randomUUID();
     const timestamp = now();
     await client.execute({
-      sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-      args: [id, input.projectId ?? null, input.date, input.type, input.description, input.amount, input.source, user.id, timestamp, timestamp],
+      sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,category,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      args: [id, input.projectId ?? null, input.date, input.type, input.description, input.amount, input.source, input.category, user.id, timestamp, timestamp],
     });
     await writeAuditLog(client, request, user, "create", "transaction", id, input);
     const row = await ensureExists("SELECT t.*,p.name AS project_name FROM transactions t LEFT JOIN projects p ON p.id=t.project_id WHERE t.id=?", [id], "Transaksi tidak ditemukan.");
@@ -2477,16 +2908,34 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     const input = transactionSchema.partial().parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM transactions WHERE id=?", [transactionId], "Transaksi tidak ditemukan.");
     if (current.project_id) await assertProjectAccess(user, String(current.project_id));
-    if (current.reference_id && (current.source === "Invoice" || current.source === "SPK")) {
+    if (!current.project_id && !hasGlobalProjectScope(user)) {
+      throw new ApiError(404, "NOT_FOUND", "Transaksi tidak ditemukan.");
+    }
+    if (
+      input.source &&
+      (["invoice", "spk"].includes(input.source.toLowerCase()) ||
+        input.source.toLowerCase().startsWith("bank:"))
+    ) {
+      throw new ApiError(
+        422,
+        "RESERVED_TRANSACTION_SOURCE",
+        "Sumber Invoice, SPK, dan Bank hanya dibuat oleh sistem.",
+      );
+    }
+    if (
+      (current.reference_id &&
+        (current.source === "Invoice" || current.source === "SPK")) ||
+      String(current.source).startsWith("Bank:")
+    ) {
       throw new ApiError(
         409,
         "SYSTEM_TRANSACTION",
-        "Transaksi otomatis harus diperbarui dari dokumen Invoice atau SPK asalnya.",
+        "Transaksi otomatis harus diperbarui dari dokumen asal atau rekonsiliasi bank.",
       );
     }
     if (input.projectId) await assertProjectAccess(user, input.projectId);
     await client.execute({
-      sql: "UPDATE transactions SET project_id=?,date=?,type=?,description=?,amount=?,source=?,updated_at=? WHERE id=?",
+      sql: "UPDATE transactions SET project_id=?,date=?,type=?,description=?,amount=?,source=?,category=?,updated_at=? WHERE id=?",
       args: [
         input.projectId === undefined ? current.project_id : input.projectId,
         input.date ?? current.date,
@@ -2494,6 +2943,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         input.description ?? current.description,
         input.amount ?? current.amount,
         input.source ?? current.source,
+        input.category ?? current.category,
         now(),
         transactionId,
       ],
@@ -2506,11 +2956,18 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
   if (transactionId && request.method === "DELETE") {
     const current = await ensureExists("SELECT * FROM transactions WHERE id=?", [transactionId], "Transaksi tidak ditemukan.");
     if (current.project_id) await assertProjectAccess(user, String(current.project_id));
-    if (current.reference_id && (current.source === "Invoice" || current.source === "SPK")) {
+    if (!current.project_id && !hasGlobalProjectScope(user)) {
+      throw new ApiError(404, "NOT_FOUND", "Transaksi tidak ditemukan.");
+    }
+    if (
+      (current.reference_id &&
+        (current.source === "Invoice" || current.source === "SPK")) ||
+      String(current.source).startsWith("Bank:")
+    ) {
       throw new ApiError(
         409,
         "SYSTEM_TRANSACTION",
-        "Transaksi otomatis hanya dapat dihapus bersama Invoice atau SPK asalnya.",
+        "Transaksi otomatis hanya dapat dihapus dari dokumen asal atau rekonsiliasi bank.",
       );
     }
     await client.execute({ sql: "DELETE FROM transactions WHERE id=?", args: [transactionId] });
@@ -2565,8 +3022,8 @@ async function handleFinance(request: Request, user: AuthUser) {
   return ok({
     income,
     expense,
-    profit: income - expense,
-    margin: income ? ((income - expense) / income) * 100 : 0,
+    netCash: income - expense,
+    cashRatio: income ? ((income - expense) / income) * 100 : 0,
     monthly: monthly.rows.map((row) => ({
       month: String(row.month),
       income: asNumber(row.income),
@@ -2596,6 +3053,14 @@ function mapUser(
     status: String(row.status),
     lastActive: lastActive(row.last_active_at, language),
     permissions: normalizePermissions(role, storedPermissions),
+    ...(row.avatar_mime_type
+      ? {
+          avatarUrl: avatarUrlForUser(
+            row.id,
+            row.profile_updated_at ?? row.updated_at,
+          ),
+        }
+      : {}),
   };
 }
 
@@ -2613,9 +3078,11 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
 
   if (request.method === "GET" && !userId) {
     const result = await client.execute(`
-      SELECT u.*,up.permissions_json
+      SELECT u.*,up.permissions_json,p.avatar_mime_type,
+        p.updated_at AS profile_updated_at
       FROM users u
       LEFT JOIN user_permissions up ON up.user_id=u.id
+      LEFT JOIN user_profiles p ON p.user_id=u.id
       ORDER BY u.status,u.name
     `);
     return ok(result.rows.map((row) => mapUser(row as Record<string, unknown>, user.preferredLanguage)));
@@ -2649,6 +3116,11 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
       "write",
     );
     await writeAuditLog(client, request, user, "create", "user", id, { name: input.name, email: input.email, role: input.role });
+    await sendAccountCreatedEmail(client, {
+      id,
+      name: input.name,
+      email: input.email,
+    });
     return created({
       id,
       name: input.name,
@@ -2715,7 +3187,7 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
     }
     await writeAuditLog(client, request, user, "update", "user", userId, { ...input, password: input.password ? "[updated]" : undefined });
     const updated = await ensureExists(
-      "SELECT u.*,up.permissions_json FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id WHERE u.id=?",
+      "SELECT u.*,up.permissions_json,p.avatar_mime_type,p.updated_at AS profile_updated_at FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id LEFT JOIN user_profiles p ON p.user_id=u.id WHERE u.id=?",
       [userId],
       "Pengguna tidak ditemukan.",
     );
@@ -2724,7 +3196,15 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
 
   if (userId && request.method === "DELETE") {
     if (userId === user.id) throw new ApiError(409, "SELF_DELETE", "Anda tidak dapat menghapus akun sendiri.");
+    const profile = await client.execute({
+      sql: "SELECT avatar_storage_url FROM user_profiles WHERE user_id=? LIMIT 1",
+      args: [userId],
+    });
+    const avatarStorageUrl = profile.rows[0]?.avatar_storage_url
+      ? String(profile.rows[0].avatar_storage_url)
+      : null;
     await client.execute({ sql: "DELETE FROM users WHERE id=?", args: [userId] });
+    await cleanupProjectFile(avatarStorageUrl, "deleted user avatar");
     await writeAuditLog(client, request, user, "delete", "user", userId);
     return noContent();
   }
@@ -2736,7 +3216,8 @@ async function getProfile(userId: string) {
   const row = await ensureExists(
     `
       SELECT u.id,u.name,u.email,u.role,p.phone,p.job_title,p.bio,p.address,p.birth_date,
-        p.avatar_mime_type,p.preferred_language,p.email_notifications
+        p.avatar_mime_type,p.preferred_language,p.email_notifications,
+        p.updated_at AS profile_updated_at
       FROM users u LEFT JOIN user_profiles p ON p.user_id=u.id
       WHERE u.id=?
     `,
@@ -2757,7 +3238,9 @@ async function getProfile(userId: string) {
     emailNotifications: row.email_notifications === null || row.email_notifications === undefined
       ? true
       : Boolean(asNumber(row.email_notifications)),
-    avatarUrl: row.avatar_mime_type ? `/api/profile/avatar/${String(row.id)}` : undefined,
+    avatarUrl: row.avatar_mime_type
+      ? avatarUrlForUser(row.id, row.profile_updated_at)
+      : undefined,
   };
 }
 
@@ -2773,6 +3256,18 @@ function hasValidAvatarSignature(content: Uint8Array, mimeType: string) {
     );
   }
   return false;
+}
+
+async function cleanupProjectFile(storageUrl: string | null, context: string) {
+  if (!storageUrl) return;
+  try {
+    await deleteProjectFile(storageUrl);
+  } catch (error) {
+    console.error("Stored file cleanup failed.", {
+      context,
+      error: error instanceof Error ? error.message : "Unknown storage error",
+    });
+  }
 }
 
 async function handleProfile(request: Request, path: string[], user: AuthUser) {
@@ -2794,7 +3289,7 @@ async function handleProfile(request: Request, path: string[], user: AuthUser) {
     return new Response(content, {
       headers: {
         "Content-Type": String(row.avatar_mime_type),
-        "Cache-Control": "private, max-age=300",
+        "Cache-Control": "private, max-age=3600, immutable",
         "Content-Disposition": "inline",
       },
     });
@@ -2814,20 +3309,39 @@ async function handleProfile(request: Request, path: string[], user: AuthUser) {
     if (!hasValidAvatarSignature(content, file.type)) {
       throw new ApiError(400, "INVALID_FILE", "Isi file tidak sesuai dengan format gambar.");
     }
-    const stored = await storeProjectFile(`avatar-${user.id}`, file.type, content.buffer as ArrayBuffer);
-    const timestamp = now();
-    await client.execute({
-      sql: `
-        INSERT INTO user_profiles (user_id,avatar_mime_type,avatar_storage_url,avatar_content_base64,preferred_language,email_notifications,updated_at)
-        VALUES (?,?,?,?,?,?,?)
-        ON CONFLICT (user_id) DO UPDATE SET avatar_mime_type=excluded.avatar_mime_type,
-          avatar_storage_url=excluded.avatar_storage_url,avatar_content_base64=excluded.avatar_content_base64,
-          updated_at=excluded.updated_at
-      `,
-      args: [user.id, file.type, stored.storageUrl, stored.contentBase64, user.preferredLanguage, 1, timestamp],
+    const current = await client.execute({
+      sql: "SELECT avatar_storage_url FROM user_profiles WHERE user_id=? LIMIT 1",
+      args: [user.id],
     });
+    const previousStorageUrl = current.rows[0]?.avatar_storage_url
+      ? String(current.rows[0].avatar_storage_url)
+      : null;
+    const stored = await storeProjectFile(
+      `avatar-${user.id}-${randomUUID()}`,
+      file.type,
+      content.buffer as ArrayBuffer,
+    );
+    const timestamp = now();
+    try {
+      await client.execute({
+        sql: `
+          INSERT INTO user_profiles (user_id,avatar_mime_type,avatar_storage_url,avatar_content_base64,preferred_language,email_notifications,updated_at)
+          VALUES (?,?,?,?,?,?,?)
+          ON CONFLICT (user_id) DO UPDATE SET avatar_mime_type=excluded.avatar_mime_type,
+            avatar_storage_url=excluded.avatar_storage_url,avatar_content_base64=excluded.avatar_content_base64,
+            updated_at=excluded.updated_at
+        `,
+        args: [user.id, file.type, stored.storageUrl, stored.contentBase64, user.preferredLanguage, 1, timestamp],
+      });
+    } catch (error) {
+      await cleanupProjectFile(stored.storageUrl, "avatar upload rollback");
+      throw error;
+    }
+    if (previousStorageUrl && previousStorageUrl !== stored.storageUrl) {
+      await cleanupProjectFile(previousStorageUrl, "replaced user avatar");
+    }
     await writeAuditLog(client, request, user, "update_avatar", "user", user.id);
-    return ok({ avatarUrl: `/api/profile/avatar/${user.id}?v=${Date.now()}` });
+    return ok({ avatarUrl: avatarUrlForUser(user.id, timestamp) });
   }
 
   if (!action && request.method === "GET") {
@@ -2892,7 +3406,7 @@ async function handleSettings(request: Request, user: AuthUser) {
     return ok({
       preferredLanguage: profile.preferredLanguage,
       emailNotifications: profile.emailNotifications,
-      emailDeliveryConfigured: Boolean(process.env.RESEND_API_KEY),
+      emailDeliveryConfigured: emailDeliveryConfigured(),
     });
   }
   if (request.method === "PATCH") {
@@ -2907,9 +3421,66 @@ async function handleSettings(request: Request, user: AuthUser) {
       args: [user.id, input.preferredLanguage, input.emailNotifications ? 1 : 0, timestamp],
     });
     await writeAuditLog(client, request, user, "update_settings", "user", user.id, input);
-    return ok({ ...input, emailDeliveryConfigured: Boolean(process.env.RESEND_API_KEY) });
+    return ok({ ...input, emailDeliveryConfigured: emailDeliveryConfigured() });
   }
   throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
+}
+
+async function handleNotifications(
+  request: Request,
+  path: string[],
+  user: AuthUser,
+) {
+  assertAccess(
+    user,
+    "settings",
+    request.method === "GET" || path[2] === "test" ? "view" : "manage",
+  );
+  if (path[1] !== "email") {
+    throw new ApiError(404, "NOT_FOUND", "Endpoint notifikasi tidak ditemukan.");
+  }
+  const { client } = await getDatabase();
+
+  if (request.method === "GET" && !path[2]) {
+    const result = await client.execute({
+      sql: `
+        SELECT id,user_id,event_type,recipient,subject,status,error_message,created_at
+        FROM email_deliveries
+        ${user.role === "Admin" ? "" : "WHERE user_id=?"}
+        ORDER BY created_at DESC
+        LIMIT 25
+      `,
+      args: user.role === "Admin" ? [] : [user.id],
+    });
+    return ok(
+      result.rows.map((row) => ({
+        id: String(row.id),
+        userId: row.user_id ? String(row.user_id) : undefined,
+        eventType: String(row.event_type),
+        recipient: String(row.recipient),
+        subject: String(row.subject),
+        status: String(row.status),
+        error: row.error_message ? String(row.error_message) : undefined,
+        createdAt: String(row.created_at),
+      })),
+    );
+  }
+
+  if (request.method === "POST" && path[2] === "test") {
+    const result = await sendTestEmail(client, user);
+    await writeAuditLog(
+      client,
+      request,
+      user,
+      "test_email",
+      "email_delivery",
+      result.id,
+      { status: result.status },
+    );
+    return ok(result);
+  }
+
+  throw new ApiError(404, "NOT_FOUND", "Endpoint notifikasi tidak ditemukan.");
 }
 
 async function handleDocuments(request: Request, path: string[], user: AuthUser) {
@@ -3008,7 +3579,16 @@ export async function dispatchApi(request: Request, path: string[]) {
 
   const user = await requireUser(request);
   if (resource === "system" && path[1] === "time" && request.method === "GET") {
-    return ok({ now: now(), timeZone: "Asia/Makassar" }, 200, { "Cache-Control": "no-store" });
+    const serverNow = now();
+    return ok(
+      {
+        now: serverNow,
+        today: makassarToday(serverNow),
+        timeZone: "Asia/Makassar",
+      },
+      200,
+      { "Cache-Control": "no-store" },
+    );
   }
   const accessModule = resourceModules[resource];
   if (accessModule) {
@@ -3029,9 +3609,11 @@ export async function dispatchApi(request: Request, path: string[]) {
   if (resource === "validations") return handleValidations(request, path, user);
   if (resource === "transactions") return handleTransactions(request, path, user);
   if (resource === "finance" && path[1] === "summary") return handleFinance(request, user);
+  if (resource === "bank-accounts") return handleBankAccounts(request, path, user);
   if (resource === "users") return handleUsers(request, path, user);
   if (resource === "profile") return handleProfile(request, path, user);
   if (resource === "settings") return handleSettings(request, user);
+  if (resource === "notifications") return handleNotifications(request, path, user);
   if (resource === "documents") return handleDocuments(request, path, user);
   if (resource === "audit-logs") return handleAudit(request, user);
   if (resource === "search") return handleSearch(request, user);

@@ -40,15 +40,17 @@ export function ProfileView({ language, user, notify, onUserChange }: ProfileVie
     avatarUrl: user.avatarUrl,
   });
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let active = true;
     api<ProfileData>("/api/profile")
       .then((data) => active && setProfile(data))
-      .catch((error) => notify(messageOf(error)));
+      .catch((error) => notify(messageOf(error, language)));
     return () => { active = false; };
-  }, [notify]);
+  }, [language, notify, user.id]);
 
   function setField<K extends keyof ProfileData>(key: K, value: ProfileData[K]) {
     setProfile((current) => ({ ...current, [key]: value }));
@@ -66,7 +68,7 @@ export function ProfileView({ language, user, notify, onUserChange }: ProfileVie
       onUserChange({ ...user, name: updated.name, email: updated.email, avatarUrl: updated.avatarUrl ?? user.avatarUrl });
       notify(language === "id" ? "Profil berhasil diperbarui." : "Profile updated successfully.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     } finally {
       setSaving(false);
     }
@@ -77,17 +79,20 @@ export function ProfileView({ language, user, notify, onUserChange }: ProfileVie
     if (!file) return;
     const form = new FormData();
     form.set("file", file);
+    setUploading(true);
     try {
       const result = await api<{ avatarUrl: string }>("/api/profile/avatar", {
         method: "POST",
         body: form,
       });
       setProfile((current) => ({ ...current, avatarUrl: result.avatarUrl }));
+      setFailedAvatarUrl("");
       onUserChange({ ...user, avatarUrl: result.avatarUrl });
       notify(language === "id" ? "Foto profil berhasil diperbarui." : "Profile photo updated.");
     } catch (error) {
-      notify(messageOf(error));
+      notify(messageOf(error, language));
     } finally {
+      setUploading(false);
       event.target.value = "";
     }
   }
@@ -103,9 +108,23 @@ export function ProfileView({ language, user, notify, onUserChange }: ProfileVie
       <section className="profile-layout">
         <aside className="panel profile-summary-card">
           <div className="profile-photo-large">
-            {profile.avatarUrl ? <img src={appPath(profile.avatarUrl)} alt={profile.name} /> : initials}
-            <button type="button" aria-label={id ? "Ganti foto" : "Change photo"} onClick={() => inputRef.current?.click()}><Camera size={17} /></button>
-            <input ref={inputRef} hidden type="file" accept="image/jpeg,image/png,image/webp" onChange={uploadAvatar} />
+            {profile.avatarUrl && failedAvatarUrl !== profile.avatarUrl ? (
+              <img
+                src={appPath(profile.avatarUrl)}
+                alt={profile.name}
+                onError={() => setFailedAvatarUrl(profile.avatarUrl ?? "")}
+              />
+            ) : initials}
+            <button
+              type="button"
+              disabled={uploading}
+              aria-busy={uploading}
+              aria-label={id ? "Ganti foto" : "Change photo"}
+              onClick={() => inputRef.current?.click()}
+            >
+              <Camera size={17} />
+            </button>
+            <input ref={inputRef} hidden disabled={uploading} type="file" accept="image/jpeg,image/png,image/webp" onChange={uploadAvatar} />
           </div>
           <h2>{profile.name}</h2>
           <span className="role-chip admin">{profile.role}</span>
@@ -115,7 +134,7 @@ export function ProfileView({ language, user, notify, onUserChange }: ProfileVie
             <span><Phone size={15} /> {profile.phone || "—"}</span>
             <span><MapPin size={15} /> {profile.address || "—"}</span>
           </div>
-          <small>{id ? "JPG, PNG, atau WebP · maks. 3 MB" : "JPG, PNG, or WebP · max. 3 MB"}</small>
+          <small>{uploading ? (id ? "Mengunggah foto..." : "Uploading photo...") : (id ? "JPG, PNG, atau WebP · maks. 3 MB" : "JPG, PNG, or WebP · max. 3 MB")}</small>
         </aside>
         <form className="panel profile-form-card" onSubmit={save}>
           <div className="panel-head"><div><span className="eyebrow">{id ? "DATA PRIBADI" : "PERSONAL DETAILS"}</span><h2>{id ? "Informasi profil" : "Profile information"}</h2></div><UserRound size={22} /></div>

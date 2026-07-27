@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { appPath } from "../paths";
 
 interface UserAvatarProps {
@@ -9,6 +10,7 @@ interface UserAvatarProps {
 }
 
 export function UserAvatar({ name, avatarUrl, className = "" }: UserAvatarProps) {
+  const [failedUrl, setFailedUrl] = useState("");
   const initials = name
     .split(/\s+/)
     .slice(0, 2)
@@ -18,7 +20,15 @@ export function UserAvatar({ name, avatarUrl, className = "" }: UserAvatarProps)
 
   return (
     <span className={`avatar avatar-image ${className}`.trim()}>
-      {avatarUrl ? <img src={appPath(avatarUrl)} alt={`Foto profil ${name}`} /> : initials}
+      {avatarUrl && failedUrl !== avatarUrl ? (
+        <img
+          src={appPath(avatarUrl)}
+          alt={`Foto profil ${name}`}
+          onError={() => setFailedUrl(avatarUrl)}
+        />
+      ) : (
+        initials
+      )}
     </span>
   );
 }

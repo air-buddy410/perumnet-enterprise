@@ -50,6 +50,20 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS email_deliveries (
+  id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  event_type TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('sent', 'failed', 'skipped')),
+  provider_id TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS email_deliveries_user_idx ON email_deliveries(user_id,created_at);
+CREATE INDEX IF NOT EXISTS email_deliveries_status_idx ON email_deliveries(status,created_at);
+
 CREATE TABLE IF NOT EXISTS user_permissions (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   permissions_json TEXT NOT NULL,
@@ -204,6 +218,8 @@ CREATE TABLE IF NOT EXISTS spks (
   scope TEXT NOT NULL,
   cost INTEGER NOT NULL CHECK (cost > 0),
   status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Dikirim', 'Dikerjakan', 'Selesai')),
+  payment_status TEXT NOT NULL DEFAULT 'Belum Dibayar' CHECK (payment_status IN ('Belum Dibayar', 'Dibayar')),
+  paid_date TEXT,
   start_date TEXT,
   end_date TEXT,
   created_at TEXT NOT NULL,
@@ -261,6 +277,41 @@ CREATE TABLE IF NOT EXISTS project_validation_items (
 CREATE INDEX IF NOT EXISTS project_validation_items_validation_idx ON project_validation_items(validation_id);
 CREATE UNIQUE INDEX IF NOT EXISTS project_validation_items_boq_unique ON project_validation_items(validation_id,boq_item_id);
 
+CREATE TABLE IF NOT EXISTS bank_accounts (
+  id TEXT PRIMARY KEY,
+  bank_name TEXT NOT NULL,
+  account_name TEXT NOT NULL,
+  account_number_masked TEXT NOT NULL,
+  external_account_id TEXT,
+  currency TEXT NOT NULL DEFAULT 'IDR',
+  opening_balance INTEGER NOT NULL DEFAULT 0 CHECK (opening_balance >= 0),
+  current_balance INTEGER NOT NULL DEFAULT 0 CHECK (current_balance >= 0),
+  sync_mode TEXT NOT NULL DEFAULT 'Manual' CHECK (sync_mode IN ('Manual', 'API')),
+  status TEXT NOT NULL DEFAULT 'Aktif' CHECK (status IN ('Aktif', 'Nonaktif')),
+  last_synced_at TEXT,
+  balance_updated_at TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bank_accounts_status_idx ON bank_accounts(status,bank_name);
+
+CREATE TABLE IF NOT EXISTS bank_statement_imports (
+  id TEXT PRIMARY KEY,
+  bank_account_id TEXT NOT NULL REFERENCES bank_accounts(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  file_hash TEXT NOT NULL,
+  statement_month TEXT,
+  row_count INTEGER NOT NULL DEFAULT 0,
+  imported_count INTEGER NOT NULL DEFAULT 0,
+  duplicate_count INTEGER NOT NULL DEFAULT 0,
+  error_count INTEGER NOT NULL DEFAULT 0,
+  imported_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bank_statement_imports_account_idx
+  ON bank_statement_imports(bank_account_id,created_at);
+
 CREATE TABLE IF NOT EXISTS transactions (
   id TEXT PRIMARY KEY,
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
@@ -270,6 +321,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   amount INTEGER NOT NULL CHECK (amount > 0),
   source TEXT NOT NULL,
   reference_id TEXT,
+  category TEXT NOT NULL DEFAULT 'Lainnya',
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -279,6 +331,31 @@ CREATE INDEX IF NOT EXISTS transactions_date_idx ON transactions(date);
 CREATE UNIQUE INDEX IF NOT EXISTS transactions_source_reference_unique
   ON transactions(source, reference_id)
   WHERE reference_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS bank_statement_entries (
+  id TEXT PRIMARY KEY,
+  bank_account_id TEXT NOT NULL REFERENCES bank_accounts(id) ON DELETE CASCADE,
+  import_id TEXT REFERENCES bank_statement_imports(id) ON DELETE SET NULL,
+  transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+  date TEXT NOT NULL,
+  description TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('Pemasukan', 'Pengeluaran')),
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  running_balance INTEGER,
+  reference TEXT,
+  fingerprint TEXT NOT NULL,
+  reconciliation_status TEXT NOT NULL DEFAULT 'Imported'
+    CHECK (reconciliation_status IN ('Matched', 'Imported', 'Excluded')),
+  source TEXT NOT NULL CHECK (source IN ('Manual Upload', 'API')),
+  raw_json TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS bank_statement_entries_fingerprint_unique
+  ON bank_statement_entries(bank_account_id,fingerprint);
+CREATE INDEX IF NOT EXISTS bank_statement_entries_account_date_idx
+  ON bank_statement_entries(bank_account_id,date);
+CREATE INDEX IF NOT EXISTS bank_statement_entries_transaction_idx
+  ON bank_statement_entries(transaction_id);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
@@ -386,6 +463,8 @@ async function ensureCmsSeed(client: DatabaseClient) {
     ["address", "BTN Kecicang Indah Blok A5, Bungaya Kangin, Karangasem, Bali 80813"],
     ["instagram_url", "https://www.instagram.com/perum_net"],
     ["linkedin_url", ""],
+    ["website_url", "https://www.perumnet.id/"],
+    ["dark_font_color", "#FFFFFF"],
     ["cta_text", "Konsultasikan Kebutuhan Anda"],
     ["business_hours", "Senin–Minggu · 24/7 support"],
   ];
@@ -399,7 +478,7 @@ async function ensureCmsSeed(client: DatabaseClient) {
   const texts = [
     ["home", "hero_eyebrow", "SOLUSI IT TERINTEGRASI · BALI"],
     ["home", "hero_title", "Infrastruktur IT yang bekerja tanpa hambatan."],
-    ["home", "hero_description", "PerumNet Enterprise merancang, memasang, dan merawat jaringan WiFi, CCTV, serta IP PABX agar bisnis Anda selalu terhubung, aman, dan siap bertumbuh."],
+    ["home", "hero_description", "PerumNet Enterprise merancang, memasang, dan merawat jaringan WiFi, CCTV, Smart Home Device, serta IP PABX agar bisnis Anda selalu terhubung, aman, dan siap bertumbuh."],
     ["home", "about_eyebrow", "PARTNER TEKNOLOGI ANDA"],
     ["home", "about_title", "Satu tim untuk seluruh kebutuhan infrastruktur."],
     ["home", "about_description", "Kami menggabungkan konsultasi, instalasi, dokumentasi, dan dukungan berkelanjutan dalam satu layanan yang mudah dipantau."],
@@ -409,7 +488,7 @@ async function ensureCmsSeed(client: DatabaseClient) {
     ["home", "testimonials_title", "Dipercaya untuk menjaga operasional tetap berjalan."],
     ["home", "closing_title", "Mulai dari survei lokasi, kami bantu sampai sistem siap digunakan."],
     ["services", "page_title", "Infrastruktur yang siap mengikuti ritme bisnis Anda."],
-    ["services", "page_description", "Layanan konsultasi, instalasi, integrasi, dan pemeliharaan untuk jaringan WiFi, CCTV, dan IP PABX."],
+    ["services", "page_description", "Layanan konsultasi, instalasi, integrasi, dan pemeliharaan untuk jaringan WiFi, CCTV, Smart Home Device, dan IP PABX."],
     ["portfolio", "page_title", "Pilihan proyek yang kami selesaikan bersama klien."],
     ["portfolio", "page_description", "Setiap proyek dimulai dari kebutuhan lapangan dan ditutup dengan dokumentasi yang jelas."],
     ["testimonials", "page_title", "Cerita dari bisnis yang bertumbuh bersama sistem yang lebih baik."],
@@ -428,6 +507,7 @@ async function ensureCmsSeed(client: DatabaseClient) {
     ["cms-service-wifi", "managed-wifi", "Managed WiFi", "WiFi stabil, aman, dan mudah dikelola untuk kantor, hotel, sekolah, dan area publik.", "Kami merancang cakupan, kapasitas, segmentasi jaringan, dan monitoring agar setiap pengguna mendapat pengalaman koneksi yang konsisten.", "[\"Site survey & heatmap\",\"Managed access point\",\"Guest WiFi & captive portal\",\"Monitoring dan dukungan\"]", "wifi", 1],
     ["cms-service-cctv", "cctv", "CCTV & Surveillance", "Sistem pengawasan yang memberi visibilitas jelas dari lokasi maupun jarak jauh.", "Mulai dari penempatan kamera hingga retensi rekaman dan akses mobile, sistem CCTV disusun sesuai risiko dan alur aktivitas lokasi.", "[\"IP camera & NVR\",\"Remote monitoring\",\"Smart detection\",\"Preventive maintenance\"]", "camera", 2],
     ["cms-service-pabx", "ip-pabx", "IP PABX", "Komunikasi internal yang profesional, fleksibel, dan siap berkembang bersama tim.", "Kami mengintegrasikan extension, IVR, call routing, dan perangkat IP phone agar komunikasi pelanggan dan tim berjalan lebih efisien.", "[\"Extension planning\",\"IVR & call routing\",\"IP phone provisioning\",\"Call recording option\"]", "phone", 3],
+    ["cms-service-smart-home", "smart-home-device", "Smart Home Device", "Kontrol perangkat, keamanan, dan otomasi ruang yang praktis dari satu sistem.", "Kami mengintegrasikan perangkat smart home sesuai kebutuhan rumah, villa, maupun area komersial agar pencahayaan, akses, sensor, dan perangkat terpilih dapat dipantau serta dikendalikan dengan mudah.", "[\"Smart lighting & switch\",\"Sensor pintu dan gerak\",\"Kontrol perangkat terpusat\",\"Konfigurasi dan dukungan\"]", "home", 4],
   ];
   for (const row of services) {
     statements.push(statement(
@@ -474,6 +554,55 @@ async function ensureCmsSeed(client: DatabaseClient) {
   await client.batch(statements, "write");
 }
 
+async function ensureCmsEnhancements(client: DatabaseClient) {
+  const timestamp = new Date().toISOString();
+  await client.batch([
+    statement(
+      "INSERT INTO cms_site_settings (id,key_name,value_content,updated_at) VALUES (?,?,?,?) ON CONFLICT DO NOTHING",
+      ["cms-setting-website_url", "website_url", "https://www.perumnet.id/", timestamp],
+    ),
+    statement(
+      "INSERT INTO cms_site_settings (id,key_name,value_content,updated_at) VALUES (?,?,?,?) ON CONFLICT DO NOTHING",
+      ["cms-setting-dark_font_color", "dark_font_color", "#FFFFFF", timestamp],
+    ),
+    statement(
+      "INSERT INTO cms_services (id,slug,title,summary,description,features_json,icon,sort_order,is_published,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT DO NOTHING",
+      [
+        "cms-service-smart-home",
+        "smart-home-device",
+        "Smart Home Device",
+        "Kontrol perangkat, keamanan, dan otomasi ruang yang praktis dari satu sistem.",
+        "Kami mengintegrasikan perangkat smart home sesuai kebutuhan rumah, villa, maupun area komersial agar pencahayaan, akses, sensor, dan perangkat terpilih dapat dipantau serta dikendalikan dengan mudah.",
+        "[\"Smart lighting & switch\",\"Sensor pintu dan gerak\",\"Kontrol perangkat terpusat\",\"Konfigurasi dan dukungan\"]",
+        "home",
+        4,
+        timestamp,
+        timestamp,
+      ],
+    ),
+    statement(
+      "UPDATE cms_site_texts SET value_content=?,updated_at=? WHERE page_key=? AND content_key=? AND value_content=?",
+      [
+        "PerumNet Enterprise merancang, memasang, dan merawat jaringan WiFi, CCTV, Smart Home Device, serta IP PABX agar bisnis Anda selalu terhubung, aman, dan siap bertumbuh.",
+        timestamp,
+        "home",
+        "hero_description",
+        "PerumNet Enterprise merancang, memasang, dan merawat jaringan WiFi, CCTV, serta IP PABX agar bisnis Anda selalu terhubung, aman, dan siap bertumbuh.",
+      ],
+    ),
+    statement(
+      "UPDATE cms_site_texts SET value_content=?,updated_at=? WHERE page_key=? AND content_key=? AND value_content=?",
+      [
+        "Layanan konsultasi, instalasi, integrasi, dan pemeliharaan untuk jaringan WiFi, CCTV, Smart Home Device, dan IP PABX.",
+        timestamp,
+        "services",
+        "page_description",
+        "Layanan konsultasi, instalasi, integrasi, dan pemeliharaan untuk jaringan WiFi, CCTV, dan IP PABX.",
+      ],
+    ),
+  ], "write");
+}
+
 async function ensureBastEngineerRoleColumn(client: DatabaseClient) {
   try {
     await client.execute("SELECT engineer_role FROM basts LIMIT 1");
@@ -489,10 +618,77 @@ async function ensureBastEngineerRoleColumn(client: DatabaseClient) {
   }
 }
 
+async function ensureTransactionCategoryColumn(client: DatabaseClient) {
+  try {
+    await client.execute("SELECT category FROM transactions LIMIT 1");
+  } catch {
+    try {
+      await client.execute(
+        "ALTER TABLE transactions ADD COLUMN category TEXT NOT NULL DEFAULT 'Lainnya'",
+      );
+      await client.execute(`
+        UPDATE transactions
+        SET category = CASE
+          WHEN source='Invoice' THEN 'Penjualan'
+          WHEN source='SPK' THEN 'Vendor'
+          WHEN source IN ('Material','Perangkat') THEN 'Vendor'
+          WHEN source='Operasional' THEN 'Operasional'
+          ELSE 'Lainnya'
+        END
+      `);
+    } catch {
+      // A concurrent initializer may have completed the same migration first.
+      await client.execute("SELECT category FROM transactions LIMIT 1");
+    }
+  }
+}
+
+async function ensureSpkPaymentColumns(client: DatabaseClient) {
+  try {
+    await client.execute("SELECT payment_status FROM spks LIMIT 1");
+  } catch {
+    try {
+      await client.execute(
+        "ALTER TABLE spks ADD COLUMN payment_status TEXT NOT NULL DEFAULT 'Belum Dibayar'",
+      );
+    } catch {
+      await client.execute("SELECT payment_status FROM spks LIMIT 1");
+    }
+  }
+  try {
+    await client.execute("SELECT paid_date FROM spks LIMIT 1");
+  } catch {
+    try {
+      await client.execute("ALTER TABLE spks ADD COLUMN paid_date TEXT");
+    } catch {
+      await client.execute("SELECT paid_date FROM spks LIMIT 1");
+    }
+  }
+  await client.execute(`
+    UPDATE spks
+    SET payment_status='Dibayar',
+      paid_date=COALESCE(
+        paid_date,
+        (SELECT date FROM transactions
+          WHERE transactions.source='SPK'
+            AND transactions.reference_id=spks.id
+          LIMIT 1)
+      )
+    WHERE EXISTS (
+      SELECT 1 FROM transactions
+      WHERE transactions.source='SPK'
+        AND transactions.reference_id=spks.id
+    )
+  `);
+}
+
 export async function initializeDatabase(client: DatabaseClient) {
   await client.executeMultiple(schemaSql);
   await ensureBastEngineerRoleColumn(client);
+  await ensureTransactionCategoryColumn(client);
+  await ensureSpkPaymentColumns(client);
   await ensureCmsSeed(client);
+  await ensureCmsEnhancements(client);
 
   const existing = await client.execute("SELECT id FROM users LIMIT 1");
   if (existing.rows.length) return;

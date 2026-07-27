@@ -27,6 +27,7 @@ interface BillingViewProps {
   notify: (message: string) => void;
   projectId: string;
   canManage: boolean;
+  canManagePayments: boolean;
 }
 
 type BillingTab = "quotation" | "invoice";
@@ -45,6 +46,7 @@ export function BillingView({
   notify,
   projectId,
   canManage,
+  canManagePayments,
 }: BillingViewProps) {
   const id = language === "id";
   const [activeTab, setActiveTab] = useState<BillingTab>("quotation");
@@ -61,6 +63,10 @@ export function BillingView({
   const [showQuotationForm, setShowQuotationForm] = useState(false);
   const [quotationIssuedAt, setQuotationIssuedAt] = useState("");
   const [quotationValidUntil, setQuotationValidUntil] = useState("");
+  const [serverToday, setServerToday] = useState("");
+  const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
+  const [paymentDate, setPaymentDate] = useState("");
+  const [paymentSaving, setPaymentSaving] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -84,6 +90,18 @@ export function BillingView({
       active = false;
     };
   }, [language, notify, projectId]);
+
+  useEffect(() => {
+    let active = true;
+    api<{ today: string }>("/api/system/time")
+      .then((result) => {
+        if (active) setServerToday(result.today);
+      })
+      .catch((error) => notify(messageOf(error, language)));
+    return () => {
+      active = false;
+    };
+  }, [language, notify]);
 
   const boqTotal = useMemo(
     () =>
@@ -166,18 +184,77 @@ export function BillingView({
     }
   }
 
-  async function confirmPayment(invoiceId: string) {
+  function openPayment(invoice: Invoice) {
+    setPaymentInvoice(invoice);
+    setPaymentDate(
+      invoice.paidDateIso ??
+        (invoice.status === "Belum Lunas" ? serverToday : ""),
+    );
+  }
+
+  async function persistPayment(
+    event: FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault();
+    if (!paymentInvoice || !paymentDate) return;
+    setPaymentSaving(true);
     try {
-      const updated = await api<Invoice>(`/api/invoices/${invoiceId}/payment`, {
-        method: "POST",
-        body: JSON.stringify({ paidDate: new Date().toISOString().slice(0, 10) }),
-      });
-      setInvoices((current) =>
-        current.map((invoice) => (invoice.id === invoiceId ? updated : invoice)),
+      const updated = await api<Invoice>(
+        `/api/invoices/${paymentInvoice.id}/payment`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ status: "Lunas", paidDate: paymentDate }),
+        },
       );
+      setInvoices((current) =>
+        current.map((invoice) =>
+          invoice.id === paymentInvoice.id ? updated : invoice,
+        ),
+      );
+      setPaymentInvoice(null);
       notify(id ? "Pembayaran dan transaksi pembukuan telah disinkronkan." : "Payment and finance transaction synchronized.");
     } catch (error) {
       notify(messageOf(error, language));
+    } finally {
+      setPaymentSaving(false);
+    }
+  }
+
+  async function cancelPayment() {
+    if (!paymentInvoice) return;
+    if (
+      !window.confirm(
+        id
+          ? `Batalkan konfirmasi pembayaran ${paymentInvoice.number}? Mutasi bank yang sudah dicocokkan tetap dipertahankan untuk ditinjau.`
+          : `Cancel payment confirmation for ${paymentInvoice.number}? Any matched bank statement remains available for review.`,
+      )
+    ) {
+      return;
+    }
+    setPaymentSaving(true);
+    try {
+      const updated = await api<Invoice>(
+        `/api/invoices/${paymentInvoice.id}/payment`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ status: "Belum Lunas" }),
+        },
+      );
+      setInvoices((current) =>
+        current.map((invoice) =>
+          invoice.id === paymentInvoice.id ? updated : invoice,
+        ),
+      );
+      setPaymentInvoice(null);
+      notify(
+        id
+          ? "Konfirmasi pembayaran dibatalkan dan pembukuan dikoreksi."
+          : "Payment confirmation cancelled and the ledger corrected.",
+      );
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setPaymentSaving(false);
     }
   }
 
@@ -409,9 +486,9 @@ export function BillingView({
                   <span className={`status-badge ${invoice.status === "Lunas" ? "success" : "warning"}`}>{localizedLabel(language, invoice.status)}</span>
                   <div className="invoice-actions">
                     <button className="button subtle small" type="button" onClick={() => downloadInvoice(invoice)}><Download size={15} /> PDF</button>
-                    {canManage && <button className="icon-button" type="button" aria-label={`Edit ${invoice.number}`} onClick={() => openEditInvoice(invoice)}><Pencil size={15} /></button>}
-                    {canManage && invoice.status === "Belum Lunas" && <button className="button primary small" type="button" onClick={() => confirmPayment(invoice.id)}><Check size={15} /> {id ? "Konfirmasi" : "Confirm"}</button>}
-                    {canManage && <button className="icon-button danger" type="button" aria-label={`Hapus ${invoice.number}`} onClick={() => deleteInvoice(invoice)}><Trash2 size={15} /></button>}
+                    {canManage && (invoice.status !== "Lunas" || canManagePayments) && <button className="icon-button" type="button" aria-label={`Edit ${invoice.number}`} onClick={() => openEditInvoice(invoice)}><Pencil size={15} /></button>}
+                    {canManagePayments && <button className={`button small ${invoice.status === "Lunas" ? "subtle" : "primary"}`} type="button" onClick={() => openPayment(invoice)}><Check size={15} /> {invoice.status === "Lunas" ? (id ? "Koreksi bayar" : "Correct payment") : (id ? "Konfirmasi" : "Confirm")}</button>}
+                    {canManage && (invoice.status !== "Lunas" || canManagePayments) && <button className="icon-button danger" type="button" aria-label={`Hapus ${invoice.number}`} onClick={() => deleteInvoice(invoice)}><Trash2 size={15} /></button>}
                   </div>
                 </article>
               ))}
@@ -420,6 +497,26 @@ export function BillingView({
           </section>
         </div>
       )}
+
+      {paymentInvoice ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setPaymentInvoice(null)}>
+          <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="invoice-payment-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div><span className="eyebrow">{id ? "PEMBAYARAN INVOICE" : "INVOICE PAYMENT"}</span><h2 id="invoice-payment-title">{paymentInvoice.number}</h2></div>
+              <button className="icon-button" type="button" aria-label={id ? "Tutup" : "Close"} onClick={() => setPaymentInvoice(null)}><X size={18} /></button>
+            </div>
+            <form className="form-grid" onSubmit={persistPayment}>
+              <label className="field full"><span>{id ? "Tanggal dana diterima" : "Payment received date"}</span><input type="date" required min={paymentInvoice.issueDateIso} max={serverToday || undefined} value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} /></label>
+              <div className="statement-guidance full"><Clock3 size={18} /><span><strong>{id ? "Gunakan tanggal mutasi rekening" : "Use the bank statement date"}</strong><small>{id ? "Tanggal ini menentukan periode arus kas dan kandidat rekonsiliasi bank." : "This date determines the cash-flow period and bank reconciliation candidates."}</small></span></div>
+              <div className="modal-actions full">
+                {paymentInvoice.status === "Lunas" ? <button className="button danger" type="button" disabled={paymentSaving} onClick={cancelPayment}>{id ? "Batalkan pembayaran" : "Cancel payment"}</button> : null}
+                <button className="button secondary" type="button" onClick={() => setPaymentInvoice(null)}>{id ? "Tutup" : "Close"}</button>
+                <button className="button primary" type="submit" disabled={paymentSaving || !paymentDate}><Check size={15} /> {paymentSaving ? (id ? "Menyimpan..." : "Saving...") : paymentInvoice.status === "Lunas" ? (id ? "Simpan koreksi" : "Save correction") : (id ? "Konfirmasi pembayaran" : "Confirm payment")}</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
 
       {showInvoiceForm && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowInvoiceForm(false)}>

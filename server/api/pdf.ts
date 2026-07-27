@@ -45,6 +45,17 @@ export type FinancialReportEntry = {
   description: string;
   amount: number;
   source: string;
+  category: string;
+};
+
+export type FinancialReportBankAccount = {
+  bankName: string;
+  accountName: string;
+  accountNumberMasked: string;
+  openingBalance: number;
+  currentBalance: number;
+  balanceUpdatedAt?: string;
+  syncMode: string;
 };
 
 const PAGE_WIDTH = 210;
@@ -107,11 +118,19 @@ function localizeValue(value: unknown, language: PdfLanguage) {
     paket: "package",
     hari: "day",
     Umum: "General",
+    Penjualan: "Sales",
+    Operasional: "Operations",
+    Vendor: "Vendor",
+    Pajak: "Tax",
+    Gaji: "Payroll",
+    Modal: "Capital",
+    Lainnya: "Other",
     Draft: "Draft",
     Final: "Final",
     Sent: "Sent",
     Generated: "Generated",
     Completed: "Completed",
+    Manual: "Manual",
   };
   return values[source] ?? source;
 }
@@ -1185,6 +1204,7 @@ export async function renderFinancialReportPdf(
   entries: FinancialReportEntry[],
   scopeLabel: string,
   language: PdfLanguage = "id",
+  bankAccounts: FinancialReportBankAccount[] = [],
 ) {
   const sortedDates = entries
     .map((entry) => entry.dateIso)
@@ -1201,12 +1221,12 @@ export async function renderFinancialReportPdf(
   const expense = entries
     .filter((entry) => entry.type === "Pengeluaran")
     .reduce((sum, entry) => sum + entry.amount, 0);
-  const profit = income - expense;
+  const netCash = income - expense;
   const context = await createDocument({
-    title: tr(language, "Laporan Keuangan", "Financial Report"),
+    title: tr(language, "Laporan Arus Kas", "Cash Flow Report"),
     number: `FIN/${reportDate.replaceAll("-", "")}`,
     status: "Generated",
-    subject: tr(language, `Laporan keuangan ${scopeLabel}`, `Financial report ${scopeLabel}`),
+    subject: tr(language, `Laporan arus kas ${scopeLabel}`, `Cash flow report ${scopeLabel}`),
   }, language);
   let y = BODY_TOP;
   y = drawInfoGrid(context, y, [
@@ -1216,10 +1236,43 @@ export async function renderFinancialReportPdf(
     { label: tr(language, "Tanggal laporan", "Report date"), value: generatedDate(language) },
   ]);
   y = drawMetricCards(context, y, [
-    { label: tr(language, "Total pemasukan", "Total income"), value: rupiah(income, language), tone: "income" },
-    { label: tr(language, "Total pengeluaran", "Total expenses"), value: rupiah(expense, language), tone: "expense" },
-    { label: tr(language, "Laba bersih", "Net profit"), value: rupiah(profit, language), tone: "profit" },
+    { label: tr(language, "Kas masuk", "Cash inflow"), value: rupiah(income, language), tone: "income" },
+    { label: tr(language, "Kas keluar", "Cash outflow"), value: rupiah(expense, language), tone: "expense" },
+    { label: tr(language, "Arus kas bersih", "Net cash flow"), value: rupiah(netCash, language), tone: "profit" },
   ]);
+
+  if (bankAccounts.length) {
+    y = drawSectionTitle(
+      context,
+      y,
+      tr(language, "Posisi Rekening Perusahaan", "Company Bank Position"),
+      tr(
+        language,
+        "Saldo terakhir sesuai mutasi atau konektor bank",
+        "Latest balance from bank statements or the bank connector",
+      ),
+    );
+    y = drawTable(
+      context,
+      y,
+      [
+        { title: tr(language, "Rekening", "Account"), width: 58 },
+        { title: tr(language, "Metode", "Method"), width: 30 },
+        { title: tr(language, "Saldo Awal", "Opening Balance"), width: 47, align: "right" },
+        { title: tr(language, "Saldo Terkini", "Current Balance"), width: 47, align: "right" },
+      ],
+      bankAccounts.map((account) => [
+        `${account.bankName} · ${account.accountNumberMasked}\n${account.accountName}`,
+        localizeValue(account.syncMode, language),
+        rupiah(account.openingBalance, language),
+        `${rupiah(account.currentBalance, language)}${
+          account.balanceUpdatedAt
+            ? `\n${displayDate(account.balanceUpdatedAt, language)}`
+            : ""
+        }`,
+      ]),
+    );
+  }
 
   if (!entries.length) {
     drawCallout(
@@ -1231,7 +1284,7 @@ export async function renderFinancialReportPdf(
     );
     return response(
       context,
-      `${tr(language, "Laporan-Keuangan", "Financial-Report")}-PerumNet-${reportDate}.pdf`,
+      `${tr(language, "Laporan-Arus-Kas", "Cash-Flow-Report")}-PerumNet-${reportDate}.pdf`,
     );
   }
 
@@ -1265,15 +1318,15 @@ export async function renderFinancialReportPdf(
     context,
     y,
     tr(language, "Arus Kas Bulanan", "Monthly Cash Flow"),
-    tr(language, "Perbandingan pemasukan dan pengeluaran", "Income and expense comparison"),
+    tr(language, "Perbandingan kas masuk dan kas keluar", "Cash inflow and outflow comparison"),
   );
   y = drawTable(
     context,
     y,
     [
       { title: tr(language, "Periode", "Period"), width: 50 },
-      { title: tr(language, "Pemasukan", "Income"), width: 44, align: "right" },
-      { title: tr(language, "Pengeluaran", "Expenses"), width: 44, align: "right" },
+      { title: tr(language, "Kas Masuk", "Cash Inflow"), width: 44, align: "right" },
+      { title: tr(language, "Kas Keluar", "Cash Outflow"), width: 44, align: "right" },
       { title: tr(language, "Arus Bersih", "Net Cash"), width: 44, align: "right" },
     ],
     Array.from(monthly.entries())
@@ -1293,17 +1346,17 @@ export async function renderFinancialReportPdf(
   y = drawSectionTitle(
     context,
     y,
-    tr(language, "Profitabilitas Proyek", "Project Profitability"),
-    tr(language, "Ringkasan berdasarkan transaksi yang tercatat", "Summary based on recorded transactions"),
+    tr(language, "Kontribusi Kas Proyek", "Project Cash Contribution"),
+    tr(language, "Ringkasan arus kas berdasarkan transaksi tercatat", "Cash flow summary based on recorded transactions"),
   );
   y = drawTable(
     context,
     y,
     [
       { title: tr(language, "Proyek", "Project"), width: 74 },
-      { title: tr(language, "Pemasukan", "Income"), width: 36, align: "right" },
-      { title: tr(language, "Pengeluaran", "Expenses"), width: 36, align: "right" },
-      { title: tr(language, "Laba / Rugi", "Profit / Loss"), width: 36, align: "right" },
+      { title: tr(language, "Kas Masuk", "Cash Inflow"), width: 36, align: "right" },
+      { title: tr(language, "Kas Keluar", "Cash Outflow"), width: 36, align: "right" },
+      { title: tr(language, "Arus Bersih", "Net Cash"), width: 36, align: "right" },
     ],
     Array.from(projects.entries())
       .sort(
@@ -1330,16 +1383,18 @@ export async function renderFinancialReportPdf(
     context,
     y,
     [
-      { title: tr(language, "Tanggal", "Date"), width: 25 },
-      { title: tr(language, "Jenis", "Type"), width: 25 },
-      { title: tr(language, "Proyek", "Project"), width: 43 },
-      { title: tr(language, "Deskripsi / Sumber", "Description / Source"), width: 53 },
-      { title: tr(language, "Nominal", "Amount"), width: 36, align: "right" },
+      { title: tr(language, "Tanggal", "Date"), width: 22 },
+      { title: tr(language, "Jenis", "Type"), width: 21 },
+      { title: tr(language, "Proyek", "Project"), width: 34 },
+      { title: tr(language, "Kategori", "Category"), width: 28 },
+      { title: tr(language, "Deskripsi / Sumber", "Description / Source"), width: 46 },
+      { title: tr(language, "Nominal", "Amount"), width: 31, align: "right" },
     ],
     entries.map((entry) => [
       entry.date,
       localizeValue(entry.type, language),
-      entry.project,
+      localizeValue(entry.project, language),
+      localizeValue(entry.category, language),
       `${entry.description}\n${entry.source}`,
       rupiah(entry.amount, language),
     ]),
@@ -1347,7 +1402,7 @@ export async function renderFinancialReportPdf(
 
   return response(
     context,
-    `${tr(language, "Laporan-Keuangan", "Financial-Report")}-PerumNet-${reportDate}.pdf`,
+    `${tr(language, "Laporan-Arus-Kas", "Cash-Flow-Report")}-PerumNet-${reportDate}.pdf`,
   );
 }
 
