@@ -9,6 +9,7 @@ const basePath =
 const nextConfig: NextConfig = {
   basePath,
   poweredByHeader: false,
+  serverExternalPackages: ["pdf-parse"],
 };
 
 export default nextConfig;

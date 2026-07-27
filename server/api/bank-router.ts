@@ -9,6 +9,7 @@ import {
   createBankEntryFingerprint,
   inferCashCategory,
   parseBankStatementCsv,
+  type ParsedBankStatement,
   type ParsedBankStatementEntry,
 } from "../bank-statement";
 import { getDatabase, type DatabaseClient } from "../db/client";
@@ -347,27 +348,77 @@ async function importStatement(
       ? statementMonthValue
       : undefined;
   if (!(file instanceof File)) {
-    throw new ApiError(400, "FILE_REQUIRED", "Pilih file mutasi CSV.");
+    throw new ApiError(400, "FILE_REQUIRED", "Pilih file mutasi CSV atau PDF.");
   }
-  if (file.size > 2 * 1024 * 1024) {
+  const filename = file.name.toLowerCase();
+  const declaredPdf = filename.endsWith(".pdf") || file.type === "application/pdf";
+  const declaredCsv =
+    filename.endsWith(".csv") ||
+    ["text/csv", "text/plain", "application/vnd.ms-excel"].includes(file.type);
+  const sizeLimit = declaredPdf ? 5 * 1024 * 1024 : 2 * 1024 * 1024;
+  if (file.size > sizeLimit) {
     throw new ApiError(
       413,
       "FILE_TOO_LARGE",
-      "Ukuran file mutasi maksimal 2 MB.",
+      declaredPdf
+        ? "Ukuran PDF mutasi maksimal 5 MB."
+        : "Ukuran CSV mutasi maksimal 2 MB.",
     );
   }
-  if (
-    !file.name.toLowerCase().endsWith(".csv") &&
-    !["text/csv", "text/plain", "application/vnd.ms-excel"].includes(file.type)
-  ) {
+  if (!declaredPdf && !declaredCsv) {
     throw new ApiError(
       400,
       "UNSUPPORTED_FILE",
-      "Gunakan file CSV dari internet banking.",
+      "Gunakan file CSV atau PDF e-statement dari internet banking.",
     );
   }
-  const content = await file.text();
-  const parsed = parseBankStatementCsv(content, accountId, statementMonth);
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const hasPdfSignature =
+    bytes.length >= 5 &&
+    Buffer.from(bytes.subarray(0, 5)).toString("ascii") === "%PDF-";
+  if (declaredPdf && !hasPdfSignature) {
+    throw new ApiError(
+      400,
+      "UNSUPPORTED_FILE",
+      "Isi file tidak dikenali sebagai PDF yang valid.",
+    );
+  }
+  let parsed: ParsedBankStatement;
+  if (hasPdfSignature) {
+    const { parseBankStatementPdf } = await import("../bank-statement-pdf");
+    parsed = await parseBankStatementPdf(bytes, accountId, statementMonth);
+  } else {
+    parsed = parseBankStatementCsv(
+      Buffer.from(bytes).toString("utf8"),
+      accountId,
+      statementMonth,
+    );
+  }
+  if (
+    parsed.statementMonth &&
+    statementMonth &&
+    parsed.statementMonth !== statementMonth
+  ) {
+    throw new ApiError(
+      422,
+      "STATEMENT_PERIOD_MISMATCH",
+      `Periode di PDF adalah ${parsed.statementMonth}, bukan ${statementMonth}.`,
+    );
+  }
+  const accountLast4 = String(account.account_number_masked)
+    .replace(/\D/g, "")
+    .slice(-4);
+  if (
+    parsed.accountNumberLast4 &&
+    accountLast4 &&
+    parsed.accountNumberLast4 !== accountLast4
+  ) {
+    throw new ApiError(
+      422,
+      "BANK_ACCOUNT_MISMATCH",
+      "Nomor rekening di PDF tidak sesuai dengan rekening yang dipilih.",
+    );
+  }
   if (!parsed.entries.length) {
     throw new ApiError(
       422,
@@ -386,6 +437,7 @@ async function importStatement(
 
   const importId = randomUUID();
   const timestamp = new Date().toISOString();
+  const resolvedStatementMonth = parsed.statementMonth ?? statementMonth;
   await client.execute({
     sql: `
       INSERT INTO bank_statement_imports
@@ -396,8 +448,8 @@ async function importStatement(
       importId,
       accountId,
       file.name.slice(0, 240),
-      createHash("sha256").update(content).digest("hex"),
-      statementMonth ?? null,
+      createHash("sha256").update(bytes).digest("hex"),
+      resolvedStatementMonth ?? null,
       parsed.entries.length + parsed.errors.length,
       0,
       0,
@@ -428,6 +480,8 @@ async function importStatement(
   await writeAuditLog(client, request, user, "import", "bank_statement", importId, {
     accountId,
     filename: file.name,
+    format: hasPdfSignature ? "PDF" : "CSV",
+    statementMonth: resolvedStatementMonth,
     ...counts,
     errorCount: parsed.errors.length,
   });

@@ -570,8 +570,8 @@ export function BankingPanel({
                       <FileSpreadsheet size={22} />
                       <span>
                         {id
-                          ? "Belum ada mutasi. Impor CSV bulanan untuk memperbarui saldo."
-                          : "No statements yet. Import a monthly CSV to update the balance."}
+                          ? "Belum ada mutasi. Impor PDF atau CSV bulanan untuk memperbarui saldo."
+                          : "No statements yet. Import a monthly PDF or CSV to update the balance."}
                       </span>
                     </div>
                   ) : null}
@@ -693,7 +693,7 @@ export function BankingPanel({
                   }
                 >
                   <option value="Manual">
-                    {id ? "Upload CSV manual" : "Manual CSV upload"}
+                    {id ? "Upload PDF/CSV manual" : "Manual PDF/CSV upload"}
                   </option>
                   <option value="API">
                     {id ? "Konektor API read-only" : "Read-only API connector"}
@@ -783,11 +783,11 @@ export function BankingPanel({
                 />
               </label>
               <label className="field">
-                <span>{id ? "File CSV" : "CSV file"}</span>
+                <span>{id ? "File PDF atau CSV" : "PDF or CSV file"}</span>
                 <input
                   type="file"
                   required
-                  accept=".csv,text/csv,text/plain"
+                  accept=".pdf,.csv,application/pdf,text/csv,text/plain"
                   onChange={selectStatement}
                 />
               </label>
@@ -796,13 +796,13 @@ export function BankingPanel({
                 <span>
                   <strong>
                     {id
-                      ? "Format BCA dan CSV bank umum didukung"
-                      : "BCA and generic bank CSV formats are supported"}
+                      ? "PDF e-statement BCA dan CSV bank umum didukung"
+                      : "BCA e-statement PDFs and generic bank CSVs are supported"}
                   </strong>
                   <small>
                     {id
-                      ? "Kolom minimum: Tanggal, Keterangan/Transaksi, lalu Mutasi atau Debit dan Kredit. File yang sama aman diunggah ulang karena duplikat dilewati."
-                      : "Required columns: Date, Description/Transaction, then Amount or Debit and Credit. Re-uploading is safe because duplicates are skipped."}
+                      ? "PDF harus berupa e-statement asli dengan teks yang dapat dipilih, bukan scan/foto. CSV memerlukan kolom Tanggal, Keterangan, serta Mutasi atau Debit/Kredit. Duplikat otomatis dilewati."
+                      : "PDFs must be original searchable e-statements, not scans or photos. CSVs require Date, Description, and Amount or Debit/Credit columns. Duplicates are skipped automatically."}
                   </small>
                 </span>
               </div>

@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { after, before, test } from "node:test";
+import { jsPDF } from "jspdf";
 
 let server;
 let baseUrl;
@@ -597,6 +598,131 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     bankEntries.map((entry) => entry.type).sort(),
     ["Pemasukan", "Pengeluaran"].sort(),
   );
+
+  const pdfBankAccount = await json(
+    "/api/bank-accounts",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        bankName: "BCA",
+        accountName: "Rekening PDF",
+        accountNumber: "9988776655",
+        openingBalance: 1_000_000,
+        syncMode: "Manual",
+      }),
+    },
+    201,
+  );
+  const statementPdf = new jsPDF({ unit: "pt", format: "a4" });
+  [
+    "REKENING TAHAPAN",
+    "NO. REKENING : 9988776655",
+    "PERIODE : JULI 2026",
+    "MATA UANG : IDR",
+    "TANGGAL KETERANGAN CBG MUTASI SALDO",
+    "21/07 TRSF E-BANKING CR 2107/FTSCY/WS10001",
+    "500000.00",
+    "PT PELANGGAN",
+    "500,000.00 1,500,000.00",
+    "22/07 BIAYA ADM 5,000.00 DB 1,495,000.00",
+    "SALDO AWAL : 1,000,000.00",
+    "MUTASI CR : 500,000.00 1",
+    "MUTASI DB : 5,000.00 1",
+    "SALDO AKHIR : 1,495,000.00",
+  ].forEach((line, index) => {
+    statementPdf.text(line, 40, 50 + index * 24);
+  });
+  const statementPdfBytes = statementPdf.output("arraybuffer");
+  const pdfStatementForm = new FormData();
+  pdfStatementForm.set(
+    "file",
+    new File([statementPdfBytes], "e-Statement-BCA-Juli-2026.pdf", {
+      type: "application/pdf",
+    }),
+  );
+  pdfStatementForm.set("statementMonth", "2026-07");
+  const importedPdfStatement = await json(
+    `/api/bank-accounts/${pdfBankAccount.id}/import`,
+    { method: "POST", body: pdfStatementForm },
+    201,
+  );
+  assert.equal(importedPdfStatement.importedCount, 2);
+  assert.equal(importedPdfStatement.duplicateCount, 0);
+  assert.equal(importedPdfStatement.currentBalance, 1_495_000);
+
+  const pdfBankEntries = await json(
+    `/api/bank-accounts/${pdfBankAccount.id}/entries`,
+  );
+  assert.equal(pdfBankEntries.length, 2);
+  assert.equal(
+    pdfBankEntries.find((entry) => entry.type === "Pemasukan").amount,
+    500_000,
+  );
+  assert.match(
+    pdfBankEntries.find((entry) => entry.type === "Pemasukan").description,
+    /PT PELANGGAN/,
+  );
+  assert.equal(
+    pdfBankEntries.find((entry) => entry.type === "Pengeluaran").amount,
+    5_000,
+  );
+  assert.equal(
+    pdfBankEntries.every((entry) => entry.source === "Manual Upload"),
+    true,
+  );
+
+  const repeatedPdfForm = new FormData();
+  repeatedPdfForm.set(
+    "file",
+    new File([statementPdfBytes], "e-Statement-BCA-Juli-2026.pdf", {
+      type: "application/pdf",
+    }),
+  );
+  repeatedPdfForm.set("statementMonth", "2026-07");
+  const repeatedPdfImport = await json(
+    `/api/bank-accounts/${pdfBankAccount.id}/import`,
+    { method: "POST", body: repeatedPdfForm },
+    201,
+  );
+  assert.equal(repeatedPdfImport.importedCount, 0);
+  assert.equal(repeatedPdfImport.duplicateCount, 2);
+
+  const mismatchedPeriodForm = new FormData();
+  mismatchedPeriodForm.set(
+    "file",
+    new File([statementPdfBytes], "e-Statement-BCA-Juli-2026.pdf", {
+      type: "application/pdf",
+    }),
+  );
+  mismatchedPeriodForm.set("statementMonth", "2026-06");
+  assert.equal(
+    (
+      await request(`/api/bank-accounts/${pdfBankAccount.id}/import`, {
+        method: "POST",
+        body: mismatchedPeriodForm,
+      })
+    ).status,
+    422,
+  );
+
+  const mismatchedAccountForm = new FormData();
+  mismatchedAccountForm.set(
+    "file",
+    new File([statementPdfBytes], "e-Statement-BCA-Juli-2026.pdf", {
+      type: "application/pdf",
+    }),
+  );
+  mismatchedAccountForm.set("statementMonth", "2026-07");
+  assert.equal(
+    (
+      await request(`/api/bank-accounts/${bankAccount.id}/import`, {
+        method: "POST",
+        body: mismatchedAccountForm,
+      })
+    ).status,
+    422,
+  );
+
   const generatedBankTransaction = (
     await json("/api/transactions")
   ).find(

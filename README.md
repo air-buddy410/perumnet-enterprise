@@ -62,12 +62,15 @@ Template PM2, Nginx, dan backup harian PostgreSQL untuk VPS tersedia di folder
 Admin dapat menambahkan rekening BCA atau bank lain dari modul Finance. Finance
 dapat memperbarui saldo dan mutasi melalui dua jalur:
 
-- Upload CSV bulanan. Parser menerima format BCA/generic dengan kolom tanggal,
-  keterangan, mutasi atau debit/kredit, saldo, dan referensi. Impor bersifat
-  idempoten; baris duplikat dilewati dan transaksi Invoice/SPK yang cocok
-  dalam jendela settlement tiga hari direkonsiliasi agar tidak dihitung dua
-  kali. Kasus ambigu dapat ditinjau, dicocokkan, atau dikecualikan secara
-  manual dari tabel mutasi.
+- Upload PDF atau CSV bulanan. PDF e-statement BCA yang memiliki teks dapat
+  dibaca langsung, termasuk detail transfer multi-baris, penanda debit/kredit,
+  saldo akhir, periode, dan verifikasi empat digit terakhir nomor rekening.
+  PDF hasil scan/foto tidak diproses tanpa OCR. Parser CSV menerima format
+  BCA/generic dengan kolom tanggal, keterangan, mutasi atau debit/kredit, saldo,
+  dan referensi. Impor bersifat idempoten; baris duplikat dilewati dan
+  transaksi Invoice/SPK yang cocok dalam jendela settlement tiga hari
+  direkonsiliasi agar tidak dihitung dua kali. Kasus ambigu dapat ditinjau,
+  dicocokkan, atau dikecualikan secara manual dari tabel mutasi.
 - Konektor API read-only. Isi `BANK_SYNC_API_URL` dan `BANK_SYNC_API_TOKEN` pada
   environment server. Credential bank tidak pernah dikirim ke browser atau
   disimpan di tabel aplikasi.

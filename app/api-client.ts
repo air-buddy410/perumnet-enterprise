@@ -70,6 +70,9 @@ export function messageOf(error: unknown, language: "id" | "en" = "id") {
       SIGNATURES_REQUIRED: "Client and PerumNet signatures are required before finalization.",
       FILE_TOO_LARGE: "The file is too large.",
       UNSUPPORTED_FILE: "This file format is not supported.",
+      INVALID_STATEMENT: "No valid bank transactions were found in this statement.",
+      STATEMENT_PERIOD_MISMATCH: "The selected period does not match the period in the PDF.",
+      BANK_ACCOUNT_MISMATCH: "The account number in the PDF does not match the selected bank account.",
     };
     return error.code && messages[error.code]
       ? messages[error.code]

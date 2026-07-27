@@ -18,6 +18,9 @@ export interface ParsedBankStatementEntry {
 export interface ParsedBankStatement {
   entries: ParsedBankStatementEntry[];
   errors: string[];
+  statementMonth?: string;
+  accountNumberLast4?: string;
+  closingBalance?: number;
 }
 
 const HEADER_ALIASES = {
@@ -337,6 +340,276 @@ export function parseBankStatementCsv(
   });
 
   return { entries, errors: errors.slice(0, 50) };
+}
+
+const STATEMENT_MONTHS: Record<string, string> = {
+  JANUARI: "01",
+  JANUARY: "01",
+  FEBRUARI: "02",
+  FEBRUARY: "02",
+  MARET: "03",
+  MARCH: "03",
+  APRIL: "04",
+  MEI: "05",
+  MAY: "05",
+  JUNI: "06",
+  JUNE: "06",
+  JULI: "07",
+  JULY: "07",
+  AGUSTUS: "08",
+  AUGUST: "08",
+  SEPTEMBER: "09",
+  OKTOBER: "10",
+  OCTOBER: "10",
+  NOVEMBER: "11",
+  DESEMBER: "12",
+  DECEMBER: "12",
+};
+
+interface PdfStatementGroup {
+  dateText: string;
+  lines: string[];
+}
+
+interface MoneyMatch {
+  value: string;
+  index: number;
+}
+
+function statementMonthFromPdf(lines: string[]) {
+  for (const line of lines) {
+    const normalized = line
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toUpperCase();
+    const matched = normalized.match(
+      /\b(?:PERIODE|PERIOD)\s*:?\s*([A-Z]+)\s+(\d{4})\b/,
+    );
+    if (!matched) continue;
+    const month = STATEMENT_MONTHS[matched[1]];
+    if (month) return `${matched[2]}-${month}`;
+  }
+  return undefined;
+}
+
+function moneyMatches(value: string): MoneyMatch[] {
+  const matches: MoneyMatch[] = [];
+  const pattern = /(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}/g;
+  for (const match of value.matchAll(pattern)) {
+    matches.push({
+      value: match[0],
+      index: match.index ?? 0,
+    });
+  }
+  return matches;
+}
+
+function ledgerAmounts(lines: string[]) {
+  const headerMatches = moneyMatches(lines[0] ?? "");
+  if (headerMatches.length) {
+    return {
+      amount: parseMoney(headerMatches[0].value),
+      runningBalance:
+        headerMatches.length > 1
+          ? parseMoney(headerMatches[1].value)
+          : null,
+    };
+  }
+
+  const candidates = lines
+    .slice(1)
+    .map((line) => ({ line, matches: moneyMatches(line) }))
+    .filter((candidate) => candidate.matches.length);
+  if (!candidates.length) {
+    return { amount: null, runningBalance: null };
+  }
+
+  const ledgerCandidate =
+    [...candidates]
+      .reverse()
+      .find(
+        ({ line, matches }) =>
+          matches.length > 1 ||
+          /(?:,|\bDB\b|\bCR\b)/i.test(line) ||
+          !/^\d+\.\d{2}$/.test(line),
+      ) ?? candidates.at(-1)!;
+  return {
+    amount: parseMoney(ledgerCandidate.matches[0].value),
+    runningBalance:
+      ledgerCandidate.matches.length > 1
+        ? parseMoney(ledgerCandidate.matches[1].value)
+        : null,
+  };
+}
+
+function pdfDescription(lines: string[]) {
+  const parts = lines
+    .map((line, index) => {
+      if (index > 0 && /^\d[\d.,]*(?:\s+(?:DB|CR))?(?:\s+\d[\d.,]*)?$/i.test(line)) {
+        return "";
+      }
+      const firstAmount = moneyMatches(line)[0];
+      const withoutLedger = firstAmount ? line.slice(0, firstAmount.index) : line;
+      return withoutLedger.replace(/\s+/g, " ").trim();
+    })
+    .filter(Boolean);
+  return [...new Set(parts)].join(" · ").slice(0, 500);
+}
+
+function pdfReference(description: string) {
+  return (
+    description.match(
+      /\b\d{4}\/[A-Z0-9]{3,}\/[A-Z0-9][A-Z0-9/-]{2,}\b/i,
+    )?.[0] ?? undefined
+  );
+}
+
+/**
+ * Parses searchable bank-statement text extracted from PDF. BCA e-statements
+ * use a dated primary row followed by zero or more transfer-detail rows. The
+ * amount/balance row can appear after those details, so rows are grouped by
+ * transaction date before their ledger values are interpreted.
+ */
+export function parseBankStatementPdfText(
+  input: string,
+  accountId: string,
+  selectedStatementMonth?: string,
+): ParsedBankStatement {
+  const lines = input
+    .replace(/\u00a0/g, " ")
+    .split(/\r?\n/)
+    .map((line) => line.normalize("NFKC").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const detectedStatementMonth = statementMonthFromPdf(lines);
+  const effectiveStatementMonth =
+    detectedStatementMonth ?? selectedStatementMonth;
+  const accountNumber = input
+    .replace(/\s+/g, " ")
+    .match(/NO\.?\s*REKENING\s*:\s*([0-9][0-9 .-]{5,})/i)?.[1]
+    ?.replace(/\D/g, "");
+  const accountNumberLast4 =
+    accountNumber && accountNumber.length >= 4
+      ? accountNumber.slice(-4)
+      : undefined;
+  const closingBalanceMatch = input.match(
+    /SALDO\s+AKHIR\s*:\s*((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})/i,
+  );
+  const closingBalance = closingBalanceMatch
+    ? parseMoney(closingBalanceMatch[1]) ?? undefined
+    : undefined;
+
+  const groups: PdfStatementGroup[] = [];
+  let current: PdfStatementGroup | null = null;
+  let insideTable = false;
+  const flush = () => {
+    if (current) groups.push(current);
+    current = null;
+  };
+
+  for (const line of lines) {
+    if (/\bTANGGAL\b.*\bKETERANGAN\b.*\bMUTASI\b/i.test(line)) {
+      flush();
+      insideTable = true;
+      continue;
+    }
+    if (/^--\s*\d+\s+of\s+\d+\s*--$/i.test(line)) {
+      flush();
+      insideTable = false;
+      continue;
+    }
+    if (/^SALDO\s+AWAL\s*:/i.test(line)) {
+      flush();
+      insideTable = false;
+      continue;
+    }
+    if (!insideTable) continue;
+
+    const dated = line.match(/^(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\s+(.+)$/);
+    if (dated) {
+      flush();
+      current = { dateText: dated[1], lines: [dated[2]] };
+      continue;
+    }
+    if (current && !/^\d+\s*\/\s*\d+$/.test(line)) {
+      current.lines.push(line);
+    }
+  }
+  flush();
+
+  const entries: ParsedBankStatementEntry[] = [];
+  const errors: string[] = [];
+  const occurrences = new Map<string, number>();
+
+  for (const group of groups) {
+    const date = parseDate(group.dateText, effectiveStatementMonth);
+    const description = pdfDescription(group.lines);
+    if (/saldo\s+awal|opening\s+balance/i.test(description)) continue;
+    const { amount, runningBalance } = ledgerAmounts(group.lines);
+    const type: BankEntryType = /\b(?:DB|DR|DEBIT|DEBET)\b/i.test(
+      group.lines.join(" "),
+    )
+      ? "Pengeluaran"
+      : "Pemasukan";
+    if (!date || !description || !amount) {
+      errors.push(
+        `Mutasi ${group.dateText} dilewati karena tanggal, deskripsi, atau nominal tidak valid.`,
+      );
+      continue;
+    }
+
+    const reference = pdfReference(description);
+    const values = {
+      date,
+      description,
+      type,
+      amount,
+      ...(runningBalance === null || runningBalance === undefined
+        ? {}
+        : { runningBalance }),
+      ...(reference ? { reference } : {}),
+    };
+    const fingerprintBase = [
+      date,
+      type,
+      amount,
+      description.trim().replace(/\s+/g, " ").toLowerCase(),
+      reference ?? "",
+      runningBalance ?? "",
+    ].join("|");
+    const occurrence = (occurrences.get(fingerprintBase) ?? 0) + 1;
+    occurrences.set(fingerprintBase, occurrence);
+    entries.push({
+      ...values,
+      fingerprint: createBankEntryFingerprint(accountId, values, occurrence),
+      raw: {
+        format: "PDF",
+        lines: group.lines,
+      },
+    });
+  }
+
+  if (entries.length && closingBalance !== undefined) {
+    const last = entries.at(-1)!;
+    if (last.runningBalance === undefined) {
+      last.runningBalance = closingBalance;
+    }
+  }
+
+  if (!groups.length) {
+    errors.push(
+      "Tabel mutasi tidak ditemukan. Gunakan PDF e-statement yang teksnya dapat dipilih, bukan hasil scan/foto.",
+    );
+  }
+
+  return {
+    entries,
+    errors: errors.slice(0, 50),
+    ...(detectedStatementMonth
+      ? { statementMonth: detectedStatementMonth }
+      : {}),
+    ...(accountNumberLast4 ? { accountNumberLast4 } : {}),
+    ...(closingBalance === undefined ? {} : { closingBalance }),
+  };
 }
 
 export function inferCashCategory(
