@@ -265,8 +265,6 @@
 html {
   min-width: 320px;
   overflow-x: hidden;
-  scroll-behavior: smooth;
-  scroll-padding-top: 96px;
 }
 
 body {

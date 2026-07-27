@@ -386,6 +386,8 @@ async function ensureCmsSeed(client: DatabaseClient) {
     ["address", "BTN Kecicang Indah Blok A5, Bungaya Kangin, Karangasem, Bali 80813"],
     ["instagram_url", "https://www.instagram.com/perum_net"],
     ["linkedin_url", ""],
+    ["website_url", "https://www.perumnet.id/"],
+    ["dark_font_color", "#FFFFFF"],
     ["cta_text", "Konsultasikan Kebutuhan Anda"],
     ["business_hours", "Senin–Minggu · 24/7 support"],
   ];
@@ -399,7 +401,7 @@ async function ensureCmsSeed(client: DatabaseClient) {
   const texts = [
     ["home", "hero_eyebrow", "SOLUSI IT TERINTEGRASI · BALI"],
     ["home", "hero_title", "Infrastruktur IT yang bekerja tanpa hambatan."],
-    ["home", "hero_description", "PerumNet Enterprise merancang, memasang, dan merawat jaringan WiFi, CCTV, serta IP PABX agar bisnis Anda selalu terhubung, aman, dan siap bertumbuh."],
+    ["home", "hero_description", "PerumNet Enterprise merancang, memasang, dan merawat jaringan WiFi, CCTV, Smart Home Device, serta IP PABX agar bisnis Anda selalu terhubung, aman, dan siap bertumbuh."],
     ["home", "about_eyebrow", "PARTNER TEKNOLOGI ANDA"],
     ["home", "about_title", "Satu tim untuk seluruh kebutuhan infrastruktur."],
     ["home", "about_description", "Kami menggabungkan konsultasi, instalasi, dokumentasi, dan dukungan berkelanjutan dalam satu layanan yang mudah dipantau."],
@@ -409,7 +411,7 @@ async function ensureCmsSeed(client: DatabaseClient) {
     ["home", "testimonials_title", "Dipercaya untuk menjaga operasional tetap berjalan."],
     ["home", "closing_title", "Mulai dari survei lokasi, kami bantu sampai sistem siap digunakan."],
     ["services", "page_title", "Infrastruktur yang siap mengikuti ritme bisnis Anda."],
-    ["services", "page_description", "Layanan konsultasi, instalasi, integrasi, dan pemeliharaan untuk jaringan WiFi, CCTV, dan IP PABX."],
+    ["services", "page_description", "Layanan konsultasi, instalasi, integrasi, dan pemeliharaan untuk jaringan WiFi, CCTV, Smart Home Device, dan IP PABX."],
     ["portfolio", "page_title", "Pilihan proyek yang kami selesaikan bersama klien."],
     ["portfolio", "page_description", "Setiap proyek dimulai dari kebutuhan lapangan dan ditutup dengan dokumentasi yang jelas."],
     ["testimonials", "page_title", "Cerita dari bisnis yang bertumbuh bersama sistem yang lebih baik."],
@@ -428,6 +430,7 @@ async function ensureCmsSeed(client: DatabaseClient) {
     ["cms-service-wifi", "managed-wifi", "Managed WiFi", "WiFi stabil, aman, dan mudah dikelola untuk kantor, hotel, sekolah, dan area publik.", "Kami merancang cakupan, kapasitas, segmentasi jaringan, dan monitoring agar setiap pengguna mendapat pengalaman koneksi yang konsisten.", "[\"Site survey & heatmap\",\"Managed access point\",\"Guest WiFi & captive portal\",\"Monitoring dan dukungan\"]", "wifi", 1],
     ["cms-service-cctv", "cctv", "CCTV & Surveillance", "Sistem pengawasan yang memberi visibilitas jelas dari lokasi maupun jarak jauh.", "Mulai dari penempatan kamera hingga retensi rekaman dan akses mobile, sistem CCTV disusun sesuai risiko dan alur aktivitas lokasi.", "[\"IP camera & NVR\",\"Remote monitoring\",\"Smart detection\",\"Preventive maintenance\"]", "camera", 2],
     ["cms-service-pabx", "ip-pabx", "IP PABX", "Komunikasi internal yang profesional, fleksibel, dan siap berkembang bersama tim.", "Kami mengintegrasikan extension, IVR, call routing, dan perangkat IP phone agar komunikasi pelanggan dan tim berjalan lebih efisien.", "[\"Extension planning\",\"IVR & call routing\",\"IP phone provisioning\",\"Call recording option\"]", "phone", 3],
+    ["cms-service-smart-home", "smart-home-device", "Smart Home Device", "Kontrol perangkat, keamanan, dan otomasi ruang yang praktis dari satu sistem.", "Kami mengintegrasikan perangkat smart home sesuai kebutuhan rumah, villa, maupun area komersial agar pencahayaan, akses, sensor, dan perangkat terpilih dapat dipantau serta dikendalikan dengan mudah.", "[\"Smart lighting & switch\",\"Sensor pintu dan gerak\",\"Kontrol perangkat terpusat\",\"Konfigurasi dan dukungan\"]", "home", 4],
   ];
   for (const row of services) {
     statements.push(statement(
@@ -474,6 +477,55 @@ async function ensureCmsSeed(client: DatabaseClient) {
   await client.batch(statements, "write");
 }
 
+async function ensureCmsEnhancements(client: DatabaseClient) {
+  const timestamp = new Date().toISOString();
+  await client.batch([
+    statement(
+      "INSERT INTO cms_site_settings (id,key_name,value_content,updated_at) VALUES (?,?,?,?) ON CONFLICT DO NOTHING",
+      ["cms-setting-website_url", "website_url", "https://www.perumnet.id/", timestamp],
+    ),
+    statement(
+      "INSERT INTO cms_site_settings (id,key_name,value_content,updated_at) VALUES (?,?,?,?) ON CONFLICT DO NOTHING",
+      ["cms-setting-dark_font_color", "dark_font_color", "#FFFFFF", timestamp],
+    ),
+    statement(
+      "INSERT INTO cms_services (id,slug,title,summary,description,features_json,icon,sort_order,is_published,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT DO NOTHING",
+      [
+        "cms-service-smart-home",
+        "smart-home-device",
+        "Smart Home Device",
+        "Kontrol perangkat, keamanan, dan otomasi ruang yang praktis dari satu sistem.",
+        "Kami mengintegrasikan perangkat smart home sesuai kebutuhan rumah, villa, maupun area komersial agar pencahayaan, akses, sensor, dan perangkat terpilih dapat dipantau serta dikendalikan dengan mudah.",
+        "[\"Smart lighting & switch\",\"Sensor pintu dan gerak\",\"Kontrol perangkat terpusat\",\"Konfigurasi dan dukungan\"]",
+        "home",
+        4,
+        timestamp,
+        timestamp,
+      ],
+    ),
+    statement(
+      "UPDATE cms_site_texts SET value_content=?,updated_at=? WHERE page_key=? AND content_key=? AND value_content=?",
+      [
+        "PerumNet Enterprise merancang, memasang, dan merawat jaringan WiFi, CCTV, Smart Home Device, serta IP PABX agar bisnis Anda selalu terhubung, aman, dan siap bertumbuh.",
+        timestamp,
+        "home",
+        "hero_description",
+        "PerumNet Enterprise merancang, memasang, dan merawat jaringan WiFi, CCTV, serta IP PABX agar bisnis Anda selalu terhubung, aman, dan siap bertumbuh.",
+      ],
+    ),
+    statement(
+      "UPDATE cms_site_texts SET value_content=?,updated_at=? WHERE page_key=? AND content_key=? AND value_content=?",
+      [
+        "Layanan konsultasi, instalasi, integrasi, dan pemeliharaan untuk jaringan WiFi, CCTV, Smart Home Device, dan IP PABX.",
+        timestamp,
+        "services",
+        "page_description",
+        "Layanan konsultasi, instalasi, integrasi, dan pemeliharaan untuk jaringan WiFi, CCTV, dan IP PABX.",
+      ],
+    ),
+  ], "write");
+}
+
 async function ensureBastEngineerRoleColumn(client: DatabaseClient) {
   try {
     await client.execute("SELECT engineer_role FROM basts LIMIT 1");
@@ -493,6 +545,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await client.executeMultiple(schemaSql);
   await ensureBastEngineerRoleColumn(client);
   await ensureCmsSeed(client);
+  await ensureCmsEnhancements(client);
 
   const existing = await client.execute("SELECT id FROM users LIMIT 1");
   if (existing.rows.length) return;

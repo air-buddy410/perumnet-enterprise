@@ -124,7 +124,7 @@ function SidebarNavigation({
   return (
     <>
       <div className="sidebar-brand">
-        <img src={appPath("/perumnet-enterprise-brand.png")} alt="" width={42} height={42} />
+        <img src={appPath("/perumnet-mark.png")} alt="" width={42} height={42} />
         <div><strong>PerumNet</strong><span>Enterprise</span></div>
         <button className="icon-button sidebar-close" type="button" aria-label={language === "id" ? "Tutup navigasi" : "Close navigation"} onClick={onClose}><X size={18} /></button>
       </div>

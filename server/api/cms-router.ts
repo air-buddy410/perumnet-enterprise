@@ -37,6 +37,8 @@ const siteSettingsSchema = z.object({
   address: z.string().trim().min(4).max(1_000),
   instagram_url: externalUrl,
   linkedin_url: externalUrl,
+  website_url: externalUrl,
+  dark_font_color: z.string().trim().regex(/^#[0-9A-Fa-f]{6}$/, "Warna teks harus menggunakan format HEX, misalnya #FFFFFF."),
   cta_text: z.string().trim().min(1).max(180),
   business_hours: z.string().trim().min(1).max(180),
 }).partial().strict();
@@ -47,7 +49,7 @@ const serviceSchema = z.object({
   summary: z.string().trim().min(4).max(400),
   description: longText,
   features: z.array(z.string().trim().min(1).max(160)).max(12).default([]),
-  icon: z.enum(["wifi", "camera", "phone", "network", "shield"]).default("network"),
+  icon: z.enum(["wifi", "camera", "phone", "network", "shield", "home"]).default("network"),
   sortOrder: z.number().int().min(0).max(999).default(0),
   isPublished: z.boolean().default(true),
 });

@@ -57,7 +57,7 @@ const navItems: Array<{ id: Section; label: string; icon: typeof Home }> = [
   { id: "portfolios", label: "Portofolio", icon: ImageIcon },
   { id: "testimonials", label: "Testimoni", icon: MessageSquareQuote },
   { id: "pages", label: "Halaman", icon: Globe2 },
-  { id: "settings", label: "Pengaturan CTA", icon: Settings },
+  { id: "settings", label: "Pengaturan Situs", icon: Settings },
 ];
 
 const cmsServiceIcons: Record<string, typeof Home> = {
@@ -66,6 +66,7 @@ const cmsServiceIcons: Record<string, typeof Home> = {
   phone: Phone,
   network: Network,
   shield: ShieldCheck,
+  home: Home,
 };
 
 const textLabels: Record<string, Record<string, string>> = {
@@ -176,7 +177,7 @@ export function PanelApp() {
   return (
     <div className={styles.panelRoot}>
       <aside className={`${styles.sidebar} ${sidebarOpen ? styles.sidebarOpen : ""}`}>
-        <div className={styles.sideBrand}><img src="/perumnet-enterprise-brand.png" alt="" /><span><strong>PERUMNET</strong><small>CONTENT STUDIO</small></span><button onClick={() => setSidebarOpen(false)} aria-label="Tutup menu"><X size={20} /></button></div>
+        <div className={styles.sideBrand}><img src="/perumnet-mark.png" alt="" /><span><strong>PERUMNET</strong><small>CONTENT STUDIO</small></span><button onClick={() => setSidebarOpen(false)} aria-label="Tutup menu"><X size={20} /></button></div>
         <div className={styles.sideLabel}>PENGELOLAAN SITUS</div>
         <nav>{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={section === id ? styles.activeSide : ""} onClick={() => { setSection(id); setSidebarOpen(false); }}><Icon size={18} /><span>{label}</span>{section === id && <ChevronRight size={15} />}</button>)}</nav>
         <div className={styles.sideFooter}>
@@ -208,7 +209,7 @@ export function PanelApp() {
 }
 
 function LoadingScreen() {
-  return <main className={styles.loading}><img src="/perumnet-enterprise-brand.png" alt="PerumNet Enterprise" /><LoaderCircle size={25} /><p>Menyiapkan Content Studio...</p></main>;
+  return <main className={styles.loading}><img src="/perumnet-mark.png" alt="PerumNet Enterprise" /><LoaderCircle size={25} /><p>Menyiapkan Content Studio...</p></main>;
 }
 
 function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
@@ -227,7 +228,7 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
   };
   return <main className={styles.loginRoot}>
     <section className={styles.loginVisual}>
-      <div className={styles.loginBrand}><img src="/perumnet-enterprise-brand.png" alt="" /><strong>PERUMNET ENTERPRISE</strong></div>
+      <div className={styles.loginBrand}><img src="/perumnet-mark.png" alt="" /><strong>PERUMNET ENTERPRISE</strong></div>
       <div className={styles.loginCopy}><span>CONTENT MANAGEMENT SYSTEM</span><h1>Kelola website<br /><em>tanpa menyentuh kode.</em></h1><p>Perbarui layanan, portofolio, testimoni, halaman, dan informasi kontak dari satu ruang kerja.</p><div><LockKeyhole size={20} /><span><strong>Akses aman Administrator</strong><small>Sesi terlindungi dan tercatat</small></span></div></div>
       <div className={styles.loginStatus}><span /> Sistem pengelolaan konten siap digunakan</div>
     </section>
@@ -288,7 +289,7 @@ function ServiceEditor({ items, busy, mutate }: { items: Service[]; busy: boolea
   return <>
     <SectionTitle eyebrow="LAYANAN" title="Kelola solusi yang Anda tawarkan." description="Atur deskripsi, fitur, urutan, dan status tayang setiap layanan." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyService()); }}><Plus size={17} /> Layanan baru</button>} />
     <div className={styles.splitEditor}><ListPanel title="Daftar layanan">{items.map((item) => { const Icon = cmsServiceIcons[item.icon] || Network; return <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm({ ...item }); }}><span className={styles.itemIcon}><Icon size={18} /></span><div><strong>{item.title}</strong><small>{item.isPublished ? "Tayang" : "Disembunyikan"}</small></div><ChevronRight size={16} /></button>; })}</ListPanel><EditorPanel title={selected ? "Edit layanan" : "Layanan baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus layanan ini?")) mutate(() => request(`/api/cms/services/${selected}`, { method: "DELETE" }), "Layanan dihapus."); } : undefined}>
-      <div className={styles.fieldGrid}><Field label="Nama layanan" value={form.title} onChange={(title) => setForm({ ...form, title })} /><Field label="Slug URL" value={form.slug} onChange={(slug) => setForm({ ...form, slug })} placeholder="otomatis-dari-judul" /><label className={styles.fullField}><span>Ringkasan</span><textarea rows={3} value={form.summary} onChange={(event) => setForm({ ...form, summary: event.target.value })} /></label><label className={styles.fullField}><span>Deskripsi lengkap</span><textarea rows={5} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label><label className={styles.fullField}><span>Fitur (satu per baris)</span><textarea rows={5} value={form.features.join("\n")} onChange={(event) => setForm({ ...form, features: event.target.value.split("\n").map((value) => value.trim()).filter(Boolean) })} /></label><SelectField label="Ikon" value={form.icon} options={["wifi","camera","phone","network","shield"]} onChange={(icon) => setForm({ ...form, icon })} /><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><ToggleField label="Tampilkan di website" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /></div>
+      <div className={styles.fieldGrid}><Field label="Nama layanan" value={form.title} onChange={(title) => setForm({ ...form, title })} /><Field label="Slug URL" value={form.slug} onChange={(slug) => setForm({ ...form, slug })} placeholder="otomatis-dari-judul" /><label className={styles.fullField}><span>Ringkasan</span><textarea rows={3} value={form.summary} onChange={(event) => setForm({ ...form, summary: event.target.value })} /></label><label className={styles.fullField}><span>Deskripsi lengkap</span><textarea rows={5} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label><label className={styles.fullField}><span>Fitur (satu per baris)</span><textarea rows={5} value={form.features.join("\n")} onChange={(event) => setForm({ ...form, features: event.target.value.split("\n").map((value) => value.trim()).filter(Boolean) })} /></label><SelectField label="Ikon" value={form.icon} options={["wifi","camera","phone","network","shield","home"]} onChange={(icon) => setForm({ ...form, icon })} /><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><ToggleField label="Tampilkan di website" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /></div>
     </EditorPanel></div>
   </>;
 }
@@ -337,8 +338,21 @@ function SettingsEditor({ settings, busy, save }: { settings: Record<string,stri
   const [values, setValues] = useState(settings);
   const set = (key: string, value: string) => setValues((current) => ({ ...current, [key]: value }));
   return <>
-    <SectionTitle eyebrow="PENGATURAN TOMBOL AKSI" title="Satu pusat untuk semua informasi kontak." description="Nomor WhatsApp, email, alamat, dan CTA di seluruh website mengikuti pengaturan ini." action={<button className={styles.primaryAction} disabled={busy} onClick={() => save(values)}><Save size={17} /> Simpan pengaturan</button>} />
-    <section className={styles.editorCard}><div className={styles.cardHeading}><span>Identitas & kontak</span><small>Digunakan di header, footer, dan halaman kontak</small></div><div className={styles.fieldGrid}><Field label="Nama perusahaan" value={values.company_name || ""} onChange={(value) => set("company_name", value)} /><Field label="Tagline" value={values.company_tagline || ""} onChange={(value) => set("company_tagline", value)} /><Field label="Nomor WhatsApp" value={values.whatsapp_number || ""} onChange={(value) => set("whatsapp_number", value)} placeholder="085155026889 atau 6285155026889" /><Field label="Nomor telepon tampilan" value={values.phone || ""} onChange={(value) => set("phone", value)} /><Field label="Email" value={values.email || ""} onChange={(value) => set("email", value)} type="email" /><Field label="Jam operasional" value={values.business_hours || ""} onChange={(value) => set("business_hours", value)} /><label className={styles.fullField}><span>Alamat</span><textarea rows={4} value={values.address || ""} onChange={(event) => set("address", event.target.value)} /></label><Field label="Instagram URL" value={values.instagram_url || ""} onChange={(value) => set("instagram_url", value)} type="url" /><Field label="LinkedIn URL" value={values.linkedin_url || ""} onChange={(value) => set("linkedin_url", value)} type="url" /><label className={styles.fullField}><span>Teks tombol CTA utama</span><input value={values.cta_text || ""} onChange={(event) => set("cta_text", event.target.value)} /></label></div></section>
+    <SectionTitle eyebrow="PENGATURAN SITUS" title="Identitas, kontak, dan tampilan dalam satu tempat." description="Perubahan berikut langsung digunakan pada seluruh halaman website publik." action={<button className={styles.primaryAction} disabled={busy} onClick={() => save(values)}><Save size={17} /> Simpan pengaturan</button>} />
+    <div className={styles.formStack}>
+      <section className={styles.editorCard}>
+        <div className={styles.cardHeading}><span>Warna & tampilan publik</span><small>Kontras teks pada area teal dan gelap</small></div>
+        <div className={styles.appearanceGrid}>
+          <ColorField label="Warna teks utama di area gelap" value={values.dark_font_color || "#FFFFFF"} onChange={(value) => set("dark_font_color", value)} />
+          <div className={styles.colorPreview} style={{ color: values.dark_font_color || "#FFFFFF" }}>
+            <span>Pratinjau kontras</span>
+            <strong>Infrastruktur IT yang bekerja tanpa hambatan.</strong>
+            <small>Warna ini digunakan untuk judul dan teks utama pada bidang teal atau gelap.</small>
+          </div>
+        </div>
+      </section>
+      <section className={styles.editorCard}><div className={styles.cardHeading}><span>Identitas & kontak</span><small>Digunakan di header, footer, dan halaman kontak</small></div><div className={styles.fieldGrid}><Field label="Nama perusahaan" value={values.company_name || ""} onChange={(value) => set("company_name", value)} /><Field label="Tagline" value={values.company_tagline || ""} onChange={(value) => set("company_tagline", value)} /><Field label="Nomor WhatsApp" value={values.whatsapp_number || ""} onChange={(value) => set("whatsapp_number", value)} placeholder="085155026889 atau 6285155026889" /><Field label="Nomor telepon tampilan" value={values.phone || ""} onChange={(value) => set("phone", value)} /><Field label="Email" value={values.email || ""} onChange={(value) => set("email", value)} type="email" /><Field label="Jam operasional" value={values.business_hours || ""} onChange={(value) => set("business_hours", value)} /><label className={styles.fullField}><span>Alamat</span><textarea rows={4} value={values.address || ""} onChange={(event) => set("address", event.target.value)} /></label><Field label="Instagram URL" value={values.instagram_url || ""} onChange={(value) => set("instagram_url", value)} type="url" /><Field label="LinkedIn URL" value={values.linkedin_url || ""} onChange={(value) => set("linkedin_url", value)} type="url" /><Field label="Website utama" value={values.website_url || "https://www.perumnet.id/"} onChange={(value) => set("website_url", value)} type="url" /><label className={styles.fullField}><span>Teks tombol CTA utama</span><input value={values.cta_text || ""} onChange={(event) => set("cta_text", event.target.value)} /></label></div></section>
+    </div>
   </>;
 }
 
@@ -351,4 +365,10 @@ function EditorPanel({ title, children, onSave, onDelete, busy }: { title: strin
 function Field({ label, value, onChange, placeholder, type = "text" }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; type?: string }) { return <label><span>{label}</span><input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></label>; }
 function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) { return <label><span>{label}</span><input type="number" min="0" max="999" value={value} onChange={(event) => onChange(Number(event.target.value) || 0)} /></label>; }
 function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) { return <label><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>; }
-function ToggleField({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) { return <label className={styles.toggleField}><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /><span className={styles.toggle} /><strong>{label}</strong></label>; }
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  const safeValue = /^#[0-9a-f]{6}$/i.test(value) ? value : "#FFFFFF";
+  return <label className={styles.colorField}><span>{label}</span><div><input type="color" value={safeValue} onChange={(event) => onChange(event.target.value.toUpperCase())} aria-label={label} /><input value={value} onChange={(event) => onChange(event.target.value.toUpperCase())} maxLength={7} pattern="^#[0-9A-Fa-f]{6}$" placeholder="#FFFFFF" /></div><small>Gunakan format HEX. Putih (#FFFFFF) direkomendasikan untuk kontras terbaik.</small></label>;
+}
+function ToggleField({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
+  return <label className={styles.toggleField}><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} aria-label={label} /><span className={styles.toggle} aria-hidden="true" /><span className={styles.toggleCopy}><strong>{label}</strong><small>{checked ? "Aktif" : "Nonaktif"}</small></span></label>;
+}

@@ -119,7 +119,7 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
         <div className="auth-orbit auth-orbit-two" />
         <div className="auth-brand-top">
           <img
-            src={appPath("/perumnet-enterprise-brand.png")}
+            src={appPath("/perumnet-mark.png")}
             alt=""
             width={58}
             height={58}
