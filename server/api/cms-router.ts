@@ -39,6 +39,7 @@ const siteSettingsSchema = z.object({
   linkedin_url: externalUrl,
   website_url: externalUrl,
   dark_font_color: z.string().trim().regex(/^#[0-9A-Fa-f]{6}$/, "Warna teks harus menggunakan format HEX, misalnya #FFFFFF."),
+  footer_copyright: z.string().trim().min(1).max(240),
   cta_text: z.string().trim().min(1).max(180),
   business_hours: z.string().trim().min(1).max(180),
 }).partial().strict();

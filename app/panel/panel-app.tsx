@@ -352,6 +352,19 @@ function SettingsEditor({ settings, busy, save }: { settings: Record<string,stri
         </div>
       </section>
       <section className={styles.editorCard}><div className={styles.cardHeading}><span>Identitas & kontak</span><small>Digunakan di header, footer, dan halaman kontak</small></div><div className={styles.fieldGrid}><Field label="Nama perusahaan" value={values.company_name || ""} onChange={(value) => set("company_name", value)} /><Field label="Tagline" value={values.company_tagline || ""} onChange={(value) => set("company_tagline", value)} /><Field label="Nomor WhatsApp" value={values.whatsapp_number || ""} onChange={(value) => set("whatsapp_number", value)} placeholder="085155026889 atau 6285155026889" /><Field label="Nomor telepon tampilan" value={values.phone || ""} onChange={(value) => set("phone", value)} /><Field label="Email" value={values.email || ""} onChange={(value) => set("email", value)} type="email" /><Field label="Jam operasional" value={values.business_hours || ""} onChange={(value) => set("business_hours", value)} /><label className={styles.fullField}><span>Alamat</span><textarea rows={4} value={values.address || ""} onChange={(event) => set("address", event.target.value)} /></label><Field label="Instagram URL" value={values.instagram_url || ""} onChange={(value) => set("instagram_url", value)} type="url" /><Field label="LinkedIn URL" value={values.linkedin_url || ""} onChange={(value) => set("linkedin_url", value)} type="url" /><Field label="Website utama" value={values.website_url || "https://www.perumnet.id/"} onChange={(value) => set("website_url", value)} type="url" /><label className={styles.fullField}><span>Teks tombol CTA utama</span><input value={values.cta_text || ""} onChange={(event) => set("cta_text", event.target.value)} /></label></div></section>
+      <section className={styles.editorCard}>
+        <div className={styles.cardHeading}><span>Footer website</span><small>Teks hak cipta yang tampil paling bawah pada seluruh halaman</small></div>
+        <div className={styles.fieldGrid}>
+          <label className={styles.fullField}>
+            <span>Teks hak cipta footer</span>
+            <input
+              value={values.footer_copyright || "© 2026 PerumNet Enterprise. All Rights Reserved."}
+              onChange={(event) => set("footer_copyright", event.target.value)}
+              maxLength={240}
+            />
+          </label>
+        </div>
+      </section>
     </div>
   </>;
 }

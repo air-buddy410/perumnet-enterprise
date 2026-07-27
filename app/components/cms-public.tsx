@@ -143,8 +143,7 @@ export function PublicShell({
           </div>
         </div>
         <div className={styles.footerBottom}>
-          <span>PerumNet Enterprise © 2026 PerumNet Enterprise. All Rights Reserved.</span>
-          <Link href="/panel">Panel CMS</Link>
+          <span>{content.settings.footer_copyright || "© 2026 PerumNet Enterprise. All Rights Reserved."}</span>
         </div>
       </footer>
       <a className={styles.floatingWa} href={waLink(content)} target="_blank" rel="noreferrer" aria-label="Hubungi PerumNet Enterprise via WhatsApp">

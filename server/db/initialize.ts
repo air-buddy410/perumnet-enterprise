@@ -388,6 +388,7 @@ async function ensureCmsSeed(client: DatabaseClient) {
     ["linkedin_url", ""],
     ["website_url", "https://www.perumnet.id/"],
     ["dark_font_color", "#FFFFFF"],
+    ["footer_copyright", "© 2026 PerumNet Enterprise. All Rights Reserved."],
     ["cta_text", "Konsultasikan Kebutuhan Anda"],
     ["business_hours", "Senin–Minggu · 24/7 support"],
   ];
@@ -487,6 +488,10 @@ async function ensureCmsEnhancements(client: DatabaseClient) {
     statement(
       "INSERT INTO cms_site_settings (id,key_name,value_content,updated_at) VALUES (?,?,?,?) ON CONFLICT DO NOTHING",
       ["cms-setting-dark_font_color", "dark_font_color", "#FFFFFF", timestamp],
+    ),
+    statement(
+      "INSERT INTO cms_site_settings (id,key_name,value_content,updated_at) VALUES (?,?,?,?) ON CONFLICT DO NOTHING",
+      ["cms-setting-footer_copyright", "footer_copyright", "© 2026 PerumNet Enterprise. All Rights Reserved.", timestamp],
     ),
     statement(
       "INSERT INTO cms_services (id,slug,title,summary,description,features_json,icon,sort_order,is_published,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT DO NOTHING",
