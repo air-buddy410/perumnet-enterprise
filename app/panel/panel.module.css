@@ -23,12 +23,15 @@
 .sideBrand small { margin-top: 5px; color: #63d6ce; font-size: 9px; font-weight: 800; letter-spacing: .18em; }
 .sideBrand > button { display: none; margin-left: auto; border: 0; color: #fff; background: transparent; }
 .sideLabel { margin: 27px 12px 10px; color: #82969a; font-size: 10px; font-weight: 800; letter-spacing: .16em; }
-.sidebar nav { display: grid; gap: 4px; }
+.sidebar > nav { min-height: 0; display: grid; gap: 4px; overflow-y: auto; scrollbar-width: thin; }
 .sidebar nav button { width: 100%; min-height: 45px; padding: 0 12px; display: grid; grid-template-columns: 22px 1fr 16px; align-items: center; gap: 9px; border: 0; border-radius: 8px; color: #a9b9bb; background: transparent; text-align: left; cursor: pointer; }
 .sidebar nav button:hover { color: #fff; background: rgba(255,255,255,.05); }
 .sidebar nav .activeSide { color: #fff; background: linear-gradient(90deg,rgba(4,169,159,.25),rgba(4,169,159,.08)); box-shadow: inset 2px 0 #21c9bd; }
 .sidebar nav span { font-size: 13px; font-weight: 700; }
 .sideFooter { margin-top: auto; display: grid; gap: 6px; }
+.legalLinks { padding: 11px 10px 7px; display: flex; flex-wrap: wrap; gap: 5px 10px; border-top: 1px solid rgba(255,255,255,.08); }
+.legalLinks a { color: #7f9699; font-size: 9px; line-height: 1.4; text-decoration: none; }
+.legalLinks a:hover { color: #d7e6e5; }
 .sideFooter > a { min-height: 42px; padding: 0 11px; display: grid; grid-template-columns: 20px 1fr 14px; align-items: center; gap: 8px; border-radius: 7px; color: #9eb0b3; font-size: 12px; text-decoration: none; }
 .sideFooter > a:hover { color: #fff; background: rgba(255,255,255,.05); }
 .userChip { margin-top: 9px; padding: 12px 9px 4px; display: grid; grid-template-columns: 34px 1fr 28px; align-items: center; gap: 8px; border-top: 1px solid rgba(255,255,255,.08); }
@@ -81,14 +84,27 @@
 .sectionTitle span { color: var(--teal-dark); font-size: 10px; font-weight: 800; letter-spacing: .15em; }
 .sectionTitle h2 { margin: 9px 0 8px; font-family: "Plus Jakarta Sans",sans-serif; font-size: 32px; letter-spacing: -.04em; }
 .sectionTitle p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
-.primaryAction, .secondaryAction, .deleteButton { min-height: 42px; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 7px; font-size: 12px; font-weight: 800; cursor: pointer; }
+.primaryAction, .secondaryAction, .deleteButton, .translateAction { min-height: 42px; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 7px; font-size: 12px; font-weight: 800; cursor: pointer; }
 .primaryAction { border: 0; color: #fff !important; background: var(--teal); }
 .secondaryAction { border: 1px solid var(--line); background: #fff; }
 .deleteButton { border: 1px solid #f1d8d8; color: #af4a4a !important; background: #fff7f7; }
-.primaryAction:disabled, .secondaryAction:disabled, .deleteButton:disabled { opacity: .55; cursor: wait; }
+.translateAction { border: 1px solid #cce8e4; color: var(--teal-dark) !important; background: #effaf8; }
+.primaryAction:disabled, .secondaryAction:disabled, .deleteButton:disabled, .translateAction:disabled { opacity: .55; cursor: wait; }
+.actionGroup { display: flex; align-items: center; gap: 8px; }
 
 .formStack { display: grid; gap: 18px; }
 .editorCard { overflow: hidden; }
+.bilingualGrid { padding: 22px; display: grid; gap: 18px; }
+.translationPair { padding: 18px; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; border: 1px solid #e0e9e7; border-radius: 9px; background: #fbfdfd; }
+.translationPair label { min-width: 0; display: grid; gap: 7px; color: #52656b; font-size: 12px; font-weight: 700; }
+.translationPair input, .translationPair textarea { width: 100%; padding: 11px 12px; border: 1px solid #d5e1de; border-radius: 7px; outline: none; color: var(--ink); background: #fff; font-size: 14px; line-height: 1.55; }
+.translationPair input { height: 46px; }
+.translationPair textarea { resize: vertical; }
+.translationPair input:focus, .translationPair textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(4,169,159,.09); }
+.languageHeading { min-height: 66px; padding: 13px 22px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid #e9efed; background: #f8fbfa; }
+.languageHeading > div { display: grid; gap: 3px; }
+.languageHeading strong { color: var(--ink); font-size: 13px; }
+.languageHeading small { color: var(--muted); font-size: 11px; }
 .fieldGrid { padding: 22px; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; }
 .fieldGrid label { min-width: 0; display: grid; align-content: start; gap: 7px; color: #52656b; font-size: 12px; font-weight: 700; }
 .fieldGrid label > span:first-child { color: #52656b; font-size: 12px; font-weight: 700; letter-spacing: 0; text-transform: none; }
@@ -113,6 +129,7 @@
 .editorTop > div { display: flex; gap: 7px; }
 .fileInput { padding: 9px !important; height: auto !important; }
 .imagePreview { width: min(100%,420px); max-height: 220px; margin-top: 8px; object-fit: cover; border-radius: 8px; }
+.logoPreview { width: min(100%,240px); max-height: 100px; margin-top: 8px; padding: 10px; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .toggleField { position: relative; min-height: 66px; padding: 11px 13px; display: grid !important; grid-template-columns: 46px minmax(0,1fr) !important; align-items: center !important; gap: 12px !important; border: 1px solid #dce6e4; border-radius: 9px; background: #fbfdfd; cursor: pointer; }
 .toggleField > input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .toggle { position: relative; grid-column: 1; width: 44px; height: 24px; border-radius: 999px; background: #aebdba; box-shadow: inset 0 0 0 1px rgba(38,61,70,.08); transition: background .2s, box-shadow .2s; }
@@ -181,7 +198,10 @@
 .formError { margin:-2px 0 14px; padding:10px 12px; border-radius:6px; color:#a83e3e; background:#fff2f2; font-size:13px; }
 .loginForm > button { height:49px; display:flex; align-items:center; justify-content:center; gap:10px; border:0; border-radius:7px; color:#fff; background:var(--teal); font-weight:800; cursor:pointer; }
 .loginForm > button:disabled { opacity:.6; }
-.loginForm > small { margin-top:42px; color:#929ea1; font-size:11px; text-align:center; }
+.loginLegal { margin-top: 25px; display: flex; justify-content: center; flex-wrap: wrap; gap: 8px 16px; }
+.loginLegal a { color: #75868a; font-size: 11px; text-decoration: none; }
+.loginLegal a:hover { color: var(--teal-dark); }
+.loginForm > small { margin-top:18px; color:#929ea1; font-size:11px; text-align:center; }
 
 @media (max-width: 1024px) {
   .sidebar { transform: translateX(-100%); transition: transform .25s ease; }
@@ -207,6 +227,8 @@
   .appearanceGrid { grid-template-columns:1fr; }
   .listPanel > div:last-child { max-height:280px; }
   .sectionTitle { display:flex; }
+  .actionGroup { width: 100%; flex-wrap: wrap; }
+  .translationPair { grid-template-columns: 1fr; }
   .loginRoot { grid-template-columns:1fr; }
   .loginVisual { min-height:340px; padding:28px; }
   .loginCopy { margin:50px 0; }
@@ -222,13 +244,17 @@
   .metrics > div { min-height:95px; }
   .quickGrid { grid-template-columns:1fr; }
   .fieldGrid { grid-template-columns:1fr; padding:16px; }
+  .bilingualGrid { padding: 16px; }
+  .translationPair { padding: 14px; }
+  .languageHeading { align-items: flex-start; flex-direction: column; padding: 14px 16px; }
+  .languageHeading .translateAction { width: 100%; }
   .appearanceGrid { padding:16px; }
   .fullField { grid-column:auto; }
   .editorTop { align-items:flex-start; flex-direction:column; }
   .editorTop > div { width:100%; }
   .editorTop button { flex:1; }
   .sectionTitle h2 { font-size:26px; }
-  .sectionTitle > button { width:100%; }
+  .sectionTitle > button, .sectionTitle > .actionGroup, .sectionTitle .actionGroup button { width:100%; }
   .toast { left:16px; right:16px; bottom:16px; }
   .loginVisual { min-height:285px; }
   .loginBrand img { width:48px; height:48px; }

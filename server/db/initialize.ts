@@ -425,6 +425,7 @@ CREATE TABLE IF NOT EXISTS cms_site_texts (
   page_key TEXT NOT NULL,
   content_key TEXT NOT NULL,
   value_content TEXT NOT NULL,
+  value_content_en TEXT NOT NULL DEFAULT '',
   updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   updated_at TEXT NOT NULL
 );
@@ -435,9 +436,13 @@ CREATE TABLE IF NOT EXISTS cms_services (
   id TEXT PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,
   title TEXT NOT NULL,
+  title_en TEXT NOT NULL DEFAULT '',
   summary TEXT NOT NULL,
+  summary_en TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL,
+  description_en TEXT NOT NULL DEFAULT '',
   features_json TEXT NOT NULL DEFAULT '[]',
+  features_json_en TEXT NOT NULL DEFAULT '[]',
   icon TEXT NOT NULL DEFAULT 'wifi',
   sort_order INTEGER NOT NULL DEFAULT 0,
   is_published INTEGER NOT NULL DEFAULT 1 CHECK (is_published IN (0, 1)),
@@ -448,11 +453,14 @@ CREATE TABLE IF NOT EXISTS cms_services (
 CREATE TABLE IF NOT EXISTS cms_portfolios (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
+  title_en TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL,
+  description_en TEXT NOT NULL DEFAULT '',
   image_url TEXT,
   image_storage_url TEXT,
   image_mime_type TEXT,
   location TEXT,
+  location_en TEXT NOT NULL DEFAULT '',
   completed_at TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   is_published INTEGER NOT NULL DEFAULT 1 CHECK (is_published IN (0, 1)),
@@ -465,6 +473,7 @@ CREATE TABLE IF NOT EXISTS cms_testimonials (
   client_name TEXT NOT NULL,
   company_name TEXT,
   review TEXT NOT NULL,
+  review_en TEXT NOT NULL DEFAULT '',
   is_visible INTEGER NOT NULL DEFAULT 1 CHECK (is_visible IN (0, 1)),
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
@@ -474,10 +483,14 @@ CREATE TABLE IF NOT EXISTS cms_testimonials (
 CREATE TABLE IF NOT EXISTS cms_pages (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
+  title_en TEXT NOT NULL DEFAULT '',
   slug TEXT NOT NULL UNIQUE,
   excerpt TEXT,
+  excerpt_en TEXT NOT NULL DEFAULT '',
   content TEXT NOT NULL,
+  content_en TEXT NOT NULL DEFAULT '',
   is_published INTEGER NOT NULL DEFAULT 0 CHECK (is_published IN (0, 1)),
+  show_in_navigation INTEGER NOT NULL DEFAULT 1 CHECK (show_in_navigation IN (0, 1)),
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -487,7 +500,36 @@ CREATE TABLE IF NOT EXISTS cms_site_settings (
   id TEXT PRIMARY KEY,
   key_name TEXT NOT NULL UNIQUE,
   value_content TEXT NOT NULL,
+  value_content_en TEXT NOT NULL DEFAULT '',
   updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cms_faqs (
+  id TEXT PRIMARY KEY,
+  question TEXT NOT NULL,
+  question_en TEXT NOT NULL DEFAULT '',
+  answer TEXT NOT NULL,
+  answer_en TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_visible INTEGER NOT NULL DEFAULT 1 CHECK (is_visible IN (0, 1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cms_partners (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  organization_type TEXT NOT NULL DEFAULT 'partner'
+    CHECK (organization_type IN ('partner', 'client')),
+  category TEXT NOT NULL DEFAULT '',
+  website_url TEXT NOT NULL DEFAULT '',
+  logo_url TEXT NOT NULL DEFAULT '',
+  logo_storage_url TEXT,
+  logo_mime_type TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_visible INTEGER NOT NULL DEFAULT 1 CHECK (is_visible IN (0, 1)),
+  created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 `;
@@ -653,6 +695,236 @@ async function ensureCmsEnhancements(client: DatabaseClient) {
   ], "write");
 }
 
+async function ensureColumn(
+  client: DatabaseClient,
+  table: string,
+  column: string,
+  definition: string,
+) {
+  try {
+    await client.execute(`SELECT ${column} FROM ${table} LIMIT 1`);
+  } catch {
+    try {
+      await client.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    } catch {
+      await client.execute(`SELECT ${column} FROM ${table} LIMIT 1`);
+    }
+  }
+}
+
+async function ensureCmsBilingualSchema(client: DatabaseClient) {
+  const columns: Array<[string, string, string]> = [
+    ["cms_site_texts", "value_content_en", "TEXT NOT NULL DEFAULT ''"],
+    ["cms_site_settings", "value_content_en", "TEXT NOT NULL DEFAULT ''"],
+    ["cms_services", "title_en", "TEXT NOT NULL DEFAULT ''"],
+    ["cms_services", "summary_en", "TEXT NOT NULL DEFAULT ''"],
+    ["cms_services", "description_en", "TEXT NOT NULL DEFAULT ''"],
+    ["cms_services", "features_json_en", "TEXT NOT NULL DEFAULT '[]'"],
+    ["cms_portfolios", "title_en", "TEXT NOT NULL DEFAULT ''"],
+    ["cms_portfolios", "description_en", "TEXT NOT NULL DEFAULT ''"],
+    ["cms_portfolios", "location_en", "TEXT NOT NULL DEFAULT ''"],
+    ["cms_testimonials", "review_en", "TEXT NOT NULL DEFAULT ''"],
+    ["cms_pages", "title_en", "TEXT NOT NULL DEFAULT ''"],
+    ["cms_pages", "excerpt_en", "TEXT NOT NULL DEFAULT ''"],
+    ["cms_pages", "content_en", "TEXT NOT NULL DEFAULT ''"],
+    ["cms_pages", "show_in_navigation", "INTEGER NOT NULL DEFAULT 1"],
+  ];
+  for (const [table, column, definition] of columns) {
+    await ensureColumn(client, table, column, definition);
+  }
+}
+
+async function ensureCmsLandingFeatures(client: DatabaseClient) {
+  const timestamp = new Date().toISOString();
+  const statements: DatabaseStatement[] = [
+    statement(
+      `INSERT INTO cms_services
+        (id,slug,title,title_en,summary,summary_en,description,description_en,features_json,features_json_en,icon,sort_order,is_published,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT DO NOTHING`,
+      [
+        "cms-service-labs",
+        "perumnet-labs",
+        "PerumNet Labs",
+        "PerumNet Labs",
+        "Software bisnis, web, dan sistem internal yang dibangun mengikuti alur kerja perusahaan Anda.",
+        "Business software, websites, and internal systems built around the way your company works.",
+        "PerumNet Labs adalah lini software house kami untuk merancang aplikasi web, dashboard operasional, otomasi proses, integrasi API, dan produk digital yang aman serta mudah dikembangkan.",
+        "PerumNet Labs is our software house for secure, scalable web applications, operational dashboards, process automation, API integrations, and digital products.",
+        JSON.stringify(["Web app & dashboard", "Business process automation", "API & system integration", "Maintenance & continuous improvement"]),
+        JSON.stringify(["Web apps & dashboards", "Business process automation", "API & system integrations", "Maintenance & continuous improvement"]),
+        "terminal",
+        5,
+        timestamp,
+        timestamp,
+      ],
+    ),
+  ];
+
+  const englishTexts: Array<[string, string]> = [
+    ["home.hero_eyebrow", "INTEGRATED IT SOLUTIONS · BALI"],
+    ["home.hero_title", "IT infrastructure that works without interruption."],
+    ["home.hero_description", "PerumNet Enterprise designs, installs, and maintains WiFi, CCTV, Smart Home, IP PABX, and business software so your operations stay connected, secure, and ready to grow."],
+    ["home.about_eyebrow", "YOUR TECHNOLOGY PARTNER"],
+    ["home.about_title", "One team for every infrastructure need."],
+    ["home.about_description", "We combine consulting, installation, documentation, and ongoing support in one transparent service."],
+    ["home.services_title", "Solutions built for real operational needs."],
+    ["home.services_description", "From guest connectivity to site security, communications, and software, every system is designed to stay reliable from day one."],
+    ["home.portfolio_title", "Structured delivery. Measurable outcomes."],
+    ["home.testimonials_title", "Trusted to keep operations running."],
+    ["home.closing_title", "From the first site survey to a system ready for daily use."],
+    ["services.page_title", "Infrastructure ready to keep pace with your business."],
+    ["services.page_description", "Consulting, installation, integration, and maintenance for WiFi, CCTV, Smart Home, IP PABX, and business software."],
+    ["portfolio.page_title", "Selected projects delivered together with our clients."],
+    ["portfolio.page_description", "Every project starts from real field requirements and closes with clear documentation."],
+    ["testimonials.page_title", "Stories from businesses growing with better systems."],
+    ["testimonials.page_description", "Client perspectives on our process, responsiveness, and implementation outcomes."],
+    ["contact.page_title", "Let us discuss your IT requirements."],
+    ["contact.page_description", "Tell us about your location, challenges, and target. Our team will recommend a practical first step."],
+  ];
+  for (const [key, value] of englishTexts) {
+    const [pageKey, contentKey] = key.split(".");
+    statements.push(statement(
+      "UPDATE cms_site_texts SET value_content_en=?,updated_at=? WHERE page_key=? AND content_key=? AND value_content_en=''",
+      [value, timestamp, pageKey, contentKey],
+    ));
+  }
+
+  const serviceTranslations: Array<[string, string, string, string, string[]]> = [
+    ["managed-wifi", "Managed WiFi", "Reliable, secure, and manageable WiFi for offices, hotels, schools, and public venues.", "We design coverage, capacity, network segmentation, and monitoring so every user receives a consistent connection.", ["Site survey & heatmap", "Managed access points", "Guest WiFi & captive portal", "Monitoring and support"]],
+    ["cctv", "CCTV & Surveillance", "A surveillance system that provides clear visibility on-site and remotely.", "From camera placement to recording retention and mobile access, each system is arranged around your site risk and activities.", ["IP cameras & NVR", "Remote monitoring", "Smart detection", "Preventive maintenance"]],
+    ["ip-pabx", "IP PABX", "Professional internal communication that can grow with your team.", "We integrate extensions, IVR, call routing, and IP phones to streamline customer and internal communications.", ["Extension planning", "IVR & call routing", "IP phone provisioning", "Call recording option"]],
+    ["smart-home-device", "Smart Home Devices", "Practical control of devices, security, and room automation from one system.", "We integrate smart-home devices for homes, villas, and commercial spaces so lighting, access, sensors, and selected devices remain easy to monitor and control.", ["Smart lighting & switches", "Door and motion sensors", "Centralized device control", "Configuration and support"]],
+  ];
+  for (const [slug, title, summary, description, features] of serviceTranslations) {
+    statements.push(statement(
+      "UPDATE cms_services SET title_en=?,summary_en=?,description_en=?,features_json_en=?,updated_at=? WHERE slug=? AND title_en=''",
+      [title, summary, description, JSON.stringify(features), timestamp, slug],
+    ));
+  }
+
+  const portfolioTranslations: Array<[string, string, string, string]> = [
+    ["cms-portfolio-wifi", "Managed WiFi for Hospitality", "Network and access-point redesign for consistent guest connectivity throughout the property.", "Ubud, Gianyar"],
+    ["cms-portfolio-cctv", "CCTV for a Commercial Site", "IP cameras, NVR, and monitoring access for operational and parking areas.", "Denpasar, Bali"],
+    ["cms-portfolio-pabx", "IP PABX for a Branch Office", "Extensions and call routing that connect communications across departments and branch offices.", "Karangasem, Bali"],
+  ];
+  for (const [id, titleEn, descriptionEn, locationEn] of portfolioTranslations) {
+    statements.push(statement(
+      "UPDATE cms_portfolios SET title_en=?,description_en=?,location_en=?,updated_at=? WHERE id=? AND title_en=''",
+      [titleEn, descriptionEn, locationEn, timestamp, id],
+    ));
+  }
+
+  const testimonialTranslations: Array<[string, string]> = [
+    ["cms-testimonial-1", "The PerumNet team understood our operational requirements, delivered a well-organized installation, and remained responsive after handover."],
+    ["cms-testimonial-2", "Network monitoring is much easier now. The documentation is complete and our team received clear, practical guidance."],
+    ["cms-testimonial-3", "The process from survey to handover was clear. Our CCTV and WiFi systems remain stable and match the needs of the site."],
+  ];
+  for (const [id, reviewEn] of testimonialTranslations) {
+    statements.push(statement(
+      "UPDATE cms_testimonials SET review_en=?,updated_at=? WHERE id=? AND review_en=''",
+      [reviewEn, timestamp, id],
+    ));
+  }
+
+  const dynamicPageTranslations: Array<[string, string, string, string]> = [
+    [
+      "cms-page-about",
+      "About Us",
+      "Learn about PerumNet Enterprise and how we work.",
+      "PerumNet Enterprise is a Bali-based IT consulting company that helps businesses design, install, and maintain technology infrastructure that is always ready for daily operations.\n\nWe believe good technical delivery should feel simple to users: requirements are mapped clearly, installations are documented, and support remains easy to reach when needed.",
+    ],
+    [
+      "cms-page-careers",
+      "Careers",
+      "Join the PerumNet Enterprise technical team.",
+      "We are always open to meeting people who enjoy field work, network technology, software development, and well-organized customer service.",
+    ],
+  ];
+  for (const [id, titleEn, excerptEn, contentEn] of dynamicPageTranslations) {
+    statements.push(statement(
+      "UPDATE cms_pages SET title_en=?,excerpt_en=?,content_en=?,updated_at=? WHERE id=? AND title_en=''",
+      [titleEn, excerptEn, contentEn, timestamp, id],
+    ));
+  }
+
+  const faqs: Array<[string, string, string, string]> = [
+    ["Layanan apa saja yang ditangani PerumNet Enterprise?", "Kami menangani Managed WiFi, CCTV, IP PABX, Smart Home Device, pengembangan software melalui PerumNet Labs, serta integrasi dan dukungan sistem sesuai kebutuhan lokasi.", "What services does PerumNet Enterprise provide?", "We provide Managed WiFi, CCTV, IP PABX, Smart Home solutions, software development through PerumNet Labs, system integrations, and ongoing support."],
+    ["Apakah konsultasi awal dan survei lokasi berbayar?", "Konsultasi awal tidak dipungut biaya. Kebutuhan survei dan biaya kunjungan—bila ada—akan dijelaskan terlebih dahulu sesuai lokasi serta ruang lingkup proyek.", "Are the initial consultation and site survey paid?", "The initial consultation is free. Any site-survey or travel fee will be confirmed in advance based on the location and project scope."],
+    ["Apakah PerumNet Enterprise menyediakan dukungan setelah instalasi?", "Ya. Setiap pekerjaan ditutup dengan pengujian dan dokumentasi. Pilihan garansi, pemeliharaan, serta dukungan berkala disesuaikan dengan proposal atau kontrak layanan.", "Do you provide support after installation?", "Yes. Every delivery includes testing and documentation. Warranty, maintenance, and ongoing support options follow the approved proposal or service contract."],
+    ["Bisakah sistem lama diintegrasikan atau ditingkatkan?", "Bisa. Tim kami akan mengaudit kondisi perangkat, jaringan, dan aplikasi yang sudah ada untuk menentukan bagian yang dapat dipertahankan, ditingkatkan, atau perlu diganti.", "Can you integrate or upgrade an existing system?", "Yes. We audit existing devices, networks, and applications to determine what can be retained, upgraded, or should be replaced."],
+    ["Bagaimana memulai proyek bersama PerumNet Enterprise?", "Hubungi kami melalui WhatsApp atau email, ceritakan kebutuhan dan lokasi, lalu tim kami akan menyusun langkah awal berupa diskusi, survei bila diperlukan, serta rekomendasi solusi.", "How do I start a project with PerumNet Enterprise?", "Contact us through WhatsApp or email, share your needs and location, and our team will arrange an initial discussion, a site survey when needed, and a solution recommendation."],
+  ];
+  faqs.forEach((faq, index) => statements.push(statement(
+    `INSERT INTO cms_faqs
+      (id,question,answer,question_en,answer_en,sort_order,is_visible,created_at,updated_at)
+     VALUES (?,?,?,?,?,?,1,?,?) ON CONFLICT DO NOTHING`,
+    [`cms-faq-${index + 1}`, faq[0], faq[1], faq[2], faq[3], index + 1, timestamp, timestamp],
+  )));
+
+  const partners: Array<[string, string, string, string, number]> = [
+    ["cms-partner-alus", "PT Adi Solusindo Teknologi (ALUS)", "partner", "Partner Teknologi", 1],
+    ["cms-client-hospitality", "Hospitality & Villa", "client", "Sektor Klien", 2],
+    ["cms-client-workspace", "Office & Workspace", "client", "Sektor Klien", 3],
+    ["cms-client-property", "Property & Residential", "client", "Sektor Klien", 4],
+    ["cms-client-retail", "Retail & Commercial", "client", "Sektor Klien", 5],
+    ["cms-client-education", "Education & Public Space", "client", "Sektor Klien", 6],
+  ];
+  for (const [id, name, type, category, sortOrder] of partners) {
+    statements.push(statement(
+      `INSERT INTO cms_partners
+        (id,name,organization_type,category,website_url,logo_url,sort_order,is_visible,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,1,?,?) ON CONFLICT DO NOTHING`,
+      [id, name, type, category, "", "", sortOrder, timestamp, timestamp],
+    ));
+  }
+
+  const pages: Array<[string, string, string, string, string, string, string]> = [
+    [
+      "cms-page-terms",
+      "Syarat dan Ketentuan",
+      "Terms and Conditions",
+      "syarat-ketentuan",
+      "Ketentuan penggunaan layanan dan kerja sama dengan PerumNet Enterprise.",
+      "Terms governing the use of PerumNet Enterprise services and project engagements.",
+      "Dokumen ini mengatur penggunaan situs dan layanan PerumNet Enterprise. Ruang lingkup pekerjaan, jadwal, biaya, metode pembayaran, garansi, dan dukungan mengikuti proposal, BOQ, SPK, atau perjanjian tertulis yang disetujui para pihak.\n\nKlien bertanggung jawab memberikan informasi lokasi, akses kerja, persetujuan teknis, dan pembayaran sesuai jadwal. Perubahan ruang lingkup harus disepakati tertulis dan dapat memengaruhi biaya maupun waktu pelaksanaan.\n\nHak atas perangkat lunak, desain, dokumentasi, konfigurasi, atau materi lain mengikuti ketentuan pada dokumen proyek. Informasi bisnis dan akses sistem diperlakukan sebagai informasi rahasia sesuai kebutuhan pelaksanaan.\n\nPerumNet Enterprise menerapkan upaya profesional untuk menjaga mutu pekerjaan. Batas tanggung jawab, keadaan kahar, penghentian pekerjaan, serta penyelesaian perselisihan mengikuti perjanjian yang berlaku dan hukum Republik Indonesia.\n\nPertanyaan dapat dikirim ke it@perumnet.id.",
+    ],
+    [
+      "cms-page-privacy",
+      "Kebijakan Privasi",
+      "Privacy Policy",
+      "kebijakan-privasi",
+      "Cara PerumNet Enterprise mengelola informasi pengunjung dan klien.",
+      "How PerumNet Enterprise manages visitor and client information.",
+      "PerumNet Enterprise dapat mengumpulkan informasi yang Anda kirimkan melalui formulir, WhatsApp, email, konsultasi, atau pelaksanaan proyek; termasuk nama, perusahaan, informasi kontak, lokasi, dan kebutuhan teknis.\n\nInformasi digunakan untuk menjawab permintaan, menyiapkan proposal, melaksanakan dan mendukung layanan, menjaga keamanan sistem, memenuhi kewajiban administrasi, serta meningkatkan kualitas layanan.\n\nAkses informasi dibatasi sesuai kebutuhan kerja dan dapat dibagikan kepada mitra pelaksana atau penyedia teknologi hanya sejauh diperlukan. Kami tidak menjual data pribadi.\n\nSitus dapat memproses data teknis dasar seperti alamat IP, jenis perangkat, log keamanan, dan cookie esensial. Data disimpan selama diperlukan untuk tujuan layanan, keamanan, kewajiban hukum, atau penyelesaian sengketa.\n\nAnda dapat meminta akses, koreksi, atau penghapusan data yang memenuhi ketentuan melalui it@perumnet.id. Kebijakan ini dapat diperbarui ketika layanan atau ketentuan hukum berubah.",
+    ],
+  ];
+  for (const [id, title, titleEn, slug, excerpt, excerptEn, content] of pages) {
+    const contentEn = slug === "syarat-ketentuan"
+      ? "These terms govern the use of the PerumNet Enterprise website and services. Project scope, schedule, fees, payment terms, warranty, and support are defined by the approved proposal, BOQ, work order, or written agreement.\n\nClients are responsible for providing accurate site information, work access, technical approvals, and payments on schedule. Scope changes must be agreed in writing and may affect delivery time and cost.\n\nOwnership of software, designs, documentation, configurations, and other deliverables follows the relevant project agreement. Business information and system credentials are treated as confidential as required for delivery.\n\nPerumNet Enterprise applies professional care to every engagement. Liability limits, force majeure, termination, and dispute resolution follow the applicable agreement and the laws of the Republic of Indonesia.\n\nQuestions can be sent to it@perumnet.id."
+      : "PerumNet Enterprise may collect information you provide through forms, WhatsApp, email, consultations, or project delivery, including names, company details, contact information, locations, and technical requirements.\n\nWe use this information to respond to enquiries, prepare proposals, deliver and support services, protect systems, fulfil administrative obligations, and improve service quality.\n\nAccess is restricted to people who need it for their work. Information may be shared with delivery partners or technology providers only when necessary. We do not sell personal data.\n\nThe website may process basic technical data such as IP addresses, device types, security logs, and essential cookies. Data is retained only as required for services, security, legal obligations, or dispute handling.\n\nYou may request access, correction, or eligible deletion by contacting it@perumnet.id. This policy may be updated as services or legal requirements change.";
+    statements.push(statement(
+      `INSERT INTO cms_pages
+        (id,title,title_en,slug,excerpt,excerpt_en,content,content_en,is_published,show_in_navigation,sort_order,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,1,0,?,?,?) ON CONFLICT DO NOTHING`,
+      [id, title, titleEn, slug, excerpt, excerptEn, content, contentEn, slug === "syarat-ketentuan" ? 90 : 91, timestamp, timestamp],
+    ));
+  }
+
+  const settingTranslations: Array<[string, string]> = [
+    ["company_tagline", "IT consulting for more reliable operations"],
+    ["cta_text", "Discuss Your Requirements"],
+    ["business_hours", "Monday–Sunday · 24/7 support"],
+  ];
+  for (const [key, value] of settingTranslations) {
+    statements.push(statement(
+      "UPDATE cms_site_settings SET value_content_en=?,updated_at=? WHERE key_name=? AND value_content_en=''",
+      [value, timestamp, key],
+    ));
+  }
+
+  await client.batch(statements, "write");
+}
+
 async function ensureBastEngineerRoleColumn(client: DatabaseClient) {
   try {
     await client.execute("SELECT engineer_role FROM basts LIMIT 1");
@@ -734,11 +1006,13 @@ async function ensureSpkPaymentColumns(client: DatabaseClient) {
 
 export async function initializeDatabase(client: DatabaseClient) {
   await client.executeMultiple(schemaSql);
+  await ensureCmsBilingualSchema(client);
   await ensureBastEngineerRoleColumn(client);
   await ensureTransactionCategoryColumn(client);
   await ensureSpkPaymentColumns(client);
   await ensureCmsSeed(client);
   await ensureCmsEnhancements(client);
+  await ensureCmsLandingFeatures(client);
 
   const existing = await client.execute("SELECT id FROM users LIMIT 1");
   if (existing.rows.length) return;

@@ -8,11 +8,14 @@ import {
   Camera,
   Check,
   ChevronRight,
+  CircleHelp,
   Eye,
   FileText,
   Globe2,
+  Handshake,
   Home,
   Image as ImageIcon,
+  Languages,
   LayoutDashboard,
   LoaderCircle,
   LockKeyhole,
@@ -27,6 +30,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  TerminalSquare,
   Trash2,
   Wifi,
   X,
@@ -34,29 +38,39 @@ import {
 import styles from "./panel.module.css";
 
 type User = { id: string; name: string; email: string; role: string };
-type Service = { id: string; slug: string; title: string; summary: string; description: string; features: string[]; icon: string; sortOrder: number; isPublished: boolean };
-type Portfolio = { id: string; title: string; description: string; imageUrl: string; location: string; completedAt: string; sortOrder: number; isPublished: boolean };
-type Testimonial = { id: string; clientName: string; companyName: string; review: string; isVisible: boolean; sortOrder: number };
-type Page = { id: string; title: string; slug: string; excerpt: string; content: string; isPublished: boolean; sortOrder: number };
+type Service = { id: string; slug: string; title: string; titleEn: string; summary: string; summaryEn: string; description: string; descriptionEn: string; features: string[]; featuresEn: string[]; icon: string; sortOrder: number; isPublished: boolean };
+type Portfolio = { id: string; title: string; titleEn: string; description: string; descriptionEn: string; imageUrl: string; location: string; locationEn: string; completedAt: string; sortOrder: number; isPublished: boolean };
+type Testimonial = { id: string; clientName: string; companyName: string; review: string; reviewEn: string; isVisible: boolean; sortOrder: number };
+type Page = { id: string; title: string; titleEn: string; slug: string; excerpt: string; excerptEn: string; content: string; contentEn: string; isPublished: boolean; showInNavigation: boolean; sortOrder: number };
+type Faq = { id: string; question: string; questionEn: string; answer: string; answerEn: string; sortOrder: number; isVisible: boolean };
+type Partner = { id: string; name: string; organizationType: "partner" | "client"; category: string; websiteUrl: string; logoUrl: string; sortOrder: number; isVisible: boolean };
+type CmsText = { id: string; pageKey: string; contentKey: string; value: string; valueEn: string };
 type CmsContent = {
-  texts: Array<{ id: string; pageKey: string; contentKey: string; value: string }>;
+  texts: CmsText[];
   textMap: Record<string, Record<string, string>>;
+  textMapEn: Record<string, Record<string, string>>;
   settings: Record<string, string>;
+  settingsEn: Record<string, string>;
   services: Service[];
   portfolios: Portfolio[];
   testimonials: Testimonial[];
   pages: Page[];
+  faqs: Faq[];
+  partners: Partner[];
 };
 
-type Section = "overview" | "texts" | "services" | "portfolios" | "testimonials" | "pages" | "settings";
+type Section = "overview" | "texts" | "services" | "portfolios" | "partners" | "testimonials" | "faqs" | "pages" | "settings";
+type Mutate = (job: () => Promise<unknown>, success: string) => void;
 
 const navItems: Array<{ id: Section; label: string; icon: typeof Home }> = [
   { id: "overview", label: "Ringkasan", icon: LayoutDashboard },
   { id: "texts", label: "Teks Situs", icon: FileText },
   { id: "services", label: "Layanan", icon: Wifi },
   { id: "portfolios", label: "Portofolio", icon: ImageIcon },
+  { id: "partners", label: "Partner & Klien", icon: Handshake },
   { id: "testimonials", label: "Testimoni", icon: MessageSquareQuote },
-  { id: "pages", label: "Halaman", icon: Globe2 },
+  { id: "faqs", label: "FAQ", icon: CircleHelp },
+  { id: "pages", label: "Halaman & Legal", icon: Globe2 },
   { id: "settings", label: "Pengaturan Situs", icon: Settings },
 ];
 
@@ -67,6 +81,7 @@ const cmsServiceIcons: Record<string, typeof Home> = {
   network: Network,
   shield: ShieldCheck,
   home: Home,
+  terminal: TerminalSquare,
 };
 
 const textLabels: Record<string, Record<string, string>> = {
@@ -96,32 +111,57 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return payload?.data as T;
 }
 
+async function translateTexts(texts: string[]) {
+  const data = await request<{ translations: string[] }>("/api/cms/translate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ texts }),
+  });
+  return data.translations;
+}
+
 function emptyService(): Omit<Service, "id"> {
-  return { slug: "", title: "", summary: "", description: "", features: [], icon: "network", sortOrder: 0, isPublished: true };
+  return { slug: "", title: "", titleEn: "", summary: "", summaryEn: "", description: "", descriptionEn: "", features: [], featuresEn: [], icon: "network", sortOrder: 0, isPublished: true };
 }
-
 function emptyPortfolio(): Omit<Portfolio, "id" | "imageUrl"> {
-  return { title: "", description: "", location: "", completedAt: "", sortOrder: 0, isPublished: true };
+  return { title: "", titleEn: "", description: "", descriptionEn: "", location: "", locationEn: "", completedAt: "", sortOrder: 0, isPublished: true };
 }
-
 function portfolioForm(item?: Portfolio): Omit<Portfolio, "id" | "imageUrl"> {
   if (!item) return emptyPortfolio();
   return {
     title: item.title,
+    titleEn: item.titleEn,
     description: item.description,
+    descriptionEn: item.descriptionEn,
     location: item.location,
+    locationEn: item.locationEn,
     completedAt: item.completedAt,
     sortOrder: item.sortOrder,
     isPublished: item.isPublished,
   };
 }
-
 function emptyTestimonial(): Omit<Testimonial, "id"> {
-  return { clientName: "", companyName: "", review: "", isVisible: true, sortOrder: 0 };
+  return { clientName: "", companyName: "", review: "", reviewEn: "", isVisible: true, sortOrder: 0 };
 }
-
 function emptyPage(): Omit<Page, "id"> {
-  return { title: "", slug: "", excerpt: "", content: "", isPublished: false, sortOrder: 0 };
+  return { title: "", titleEn: "", slug: "", excerpt: "", excerptEn: "", content: "", contentEn: "", isPublished: false, showInNavigation: true, sortOrder: 0 };
+}
+function emptyFaq(): Omit<Faq, "id"> {
+  return { question: "", questionEn: "", answer: "", answerEn: "", sortOrder: 0, isVisible: true };
+}
+function emptyPartner(): Omit<Partner, "id" | "logoUrl"> {
+  return { name: "", organizationType: "partner", category: "", websiteUrl: "", sortOrder: 0, isVisible: true };
+}
+function partnerForm(item?: Partner): Omit<Partner, "id" | "logoUrl"> {
+  if (!item) return emptyPartner();
+  return {
+    name: item.name,
+    organizationType: item.organizationType,
+    category: item.category,
+    websiteUrl: item.websiteUrl,
+    sortOrder: item.sortOrder,
+    isVisible: item.isVisible,
+  };
 }
 
 export function PanelApp() {
@@ -153,16 +193,14 @@ export function PanelApp() {
 
   const flash = (message: string) => {
     setNotice(message);
-    window.setTimeout(() => setNotice(""), 2800);
+    window.setTimeout(() => setNotice(""), 3200);
   };
-
-  const mutate = async (job: () => Promise<unknown>, success: string) => {
+  const mutate: Mutate = async (job, success) => {
     setBusy(true);
     try { await job(); await loadContent(); flash(success); }
     catch (error) { flash(error instanceof Error ? error.message : "Terjadi kesalahan."); }
     finally { setBusy(false); }
   };
-
   const logout = async () => {
     await request("/api/auth/logout", { method: "POST" }).catch(() => null);
     setUser(null); setContent(null); setStatus("login");
@@ -181,6 +219,7 @@ export function PanelApp() {
         <div className={styles.sideLabel}>PENGELOLAAN SITUS</div>
         <nav>{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={section === id ? styles.activeSide : ""} onClick={() => { setSection(id); setSidebarOpen(false); }}><Icon size={18} /><span>{label}</span>{section === id && <ChevronRight size={15} />}</button>)}</nav>
         <div className={styles.sideFooter}>
+          <div className={styles.legalLinks}><Link href="/syarat-ketentuan" target="_blank">Syarat & Ketentuan</Link><Link href="/kebijakan-privasi" target="_blank">Kebijakan Privasi</Link><Link href="/#faq" target="_blank">FAQ</Link></div>
           <Link href="/" target="_blank" rel="noreferrer"><MonitorUp size={17} /><span>Lihat website</span><ArrowRight size={14} /></Link>
           <Link href="/admin"><BriefcaseBusiness size={17} /><span>Buka ERP</span><ArrowRight size={14} /></Link>
           <div className={styles.userChip}><span>{user.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div><strong>{user.name}</strong><small>Administrator</small></div><button onClick={logout} aria-label="Keluar"><LogOut size={17} /></button></div>
@@ -188,19 +227,17 @@ export function PanelApp() {
       </aside>
       {sidebarOpen && <button className={styles.backdrop} onClick={() => setSidebarOpen(false)} aria-label="Tutup menu" />}
       <div className={styles.workspace}>
-        <header className={styles.topbar}>
-          <button className={styles.menuButton} onClick={() => setSidebarOpen(true)} aria-label="Buka menu"><Menu size={21} /></button>
-          <div><span>Panel CMS</span><h1>{current.label}</h1></div>
-          <Link href="/" target="_blank" rel="noreferrer"><Eye size={17} /> Pratinjau situs</Link>
-        </header>
+        <header className={styles.topbar}><button className={styles.menuButton} onClick={() => setSidebarOpen(true)} aria-label="Buka menu"><Menu size={21} /></button><div><span>Panel CMS</span><h1>{current.label}</h1></div><Link href="/" target="_blank" rel="noreferrer"><Eye size={17} /> Pratinjau situs</Link></header>
         <main className={styles.mainContent}>
           {section === "overview" && <Overview content={content} user={user} onNavigate={setSection} />}
-          {section === "texts" && <TextEditor key={JSON.stringify(content.texts)} content={content} busy={busy} save={(items) => mutate(() => request("/api/cms/texts", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) }), "Teks situs berhasil diperbarui.")} />}
+          {section === "texts" && <TextEditor key={JSON.stringify(content.texts)} content={content} busy={busy} mutate={mutate} />}
           {section === "services" && <ServiceEditor key={JSON.stringify(content.services)} items={content.services} busy={busy} mutate={mutate} />}
           {section === "portfolios" && <PortfolioEditor key={JSON.stringify(content.portfolios)} items={content.portfolios} busy={busy} mutate={mutate} />}
+          {section === "partners" && <PartnerEditor key={JSON.stringify(content.partners)} items={content.partners} busy={busy} mutate={mutate} />}
           {section === "testimonials" && <TestimonialEditor key={JSON.stringify(content.testimonials)} items={content.testimonials} busy={busy} mutate={mutate} />}
+          {section === "faqs" && <FaqEditor key={JSON.stringify(content.faqs)} items={content.faqs} busy={busy} mutate={mutate} />}
           {section === "pages" && <PageEditor key={JSON.stringify(content.pages)} items={content.pages} busy={busy} mutate={mutate} />}
-          {section === "settings" && <SettingsEditor key={JSON.stringify(content.settings)} settings={content.settings} busy={busy} save={(settings) => mutate(() => request("/api/cms/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings }) }), "Pengaturan situs berhasil disimpan.")} />}
+          {section === "settings" && <SettingsEditor key={JSON.stringify([content.settings, content.settingsEn])} settings={content.settings} settingsEn={content.settingsEn} busy={busy} mutate={mutate} />}
         </main>
       </div>
       {notice && <div className={styles.toast}><Check size={17} /> {notice}</div>}
@@ -229,7 +266,7 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
   return <main className={styles.loginRoot}>
     <section className={styles.loginVisual}>
       <div className={styles.loginBrand}><img src="/perumnet-mark.png" alt="" /><strong>PERUMNET ENTERPRISE</strong></div>
-      <div className={styles.loginCopy}><span>CONTENT MANAGEMENT SYSTEM</span><h1>Kelola website<br /><em>tanpa menyentuh kode.</em></h1><p>Perbarui layanan, portofolio, testimoni, halaman, dan informasi kontak dari satu ruang kerja.</p><div><LockKeyhole size={20} /><span><strong>Akses aman Administrator</strong><small>Sesi terlindungi dan tercatat</small></span></div></div>
+      <div className={styles.loginCopy}><span>CONTENT MANAGEMENT SYSTEM</span><h1>Kelola website<br /><em>tanpa menyentuh kode.</em></h1><p>Perbarui layanan, portofolio, partner, FAQ, halaman legal, dan informasi kontak dari satu ruang kerja.</p><div><LockKeyhole size={20} /><span><strong>Akses aman Administrator</strong><small>Sesi terlindungi dan tercatat</small></span></div></div>
       <div className={styles.loginStatus}><span /> Sistem pengelolaan konten siap digunakan</div>
     </section>
     <section className={styles.loginFormWrap}>
@@ -240,7 +277,8 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
         <label>Kata sandi<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Masukkan kata sandi" required minLength={8} autoComplete="current-password" /></label>
         {error && <div className={styles.formError}>{error}</div>}
         <button type="submit" disabled={busy}>{busy ? <LoaderCircle className={styles.spin} size={19} /> : <>Masuk ke Panel <ArrowRight size={18} /></>}</button>
-        <small>© {new Date().getFullYear()} PerumNet Enterprise · Konsultan IT</small>
+        <div className={styles.loginLegal}><Link href="/syarat-ketentuan">Syarat dan Ketentuan</Link><Link href="/kebijakan-privasi">Kebijakan Privasi</Link><Link href="/#faq">FAQ</Link></div>
+        <small>© {new Date().getFullYear()} PerumNet Enterprise</small>
       </form>
     </section>
   </main>;
@@ -251,19 +289,17 @@ function DeniedScreen({ user, onLogout }: { user: User | null; onLogout: () => v
 }
 
 function Overview({ content, user, onNavigate }: { content: CmsContent; user: User; onNavigate: (section: Section) => void }) {
-  const visible = content.testimonials.filter((item) => item.isVisible).length;
-  const published = content.pages.filter((item) => item.isPublished).length;
   return <>
-    <section className={styles.welcome}><div><span><Sparkles size={14} /> KONTEN WEBSITE</span><h2>Selamat bekerja, {user.name.split(" ")[0]}.</h2><p>Semua perubahan yang Anda simpan akan langsung digunakan oleh website publik.</p></div><a href="/" target="_blank" rel="noreferrer">Buka website <ArrowRight size={17} /></a></section>
+    <section className={styles.welcome}><div><span><Sparkles size={14} /> KONTEN WEBSITE</span><h2>Selamat bekerja, {user.name.split(" ")[0]}.</h2><p>Konten Indonesia dan Inggris dibaca langsung dari database setelah disimpan.</p></div><a href="/" target="_blank" rel="noreferrer">Buka website <ArrowRight size={17} /></a></section>
     <section className={styles.metrics}>
       <div><span><Wifi size={19} /></span><strong>{content.services.length}</strong><small>Layanan</small></div>
-      <div><span><ImageIcon size={19} /></span><strong>{content.portfolios.length}</strong><small>Proyek portofolio</small></div>
-      <div><span><MessageSquareQuote size={19} /></span><strong>{visible}</strong><small>Testimoni tampil</small></div>
-      <div><span><Globe2 size={19} /></span><strong>{published}</strong><small>Halaman terbit</small></div>
+      <div><span><Handshake size={19} /></span><strong>{content.partners.filter((item) => item.isVisible).length}</strong><small>Partner & klien</small></div>
+      <div><span><CircleHelp size={19} /></span><strong>{content.faqs.filter((item) => item.isVisible).length}</strong><small>FAQ tampil</small></div>
+      <div><span><Globe2 size={19} /></span><strong>{content.pages.filter((item) => item.isPublished).length}</strong><small>Halaman terbit</small></div>
     </section>
     <section className={styles.overviewGrid}>
       <div className={styles.quickPanel}><div className={styles.panelHeading}><div><span>AKSES CEPAT</span><h3>Kelola konten utama</h3></div></div><div className={styles.quickGrid}>{navItems.slice(1).map(({ id, label, icon: Icon }) => <button key={id} onClick={() => onNavigate(id)}><Icon size={20} /><span>{label}</span><ChevronRight size={16} /></button>)}</div></div>
-      <div className={styles.siteStatus}><span>SITUS PUBLIK</span><h3>Website aktif dan terhubung.</h3><p>Konten dibaca langsung dari database. Anda tidak perlu melakukan proses deploy setelah mengedit teks atau data.</p><div><span /><strong>Online</strong><small>enterprise.perumnet.com · enterprise.perumnet.id</small></div></div>
+      <div className={styles.siteStatus}><span>SITUS PUBLIK</span><h3>Website aktif dan bilingual.</h3><p>Gunakan terjemahan otomatis sebagai draf, lalu tinjau kembali istilah teknis sebelum menerbitkan konten.</p><div><span /><strong>Online</strong><small>enterprise.perumnet.com · enterprise.perumnet.id</small></div></div>
     </section>
   </>;
 }
@@ -272,99 +308,171 @@ function SectionTitle({ eyebrow, title, description, action }: { eyebrow: string
   return <div className={styles.sectionTitle}><div><span>{eyebrow}</span><h2>{title}</h2><p>{description}</p></div>{action}</div>;
 }
 
-function TextEditor({ content, busy, save }: { content: CmsContent; busy: boolean; save: (items: Array<{ pageKey: string; contentKey: string; value: string }>) => void }) {
+function TranslateButton({ values, onTranslated, busy }: { values: string[]; onTranslated: (values: string[]) => void; busy: boolean }) {
+  const [translating, setTranslating] = useState(false);
+  return <button type="button" className={styles.translateAction} disabled={busy || translating || values.every((value) => !value.trim())} onClick={async () => {
+    setTranslating(true);
+    try { onTranslated(await translateTexts(values)); }
+    catch (error) { window.alert(error instanceof Error ? error.message : "Terjemahan gagal."); }
+    finally { setTranslating(false); }
+  }}>{translating ? <LoaderCircle className={styles.spin} size={16} /> : <Languages size={16} />} Terjemahkan ID → EN</button>;
+}
+
+function LanguageHeading({ label, helper, action }: { label: string; helper: string; action?: React.ReactNode }) {
+  return <div className={styles.languageHeading}><div><strong>{label}</strong><small>{helper}</small></div>{action}</div>;
+}
+
+function TextEditor({ content, busy, mutate }: { content: CmsContent; busy: boolean; mutate: Mutate }) {
   const initial = useMemo(() => Object.fromEntries(content.texts.map((item) => [`${item.pageKey}.${item.contentKey}`, item.value])), [content]);
-  const [values, setValues] = useState(initial);
+  const initialEn = useMemo(() => Object.fromEntries(content.texts.map((item) => [`${item.pageKey}.${item.contentKey}`, item.valueEn])), [content]);
+  const [values, setValues] = useState<Record<string, string>>(initial);
+  const [valuesEn, setValuesEn] = useState<Record<string, string>>(initialEn);
+  const save = () => mutate(() => request("/api/cms/texts", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items: Object.keys(values).map((key) => { const [pageKey, ...rest] = key.split("."); return { pageKey, contentKey: rest.join("."), value: values[key], valueEn: valuesEn[key] || "" }; }) }),
+  }), "Teks situs Indonesia dan Inggris berhasil diperbarui.");
+  const translateAll = async () => {
+    const keys = Object.keys(values);
+    const translated = await translateTexts(keys.map((key) => values[key]));
+    setValuesEn(Object.fromEntries(keys.map((key, index) => [key, translated[index]])));
+  };
   return <>
-    <SectionTitle eyebrow="EDIT TEKS SITUS" title="Perbarui pesan di setiap halaman." description="Teks disimpan ke database dan langsung digunakan pada kunjungan berikutnya." action={<button className={styles.primaryAction} disabled={busy} onClick={() => save(Object.entries(values).map(([key, value]) => { const [pageKey, ...rest] = key.split("."); return { pageKey, contentKey: rest.join("."), value }; }))}><Save size={17} /> Simpan semua</button>} />
-    <div className={styles.formStack}>{Object.entries(textLabels).map(([pageKey, fields]) => <section className={styles.editorCard} key={pageKey}><div className={styles.cardHeading}><span>{pageKey === "home" ? "Beranda" : pageKey[0].toUpperCase() + pageKey.slice(1)}</span><small>{Object.keys(fields).length} bidang teks</small></div><div className={styles.fieldGrid}>{Object.entries(fields).map(([contentKey, label]) => { const id = `${pageKey}.${contentKey}`; const long = contentKey.includes("description") || contentKey.includes("title"); return <label className={long ? styles.fullField : ""} key={id}><span>{label}</span>{long ? <textarea rows={contentKey.includes("description") ? 4 : 2} value={values[id] || ""} onChange={(event) => setValues((current) => ({ ...current, [id]: event.target.value }))} /> : <input value={values[id] || ""} onChange={(event) => setValues((current) => ({ ...current, [id]: event.target.value }))} />}</label>; })}</div></section>)}</div>
+    <SectionTitle eyebrow="EDIT TEKS SITUS" title="Perbarui pesan di setiap halaman." description="Konten Inggris dapat diterjemahkan otomatis lalu ditinjau sebelum disimpan." action={<div className={styles.actionGroup}><button type="button" className={styles.translateAction} disabled={busy} onClick={() => translateAll().catch((error) => window.alert(error instanceof Error ? error.message : "Terjemahan gagal."))}><Languages size={17} /> Terjemahkan semua</button><button className={styles.primaryAction} disabled={busy} onClick={save}><Save size={17} /> Simpan semua</button></div>} />
+    <div className={styles.formStack}>{Object.entries(textLabels).map(([pageKey, fields]) => <section className={styles.editorCard} key={pageKey}><div className={styles.cardHeading}><span>{pageKey === "home" ? "Beranda" : pageKey[0].toUpperCase() + pageKey.slice(1)}</span><small>{Object.keys(fields).length} bidang teks · ID / EN</small></div><div className={styles.bilingualGrid}>{Object.entries(fields).map(([contentKey, label]) => { const id = `${pageKey}.${contentKey}`; const long = contentKey.includes("description") || contentKey.includes("title"); return <div className={styles.translationPair} key={id}><label><span>{label} · Indonesia</span>{long ? <textarea rows={contentKey.includes("description") ? 4 : 2} value={values[id] || ""} onChange={(event) => setValues((current) => ({ ...current, [id]: event.target.value }))} /> : <input value={values[id] || ""} onChange={(event) => setValues((current) => ({ ...current, [id]: event.target.value }))} />}</label><label><span>{label} · English</span>{long ? <textarea rows={contentKey.includes("description") ? 4 : 2} value={valuesEn[id] || ""} onChange={(event) => setValuesEn((current) => ({ ...current, [id]: event.target.value }))} /> : <input value={valuesEn[id] || ""} onChange={(event) => setValuesEn((current) => ({ ...current, [id]: event.target.value }))} />}</label></div>; })}</div></section>)}</div>
   </>;
 }
 
-function ServiceEditor({ items, busy, mutate }: { items: Service[]; busy: boolean; mutate: (job: () => Promise<unknown>, success: string) => void }) {
+function ServiceEditor({ items, busy, mutate }: { items: Service[]; busy: boolean; mutate: Mutate }) {
   const [selected, setSelected] = useState<string | null>(items[0]?.id || null);
   const current = items.find((item) => item.id === selected);
   const [form, setForm] = useState<Omit<Service, "id">>(current ? { ...current } : emptyService());
   const submit = () => mutate(() => request(`/api/cms/services${selected ? `/${selected}` : ""}`, { method: selected ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) }), selected ? "Layanan berhasil diperbarui." : "Layanan baru berhasil ditambahkan.");
   return <>
-    <SectionTitle eyebrow="LAYANAN" title="Kelola solusi yang Anda tawarkan." description="Atur deskripsi, fitur, urutan, dan status tayang setiap layanan." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyService()); }}><Plus size={17} /> Layanan baru</button>} />
+    <SectionTitle eyebrow="LAYANAN" title="Kelola solusi dan PerumNet Labs." description="Atur konten bilingual, fitur, ikon, urutan, dan status tayang." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyService()); }}><Plus size={17} /> Layanan baru</button>} />
     <div className={styles.splitEditor}><ListPanel title="Daftar layanan">{items.map((item) => { const Icon = cmsServiceIcons[item.icon] || Network; return <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm({ ...item }); }}><span className={styles.itemIcon}><Icon size={18} /></span><div><strong>{item.title}</strong><small>{item.isPublished ? "Tayang" : "Disembunyikan"}</small></div><ChevronRight size={16} /></button>; })}</ListPanel><EditorPanel title={selected ? "Edit layanan" : "Layanan baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus layanan ini?")) mutate(() => request(`/api/cms/services/${selected}`, { method: "DELETE" }), "Layanan dihapus."); } : undefined}>
-      <div className={styles.fieldGrid}><Field label="Nama layanan" value={form.title} onChange={(title) => setForm({ ...form, title })} /><Field label="Slug URL" value={form.slug} onChange={(slug) => setForm({ ...form, slug })} placeholder="otomatis-dari-judul" /><label className={styles.fullField}><span>Ringkasan</span><textarea rows={3} value={form.summary} onChange={(event) => setForm({ ...form, summary: event.target.value })} /></label><label className={styles.fullField}><span>Deskripsi lengkap</span><textarea rows={5} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label><label className={styles.fullField}><span>Fitur (satu per baris)</span><textarea rows={5} value={form.features.join("\n")} onChange={(event) => setForm({ ...form, features: event.target.value.split("\n").map((value) => value.trim()).filter(Boolean) })} /></label><SelectField label="Ikon" value={form.icon} options={["wifi","camera","phone","network","shield","home"]} onChange={(icon) => setForm({ ...form, icon })} /><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><ToggleField label="Tampilkan di website" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /></div>
+      <LanguageHeading label="Bahasa Indonesia" helper="Konten sumber yang tampil pada pilihan ID." action={<TranslateButton busy={busy} values={[form.title, form.summary, form.description, form.features.join("\n")]} onTranslated={([titleEn, summaryEn, descriptionEn, featuresEn]) => setForm({ ...form, titleEn, summaryEn, descriptionEn, featuresEn: featuresEn.split("\n").filter(Boolean) })} />} />
+      <div className={styles.fieldGrid}><Field label="Nama layanan" value={form.title} onChange={(title) => setForm({ ...form, title })} /><Field label="Slug URL" value={form.slug} onChange={(slug) => setForm({ ...form, slug })} placeholder="otomatis-dari-judul" /><TextArea label="Ringkasan" value={form.summary} rows={3} onChange={(summary) => setForm({ ...form, summary })} /><TextArea label="Deskripsi lengkap" value={form.description} rows={5} onChange={(description) => setForm({ ...form, description })} /><TextArea label="Fitur (satu per baris)" value={form.features.join("\n")} rows={5} onChange={(value) => setForm({ ...form, features: value.split("\n").map((item) => item.trim()).filter(Boolean) })} /></div>
+      <LanguageHeading label="English" helper="Tinjau istilah teknis setelah terjemahan otomatis." />
+      <div className={styles.fieldGrid}><Field label="Service name" value={form.titleEn} onChange={(titleEn) => setForm({ ...form, titleEn })} /><TextArea label="Summary" value={form.summaryEn} rows={3} onChange={(summaryEn) => setForm({ ...form, summaryEn })} /><TextArea label="Full description" value={form.descriptionEn} rows={5} onChange={(descriptionEn) => setForm({ ...form, descriptionEn })} /><TextArea label="Features (one per line)" value={form.featuresEn.join("\n")} rows={5} onChange={(value) => setForm({ ...form, featuresEn: value.split("\n").map((item) => item.trim()).filter(Boolean) })} /></div>
+      <div className={styles.fieldGrid}><SelectField label="Ikon" value={form.icon} options={["wifi","camera","phone","network","shield","home","terminal"]} onChange={(icon) => setForm({ ...form, icon })} /><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><ToggleField label="Tampilkan di website" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /></div>
     </EditorPanel></div>
   </>;
 }
 
-function PortfolioEditor({ items, busy, mutate }: { items: Portfolio[]; busy: boolean; mutate: (job: () => Promise<unknown>, success: string) => void }) {
+function PortfolioEditor({ items, busy, mutate }: { items: Portfolio[]; busy: boolean; mutate: Mutate }) {
   const [selected, setSelected] = useState<string | null>(items[0]?.id || null);
   const current = items.find((item) => item.id === selected);
   const [form, setForm] = useState(portfolioForm(current));
   const [file, setFile] = useState<File | null>(null);
   const submit = () => { const body = new FormData(); Object.entries(form).forEach(([key, value]) => body.set(key, String(value))); if (file) body.set("image", file); mutate(() => request(`/api/cms/portfolios${selected ? `/${selected}` : ""}`, { method: selected ? "PATCH" : "POST", body }), selected ? "Portofolio berhasil diperbarui." : "Proyek baru berhasil ditambahkan."); };
   return <>
-    <SectionTitle eyebrow="PORTOFOLIO" title="Tampilkan bukti kerja terbaik Anda." description="Unggah foto proyek, tambahkan lokasi, dan atur proyek yang tampil di website." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyPortfolio()); setFile(null); }}><Plus size={17} /> Proyek baru</button>} />
+    <SectionTitle eyebrow="PORTOFOLIO" title="Tampilkan bukti kerja terbaik Anda." description="Unggah foto proyek dan kelola deskripsi Indonesia serta Inggris." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyPortfolio()); setFile(null); }}><Plus size={17} /> Proyek baru</button>} />
     <div className={styles.splitEditor}><ListPanel title="Daftar proyek">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm(portfolioForm(item)); setFile(null); }}>{item.imageUrl ? <img src={item.imageUrl} alt="" /> : <span className={styles.itemIcon}><Camera size={18} /></span>}<div><strong>{item.title}</strong><small>{item.location || "Tanpa lokasi"}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit portofolio" : "Proyek baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus proyek portofolio ini?")) mutate(() => request(`/api/cms/portfolios/${selected}`, { method: "DELETE" }), "Portofolio dihapus."); } : undefined}>
-      <div className={styles.fieldGrid}><Field label="Judul proyek" value={form.title} onChange={(title) => setForm({ ...form, title })} /><Field label="Lokasi" value={form.location} onChange={(location) => setForm({ ...form, location })} /><label className={styles.fullField}><span>Deskripsi</span><textarea rows={5} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label><label><span>Tanggal selesai</span><input type="date" value={form.completedAt} onChange={(event) => setForm({ ...form, completedAt: event.target.value })} /></label><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><label className={styles.fullField}><span>Foto proyek (JPG, PNG, WebP · maks. 5 MB)</span><input className={styles.fileInput} type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setFile(event.target.files?.[0] || null)} />{current?.imageUrl && !file && <img className={styles.imagePreview} src={current.imageUrl} alt={current.title} />}</label><ToggleField label="Tampilkan di website" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /></div>
+      <LanguageHeading label="Konten bilingual" helper="Terjemahkan lalu tinjau sebelum disimpan." action={<TranslateButton busy={busy} values={[form.title, form.location, form.description]} onTranslated={([titleEn, locationEn, descriptionEn]) => setForm({ ...form, titleEn, locationEn, descriptionEn })} />} />
+      <div className={styles.fieldGrid}><Field label="Judul proyek · ID" value={form.title} onChange={(title) => setForm({ ...form, title })} /><Field label="Project title · EN" value={form.titleEn} onChange={(titleEn) => setForm({ ...form, titleEn })} /><Field label="Lokasi · ID" value={form.location} onChange={(location) => setForm({ ...form, location })} /><Field label="Location · EN" value={form.locationEn} onChange={(locationEn) => setForm({ ...form, locationEn })} /><TextArea label="Deskripsi · ID" value={form.description} rows={5} onChange={(description) => setForm({ ...form, description })} /><TextArea label="Description · EN" value={form.descriptionEn} rows={5} onChange={(descriptionEn) => setForm({ ...form, descriptionEn })} /><label><span>Tanggal selesai</span><input type="date" value={form.completedAt} onChange={(event) => setForm({ ...form, completedAt: event.target.value })} /></label><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><label className={styles.fullField}><span>Foto proyek (JPG, PNG, WebP · maks. 5 MB)</span><input className={styles.fileInput} type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setFile(event.target.files?.[0] || null)} />{current?.imageUrl && !file && <img className={styles.imagePreview} src={current.imageUrl} alt={current.title} />}</label><ToggleField label="Tampilkan di website" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /></div>
     </EditorPanel></div>
   </>;
 }
 
-function TestimonialEditor({ items, busy, mutate }: { items: Testimonial[]; busy: boolean; mutate: (job: () => Promise<unknown>, success: string) => void }) {
+function PartnerEditor({ items, busy, mutate }: { items: Partner[]; busy: boolean; mutate: Mutate }) {
+  const [selected, setSelected] = useState<string | null>(items[0]?.id || null);
+  const current = items.find((item) => item.id === selected);
+  const [form, setForm] = useState(partnerForm(current));
+  const [file, setFile] = useState<File | null>(null);
+  const submit = () => { const body = new FormData(); Object.entries(form).forEach(([key, value]) => body.set(key, String(value))); if (file) body.set("logo", file); mutate(() => request(`/api/cms/partners${selected ? `/${selected}` : ""}`, { method: selected ? "PATCH" : "POST", body }), selected ? "Partner atau klien berhasil diperbarui." : "Partner atau klien berhasil ditambahkan."); };
+  return <>
+    <SectionTitle eyebrow="PARTNER & KLIEN" title="Kelola organisasi yang tampil di landing page." description="Nama, kategori, tautan, dan logo dapat disusun ulang atau disembunyikan." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyPartner()); setFile(null); }}><Plus size={17} /> Tambah organisasi</button>} />
+    <div className={styles.splitEditor}><ListPanel title="Daftar organisasi">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm(partnerForm(item)); setFile(null); }}>{item.logoUrl ? <img src={item.logoUrl} alt="" /> : <span className={styles.itemIcon}><Handshake size={18} /></span>}<div><strong>{item.name}</strong><small>{item.organizationType === "partner" ? "Partner teknologi" : "Klien"} · {item.isVisible ? "Tampil" : "Tersembunyi"}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit organisasi" : "Organisasi baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus organisasi ini?")) mutate(() => request(`/api/cms/partners/${selected}`, { method: "DELETE" }), "Organisasi dihapus."); } : undefined}>
+      <div className={styles.fieldGrid}><Field label="Nama organisasi" value={form.name} onChange={(name) => setForm({ ...form, name })} /><SelectField label="Jenis" value={form.organizationType} options={["partner","client"]} onChange={(organizationType) => setForm({ ...form, organizationType: organizationType as "partner" | "client" })} /><Field label="Kategori / sektor" value={form.category} onChange={(category) => setForm({ ...form, category })} placeholder="Partner Teknologi, Hospitality, Retail..." /><Field label="Website URL (opsional)" value={form.websiteUrl} onChange={(websiteUrl) => setForm({ ...form, websiteUrl })} type="url" /><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><label className={styles.fullField}><span>Logo (SVG, PNG, JPG, WebP · maks. 2 MB)</span><input className={styles.fileInput} type="file" accept="image/svg+xml,image/png,image/jpeg,image/webp" onChange={(event) => setFile(event.target.files?.[0] || null)} />{current?.logoUrl && !file && <img className={styles.logoPreview} src={current.logoUrl} alt={current.name} />}</label><ToggleField label="Tampilkan di website" checked={form.isVisible} onChange={(isVisible) => setForm({ ...form, isVisible })} /></div>
+    </EditorPanel></div>
+  </>;
+}
+
+function TestimonialEditor({ items, busy, mutate }: { items: Testimonial[]; busy: boolean; mutate: Mutate }) {
   const [selected, setSelected] = useState<string | null>(items[0]?.id || null);
   const current = items.find((item) => item.id === selected);
   const [form, setForm] = useState<Omit<Testimonial, "id">>(current ? { ...current } : emptyTestimonial());
   const submit = () => mutate(() => request(`/api/cms/testimonials${selected ? `/${selected}` : ""}`, { method: selected ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) }), selected ? "Testimoni berhasil diperbarui." : "Testimoni baru berhasil ditambahkan.");
   return <>
-    <SectionTitle eyebrow="TESTIMONI" title="Kelola cerita dan kepercayaan klien." description="Edit ulasan atau sembunyikan testimoni tanpa harus menghapusnya." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyTestimonial()); }}><Plus size={17} /> Testimoni baru</button>} />
+    <SectionTitle eyebrow="TESTIMONI" title="Kelola cerita dan kepercayaan klien." description="Nama tetap sama; ulasan memiliki versi Indonesia dan Inggris." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyTestimonial()); }}><Plus size={17} /> Testimoni baru</button>} />
     <div className={styles.splitEditor}><ListPanel title="Daftar testimoni">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm({ ...item }); }}><span className={styles.avatar}>{item.clientName.split(" ").map((part) => part[0]).slice(0,2).join("")}</span><div><strong>{item.clientName}</strong><small>{item.isVisible ? "Tampil" : "Disembunyikan"}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit testimoni" : "Testimoni baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus testimoni ini?")) mutate(() => request(`/api/cms/testimonials/${selected}`, { method: "DELETE" }), "Testimoni dihapus."); } : undefined}>
-      <div className={styles.fieldGrid}><Field label="Nama klien" value={form.clientName} onChange={(clientName) => setForm({ ...form, clientName })} /><Field label="Perusahaan" value={form.companyName} onChange={(companyName) => setForm({ ...form, companyName })} /><label className={styles.fullField}><span>Ulasan</span><textarea rows={7} value={form.review} onChange={(event) => setForm({ ...form, review: event.target.value })} /></label><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><ToggleField label="Tampilkan testimoni" checked={form.isVisible} onChange={(isVisible) => setForm({ ...form, isVisible })} /></div>
+      <LanguageHeading label="Ulasan bilingual" helper="Gunakan terjemahan otomatis sebagai draf." action={<TranslateButton busy={busy} values={[form.review]} onTranslated={([reviewEn]) => setForm({ ...form, reviewEn })} />} />
+      <div className={styles.fieldGrid}><Field label="Nama klien" value={form.clientName} onChange={(clientName) => setForm({ ...form, clientName })} /><Field label="Perusahaan" value={form.companyName} onChange={(companyName) => setForm({ ...form, companyName })} /><TextArea label="Ulasan · ID" value={form.review} rows={7} onChange={(review) => setForm({ ...form, review })} /><TextArea label="Review · EN" value={form.reviewEn} rows={7} onChange={(reviewEn) => setForm({ ...form, reviewEn })} /><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><ToggleField label="Tampilkan testimoni" checked={form.isVisible} onChange={(isVisible) => setForm({ ...form, isVisible })} /></div>
     </EditorPanel></div>
   </>;
 }
 
-function PageEditor({ items, busy, mutate }: { items: Page[]; busy: boolean; mutate: (job: () => Promise<unknown>, success: string) => void }) {
+function FaqEditor({ items, busy, mutate }: { items: Faq[]; busy: boolean; mutate: Mutate }) {
+  const [selected, setSelected] = useState<string | null>(items[0]?.id || null);
+  const current = items.find((item) => item.id === selected);
+  const [form, setForm] = useState<Omit<Faq, "id">>(current ? { ...current } : emptyFaq());
+  const submit = () => mutate(() => request(`/api/cms/faqs${selected ? `/${selected}` : ""}`, { method: selected ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) }), selected ? "FAQ berhasil diperbarui." : "FAQ baru berhasil ditambahkan.");
+  return <>
+    <SectionTitle eyebrow="FAQ" title="Jawab pertanyaan sebelum calon klien bertanya." description="Setiap pertanyaan dapat diterjemahkan, diurutkan, dan disembunyikan tanpa menghapus." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyFaq()); }}><Plus size={17} /> FAQ baru</button>} />
+    <div className={styles.splitEditor}><ListPanel title="Daftar FAQ">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm({ ...item }); }}><span className={styles.itemIcon}><CircleHelp size={18} /></span><div><strong>{item.question}</strong><small>{item.isVisible ? "Tampil" : "Disembunyikan"}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit FAQ" : "FAQ baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus FAQ ini?")) mutate(() => request(`/api/cms/faqs/${selected}`, { method: "DELETE" }), "FAQ dihapus."); } : undefined}>
+      <LanguageHeading label="Konten bilingual" helper="Terjemahkan jawaban, lalu tinjau istilah layanan." action={<TranslateButton busy={busy} values={[form.question, form.answer]} onTranslated={([questionEn, answerEn]) => setForm({ ...form, questionEn, answerEn })} />} />
+      <div className={styles.fieldGrid}><TextArea label="Pertanyaan · ID" value={form.question} rows={3} onChange={(question) => setForm({ ...form, question })} /><TextArea label="Question · EN" value={form.questionEn} rows={3} onChange={(questionEn) => setForm({ ...form, questionEn })} /><TextArea label="Jawaban · ID" value={form.answer} rows={7} onChange={(answer) => setForm({ ...form, answer })} /><TextArea label="Answer · EN" value={form.answerEn} rows={7} onChange={(answerEn) => setForm({ ...form, answerEn })} /><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><ToggleField label="Tampilkan di website" checked={form.isVisible} onChange={(isVisible) => setForm({ ...form, isVisible })} /></div>
+    </EditorPanel></div>
+  </>;
+}
+
+function PageEditor({ items, busy, mutate }: { items: Page[]; busy: boolean; mutate: Mutate }) {
   const [selected, setSelected] = useState<string | null>(items[0]?.id || null);
   const current = items.find((item) => item.id === selected);
   const [form, setForm] = useState<Omit<Page, "id">>(current ? { ...current } : emptyPage());
   const submit = () => mutate(() => request(`/api/cms/pages${selected ? `/${selected}` : ""}`, { method: selected ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) }), selected ? "Halaman berhasil diperbarui." : "Halaman baru berhasil dibuat.");
   return <>
-    <SectionTitle eyebrow="HALAMAN DINAMIS" title="Buat halaman baru tanpa coding." description="Halaman yang diterbitkan otomatis muncul di navigasi publik sesuai urutannya." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyPage()); }}><Plus size={17} /> Halaman baru</button>} />
+    <SectionTitle eyebrow="HALAMAN & LEGAL" title="Kelola halaman, syarat, dan kebijakan privasi." description="Halaman legal dapat terbit di footer tanpa harus muncul di menu header." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyPage()); }}><Plus size={17} /> Halaman baru</button>} />
     <div className={styles.splitEditor}><ListPanel title="Daftar halaman">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm({ ...item }); }}><span className={styles.itemIcon}><Globe2 size={18} /></span><div><strong>{item.title}</strong><small>{item.isPublished ? "Terbit" : "Draf"} · /{item.slug}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit halaman" : "Halaman baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus halaman ini?")) mutate(() => request(`/api/cms/pages/${selected}`, { method: "DELETE" }), "Halaman dihapus."); } : undefined}>
-      <div className={styles.fieldGrid}><Field label="Judul halaman" value={form.title} onChange={(title) => setForm({ ...form, title })} /><Field label="Slug URL" value={form.slug} onChange={(slug) => setForm({ ...form, slug })} placeholder="otomatis-dari-judul" /><label className={styles.fullField}><span>Ringkasan</span><textarea rows={3} value={form.excerpt} onChange={(event) => setForm({ ...form, excerpt: event.target.value })} /></label><label className={styles.fullField}><span>Isi halaman</span><textarea rows={12} value={form.content} onChange={(event) => setForm({ ...form, content: event.target.value })} placeholder="Pisahkan paragraf dengan satu baris kosong." /></label><NumberField label="Urutan menu" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><ToggleField label="Terbitkan halaman" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /></div>
+      <LanguageHeading label="Konten bilingual" helper="Pisahkan paragraf dengan satu baris kosong." action={<TranslateButton busy={busy} values={[form.title, form.excerpt, form.content]} onTranslated={([titleEn, excerptEn, contentEn]) => setForm({ ...form, titleEn, excerptEn, contentEn })} />} />
+      <div className={styles.fieldGrid}><Field label="Judul halaman · ID" value={form.title} onChange={(title) => setForm({ ...form, title })} /><Field label="Page title · EN" value={form.titleEn} onChange={(titleEn) => setForm({ ...form, titleEn })} /><Field label="Slug URL" value={form.slug} onChange={(slug) => setForm({ ...form, slug })} placeholder="otomatis-dari-judul" /><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><TextArea label="Ringkasan · ID" value={form.excerpt} rows={3} onChange={(excerpt) => setForm({ ...form, excerpt })} /><TextArea label="Excerpt · EN" value={form.excerptEn} rows={3} onChange={(excerptEn) => setForm({ ...form, excerptEn })} /><TextArea label="Isi halaman · ID" value={form.content} rows={12} onChange={(contentValue) => setForm({ ...form, content: contentValue })} /><TextArea label="Page content · EN" value={form.contentEn} rows={12} onChange={(contentEn) => setForm({ ...form, contentEn })} /><ToggleField label="Terbitkan halaman" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /><ToggleField label="Tampilkan di header" checked={form.showInNavigation} onChange={(showInNavigation) => setForm({ ...form, showInNavigation })} /></div>
     </EditorPanel></div>
   </>;
 }
 
-function SettingsEditor({ settings, busy, save }: { settings: Record<string,string>; busy: boolean; save: (settings: Record<string,string>) => void }) {
+function SettingsEditor({ settings, settingsEn, busy, mutate }: { settings: Record<string,string>; settingsEn: Record<string,string>; busy: boolean; mutate: Mutate }) {
   const [values, setValues] = useState(settings);
+  const [valuesEn, setValuesEn] = useState(settingsEn);
   const set = (key: string, value: string) => setValues((current) => ({ ...current, [key]: value }));
+  const setEn = (key: string, value: string) => setValuesEn((current) => ({ ...current, [key]: value }));
+  const save = () => {
+    const translatedKeys = ["company_name", "company_tagline", "address", "cta_text", "business_hours"];
+    const safeSettingsEn = Object.fromEntries(
+      translatedKeys
+        .map((key) => [key, valuesEn[key] || ""] as const)
+        .filter(([, value]) => value.trim()),
+    );
+    mutate(() => request("/api/cms/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: values, settingsEn: safeSettingsEn }) }), "Pengaturan situs berhasil disimpan.");
+  };
   return <>
-    <SectionTitle eyebrow="PENGATURAN SITUS" title="Identitas, kontak, dan tampilan dalam satu tempat." description="Perubahan berikut langsung digunakan pada seluruh halaman website publik." action={<button className={styles.primaryAction} disabled={busy} onClick={() => save(values)}><Save size={17} /> Simpan pengaturan</button>} />
+    <SectionTitle eyebrow="PENGATURAN SITUS" title="Identitas, kontak, dan tampilan dalam satu tempat." description="Kontak bersifat universal; tagline, jam layanan, dan CTA memiliki versi Inggris." action={<button className={styles.primaryAction} disabled={busy} onClick={save}><Save size={17} /> Simpan pengaturan</button>} />
     <div className={styles.formStack}>
-      <section className={styles.editorCard}>
-        <div className={styles.cardHeading}><span>Warna & tampilan publik</span><small>Kontras teks pada area teal dan gelap</small></div>
-        <div className={styles.appearanceGrid}>
-          <ColorField label="Warna teks utama di area gelap" value={values.dark_font_color || "#FFFFFF"} onChange={(value) => set("dark_font_color", value)} />
-          <div className={styles.colorPreview} style={{ color: values.dark_font_color || "#FFFFFF" }}>
-            <span>Pratinjau kontras</span>
-            <strong>Infrastruktur IT yang bekerja tanpa hambatan.</strong>
-            <small>Warna ini digunakan untuk judul dan teks utama pada bidang teal atau gelap.</small>
-          </div>
-        </div>
-      </section>
-      <section className={styles.editorCard}><div className={styles.cardHeading}><span>Identitas & kontak</span><small>Digunakan di header, footer, dan halaman kontak</small></div><div className={styles.fieldGrid}><Field label="Nama perusahaan" value={values.company_name || ""} onChange={(value) => set("company_name", value)} /><Field label="Tagline" value={values.company_tagline || ""} onChange={(value) => set("company_tagline", value)} /><Field label="Nomor WhatsApp" value={values.whatsapp_number || ""} onChange={(value) => set("whatsapp_number", value)} placeholder="085155026889 atau 6285155026889" /><Field label="Nomor telepon tampilan" value={values.phone || ""} onChange={(value) => set("phone", value)} /><Field label="Email" value={values.email || ""} onChange={(value) => set("email", value)} type="email" /><Field label="Jam operasional" value={values.business_hours || ""} onChange={(value) => set("business_hours", value)} /><label className={styles.fullField}><span>Alamat</span><textarea rows={4} value={values.address || ""} onChange={(event) => set("address", event.target.value)} /></label><Field label="Instagram URL" value={values.instagram_url || ""} onChange={(value) => set("instagram_url", value)} type="url" /><Field label="LinkedIn URL" value={values.linkedin_url || ""} onChange={(value) => set("linkedin_url", value)} type="url" /><Field label="Website utama" value={values.website_url || "https://www.perumnet.id/"} onChange={(value) => set("website_url", value)} type="url" /><label className={styles.fullField}><span>Teks tombol CTA utama</span><input value={values.cta_text || ""} onChange={(event) => set("cta_text", event.target.value)} /></label></div></section>
+      <section className={styles.editorCard}><div className={styles.cardHeading}><span>Warna & tampilan publik</span><small>Kontras teks pada area teal dan gelap</small></div><div className={styles.appearanceGrid}><ColorField label="Warna teks utama di area gelap" value={values.dark_font_color || "#FFFFFF"} onChange={(value) => set("dark_font_color", value)} /><div className={styles.colorPreview} style={{ color: values.dark_font_color || "#FFFFFF" }}><span>Pratinjau kontras</span><strong>Infrastruktur IT yang bekerja tanpa hambatan.</strong><small>Warna ini digunakan untuk judul dan teks utama pada bidang teal atau gelap.</small></div></div></section>
+      <section className={styles.editorCard}><div className={styles.cardHeading}><span>Identitas & kontak</span><small>Digunakan di header, footer, dan halaman kontak</small></div><div className={styles.fieldGrid}><Field label="Nama perusahaan" value={values.company_name || ""} onChange={(value) => set("company_name", value)} /><Field label="Nomor WhatsApp" value={values.whatsapp_number || ""} onChange={(value) => set("whatsapp_number", value)} placeholder="085155026889 atau 6285155026889" /><Field label="Nomor telepon tampilan" value={values.phone || ""} onChange={(value) => set("phone", value)} /><Field label="Email" value={values.email || ""} onChange={(value) => set("email", value)} type="email" /><TextArea label="Alamat" value={values.address || ""} rows={4} onChange={(value) => set("address", value)} /><Field label="Instagram URL" value={values.instagram_url || ""} onChange={(value) => set("instagram_url", value)} type="url" /><Field label="LinkedIn URL" value={values.linkedin_url || ""} onChange={(value) => set("linkedin_url", value)} type="url" /><Field label="Website utama" value={values.website_url || "https://www.perumnet.id/"} onChange={(value) => set("website_url", value)} type="url" /></div></section>
+      <section className={styles.editorCard}><LanguageHeading label="Pesan bilingual" helper="Terjemahkan tagline, jam operasional, dan CTA." action={<TranslateButton busy={busy} values={[values.company_tagline || "", values.business_hours || "", values.cta_text || ""]} onTranslated={([companyTagline, businessHours, ctaText]) => setValuesEn((current) => ({ ...current, company_tagline: companyTagline, business_hours: businessHours, cta_text: ctaText }))} />} /><div className={styles.fieldGrid}><Field label="Tagline · ID" value={values.company_tagline || ""} onChange={(value) => set("company_tagline", value)} /><Field label="Tagline · EN" value={valuesEn.company_tagline || ""} onChange={(value) => setEn("company_tagline", value)} /><Field label="Jam operasional · ID" value={values.business_hours || ""} onChange={(value) => set("business_hours", value)} /><Field label="Business hours · EN" value={valuesEn.business_hours || ""} onChange={(value) => setEn("business_hours", value)} /><Field label="Teks CTA · ID" value={values.cta_text || ""} onChange={(value) => set("cta_text", value)} /><Field label="CTA text · EN" value={valuesEn.cta_text || ""} onChange={(value) => setEn("cta_text", value)} /></div></section>
     </div>
   </>;
 }
 
-function ListPanel({ title, children }: { title: string; children: React.ReactNode }) { return <section className={styles.listPanel}><div className={styles.cardHeading}><span>{title}</span></div><div>{children}</div></section>; }
-
+function ListPanel({ title, children }: { title: string; children: React.ReactNode }) {
+  return <section className={styles.listPanel}><div className={styles.cardHeading}><span>{title}</span></div><div>{children}</div></section>;
+}
 function EditorPanel({ title, children, onSave, onDelete, busy }: { title: string; children: React.ReactNode; onSave: () => void; onDelete?: () => void; busy: boolean }) {
   return <section className={styles.editorPanel}><div className={styles.editorTop}><h3>{title}</h3><div>{onDelete && <button className={styles.deleteButton} onClick={onDelete} disabled={busy}><Trash2 size={16} /> Hapus</button>}<button className={styles.primaryAction} onClick={onSave} disabled={busy}>{busy ? <LoaderCircle className={styles.spin} size={17} /> : <Save size={17} />} Simpan</button></div></div>{children}</section>;
 }
-
-function Field({ label, value, onChange, placeholder, type = "text" }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; type?: string }) { return <label><span>{label}</span><input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></label>; }
-function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) { return <label><span>{label}</span><input type="number" min="0" max="999" value={value} onChange={(event) => onChange(Number(event.target.value) || 0)} /></label>; }
-function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) { return <label><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>; }
+function Field({ label, value, onChange, placeholder, type = "text" }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; type?: string }) {
+  return <label><span>{label}</span><input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></label>;
+}
+function TextArea({ label, value, onChange, rows }: { label: string; value: string; onChange: (value: string) => void; rows: number }) {
+  return <label className={styles.fullField}><span>{label}</span><textarea rows={rows} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
+}
+function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  return <label><span>{label}</span><input type="number" min="0" max="999" value={value} onChange={(event) => onChange(Number(event.target.value) || 0)} /></label>;
+}
+function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
+  return <label><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>;
+}
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   const safeValue = /^#[0-9a-f]{6}$/i.test(value) ? value : "#FFFFFF";
   return <label className={styles.colorField}><span>{label}</span><div><input type="color" value={safeValue} onChange={(event) => onChange(event.target.value.toUpperCase())} aria-label={label} /><input value={value} onChange={(event) => onChange(event.target.value.toUpperCase())} maxLength={7} pattern="^#[0-9A-Fa-f]{6}$" placeholder="#FFFFFF" /></div><small>Gunakan format HEX. Putih (#FFFFFF) direkomendasikan untuk kontras terbaik.</small></label>;
