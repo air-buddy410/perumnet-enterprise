@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   BriefcaseBusiness,
@@ -32,6 +32,7 @@ import {
   Sparkles,
   TerminalSquare,
   Trash2,
+  Upload,
   Wifi,
   X,
 } from "lucide-react";
@@ -227,7 +228,7 @@ export function PanelApp() {
       </aside>
       {sidebarOpen && <button className={styles.backdrop} onClick={() => setSidebarOpen(false)} aria-label="Tutup menu" />}
       <div className={styles.workspace}>
-        <header className={styles.topbar}><button className={styles.menuButton} onClick={() => setSidebarOpen(true)} aria-label="Buka menu"><Menu size={21} /></button><div><span>Panel CMS</span><h1>{current.label}</h1></div><Link href="/" target="_blank" rel="noreferrer"><Eye size={17} /> Pratinjau situs</Link></header>
+        <header className={styles.topbar}><button className={styles.menuButton} onClick={() => setSidebarOpen(true)} aria-label="Buka menu"><Menu size={21} /></button><div><span>Panel CMS</span><h1>{current.label}</h1></div><Link className={styles.previewLink} href="/" target="_blank" rel="noreferrer" aria-label="Pratinjau situs"><Eye size={18} /><span>Pratinjau situs</span></Link></header>
         <main className={styles.mainContent}>
           {section === "overview" && <Overview content={content} user={user} onNavigate={setSection} />}
           {section === "texts" && <TextEditor key={JSON.stringify(content.texts)} content={content} busy={busy} mutate={mutate} />}
@@ -370,7 +371,7 @@ function PortfolioEditor({ items, busy, mutate }: { items: Portfolio[]; busy: bo
     <SectionTitle eyebrow="PORTOFOLIO" title="Tampilkan bukti kerja terbaik Anda." description="Unggah foto proyek dan kelola deskripsi Indonesia serta Inggris." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyPortfolio()); setFile(null); }}><Plus size={17} /> Proyek baru</button>} />
     <div className={styles.splitEditor}><ListPanel title="Daftar proyek">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm(portfolioForm(item)); setFile(null); }}>{item.imageUrl ? <img src={item.imageUrl} alt="" /> : <span className={styles.itemIcon}><Camera size={18} /></span>}<div><strong>{item.title}</strong><small>{item.location || "Tanpa lokasi"}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit portofolio" : "Proyek baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus proyek portofolio ini?")) mutate(() => request(`/api/cms/portfolios/${selected}`, { method: "DELETE" }), "Portofolio dihapus."); } : undefined}>
       <LanguageHeading label="Konten bilingual" helper="Terjemahkan lalu tinjau sebelum disimpan." action={<TranslateButton busy={busy} values={[form.title, form.location, form.description]} onTranslated={([titleEn, locationEn, descriptionEn]) => setForm({ ...form, titleEn, locationEn, descriptionEn })} />} />
-      <div className={styles.fieldGrid}><Field label="Judul proyek · ID" value={form.title} onChange={(title) => setForm({ ...form, title })} /><Field label="Project title · EN" value={form.titleEn} onChange={(titleEn) => setForm({ ...form, titleEn })} /><Field label="Lokasi · ID" value={form.location} onChange={(location) => setForm({ ...form, location })} /><Field label="Location · EN" value={form.locationEn} onChange={(locationEn) => setForm({ ...form, locationEn })} /><TextArea label="Deskripsi · ID" value={form.description} rows={5} onChange={(description) => setForm({ ...form, description })} /><TextArea label="Description · EN" value={form.descriptionEn} rows={5} onChange={(descriptionEn) => setForm({ ...form, descriptionEn })} /><label><span>Tanggal selesai</span><input type="date" value={form.completedAt} onChange={(event) => setForm({ ...form, completedAt: event.target.value })} /></label><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><label className={styles.fullField}><span>Foto proyek (JPG, PNG, WebP · maks. 5 MB)</span><input className={styles.fileInput} type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setFile(event.target.files?.[0] || null)} />{current?.imageUrl && !file && <img className={styles.imagePreview} src={current.imageUrl} alt={current.title} />}</label><ToggleField label="Tampilkan di website" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /></div>
+      <div className={styles.fieldGrid}><Field label="Judul proyek · ID" value={form.title} onChange={(title) => setForm({ ...form, title })} /><Field label="Project title · EN" value={form.titleEn} onChange={(titleEn) => setForm({ ...form, titleEn })} /><Field label="Lokasi · ID" value={form.location} onChange={(location) => setForm({ ...form, location })} /><Field label="Location · EN" value={form.locationEn} onChange={(locationEn) => setForm({ ...form, locationEn })} /><TextArea label="Deskripsi · ID" value={form.description} rows={5} onChange={(description) => setForm({ ...form, description })} /><TextArea label="Description · EN" value={form.descriptionEn} rows={5} onChange={(descriptionEn) => setForm({ ...form, descriptionEn })} /><label><span>Tanggal selesai</span><input type="date" value={form.completedAt} onChange={(event) => setForm({ ...form, completedAt: event.target.value })} /></label><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><FileUploadField label="Foto proyek (JPG, PNG, WebP · maks. 5 MB)" accept="image/jpeg,image/png,image/webp" file={file} buttonLabel="Pilih foto proyek" helper="Klik untuk memilih foto dari perangkat Anda." currentUrl={current?.imageUrl} previewAlt={current?.title || "Foto proyek"} previewClassName={styles.imagePreview} onChange={setFile} /><ToggleField label="Tampilkan di website" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /></div>
     </EditorPanel></div>
   </>;
 }
@@ -383,8 +384,8 @@ function PartnerEditor({ items, busy, mutate }: { items: Partner[]; busy: boolea
   const submit = () => { const body = new FormData(); Object.entries(form).forEach(([key, value]) => body.set(key, String(value))); if (file) body.set("logo", file); mutate(() => request(`/api/cms/partners${selected ? `/${selected}` : ""}`, { method: selected ? "PATCH" : "POST", body }), selected ? "Partner atau klien berhasil diperbarui." : "Partner atau klien berhasil ditambahkan."); };
   return <>
     <SectionTitle eyebrow="PARTNER & KLIEN" title="Kelola organisasi yang tampil di landing page." description="Nama, kategori, tautan, dan logo dapat disusun ulang atau disembunyikan." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyPartner()); setFile(null); }}><Plus size={17} /> Tambah organisasi</button>} />
-    <div className={styles.splitEditor}><ListPanel title="Daftar organisasi">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm(partnerForm(item)); setFile(null); }}>{item.logoUrl ? <img src={item.logoUrl} alt="" /> : <span className={styles.itemIcon}><Handshake size={18} /></span>}<div><strong>{item.name}</strong><small>{item.organizationType === "partner" ? "Partner teknologi" : "Klien"} · {item.isVisible ? "Tampil" : "Tersembunyi"}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit organisasi" : "Organisasi baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus organisasi ini?")) mutate(() => request(`/api/cms/partners/${selected}`, { method: "DELETE" }), "Organisasi dihapus."); } : undefined}>
-      <div className={styles.fieldGrid}><Field label="Nama organisasi" value={form.name} onChange={(name) => setForm({ ...form, name })} /><SelectField label="Jenis" value={form.organizationType} options={["partner","client"]} onChange={(organizationType) => setForm({ ...form, organizationType: organizationType as "partner" | "client" })} /><Field label="Kategori / sektor" value={form.category} onChange={(category) => setForm({ ...form, category })} placeholder="Partner Teknologi, Hospitality, Retail..." /><Field label="Website URL (opsional)" value={form.websiteUrl} onChange={(websiteUrl) => setForm({ ...form, websiteUrl })} type="url" /><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><label className={styles.fullField}><span>Logo (SVG, PNG, JPG, WebP · maks. 2 MB)</span><input className={styles.fileInput} type="file" accept="image/svg+xml,image/png,image/jpeg,image/webp" onChange={(event) => setFile(event.target.files?.[0] || null)} />{current?.logoUrl && !file && <img className={styles.logoPreview} src={current.logoUrl} alt={current.name} />}</label><ToggleField label="Tampilkan di website" checked={form.isVisible} onChange={(isVisible) => setForm({ ...form, isVisible })} /></div>
+    <div className={styles.splitEditor}><ListPanel title="Daftar organisasi">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm(partnerForm(item)); setFile(null); }}>{item.logoUrl ? <span className={`${styles.partnerListLogo} ${item.logoUrl.toLowerCase().includes("quenzo") ? styles.partnerListLogoDark : ""}`}><img src={item.logoUrl} alt="" /></span> : <span className={styles.itemIcon}><Handshake size={18} /></span>}<div><strong>{item.name}</strong><small>{item.organizationType === "partner" ? "Partner teknologi" : "Klien"} · {item.isVisible ? "Tampil" : "Tersembunyi"}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit organisasi" : "Organisasi baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus organisasi ini?")) mutate(() => request(`/api/cms/partners/${selected}`, { method: "DELETE" }), "Organisasi dihapus."); } : undefined}>
+      <div className={styles.fieldGrid}><Field label="Nama organisasi" value={form.name} onChange={(name) => setForm({ ...form, name })} /><SelectField label="Jenis" value={form.organizationType} options={["partner","client"]} onChange={(organizationType) => setForm({ ...form, organizationType: organizationType as "partner" | "client" })} /><Field label="Kategori / sektor" value={form.category} onChange={(category) => setForm({ ...form, category })} placeholder="Partner Teknologi, Hospitality, Retail..." /><Field label="Website URL (opsional)" value={form.websiteUrl} onChange={(websiteUrl) => setForm({ ...form, websiteUrl })} type="url" /><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><FileUploadField label="Logo (SVG, PNG, JPG, WebP · maks. 2 MB)" accept="image/svg+xml,image/png,image/jpeg,image/webp" file={file} buttonLabel="Pilih logo organisasi" helper="Klik untuk memilih logo dari perangkat Anda." currentUrl={current?.logoUrl} previewAlt={current?.name || "Logo organisasi"} previewClassName={styles.logoPreview} onChange={setFile} /><ToggleField label="Tampilkan di website" checked={form.isVisible} onChange={(isVisible) => setForm({ ...form, isVisible })} /></div>
     </EditorPanel></div>
   </>;
 }
@@ -460,6 +461,61 @@ function ListPanel({ title, children }: { title: string; children: React.ReactNo
 }
 function EditorPanel({ title, children, onSave, onDelete, busy }: { title: string; children: React.ReactNode; onSave: () => void; onDelete?: () => void; busy: boolean }) {
   return <section className={styles.editorPanel}><div className={styles.editorTop}><h3>{title}</h3><div>{onDelete && <button className={styles.deleteButton} onClick={onDelete} disabled={busy}><Trash2 size={16} /> Hapus</button>}<button className={styles.primaryAction} onClick={onSave} disabled={busy}>{busy ? <LoaderCircle className={styles.spin} size={17} /> : <Save size={17} />} Simpan</button></div></div>{children}</section>;
+}
+function FileUploadField({
+  label,
+  accept,
+  file,
+  buttonLabel,
+  helper,
+  currentUrl,
+  previewAlt,
+  previewClassName,
+  onChange,
+}: {
+  label: string;
+  accept: string;
+  file: File | null;
+  buttonLabel: string;
+  helper: string;
+  currentUrl?: string;
+  previewAlt: string;
+  previewClassName: string;
+  onChange: (file: File | null) => void;
+}) {
+  const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const chooseFile = () => {
+    if (!inputRef.current) return;
+    inputRef.current.value = "";
+    inputRef.current.click();
+  };
+  const fileSize = file
+    ? `${file.name} · ${(file.size / 1024 / 1024).toLocaleString("id-ID", { maximumFractionDigits: 2 })} MB`
+    : helper;
+
+  return (
+    <div className={`${styles.fullField} ${styles.uploadField}`}>
+      <span>{label}</span>
+      <input
+        ref={inputRef}
+        id={inputId}
+        className={styles.fileInput}
+        type="file"
+        accept={accept}
+        onChange={(event) => onChange(event.target.files?.[0] || null)}
+      />
+      <button type="button" className={styles.filePicker} aria-controls={inputId} onClick={chooseFile}>
+        <span className={styles.filePickerIcon}><Upload size={19} /></span>
+        <span className={styles.filePickerCopy}>
+          <strong>{file ? "File siap diunggah" : buttonLabel}</strong>
+          <small>{fileSize}</small>
+        </span>
+        <span className={styles.filePickerAction}>{file ? "Ganti file" : "Pilih file"}</span>
+      </button>
+      {currentUrl && !file && <img className={previewClassName} src={currentUrl} alt={previewAlt} />}
+    </div>
+  );
 }
 function Field({ label, value, onChange, placeholder, type = "text" }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; type?: string }) {
   return <label><span>{label}</span><input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></label>;

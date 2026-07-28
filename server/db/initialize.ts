@@ -861,20 +861,39 @@ async function ensureCmsLandingFeatures(client: DatabaseClient) {
     [`cms-faq-${index + 1}`, faq[0], faq[1], faq[2], faq[3], index + 1, timestamp, timestamp],
   )));
 
-  const partners: Array<[string, string, string, string, number]> = [
-    ["cms-partner-alus", "PT Adi Solusindo Teknologi (ALUS)", "partner", "Partner Teknologi", 1],
-    ["cms-client-hospitality", "Hospitality & Villa", "client", "Sektor Klien", 2],
-    ["cms-client-workspace", "Office & Workspace", "client", "Sektor Klien", 3],
-    ["cms-client-property", "Property & Residential", "client", "Sektor Klien", 4],
-    ["cms-client-retail", "Retail & Commercial", "client", "Sektor Klien", 5],
-    ["cms-client-education", "Education & Public Space", "client", "Sektor Klien", 6],
+  const partners: Array<[string, string, string, string, string, number]> = [
+    ["cms-partner-iconplus", "ICON+", "partner", "Partner Infrastruktur", "/partners/iconplus.jpeg", 1],
+    ["cms-partner-alus", "AlusNet", "partner", "Partner Teknologi", "/partners/alusnet.jpeg", 2],
+    ["cms-partner-fiberstar", "FiberStar", "partner", "Partner Fiber Optik", "/partners/fiberstar.jpeg", 3],
+    ["cms-client-workspace", "Akata Konstruksi", "client", "Konstruksi & Properti", "/partners/akata-konstruksi.png", 4],
+    ["cms-client-property", "Arbit", "client", "Bisnis Lokal", "/partners/arbit.png", 5],
+    ["cms-client-education", "Quenzo", "client", "Retail & Commercial", "/partners/quenzo.png", 6],
+    ["cms-client-retail", "Paborito Coffee", "client", "Food & Beverage", "/partners/paborito-coffee.jpeg", 7],
+    ["cms-client-hospitality", "Rossa Garden", "client", "Hospitality", "/partners/rossa-garden.jpeg", 8],
   ];
-  for (const [id, name, type, category, sortOrder] of partners) {
+  for (const [id, name, type, category, logoUrl, sortOrder] of partners) {
     statements.push(statement(
       `INSERT INTO cms_partners
         (id,name,organization_type,category,website_url,logo_url,sort_order,is_visible,created_at,updated_at)
        VALUES (?,?,?,?,?,?,?,1,?,?) ON CONFLICT DO NOTHING`,
-      [id, name, type, category, "", "", sortOrder, timestamp, timestamp],
+      [id, name, type, category, "", logoUrl, sortOrder, timestamp, timestamp],
+    ));
+  }
+
+  const legacyPartnerReplacements: Array<[string, string, string, string, string, string, number]> = [
+    ["cms-partner-alus", "PT Adi Solusindo Teknologi (ALUS)", "AlusNet", "partner", "Partner Teknologi", "/partners/alusnet.jpeg", 2],
+    ["cms-client-workspace", "Office & Workspace", "Akata Konstruksi", "client", "Konstruksi & Properti", "/partners/akata-konstruksi.png", 4],
+    ["cms-client-property", "Property & Residential", "Arbit", "client", "Bisnis Lokal", "/partners/arbit.png", 5],
+    ["cms-client-education", "Education & Public Space", "Quenzo", "client", "Retail & Commercial", "/partners/quenzo.png", 6],
+    ["cms-client-retail", "Retail & Commercial", "Paborito Coffee", "client", "Food & Beverage", "/partners/paborito-coffee.jpeg", 7],
+    ["cms-client-hospitality", "Hospitality & Villa", "Rossa Garden", "client", "Hospitality", "/partners/rossa-garden.jpeg", 8],
+  ];
+  for (const [id, oldName, name, type, category, logoUrl, sortOrder] of legacyPartnerReplacements) {
+    statements.push(statement(
+      `UPDATE cms_partners
+       SET name=?,organization_type=?,category=?,logo_url=?,sort_order=?,updated_at=?
+       WHERE id=? AND name=? AND logo_storage_url IS NULL AND logo_url=''`,
+      [name, type, category, logoUrl, sortOrder, timestamp, id, oldName],
     ));
   }
 

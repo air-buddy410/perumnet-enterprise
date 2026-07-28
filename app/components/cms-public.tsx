@@ -242,7 +242,8 @@ function PartnersSection({ content, language }: { content: CmsContent; language:
         {content.partners.map((partner) => {
           const initials = partner.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 3).toUpperCase();
           const category = language === "en" && partner.category === "Sektor Klien" ? "Client sector" : partner.category;
-          const body = <><span className={styles.partnerLogo}>{partner.logoUrl ? <img src={partner.logoUrl} alt="" /> : initials}</span><span><strong>{partner.name}</strong><small>{partner.organizationType === "partner" ? (language === "id" ? "Partner teknologi" : "Technology partner") : category}</small></span></>;
+          const darkLogo = partner.logoUrl.toLowerCase().includes("quenzo");
+          const body = <><span className={`${styles.partnerLogo} ${darkLogo ? styles.partnerLogoDark : ""}`}>{partner.logoUrl ? <img src={partner.logoUrl} alt="" /> : initials}</span><span><strong>{partner.name}</strong><small>{partner.organizationType === "partner" ? (language === "id" ? "Partner teknologi" : "Technology partner") : category}</small></span></>;
           return partner.websiteUrl
             ? <a key={partner.id} href={partner.websiteUrl} target="_blank" rel="noreferrer">{body}</a>
             : <div key={partner.id}>{body}</div>;
