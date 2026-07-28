@@ -44,7 +44,8 @@ interface ProjectAccessUser {
   role: "Project Manager" | "Engineer";
   status: "Aktif" | "Nonaktif";
   assigned: boolean;
-  required: boolean;
+  isManager: boolean;
+  isCreator: boolean;
 }
 
 interface ProjectTask {
@@ -225,7 +226,7 @@ export function ProjectView({
   async function saveProjectAccess() {
     try {
       const userIds = accessUsers
-        .filter((candidate) => candidate.status === "Aktif" && (candidate.assigned || candidate.required))
+        .filter((candidate) => candidate.status === "Aktif" && candidate.assigned)
         .map((candidate) => candidate.id);
       await api(`/api/projects/${projectId}/access`, {
         method: "PUT",
@@ -288,18 +289,18 @@ export function ProjectView({
               <h2>{id ? "Project Manager & Engineer" : "Project Managers & Engineers"}</h2>
               <p className="panel-description">
                 {id
-                  ? "Pilih Project Manager dan Engineer yang dapat mengakses proyek ini. Proyek yang dibuat oleh Project Manager otomatis tersedia bagi pengguna dengan izin modul Proyek."
-                  : "Select the Project Managers and Engineers who can access this project. Projects created by a Project Manager are automatically available to users with Project module access."}
+                  ? "Pilih secara eksplisit Project Manager dan Engineer yang boleh melihat proyek ini. Admin dapat mencabut akses pembuat maupun manager; Admin dan Finance tetap memiliki cakupan global."
+                  : "Explicitly select the Project Managers and Engineers who may view this project. An Admin may revoke creator or manager access; Admin and Finance retain global scope."}
               </p>
             </div>
             <button className="button primary small" type="button" onClick={saveProjectAccess}><Check size={15} /> {id ? "Simpan akses" : "Save access"}</button>
           </div>
           <div className="project-access-grid">
             {accessUsers.map((candidate) => (
-              <label className={`project-access-user ${candidate.assigned || candidate.required ? "selected" : ""}`} key={candidate.id}>
-                <input type="checkbox" checked={candidate.assigned || candidate.required} disabled={candidate.required || candidate.status !== "Aktif"} onChange={(event) => setAccessUsers((current) => current.map((item) => item.id === candidate.id ? { ...item, assigned: event.target.checked } : item))} />
-                <span className="task-check">{(candidate.assigned || candidate.required) && <Check size={14} />}</span>
-                <span><strong>{candidate.name}</strong><small>{candidate.role} · {localizedLabel(language, candidate.status)}{candidate.required ? (id ? " · Manager proyek" : " · Project manager") : ""}</small></span>
+              <label className={`project-access-user ${candidate.assigned ? "selected" : ""}`} key={candidate.id}>
+                <input type="checkbox" checked={candidate.assigned} disabled={candidate.status !== "Aktif"} onChange={(event) => setAccessUsers((current) => current.map((item) => item.id === candidate.id ? { ...item, assigned: event.target.checked } : item))} />
+                <span className="task-check">{candidate.assigned && <Check size={14} />}</span>
+                <span><strong>{candidate.name}</strong><small>{candidate.role} · {localizedLabel(language, candidate.status)}{candidate.isCreator ? (id ? " · Pembuat proyek" : " · Project creator") : ""}{candidate.isManager ? (id ? " · Manager tercatat" : " · Assigned manager") : ""}</small></span>
               </label>
             ))}
           </div>

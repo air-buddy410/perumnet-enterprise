@@ -49,6 +49,9 @@ import {
   renderValidationPdf,
 } from "./pdf";
 import { handleBankAccounts } from "./bank-router";
+import { handleProfitShares } from "./profit-share-router";
+import { handleStandaloneBoqs } from "./standalone-boq-router";
+import { renderSopPdf } from "./sop-pdf";
 
 const emailSchema = z.string().trim().email().max(254).transform((value) => value.toLowerCase());
 const idSchema = z.string().trim().min(1).max(100);
@@ -59,7 +62,7 @@ const positiveMoney = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const loginSchema = z.object({
   email: emailSchema,
   password: z.string().min(8).max(128),
-  remember: z.boolean().default(true),
+  remember: z.boolean().default(false),
 });
 
 const projectSchema = z.object({
@@ -140,6 +143,9 @@ const transactionSchema = z.object({
       "Pajak",
       "Gaji",
       "Modal",
+      "Bonus Pegawai",
+      "Fee Pemberi Kerja",
+      "Bagi Hasil",
       "Lainnya",
     ])
     .default("Lainnya"),
@@ -312,6 +318,9 @@ function localizedTransactionCategory(
     Pajak: "Tax",
     Gaji: "Payroll",
     Modal: "Capital",
+    "Bonus Pegawai": "Employee Bonus",
+    "Fee Pemberi Kerja": "Referral Fee",
+    "Bagi Hasil": "Profit Share",
     Lainnya: "Other",
   };
   return categories[category] ?? category;
@@ -345,6 +354,7 @@ const resourceModules: Record<string, AccessModule> = {
   transactions: "finance",
   finance: "finance",
   "bank-accounts": "finance",
+  "profit-shares": "finance",
   users: "users",
   "audit-logs": "users",
   notifications: "settings",
@@ -383,20 +393,12 @@ function hasGlobalProjectScope(user: AuthUser) {
 function projectScopeCondition(user: AuthUser, projectAlias = "p") {
   if (hasGlobalProjectScope(user)) return { sql: "", args: [] as unknown[] };
   return {
-    sql: `(
-      ${projectAlias}.created_by = ?
-      OR ${projectAlias}.manager_id = ?
-      OR EXISTS (
-        SELECT 1 FROM users project_creator
-        WHERE project_creator.id = ${projectAlias}.created_by
-          AND project_creator.role = 'Project Manager'
-      )
-      OR EXISTS (
-        SELECT 1 FROM project_members access_pm
-        WHERE access_pm.project_id = ${projectAlias}.id AND access_pm.user_id = ?
-      )
+    sql: `EXISTS (
+      SELECT 1 FROM project_members access_pm
+      WHERE access_pm.project_id = ${projectAlias}.id
+        AND access_pm.user_id = ?
     )`,
-    args: [user.id, user.id, user.id] as unknown[],
+    args: [user.id] as unknown[],
   };
 }
 
@@ -935,7 +937,7 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
   }
 
   if (request.method === "POST" && !projectId) {
-    if (!mutationRoles("projects").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Hanya Admin atau Project Manager yang dapat membuat proyek.");
+    if (!mutationRoles("projects").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Peran Anda tidak dapat membuat proyek.");
     const input = projectSchema.parse(await jsonBody(request));
     assertDateOrder(input.startDate, input.targetDate);
     const id = randomUUID();
@@ -990,7 +992,8 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         sql: `
           SELECT u.id,u.name,u.email,u.role,u.status,
             CASE WHEN pm.user_id IS NULL THEN 0 ELSE 1 END AS assigned,
-            CASE WHEN p.manager_id=u.id THEN 1 ELSE 0 END AS required
+            CASE WHEN p.manager_id=u.id THEN 1 ELSE 0 END AS is_manager,
+            CASE WHEN p.created_by=u.id THEN 1 ELSE 0 END AS is_creator
           FROM users u
           CROSS JOIN projects p
           LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=u.id
@@ -1006,23 +1009,19 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         role: String(row.role),
         status: String(row.status),
         assigned: Boolean(asNumber(row.assigned)),
-        required: Boolean(asNumber(row.required)),
+        isManager: Boolean(asNumber(row.is_manager)),
+        isCreator: Boolean(asNumber(row.is_creator)),
       })));
     }
 
     if (request.method === "PUT") {
       const input = projectAccessSchema.parse(await jsonBody(request));
       const project = await ensureExists(
-        "SELECT p.name,p.manager_id,u.role AS manager_role FROM projects p LEFT JOIN users u ON u.id=p.manager_id WHERE p.id=?",
+        "SELECT p.name FROM projects p WHERE p.id=?",
         [projectId],
         "Proyek tidak ditemukan.",
       );
-      const uniqueIds = Array.from(new Set([
-        ...input.userIds,
-        ...(project.manager_id && ["Project Manager", "Engineer"].includes(String(project.manager_role))
-          ? [String(project.manager_id)]
-          : []),
-      ]));
+      const uniqueIds = Array.from(new Set(input.userIds));
       if (uniqueIds.length) {
         const placeholders = uniqueIds.map(() => "?").join(",");
         const eligible = await client.execute({
@@ -1992,7 +1991,7 @@ async function handleVendors(request: Request, path: string[], user: AuthUser) {
   }
 
   if (request.method === "POST" && !vendorId) {
-    if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menambah vendor.");
+    if (!["Admin", "Finance"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Hanya Admin dan Finance yang dapat menambah vendor.");
     const input = vendorSchema.parse(await jsonBody(request));
     const id = randomUUID();
     const timestamp = now();
@@ -2010,7 +2009,7 @@ async function handleVendors(request: Request, path: string[], user: AuthUser) {
   }
 
   if (vendorId && request.method === "PATCH") {
-    if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah vendor.");
+    if (!["Admin", "Finance"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Hanya Admin dan Finance yang dapat mengubah vendor.");
     const input = vendorSchema.partial().parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM vendors WHERE id=?", [vendorId], "Vendor tidak ditemukan.");
     await client.execute({
@@ -2033,7 +2032,7 @@ async function handleVendors(request: Request, path: string[], user: AuthUser) {
   }
 
   if (vendorId && request.method === "DELETE") {
-    if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menghapus vendor.");
+    if (!["Admin", "Finance"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Hanya Admin dan Finance yang dapat menghapus vendor.");
     const usage = await client.execute({ sql: "SELECT id FROM spks WHERE vendor_id=? LIMIT 1", args: [vendorId] });
     if (usage.rows.length) throw new ApiError(409, "VENDOR_IN_USE", "Vendor masih digunakan oleh SPK dan tidak dapat dihapus.");
     await client.execute({ sql: "DELETE FROM vendors WHERE id=?", args: [vendorId] });
@@ -2731,6 +2730,13 @@ function mapTransaction(
   row: Record<string, unknown>,
   language: AuthUser["preferredLanguage"] = "id",
 ) {
+  const source = String(row.source);
+  const isSystemTransaction =
+    source.startsWith("Bank:") ||
+    source === "Profit Share" ||
+    source === "Profit Share Reversal" ||
+    (Boolean(row.reference_id) &&
+      (source === "Invoice" || source === "SPK"));
   return {
     id: String(row.id),
     date: localizedApiDate(row.date, language),
@@ -2740,8 +2746,10 @@ function mapTransaction(
     project: row.project_name ? String(row.project_name) : "Umum",
     description: localizedTransactionDescription(row.description, language),
     amount: asNumber(row.amount),
-    source: String(row.source),
+    source,
+    categoryKey: String(row.category ?? "Lainnya"),
     category: localizedTransactionCategory(row.category, language),
+    editable: !isSystemTransaction,
   };
 }
 
@@ -2787,6 +2795,83 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     const transactions = result.rows.map((row) =>
       mapTransaction(row as Record<string, unknown>, user.preferredLanguage),
     );
+    const bankAccounts = ["Admin", "Finance"].includes(user.role)
+      ? (
+          await client.execute(`
+            SELECT bank_name,account_name,account_number_masked,
+              opening_balance,current_balance,balance_updated_at,sync_mode
+            FROM bank_accounts
+            WHERE status='Aktif'
+            ORDER BY bank_name,account_name
+          `)
+        ).rows.map((row) => ({
+          bankName: String(row.bank_name),
+          accountName: String(row.account_name),
+          accountNumberMasked: String(row.account_number_masked),
+          openingBalance: asNumber(row.opening_balance),
+          currentBalance: asNumber(row.current_balance),
+          balanceUpdatedAt: row.balance_updated_at
+            ? String(row.balance_updated_at)
+            : undefined,
+          syncMode: String(row.sync_mode),
+        }))
+      : [];
+    const profitScope = projectScopeCondition(user, "p");
+    const profitConditions: string[] = [];
+    const profitArgs: unknown[] = [];
+    if (projectId) {
+      profitConditions.push("p.id=?");
+      profitArgs.push(projectId);
+    }
+    if (profitScope.sql) {
+      profitConditions.push(profitScope.sql);
+      profitArgs.push(...profitScope.args);
+    }
+    const profitResult = await client.execute({
+      sql: `
+        SELECT p.id,p.code,p.name,
+          COALESCE((
+            SELECT SUM(CASE
+              WHEN t.type='Pemasukan' THEN t.amount
+              WHEN t.type='Pengeluaran' AND t.source NOT IN ('Profit Share','Profit Share Reversal') THEN -t.amount
+              ELSE 0 END)
+            FROM transactions t
+            WHERE t.project_id=p.id
+          ),0) AS net_profit,
+          COALESCE((
+            SELECT SUM(s.amount)
+            FROM project_profit_shares s
+            WHERE s.project_id=p.id AND s.status<>'Void'
+          ),0) AS allocated_amount,
+          COALESCE((
+            SELECT SUM(s.amount)
+            FROM project_profit_shares s
+            WHERE s.project_id=p.id AND s.status='Paid'
+          ),0) AS paid_amount
+        FROM projects p
+        ${profitConditions.length ? `WHERE ${profitConditions.join(" AND ")}` : ""}
+        ORDER BY p.code
+      `,
+      args: profitArgs as never[],
+    });
+    const profitRows = profitResult.rows
+      .map((row) => {
+        const netProfit = asNumber(row.net_profit);
+        const allocatedAmount = asNumber(row.allocated_amount);
+        return {
+          project: `${String(row.code)} - ${String(row.name)}`,
+          netProfit,
+          allocatedAmount,
+          paidAmount: asNumber(row.paid_amount),
+          retainedProfit: netProfit - allocatedAmount,
+        };
+      })
+      .filter(
+        (row) =>
+          row.netProfit !== 0 ||
+          row.allocatedAmount !== 0 ||
+          row.paidAmount !== 0,
+      );
     if (transactionId === "report.csv") {
       const en = user.preferredLanguage === "en";
       const csvCell = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
@@ -2807,6 +2892,46 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           transaction.amount,
         ].map(csvCell).join(",")),
       ];
+      if (bankAccounts.length) {
+        lines.push(
+          "",
+          [en ? "COMPANY BANK POSITION" : "POSISI REKENING PERUSAHAAN"].map(csvCell).join(","),
+          [
+            en ? "Bank" : "Bank",
+            en ? "Account" : "Rekening",
+            en ? "Opening Balance (IDR)" : "Saldo Awal (IDR)",
+            en ? "Current Balance (IDR)" : "Saldo Terkini (IDR)",
+            en ? "Method" : "Metode",
+          ].map(csvCell).join(","),
+          ...bankAccounts.map((account) => [
+            account.bankName,
+            `${account.accountName} ${account.accountNumberMasked}`,
+            account.openingBalance,
+            account.currentBalance,
+            account.syncMode,
+          ].map(csvCell).join(",")),
+        );
+      }
+      if (profitRows.length) {
+        lines.push(
+          "",
+          [en ? "PROJECT PROFIT DISTRIBUTION - LIFETIME" : "DISTRIBUSI LABA PROYEK - SEPANJANG PROYEK"].map(csvCell).join(","),
+          [
+            en ? "Project" : "Proyek",
+            en ? "Base Net Profit (IDR)" : "Laba Bersih Dasar (IDR)",
+            en ? "Allocated (IDR)" : "Dialokasikan (IDR)",
+            en ? "Paid (IDR)" : "Dibayar (IDR)",
+            en ? "Retained Profit (IDR)" : "Laba Ditahan (IDR)",
+          ].map(csvCell).join(","),
+          ...profitRows.map((row) => [
+            row.project,
+            row.netProfit,
+            row.allocatedAmount,
+            row.paidAmount,
+            row.retainedProfit,
+          ].map(csvCell).join(",")),
+        );
+      }
       const reportDate = new Intl.DateTimeFormat("en-CA", {
         timeZone: "Asia/Makassar",
         year: "numeric",
@@ -2833,27 +2958,6 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         );
         scopeLabel = `${String(project.code)} - ${String(project.name)}`;
       }
-      const bankAccounts = ["Admin", "Finance"].includes(user.role)
-        ? (
-            await client.execute(`
-              SELECT bank_name,account_name,account_number_masked,
-                opening_balance,current_balance,balance_updated_at,sync_mode
-              FROM bank_accounts
-              WHERE status='Aktif'
-              ORDER BY bank_name,account_name
-            `)
-          ).rows.map((row) => ({
-            bankName: String(row.bank_name),
-            accountName: String(row.account_name),
-            accountNumberMasked: String(row.account_number_masked),
-            openingBalance: asNumber(row.opening_balance),
-            currentBalance: asNumber(row.current_balance),
-            balanceUpdatedAt: row.balance_updated_at
-              ? String(row.balance_updated_at)
-              : undefined,
-            syncMode: String(row.sync_mode),
-          }))
-        : [];
       return renderFinancialReportPdf(
         transactions.map((transaction) => ({
           date: transaction.date,
@@ -2868,6 +2972,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         scopeLabel,
         user.preferredLanguage,
         bankAccounts,
+        profitRows,
       );
     }
     return ok(transactions);
@@ -2877,7 +2982,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     const input = transactionSchema.parse(await jsonBody(request));
     if (
       ["invoice", "spk"].includes(input.source.toLowerCase()) ||
-      input.source.toLowerCase().startsWith("bank:")
+      input.source.toLowerCase().startsWith("bank:") ||
+      input.source.toLowerCase().startsWith("profit share") ||
+      input.category === "Bagi Hasil"
     ) {
       throw new ApiError(
         422,
@@ -2914,7 +3021,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     if (
       input.source &&
       (["invoice", "spk"].includes(input.source.toLowerCase()) ||
-        input.source.toLowerCase().startsWith("bank:"))
+        input.source.toLowerCase().startsWith("bank:") ||
+        input.source.toLowerCase().startsWith("profit share")) ||
+      input.category === "Bagi Hasil"
     ) {
       throw new ApiError(
         422,
@@ -2925,7 +3034,8 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     if (
       (current.reference_id &&
         (current.source === "Invoice" || current.source === "SPK")) ||
-      String(current.source).startsWith("Bank:")
+      String(current.source).startsWith("Bank:") ||
+      String(current.source).startsWith("Profit Share")
     ) {
       throw new ApiError(
         409,
@@ -2962,7 +3072,8 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     if (
       (current.reference_id &&
         (current.source === "Invoice" || current.source === "SPK")) ||
-      String(current.source).startsWith("Bank:")
+      String(current.source).startsWith("Bank:") ||
+      String(current.source).startsWith("Profit Share")
     ) {
       throw new ApiError(
         409,
@@ -3600,6 +3711,9 @@ export async function dispatchApi(request: Request, path: string[]) {
   }
 
   if (resource === "projects") return handleProjects(request, path, user);
+  if (resource === "boq" && path[1] === "standalone") {
+    return handleStandaloneBoqs(request, path, user);
+  }
   if (resource === "boq") return handleBoq(request, path, user);
   if (resource === "quotations") return handleQuotations(request, user);
   if (resource === "invoices") return handleInvoices(request, path, user);
@@ -3610,6 +3724,7 @@ export async function dispatchApi(request: Request, path: string[]) {
   if (resource === "transactions") return handleTransactions(request, path, user);
   if (resource === "finance" && path[1] === "summary") return handleFinance(request, user);
   if (resource === "bank-accounts") return handleBankAccounts(request, path, user);
+  if (resource === "profit-shares") return handleProfitShares(request, path, user);
   if (resource === "users") return handleUsers(request, path, user);
   if (resource === "profile") return handleProfile(request, path, user);
   if (resource === "settings") return handleSettings(request, user);
@@ -3617,6 +3732,9 @@ export async function dispatchApi(request: Request, path: string[]) {
   if (resource === "documents") return handleDocuments(request, path, user);
   if (resource === "audit-logs") return handleAudit(request, user);
   if (resource === "search") return handleSearch(request, user);
+  if (resource === "help" && path[1] === "sop.pdf") {
+    return renderSopPdf(request, user);
+  }
 
   throw new ApiError(404, "NOT_FOUND", "Endpoint API tidak ditemukan.");
 }

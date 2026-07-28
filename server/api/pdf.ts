@@ -58,6 +58,14 @@ export type FinancialReportBankAccount = {
   syncMode: string;
 };
 
+export type FinancialReportProfitRow = {
+  project: string;
+  netProfit: number;
+  allocatedAmount: number;
+  paidAmount: number;
+  retainedProfit: number;
+};
+
 const PAGE_WIDTH = 210;
 const MARGIN = 14;
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
@@ -1205,6 +1213,7 @@ export async function renderFinancialReportPdf(
   scopeLabel: string,
   language: PdfLanguage = "id",
   bankAccounts: FinancialReportBankAccount[] = [],
+  profitRows: FinancialReportProfitRow[] = [],
 ) {
   const sortedDates = entries
     .map((entry) => entry.dateIso)
@@ -1270,6 +1279,35 @@ export async function renderFinancialReportPdf(
             ? `\n${displayDate(account.balanceUpdatedAt, language)}`
             : ""
         }`,
+      ]),
+    );
+  }
+
+  if (profitRows.length) {
+    y = drawSectionTitle(
+      context,
+      y,
+      tr(language, "Distribusi Laba Proyek", "Project Profit Distribution"),
+      tr(
+        language,
+        "Nilai sepanjang umur proyek; laba dasar tidak termasuk pembayaran bagi hasil",
+        "Lifetime project values; base profit excludes profit-share payments",
+      ),
+    );
+    y = drawTable(
+      context,
+      y,
+      [
+        { title: tr(language, "Proyek", "Project"), width: 68 },
+        { title: tr(language, "Laba Dasar", "Base Profit"), width: 38, align: "right" },
+        { title: tr(language, "Dialokasikan", "Allocated"), width: 38, align: "right" },
+        { title: tr(language, "Dibayar", "Paid"), width: 38, align: "right" },
+      ],
+      profitRows.map((row) => [
+        row.project,
+        rupiah(row.netProfit, language),
+        `${rupiah(row.allocatedAmount, language)}\n${tr(language, "Sisa", "Retained")}: ${rupiah(row.retainedProfit, language)}`,
+        rupiah(row.paidAmount, language),
       ]),
     );
   }

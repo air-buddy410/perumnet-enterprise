@@ -14,7 +14,7 @@ import {
 } from "../bank-statement";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { asNumber } from "../format";
-import { ApiError, created, jsonBody, ok } from "./errors";
+import { ApiError, created, jsonBody, noContent, ok } from "./errors";
 
 const accountSchema = z.object({
   bankName: z.string().trim().min(2).max(80),
@@ -739,6 +739,88 @@ export async function handleBankAccounts(
           ),
         })),
     );
+  }
+
+  if (
+    accountId &&
+    request.method === "DELETE" &&
+    action === "entries" &&
+    entryId &&
+    !entryAction
+  ) {
+    if (user.role !== "Admin") {
+      throw new ApiError(
+        403,
+        "FORBIDDEN",
+        "Hanya Admin yang dapat menghapus mutasi rekening.",
+      );
+    }
+    await findAccount(client, accountId);
+    const result = await client.execute({
+      sql: `
+        SELECT e.*,t.source AS transaction_source,
+          t.reference_id AS transaction_reference
+        FROM bank_statement_entries e
+        LEFT JOIN transactions t ON t.id=e.transaction_id
+        WHERE e.id=? AND e.bank_account_id=?
+        LIMIT 1
+      `,
+      args: [entryId, accountId],
+    });
+    const entry = result.rows[0];
+    if (!entry) {
+      throw new ApiError(404, "NOT_FOUND", "Mutasi bank tidak ditemukan.");
+    }
+    const generatedTransaction =
+      entry.transaction_id &&
+      String(entry.transaction_source).startsWith("Bank:") &&
+      String(entry.transaction_reference) === entryId
+        ? String(entry.transaction_id)
+        : undefined;
+    await client.batch(
+      [
+        {
+          sql: "DELETE FROM bank_statement_entries WHERE id=? AND bank_account_id=?",
+          args: [entryId, accountId],
+        },
+        ...(generatedTransaction
+          ? [
+              {
+                sql: "DELETE FROM transactions WHERE id=?",
+                args: [generatedTransaction],
+              },
+            ]
+          : []),
+      ],
+      "write",
+    );
+    const latestBalance = await latestStoredRunningBalance(client, accountId);
+    await refreshCalculatedBalance(
+      client,
+      accountId,
+      latestBalance?.balance,
+      latestBalance
+        ? `${latestBalance.date}T00:00:00.000Z`
+        : new Date().toISOString(),
+    );
+    await writeAuditLog(
+      client,
+      request,
+      user,
+      "delete",
+      "bank_statement_entry",
+      entryId,
+      {
+        accountId,
+        date: entry.date,
+        description: entry.description,
+        type: entry.type,
+        amount: asNumber(entry.amount),
+        reconciliationStatus: entry.reconciliation_status,
+        deletedGeneratedTransactionId: generatedTransaction,
+      },
+    );
+    return noContent();
   }
 
   if (

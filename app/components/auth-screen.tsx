@@ -15,9 +15,18 @@ type AuthMode = "login" | "forgot" | "reset";
 export function AuthScreen({ language, onLogin }: AuthScreenProps) {
   const id = language === "id";
   const demoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+  const localDevelopment =
+    process.env.NODE_ENV === "development" && !demoMode;
   const [mode, setMode] = useState<AuthMode>("login");
-  const [email, setEmail] = useState(demoMode ? "admin@perumnet.id" : "");
-  const [password, setPassword] = useState(demoMode ? "perumnet123" : "");
+  const [email, setEmail] = useState(
+    demoMode
+      ? "demo@perumnet.id"
+      : localDevelopment
+        ? "admin@perumnet.id"
+        : "",
+  );
+  const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -44,7 +53,7 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
     try {
       const result = await api<{ user: SessionUser }>("/api/auth/login", {
         method: "POST",
-        body: JSON.stringify({ email, password, remember: true }),
+        body: JSON.stringify({ email, password, remember }),
       });
       onLogin(result.user);
     } catch (requestError) {
@@ -176,16 +185,21 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
                 <h2>{id ? "Selamat datang kembali." : "Welcome back."}</h2>
                 <p>{id ? "Masuk untuk melanjutkan pekerjaan dan memantau proyek Anda." : "Sign in to continue your work and monitor projects."}</p>
               </div>
-              <form className="auth-form" onSubmit={submitLogin}>
+              <form
+                className="auth-form"
+                autoComplete={localDevelopment ? "off" : "on"}
+                onSubmit={submitLogin}
+              >
                 <label className="field">
                   <span>Email</span>
                   <span className="input-with-icon">
                     <Mail size={17} />
                     <input
                       type="email"
+                      name="perumnet-login-email"
                       value={email}
                       onChange={(event) => setEmail(event.target.value)}
-                      autoComplete="email"
+                      autoComplete={localDevelopment ? "off" : "username"}
                       aria-invalid={Boolean(error)}
                     />
                   </span>
@@ -196,9 +210,12 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
                     <KeyRound size={17} />
                     <input
                       type={showPassword ? "text" : "password"}
+                      name="perumnet-login-password"
                       value={password}
                       onChange={(event) => setPassword(event.target.value)}
-                      autoComplete="current-password"
+                      autoComplete={
+                        localDevelopment ? "off" : "current-password"
+                      }
                       aria-invalid={Boolean(error)}
                     />
                     <button
@@ -213,8 +230,16 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
                 </label>
                 <div className="auth-options">
                   <label className="checkbox-label">
-                    <input type="checkbox" checked readOnly />
-                    <span>{id ? "Session aktif 8 jam" : "Eight-hour session"}</span>
+                    <input
+                      type="checkbox"
+                      checked={remember}
+                      onChange={(event) => setRemember(event.target.checked)}
+                    />
+                    <span>
+                      {id
+                        ? "Ingat saya selama 30 hari"
+                        : "Remember me for 30 days"}
+                    </span>
                   </label>
                   <button className="text-button" type="button" onClick={() => setMode("forgot")}>
                     {id ? "Lupa kata sandi?" : "Forgot password?"}
@@ -229,8 +254,8 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
                 <div className="demo-access">
                   <span className="demo-access-icon"><ShieldCheck size={18} /></span>
                   <div>
-                    <strong>{id ? "Akun demo sudah terisi" : "Demo account is prefilled"}</strong>
-                    <small>{id ? "Klik tombol masuk untuk menjelajahi seluruh modul frontend." : "Click sign in to explore all frontend modules."}</small>
+                    <strong>{id ? "Workspace demo terisolasi" : "Isolated demo workspace"}</strong>
+                    <small>{id ? "Gunakan kredensial demo yang diberikan Admin. Data pada mode ini terpisah dari database live." : "Use the demo credentials supplied by an Admin. This mode uses a database separate from live data."}</small>
                   </div>
                 </div>
               )}

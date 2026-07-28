@@ -220,7 +220,7 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError("");
     try {
-      const { user } = await request<{ user: User }>("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password, remember: true }) });
+      const { user } = await request<{ user: User }>("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password, remember: false }) });
       if (user.role !== "Admin") throw new Error("Akun ini tidak memiliki akses Administrator.");
       await onSuccess();
     } catch (error) { setError(error instanceof Error ? error.message : "Email atau kata sandi salah."); }

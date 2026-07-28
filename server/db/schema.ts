@@ -234,6 +234,48 @@ export const boqTemplateItems = sqliteTable(
   (table) => [index("boq_template_items_template_idx").on(table.templateId)],
 );
 
+export const standaloneBoqs = sqliteTable(
+  "standalone_boqs",
+  {
+    id: text("id").primaryKey(),
+    title: text("title").notNull(),
+    client: text("client"),
+    status: text("status").notNull().default("Draft"),
+    notes: text("notes"),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    ...timestamps,
+  },
+  (table) => [
+    index("standalone_boqs_created_by_idx").on(
+      table.createdBy,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const standaloneBoqItems = sqliteTable(
+  "standalone_boq_items",
+  {
+    id: text("id").primaryKey(),
+    standaloneBoqId: text("standalone_boq_id")
+      .notNull()
+      .references(() => standaloneBoqs.id, { onDelete: "cascade" }),
+    category: text("category").notNull(),
+    description: text("description").notNull(),
+    quantity: integer("quantity").notNull(),
+    unit: text("unit").notNull(),
+    costPrice: integer("cost_price").notNull().default(0),
+    sellingPrice: integer("selling_price").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps,
+  },
+  (table) => [
+    index("standalone_boq_items_boq_idx").on(table.standaloneBoqId),
+  ],
+);
+
 export const quotations = sqliteTable(
   "quotations",
   {
@@ -452,6 +494,47 @@ export const transactions = sqliteTable(
     uniqueIndex("transactions_source_reference_unique").on(
       table.source,
       table.referenceId,
+    ),
+  ],
+);
+
+export const projectProfitShares = sqliteTable(
+  "project_profit_shares",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    recipientUserId: text("recipient_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    recipientName: text("recipient_name").notNull(),
+    percentageBps: integer("percentage_bps").notNull(),
+    amount: integer("amount").notNull().default(0),
+    status: text("status").notNull().default("Draft"),
+    notes: text("notes"),
+    paidDate: text("paid_date"),
+    transactionId: text("transaction_id").references(() => transactions.id, {
+      onDelete: "set null",
+    }),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    approvedBy: text("approved_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    paidBy: text("paid_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    ...timestamps,
+  },
+  (table) => [
+    index("project_profit_shares_project_idx").on(
+      table.projectId,
+      table.status,
+    ),
+    uniqueIndex("project_profit_shares_transaction_unique").on(
+      table.transactionId,
     ),
   ],
 );

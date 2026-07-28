@@ -121,8 +121,43 @@ function postgresAdapter(pool: Pool): DatabaseClient {
 }
 
 async function createDatabaseState(): Promise<DatabaseState> {
-  const postgresUrl = process.env.DATABASE_URL;
-  const remoteUrl = process.env.TURSO_DATABASE_URL;
+  const demoMode = process.env.APP_MODE === "demo";
+  const postgresUrl = demoMode
+    ? process.env.DEMO_DATABASE_URL
+    : process.env.DATABASE_URL;
+  const remoteUrl = demoMode
+    ? process.env.DEMO_TURSO_DATABASE_URL
+    : process.env.TURSO_DATABASE_URL;
+  if (
+    demoMode &&
+    !postgresUrl &&
+    !remoteUrl &&
+    process.env.NODE_ENV === "production"
+  ) {
+    throw new Error(
+      "APP_MODE=demo wajib menggunakan DEMO_DATABASE_URL atau DEMO_TURSO_DATABASE_URL yang terpisah.",
+    );
+  }
+  if (
+    demoMode &&
+    postgresUrl &&
+    process.env.DATABASE_URL &&
+    postgresUrl === process.env.DATABASE_URL
+  ) {
+    throw new Error(
+      "DEMO_DATABASE_URL tidak boleh sama dengan DATABASE_URL production.",
+    );
+  }
+  if (
+    demoMode &&
+    remoteUrl &&
+    process.env.TURSO_DATABASE_URL &&
+    remoteUrl === process.env.TURSO_DATABASE_URL
+  ) {
+    throw new Error(
+      "DEMO_TURSO_DATABASE_URL tidak boleh sama dengan TURSO_DATABASE_URL production.",
+    );
+  }
   let client: DatabaseClient;
 
   if (postgresUrl) {
@@ -140,7 +175,9 @@ async function createDatabaseState(): Promise<DatabaseState> {
     client = libSqlAdapter(
       createClient({
         url: remoteUrl,
-        authToken: process.env.TURSO_AUTH_TOKEN,
+        authToken: demoMode
+          ? process.env.DEMO_TURSO_AUTH_TOKEN
+          : process.env.TURSO_AUTH_TOKEN,
       }),
     );
   } else {
@@ -148,7 +185,13 @@ async function createDatabaseState(): Promise<DatabaseState> {
     if (cloudflare?.DB) {
       client = d1Adapter(cloudflare.DB);
     } else if (process.env.NODE_ENV !== "production") {
-      client = libSqlAdapter(createClient({ url: "file:perumnet.local.db" }));
+      client = libSqlAdapter(
+        createClient({
+          url: demoMode
+            ? "file:perumnet.demo.local.db"
+            : "file:perumnet.local.db",
+        }),
+      );
     } else {
       throw new Error(
         "Database belum dikonfigurasi. Isi DATABASE_URL, hubungkan D1, atau isi TURSO_DATABASE_URL.",

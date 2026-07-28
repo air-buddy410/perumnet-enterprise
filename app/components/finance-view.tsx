@@ -11,10 +11,12 @@ import {
   Filter,
   Landmark,
   Plus,
+  Pencil,
   ReceiptText,
   Search,
   TrendingDown,
   TrendingUp,
+  Trash2,
   WalletCards,
   X,
 } from "lucide-react";
@@ -34,6 +36,7 @@ import {
 } from "../data";
 import { type AppLanguage, localizedDate, localizedLabel } from "../i18n";
 import { BankingPanel } from "./banking-panel";
+import { ProfitSharingPanel } from "./profit-sharing-panel";
 
 interface FinanceViewProps {
   language: AppLanguage;
@@ -43,6 +46,7 @@ interface FinanceViewProps {
   canManage: boolean;
   canUseBanking: boolean;
   canConfigureBanking: boolean;
+  canApproveProfitShares: boolean;
 }
 
 const transactionCategories = [
@@ -52,6 +56,8 @@ const transactionCategories = [
   "Pajak",
   "Gaji",
   "Modal",
+  "Bonus Pegawai",
+  "Fee Pemberi Kerja",
   "Lainnya",
 ] as const;
 
@@ -62,6 +68,9 @@ const categoryEnglish: Record<string, string> = {
   Pajak: "Tax",
   Gaji: "Payroll",
   Modal: "Capital",
+  "Bonus Pegawai": "Employee Bonus",
+  "Fee Pemberi Kerja": "Referral Fee",
+  "Bagi Hasil": "Profit Share",
   Lainnya: "Other",
 };
 
@@ -147,6 +156,7 @@ export function FinanceView({
   canManage,
   canUseBanking,
   canConfigureBanking,
+  canApproveProfitShares,
 }: FinanceViewProps) {
   const id = language === "id";
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -163,6 +173,7 @@ export function FinanceView({
   const [transactionCategory, setTransactionCategory] = useState("Penjualan");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState(0);
+  const [editingTransactionId, setEditingTransactionId] = useState("");
 
   const loadTransactions = useCallback(async () => {
     try {
@@ -314,6 +325,7 @@ export function FinanceView({
             transaction.description,
             transaction.source,
             transaction.category,
+            transaction.categoryKey,
           ]
             .join(" ")
             .toLowerCase()
@@ -322,8 +334,32 @@ export function FinanceView({
   }, [periodTransactions, query, typeFilter]);
 
   function openTransactionForm() {
+    setEditingTransactionId("");
     setTransactionProjectId(projectId || projects[0]?.id || "");
     setTransactionDate(serverToday);
+    setTransactionType("Pemasukan");
+    setTransactionCategory("Penjualan");
+    setDescription("");
+    setAmount(0);
+    setShowTransactionForm(true);
+  }
+
+  function editTransaction(transaction: Transaction) {
+    if (!transaction.editable) return;
+    setEditingTransactionId(transaction.id);
+    setTransactionProjectId(transaction.projectId ?? "");
+    setTransactionDate(transaction.dateIso ?? serverToday);
+    setTransactionType(transaction.type);
+    setTransactionCategory(
+      transactionCategories.includes(
+        (transaction.categoryKey ??
+          transaction.category) as (typeof transactionCategories)[number],
+      )
+        ? transaction.categoryKey ?? transaction.category
+        : "Lainnya",
+    );
+    setDescription(transaction.description);
+    setAmount(transaction.amount);
     setShowTransactionForm(true);
   }
 
@@ -340,8 +376,12 @@ export function FinanceView({
       return;
     }
     try {
-      await api<Transaction>("/api/transactions", {
-        method: "POST",
+      await api<Transaction>(
+        editingTransactionId
+          ? `/api/transactions/${editingTransactionId}`
+          : "/api/transactions",
+        {
+        method: editingTransactionId ? "PATCH" : "POST",
         body: JSON.stringify({
           projectId: transactionProjectId,
           date: transactionDate,
@@ -356,7 +396,36 @@ export function FinanceView({
       setDescription("");
       setAmount(0);
       setShowTransactionForm(false);
-      notify(id ? "Transaksi berhasil dicatat." : "Transaction recorded.");
+      setEditingTransactionId("");
+      notify(
+        editingTransactionId
+          ? id
+            ? "Koreksi transaksi berhasil disimpan dan dicatat di audit log."
+            : "The transaction correction was saved and recorded in the audit log."
+          : id
+            ? "Transaksi berhasil dicatat."
+            : "Transaction recorded.",
+      );
+    } catch (error) {
+      notify(messageOf(error, language));
+    }
+  }
+
+  async function deleteTransaction(transaction: Transaction) {
+    if (!transaction.editable) return;
+    if (
+      !window.confirm(
+        id
+          ? `Hapus transaksi manual "${transaction.description}"? Tindakan ini dicatat pada audit log.`
+          : `Delete manual transaction "${transaction.description}"? This action is recorded in the audit log.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await api(`/api/transactions/${transaction.id}`, { method: "DELETE" });
+      await loadTransactions();
+      notify(id ? "Transaksi manual dihapus." : "Manual transaction deleted.");
     } catch (error) {
       notify(messageOf(error, language));
     }
@@ -501,11 +570,24 @@ export function FinanceView({
           notify={notify}
           canManage={canManage}
           canConfigure={canConfigureBanking}
+          canDeleteEntries={canConfigureBanking}
           serverToday={serverToday}
           onBalanceChange={setBankBalance}
           onLedgerChanged={() => {
             void loadTransactions();
           }}
+        />
+      ) : null}
+
+      {canManage && projects.length ? (
+        <ProfitSharingPanel
+          key={projectId ?? "all-projects"}
+          language={language}
+          notify={notify}
+          projects={projects}
+          initialProjectId={projectId}
+          canApprove={canApproveProfitShares}
+          serverToday={serverToday}
         />
       ) : null}
 
@@ -677,6 +759,11 @@ export function FinanceView({
                 <th>{id ? "Kategori" : "Category"}</th>
                 <th>{id ? "Sumber" : "Source"}</th>
                 <th>{id ? "Nominal" : "Amount"}</th>
+                {canManage ? (
+                  <th>
+                    <span className="sr-only">{id ? "Aksi" : "Actions"}</span>
+                  </th>
+                ) : null}
               </tr>
             </thead>
             <tbody>
@@ -699,12 +786,47 @@ export function FinanceView({
                     </div>
                   </td>
                   <td>{!id && transaction.project === "Umum" ? "General" : transaction.project}</td>
-                  <td>{categoryLabel(language, transaction.category)}</td>
+                  <td>{categoryLabel(language, transaction.categoryKey ?? transaction.category)}</td>
                   <td><span className="source-badge">{transaction.source}</span></td>
                   <td className={transaction.type === "Pemasukan" ? "amount-income" : "amount-expense"}>
                     {transaction.type === "Pemasukan" ? "+" : "−"}
                     {formatCurrency(transaction.amount, language)}
                   </td>
+                  {canManage ? (
+                    <td>
+                      {transaction.editable ? (
+                        <div className="table-row-actions">
+                          <button
+                            className="icon-button"
+                            type="button"
+                            aria-label={id ? "Edit transaksi" : "Edit transaction"}
+                            onClick={() => editTransaction(transaction)}
+                          >
+                            <Pencil size={15} />
+                          </button>
+                          <button
+                            className="icon-button danger"
+                            type="button"
+                            aria-label={id ? "Hapus transaksi" : "Delete transaction"}
+                            onClick={() => deleteTransaction(transaction)}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      ) : (
+                        <span
+                          className="status-badge neutral"
+                          title={
+                            id
+                              ? "Transaksi sistem dikoreksi dari dokumen atau rekonsiliasi asal."
+                              : "System transactions are corrected from their source document or reconciliation."
+                          }
+                        >
+                          {id ? "Sistem" : "System"}
+                        </span>
+                      )}
+                    </td>
+                  ) : null}
                 </tr>
               ))}
             </tbody>
@@ -734,8 +856,8 @@ export function FinanceView({
           >
             <div className="modal-head">
               <div>
-                <span className="eyebrow">{id ? "TRANSAKSI BARU" : "NEW TRANSACTION"}</span>
-                <h2 id="transaction-form-title">{id ? "Catat aliran kas" : "Record cash flow"}</h2>
+                <span className="eyebrow">{editingTransactionId ? (id ? "KOREKSI TRANSAKSI" : "TRANSACTION CORRECTION") : (id ? "TRANSAKSI BARU" : "NEW TRANSACTION")}</span>
+                <h2 id="transaction-form-title">{editingTransactionId ? (id ? "Perbaiki pencatatan manual" : "Correct a manual entry") : (id ? "Catat aliran kas" : "Record cash flow")}</h2>
               </div>
               <button
                 className="icon-button"
@@ -845,7 +967,7 @@ export function FinanceView({
                   {id ? "Batal" : "Cancel"}
                 </button>
                 <button className="button primary" type="submit">
-                  <Plus size={16} /> {id ? "Simpan transaksi" : "Save transaction"}
+                  {editingTransactionId ? <Pencil size={16} /> : <Plus size={16} />} {editingTransactionId ? (id ? "Simpan koreksi" : "Save correction") : (id ? "Simpan transaksi" : "Save transaction")}
                 </button>
               </div>
             </form>

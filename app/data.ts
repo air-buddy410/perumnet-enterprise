@@ -104,6 +104,8 @@ export interface Transaction {
   amount: number;
   source: string;
   category: string;
+  categoryKey?: string;
+  editable?: boolean;
 }
 
 export interface BankAccount {

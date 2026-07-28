@@ -64,7 +64,7 @@ const roleDefaults: Record<EnterpriseRole, AccessPermissions> = {
   Finance: {
     dashboard: "view",
     projects: "view",
-    boq: "view",
+    boq: "manage",
     billing: "manage",
     procurement: "manage",
     bast: "view",

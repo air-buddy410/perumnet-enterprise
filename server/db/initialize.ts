@@ -169,6 +169,35 @@ CREATE TABLE IF NOT EXISTS boq_template_items (
 );
 CREATE INDEX IF NOT EXISTS boq_template_items_template_idx ON boq_template_items(template_id);
 
+CREATE TABLE IF NOT EXISTS standalone_boqs (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  client TEXT,
+  status TEXT NOT NULL DEFAULT 'Draft',
+  notes TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS standalone_boqs_created_by_idx
+  ON standalone_boqs(created_by,created_at);
+
+CREATE TABLE IF NOT EXISTS standalone_boq_items (
+  id TEXT PRIMARY KEY,
+  standalone_boq_id TEXT NOT NULL REFERENCES standalone_boqs(id) ON DELETE CASCADE,
+  category TEXT NOT NULL CHECK (category IN ('Perangkat', 'Material', 'Jasa', 'Mobilitas')),
+  description TEXT NOT NULL,
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  unit TEXT NOT NULL,
+  cost_price INTEGER NOT NULL DEFAULT 0 CHECK (cost_price >= 0),
+  selling_price INTEGER NOT NULL CHECK (selling_price >= 0),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS standalone_boq_items_boq_idx
+  ON standalone_boq_items(standalone_boq_id);
+
 CREATE TABLE IF NOT EXISTS quotations (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -331,6 +360,27 @@ CREATE INDEX IF NOT EXISTS transactions_date_idx ON transactions(date);
 CREATE UNIQUE INDEX IF NOT EXISTS transactions_source_reference_unique
   ON transactions(source, reference_id)
   WHERE reference_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS project_profit_shares (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  recipient_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  recipient_name TEXT NOT NULL,
+  percentage_bps INTEGER NOT NULL CHECK (percentage_bps > 0 AND percentage_bps <= 10000),
+  amount INTEGER NOT NULL DEFAULT 0 CHECK (amount >= 0),
+  status TEXT NOT NULL DEFAULT 'Draft'
+    CHECK (status IN ('Draft', 'Approved', 'Paid', 'Void')),
+  notes TEXT,
+  paid_date TEXT,
+  transaction_id TEXT UNIQUE REFERENCES transactions(id) ON DELETE SET NULL,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  approved_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  paid_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS project_profit_shares_project_idx
+  ON project_profit_shares(project_id,status);
 
 CREATE TABLE IF NOT EXISTS bank_statement_entries (
   id TEXT PRIMARY KEY,
@@ -694,10 +744,15 @@ export async function initializeDatabase(client: DatabaseClient) {
   if (existing.rows.length) return;
 
   const production = process.env.NODE_ENV === "production";
-  const bootstrapPassword = process.env.SEED_ADMIN_PASSWORD ?? (production ? "" : "perumnet123");
+  const demoMode = process.env.APP_MODE === "demo";
+  const bootstrapPassword = demoMode
+    ? process.env.DEMO_ACCOUNT_PASSWORD ?? (production ? "" : "perumnet123")
+    : process.env.SEED_ADMIN_PASSWORD ?? (production ? "" : "perumnet123");
   if (!bootstrapPassword) {
     throw new Error(
-      "Database masih kosong. Isi SEED_ADMIN_PASSWORD sekali untuk membuat akun administrator pertama.",
+      demoMode
+        ? "Database demo masih kosong. Isi DEMO_ACCOUNT_PASSWORD untuk membuat akun demo."
+        : "Database masih kosong. Isi SEED_ADMIN_PASSWORD sekali untuk membuat akun administrator pertama.",
     );
   }
   if (production && bootstrapPassword.length < 12) {
@@ -706,7 +761,13 @@ export async function initializeDatabase(client: DatabaseClient) {
   const passwordHash = await hash(bootstrapPassword, 12);
 
   const userRows = [
-    ["user-1", "Dewa Mahardika", "admin@perumnet.id", "Admin", "Aktif"],
+    [
+      "user-1",
+      demoMode ? "Demo Administrator" : "Dewa Mahardika",
+      demoMode ? "demo@perumnet.id" : "admin@perumnet.id",
+      "Admin",
+      "Aktif",
+    ],
     ["user-2", "Ayu Pramesti", "ayu@perumnet.id", "Project Manager", production ? "Nonaktif" : "Aktif"],
     ["user-3", "Agus Suardana", "agus@perumnet.id", "Engineer", production ? "Nonaktif" : "Aktif"],
     ["user-4", "Kadek Putra", "kadek@perumnet.id", "Engineer", production ? "Nonaktif" : "Aktif"],

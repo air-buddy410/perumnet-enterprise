@@ -10,6 +10,7 @@ import {
   Plus,
   RefreshCw,
   ShieldCheck,
+  Trash2,
   UploadCloud,
   X,
 } from "lucide-react";
@@ -34,6 +35,7 @@ interface BankingPanelProps {
   notify: (message: string) => void;
   canManage: boolean;
   canConfigure: boolean;
+  canDeleteEntries: boolean;
   serverToday: string;
   onBalanceChange: (balance: number) => void;
   onLedgerChanged: () => void;
@@ -78,6 +80,7 @@ export function BankingPanel({
   notify,
   canManage,
   canConfigure,
+  canDeleteEntries,
   serverToday,
   onBalanceChange,
   onLedgerChanged,
@@ -344,6 +347,37 @@ export function BankingPanel({
     }
   }
 
+  async function deleteEntry(entry: BankStatementEntry) {
+    if (!selectedAccount) return;
+    const confirmed = window.confirm(
+      id
+        ? `Hapus mutasi "${entry.description}" senilai ${formatCurrency(entry.amount, language)}? Tindakan Admin ini dicatat pada audit log.`
+        : `Delete "${entry.description}" for ${formatCurrency(entry.amount, language)}? This Admin action is recorded in the audit log.`,
+    );
+    if (!confirmed) return;
+    setSubmitting(true);
+    try {
+      await api(
+        `/api/bank-accounts/${selectedAccount.id}/entries/${entry.id}`,
+        { method: "DELETE" },
+      );
+      await Promise.all([
+        loadAccounts(),
+        loadEntries(selectedAccount.id),
+      ]);
+      onLedgerChanged();
+      notify(
+        id
+          ? "Mutasi rekening dan transaksi bank otomatis terkait berhasil dihapus."
+          : "The bank entry and its generated bank transaction were deleted.",
+      );
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <>
       <section className="panel banking-panel">
@@ -489,6 +523,13 @@ export function BankingPanel({
                         <th>{id ? "Status" : "Status"}</th>
                         <th>{id ? "Nominal" : "Amount"}</th>
                         <th>{id ? "Saldo" : "Balance"}</th>
+                        {canDeleteEntries ? (
+                          <th>
+                            <span className="sr-only">
+                              {id ? "Aksi Admin" : "Admin actions"}
+                            </span>
+                          </th>
+                        ) : null}
                       </tr>
                     </thead>
                     <tbody>
@@ -561,6 +602,23 @@ export function BankingPanel({
                               ? "—"
                               : formatCurrency(entry.runningBalance, language)}
                           </td>
+                          {canDeleteEntries ? (
+                            <td>
+                              <button
+                                className="icon-button danger"
+                                type="button"
+                                disabled={submitting}
+                                aria-label={
+                                  id
+                                    ? `Hapus mutasi ${entry.description}`
+                                    : `Delete statement entry ${entry.description}`
+                                }
+                                onClick={() => deleteEntry(entry)}
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </td>
+                          ) : null}
                         </tr>
                       ))}
                     </tbody>

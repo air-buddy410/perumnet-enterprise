@@ -12,8 +12,7 @@ npm install
 npm run dev
 ```
 
-Buka `http://localhost:3000`, lalu gunakan akun demo yang sudah terisi pada
-halaman login.
+Buka `http://localhost:3000`, lalu gunakan akun pengembangan berikut.
 
 Database SQLite lokal `perumnet.local.db` dibuat dan di-seed otomatis saat API
 pertama kali dipanggil. Akun demo:
@@ -56,6 +55,24 @@ untuk dokumen proyek melalui binding di `.openai/hosting.json`.
 
 Template PM2, Nginx, dan backup harian PostgreSQL untuk VPS tersedia di folder
 `deploy/`.
+
+## Mode demo terisolasi
+
+Jangan membuat akun demo pada database live. Jalankan instance kedua dengan
+database terpisah:
+
+```bash
+APP_MODE=demo
+NEXT_PUBLIC_DEMO_MODE=true
+DEMO_DATABASE_URL=postgresql://user:password@127.0.0.1:5432/perumnet_enterprise_demo
+DEMO_ACCOUNT_PASSWORD=kata-sandi-demo-yang-berbeda
+```
+
+Saat database demo masih kosong, aplikasi membuat
+`demo@perumnet.id` sebagai Admin demo. Startup akan ditolak apabila
+`DEMO_DATABASE_URL` sama dengan `DATABASE_URL`. Email keluar juga otomatis
+dinonaktifkan pada mode demo. Gunakan process/container dan domain demo sendiri
+agar cache build `NEXT_PUBLIC_DEMO_MODE` tidak bercampur dengan aplikasi live.
 
 ## Rekening bank dan arus kas
 
@@ -107,6 +124,15 @@ dan mengembalikan:
 Integrasi langsung BCA SNAP tetap memerlukan proses onboarding serta credential
 resmi dari BCA. Gunakan adapter server pada `BANK_SYNC_API_URL`; jangan pernah
 menaruh client secret, private key, atau access token BCA di frontend.
+
+Hanya Admin dapat menghapus mutasi rekening. Finance tetap dapat mengimpor,
+mencocokkan, mengecualikan, dan mengembalikan mutasi, tetapi tidak memiliki
+endpoint atau tombol hapus. Setiap penghapusan Admin masuk ke audit log.
+
+Bonus pegawai dan fee pemberi kerja dicatat sebagai biaya proyek. Pembagian
+keuntungan menggunakan alur Draft, persetujuan Admin, lalu pembayaran oleh
+Admin/Finance. Persentase total dibatasi 100%, jumlah penerima tidak dibatasi
+empat orang, dan pembayaran baru masuk arus kas setelah status Paid.
 
 ## Notifikasi email
 

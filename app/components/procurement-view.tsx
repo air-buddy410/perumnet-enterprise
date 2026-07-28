@@ -33,8 +33,9 @@ import { type AppLanguage, localizedLabel } from "../i18n";
 interface ProcurementViewProps {
   language: AppLanguage;
   notify: (message: string) => void;
-  projectId: string;
+  projectId?: string;
   canManage: boolean;
+  canManageVendors: boolean;
   canManagePayments: boolean;
 }
 
@@ -49,7 +50,7 @@ function spkStatusClass(status: WorkOrder["status"]) {
   return "neutral";
 }
 
-export function ProcurementView({ language, notify, projectId, canManage, canManagePayments }: ProcurementViewProps) {
+export function ProcurementView({ language, notify, projectId, canManage, canManageVendors, canManagePayments }: ProcurementViewProps) {
   const id = language === "id";
   const [activeTab, setActiveTab] = useState<ProcurementTab>("vendor");
   const [vendors, setVendors] = useState<Vendor[]>([]);
@@ -81,8 +82,12 @@ export function ProcurementView({ language, notify, projectId, canManage, canMan
     let active = true;
     Promise.all([
       api<Vendor[]>("/api/vendors"),
-      api<WorkOrder[]>(`/api/spks?projectId=${encodeURIComponent(projectId)}`),
-      api<Project>(`/api/projects/${encodeURIComponent(projectId)}`),
+      projectId
+        ? api<WorkOrder[]>(`/api/spks?projectId=${encodeURIComponent(projectId)}`)
+        : Promise.resolve([]),
+      projectId
+        ? api<Project>(`/api/projects/${encodeURIComponent(projectId)}`)
+        : Promise.resolve(null),
     ])
       .then(([vendorData, spkData, projectData]) => {
         if (!active) return;
@@ -142,6 +147,14 @@ export function ProcurementView({ language, notify, projectId, canManage, canMan
   }
 
   function openNewSpk(vendor?: Vendor) {
+    if (!projectId) {
+      notify(
+        id
+          ? "Pilih proyek sebelum membuat SPK."
+          : "Select a project before creating a Work Order.",
+      );
+      return;
+    }
     setEditingSpkId("");
     setSpkVendor(vendor?.name ?? vendors.find((item) => item.status === "Aktif")?.name ?? "");
     setSpkScope("");
@@ -193,6 +206,10 @@ export function ProcurementView({ language, notify, projectId, canManage, canMan
 
   async function persistSpk(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!projectId) {
+      notify(id ? "Pilih proyek terlebih dahulu." : "Select a project first.");
+      return;
+    }
     if (!spkScope.trim() || spkCost <= 0) return;
     const vendor = vendors.find((item) => item.name === spkVendor);
     if (!vendor) return;
@@ -342,14 +359,14 @@ export function ProcurementView({ language, notify, projectId, canManage, canMan
           <p>{id ? "Kelola mitra kerja dan Surat Perintah Kerja secara terpusat." : "Manage partners and Work Orders in one place."}</p>
         </div>
         <div className="title-actions">
-          {canManage && (
+          {(canManageVendors || (canManage && projectId)) && (
             <>
-              <button className="button secondary" type="button" onClick={() => { setActiveTab("vendor"); openNewVendor(); }}>
+              {canManageVendors ? <button className="button secondary" type="button" onClick={() => { setActiveTab("vendor"); openNewVendor(); }}>
                 <Plus size={16} /> {id ? "Tambah vendor" : "Add vendor"}
-              </button>
-              <button className="button primary" type="button" onClick={() => { setActiveTab("spk"); openNewSpk(); }}>
+              </button> : null}
+              {canManage && projectId ? <button className="button primary" type="button" onClick={() => { setActiveTab("spk"); openNewSpk(); }}>
                 <FilePlus2 size={16} /> {id ? "Buat SPK" : "Create Work Order"}
-              </button>
+              </button> : null}
             </>
           )}
         </div>
@@ -377,9 +394,9 @@ export function ProcurementView({ language, notify, projectId, canManage, canMan
         <button role="tab" aria-selected={activeTab === "vendor"} className={activeTab === "vendor" ? "active" : ""} type="button" onClick={() => setActiveTab("vendor")}>
           <Store size={17} /> {id ? "Daftar vendor" : "Vendors"} <span className="tab-count">{vendors.length}</span>
         </button>
-        <button role="tab" aria-selected={activeTab === "spk"} className={activeTab === "spk" ? "active" : ""} type="button" onClick={() => setActiveTab("spk")}>
+        {projectId ? <button role="tab" aria-selected={activeTab === "spk"} className={activeTab === "spk" ? "active" : ""} type="button" onClick={() => setActiveTab("spk")}>
           <FileText size={17} /> {id ? "Daftar SPK" : "Work Orders"} <span className="tab-count">{scopedWorkOrders.length}</span>
-        </button>
+        </button> : null}
       </div>
 
       {activeTab === "vendor" && (
@@ -409,7 +426,7 @@ export function ProcurementView({ language, notify, projectId, canManage, canMan
                 <div className="vendor-card-head">
                   <span className={`vendor-logo variant-${index % 4}`}><Building2 size={21} /></span>
                   <span className={`status-badge ${vendor.status === "Aktif" ? "success" : "neutral"}`}>{localizedLabel(language, vendor.status)}</span>
-                  {canManage && <button className="icon-button" type="button" aria-label={`Edit ${vendor.name}`} onClick={() => openEditVendor(vendor)}><MoreHorizontal size={17} /></button>}
+                  {canManageVendors && <button className="icon-button" type="button" aria-label={`Edit ${vendor.name}`} onClick={() => openEditVendor(vendor)}><MoreHorizontal size={17} /></button>}
                 </div>
                 <div className="vendor-card-copy">
                   <strong>{vendor.name}</strong>
@@ -424,7 +441,7 @@ export function ProcurementView({ language, notify, projectId, canManage, canMan
                   <span>{id ? "Tarif standar" : "Standard rate"}</span>
                   <strong>{vendor.rate ? `${formatCurrency(vendor.rate, language)} / ${id ? "hari" : "day"}` : (id ? "Sesuai quotation" : "As quoted")}</strong>
                 </div>
-                {canManage && <button className="button subtle full-width" type="button" onClick={() => openNewSpk(vendor)}>
+                {canManage && projectId && <button className="button subtle full-width" type="button" onClick={() => openNewSpk(vendor)}>
                   <FilePlus2 size={15} /> {id ? "Buat SPK untuk vendor" : "Create Work Order for vendor"}
                 </button>}
               </article>

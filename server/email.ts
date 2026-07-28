@@ -114,7 +114,7 @@ async function recordDelivery(
 }
 
 export function emailDeliveryConfigured() {
-  return Boolean(process.env.RESEND_API_KEY);
+  return process.env.APP_MODE !== "demo" && Boolean(process.env.RESEND_API_KEY);
 }
 
 export async function sendEmailDelivery(

@@ -40,6 +40,7 @@ import { ProcurementView } from "./procurement-view";
 import { ProfileView } from "./profile-view";
 import { ProjectView } from "./project-view";
 import { SettingsView } from "./settings-view";
+import { StandaloneBoqView } from "./standalone-boq-view";
 import { UserAvatar } from "./user-avatar";
 import { UsersView } from "./users-view";
 import { ValidationView } from "./validation-view";
@@ -176,6 +177,7 @@ function ProjectContextEmpty({
 }
 
 export function EnterpriseApp() {
+  const demoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
   const [user, setUser] = useState<SessionUser | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
   const [currentView, setCurrentView] = useState<ViewKey>("dashboard");
@@ -215,7 +217,7 @@ export function EnterpriseApp() {
     function sessionExpired() {
       setUser(null);
       setCurrentView("dashboard");
-      setToast(language === "id" ? "Session 8 jam telah berakhir. Silakan masuk kembali." : "Your eight-hour session has expired. Please sign in again.");
+      setToast(language === "id" ? "Sesi telah berakhir. Silakan masuk kembali." : "Your session has expired. Please sign in again.");
     }
     window.addEventListener("perumnet:session-expired", sessionExpired);
     return () => window.removeEventListener("perumnet:session-expired", sessionExpired);
@@ -446,11 +448,22 @@ export function EnterpriseApp() {
         </header>
 
         <main className="app-content">
+          {demoMode ? (
+            <section className="demo-environment-banner" role="status">
+              <ShieldCheck size={17} />
+              <span>
+                <strong>{language === "id" ? "Mode demo terisolasi" : "Isolated demo mode"}</strong>
+                {language === "id"
+                  ? " Data pada workspace ini terpisah dari database live dan email keluar dinonaktifkan."
+                  : " This workspace is separate from the live database and outbound email is disabled."}
+              </span>
+            </section>
+          ) : null}
           {currentView === "dashboard" && canUse("dashboard") && <DashboardView language={language} navigate={navigate} notify={notify} selectedProjectId={selectedProjectId} userName={user.name} canManage={canManage("projects")} canUseBoq={canUse("boq")} canUseBilling={canUse("billing")} onSelectProject={selectProject} onProjectCreated={projectCreated} />}
           {currentView === "project" && canUse("projects") && (activeProjectId ? <ProjectView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} project={projects.find((item) => item.id === activeProjectId)} canManage={canManage("projects")} canDelete={user.role === "Admin"} canManageAccess={user.role === "Admin"} onProjectDeleted={projectDeleted} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
-          {currentView === "boq" && canUse("boq") && (activeProjectId ? <BoqView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} canManage={canManage("boq")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "boq" && canUse("boq") && (activeProjectId ? <BoqView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} canManage={canManage("boq")} /> : ["Admin", "Finance"].includes(user.role) && canManage("boq") ? <StandaloneBoqView language={language} notify={notify} projects={projects} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "billing" && canUse("billing") && (activeProjectId ? <BillingView language={language} notify={notify} projectId={activeProjectId} canManage={canManage("billing")} canManagePayments={canManage("billing") && canManage("finance")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
-          {currentView === "procurement" && canUse("procurement") && (activeProjectId ? <ProcurementView language={language} notify={notify} projectId={activeProjectId} canManage={canManage("procurement")} canManagePayments={canManage("procurement") && canManage("finance")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "procurement" && canUse("procurement") && (activeProjectId || ["Admin", "Finance"].includes(user.role) ? <ProcurementView language={language} notify={notify} projectId={activeProjectId || undefined} canManage={canManage("procurement")} canManageVendors={["Admin", "Finance"].includes(user.role) && canManage("procurement")} canManagePayments={canManage("procurement") && canManage("finance")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "validation" && canUse("bast") && (activeProjectId ? <ValidationView projectId={activeProjectId} language={language} canManage={canManage("bast")} notify={notify} navigate={navigate} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "bast" && canUse("bast") && (activeProjectId ? <BastView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} canManage={canManage("bast")} userName={user.name} onProjectUpdated={projectCreated} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "finance" && canUse("finance") && (
@@ -462,6 +475,9 @@ export function EnterpriseApp() {
               canManage={canManage("finance")}
               canUseBanking={user.role === "Admin" || user.role === "Finance"}
               canConfigureBanking={
+                user.role === "Admin" && canManage("finance")
+              }
+              canApproveProfitShares={
                 user.role === "Admin" && canManage("finance")
               }
             />
