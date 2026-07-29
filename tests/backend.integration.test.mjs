@@ -283,6 +283,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     }),
   });
   assert.equal(paidInvoice.amount, 800_000);
+  assert.equal(paidInvoice.issueDateIso, "2026-07-18");
   const excessiveInvoice = await request("/api/invoices", {
     method: "POST",
     body: JSON.stringify({

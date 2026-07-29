@@ -40,6 +40,8 @@ const siteSettingsSchema = z.object({
   linkedin_url: externalUrl,
   website_url: externalUrl,
   dark_font_color: z.string().trim().regex(/^#[0-9A-Fa-f]{6}$/, "Warna teks harus menggunakan format HEX, misalnya #FFFFFF."),
+  motion_enabled: z.enum(["true", "false"]),
+  partner_carousel_speed: z.string().trim().regex(/^(1[2-9]|[2-5]\d|60)$/, "Durasi carousel harus antara 12 dan 60 detik."),
   cta_text: z.string().trim().min(1).max(180),
   business_hours: z.string().trim().min(1).max(180),
 }).partial().strict();
@@ -198,6 +200,8 @@ async function updateSettings(request: Request, user: AuthUser) {
       linkedin_url: true,
       website_url: true,
       dark_font_color: true,
+      motion_enabled: true,
+      partner_carousel_speed: true,
     }).partial().optional().default({}),
   }).parse(await jsonBody(request));
   const { client } = await getDatabase();

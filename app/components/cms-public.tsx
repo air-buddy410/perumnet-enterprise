@@ -24,6 +24,7 @@ import { FaLinkedinIn } from "react-icons/fa6";
 import { SiInstagram } from "react-icons/si";
 import type {
   CmsContent,
+  CmsPartner,
   CmsPortfolio,
   CmsService,
   CmsTestimonial,
@@ -31,6 +32,7 @@ import type {
 import type { PublicLanguage } from "@/server/public-language";
 import { PublicLanguageSwitcher } from "./public-language-switcher";
 import { PublicMobileMenu } from "./public-mobile-menu";
+import { PublicMotionController } from "./public-motion-controller";
 import { PublicPortfolioImage } from "./public-portfolio-image";
 import styles from "../site.module.css";
 
@@ -91,22 +93,29 @@ export function PublicShell({
   active?: string;
   children: React.ReactNode;
 }) {
+  const pageNavigation = content.pages
+    .filter((page) => page.showInNavigation)
+    .map((page) => ({ href: `/${page.slug}`, label: localized(page.title, page.titleEn, language), key: page.slug }));
   const nav = [
     { href: "/", label: language === "id" ? "Beranda" : "Home", key: "home" },
     { href: "/services", label: language === "id" ? "Layanan" : "Services", key: "services" },
     { href: "/portfolio", label: language === "id" ? "Portofolio" : "Portfolio", key: "portfolio" },
-    { href: "/#partners", label: language === "id" ? "Partner & Klien" : "Partners & Clients", key: "partners" },
-    { href: "/#faq", label: "FAQ", key: "faq" },
-    ...content.pages
-      .filter((page) => page.showInNavigation)
-      .map((page) => ({ href: `/${page.slug}`, label: localized(page.title, page.titleEn, language), key: page.slug })),
+    ...pageNavigation,
     { href: "/contact", label: language === "id" ? "Kontak" : "Contact", key: "contact" },
   ];
   const configuredSurfaceColor = content.settings.dark_font_color || "#FFFFFF";
   const surfaceColor = /^#[0-9a-f]{6}$/i.test(configuredSurfaceColor) ? configuredSurfaceColor : "#FFFFFF";
+  const motionEnabled = content.settings.motion_enabled !== "false";
 
   return (
-    <div className={styles.siteRoot} lang={language} style={{ "--surface-text": surfaceColor } as CSSProperties}>
+    <div
+      className={styles.siteRoot}
+      data-public-site-root
+      data-motion={motionEnabled ? "enabled" : "disabled"}
+      lang={language}
+      style={{ "--surface-text": surfaceColor } as CSSProperties}
+    >
+      <PublicMotionController enabled={motionEnabled} />
       <header className={styles.header}>
         <div className={styles.navWrap}>
           <Brand language={language} />
@@ -231,23 +240,48 @@ function LabsSection({ service, language }: { service: CmsService; language: Pub
   );
 }
 
+function PartnerCarouselCard({
+  partner,
+  duplicate = false,
+}: {
+  partner: CmsPartner;
+  duplicate?: boolean;
+}) {
+  const initials = partner.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 3).toUpperCase();
+  const darkLogo = partner.logoUrl.toLowerCase().includes("quenzo");
+  const className = `${styles.partnerCard} ${darkLogo ? styles.partnerCardDark : ""}`;
+  const content = (
+    <>
+      {partner.logoUrl
+        ? <img src={partner.logoUrl} alt={duplicate ? "" : partner.name} />
+        : <span className={styles.partnerFallback}><strong>{initials}</strong><small>{partner.name}</small></span>}
+    </>
+  );
+
+  if (!duplicate && partner.websiteUrl) {
+    return <a className={className} href={partner.websiteUrl} target="_blank" rel="noreferrer" aria-label={partner.name}>{content}</a>;
+  }
+  return <div className={className} aria-label={duplicate ? undefined : partner.name}>{content}</div>;
+}
+
 function PartnersSection({ content, language }: { content: CmsContent; language: PublicLanguage }) {
+  const requestedDuration = Number(content.settings.partner_carousel_speed || "28");
+  const duration = Number.isFinite(requestedDuration) ? Math.min(60, Math.max(12, requestedDuration)) : 28;
   return (
-    <section className={styles.partnersSection} id="partners">
+    <section className={styles.partnersSection} id="partners" data-reveal>
       <div className={styles.sectionHeader}>
-        <div><span className={styles.eyebrowDark}>{language === "id" ? "PARTNER & KLIEN" : "PARTNERS & CLIENTS"}</span><h2>{language === "id" ? "Dipercaya berbagai bisnis, diperkuat partner teknologi." : "Trusted by businesses, strengthened by technology partners."}</h2></div>
-        <p>{language === "id" ? "Kami bekerja bersama organisasi dari beragam sektor dan mitra yang mendukung kualitas implementasi." : "We work with organizations across industries and partners that support dependable implementation."}</p>
+        <div><span className={styles.eyebrowDark}>{text(content, language, "home", "partners_eyebrow", "PARTNER & KLIEN", "PARTNERS & CLIENTS")}</span><h2>{text(content, language, "home", "partners_title", "Dipercaya berbagai bisnis, diperkuat partner teknologi.", "Trusted by businesses, strengthened by technology partners.")}</h2></div>
+        <p>{text(content, language, "home", "partners_description", "Kami bekerja bersama organisasi dari beragam sektor dan mitra yang mendukung kualitas implementasi.", "We work with organizations across industries and partners that support dependable implementation.")}</p>
       </div>
-      <div className={styles.partnerRail}>
-        {content.partners.map((partner) => {
-          const initials = partner.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 3).toUpperCase();
-          const category = language === "en" && partner.category === "Sektor Klien" ? "Client sector" : partner.category;
-          const darkLogo = partner.logoUrl.toLowerCase().includes("quenzo");
-          const body = <><span className={`${styles.partnerLogo} ${darkLogo ? styles.partnerLogoDark : ""}`}>{partner.logoUrl ? <img src={partner.logoUrl} alt="" /> : initials}</span><span><strong>{partner.name}</strong><small>{partner.organizationType === "partner" ? (language === "id" ? "Partner teknologi" : "Technology partner") : category}</small></span></>;
-          return partner.websiteUrl
-            ? <a key={partner.id} href={partner.websiteUrl} target="_blank" rel="noreferrer">{body}</a>
-            : <div key={partner.id}>{body}</div>;
-        })}
+      <div className={styles.partnerCarousel} aria-label={language === "id" ? "Carousel partner dan klien" : "Partners and clients carousel"}>
+        <div className={styles.partnerTrack} style={{ "--partner-duration": `${duration}s` } as CSSProperties}>
+          <div className={styles.partnerGroup}>
+            {content.partners.map((partner) => <PartnerCarouselCard key={partner.id} partner={partner} />)}
+          </div>
+          <div className={`${styles.partnerGroup} ${styles.partnerGroupDuplicate}`} aria-hidden="true">
+            {content.partners.map((partner) => <PartnerCarouselCard key={`${partner.id}-duplicate`} partner={partner} duplicate />)}
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -281,7 +315,7 @@ export function HomePage({ content, language }: { content: CmsContent; language:
     <PublicShell content={content} language={language} active="home">
       <section className={styles.hero}>
         <div className={styles.heroGrid}>
-          <div className={styles.heroCopy}>
+          <div className={styles.heroCopy} data-reveal>
             <span className={styles.eyebrow}><Sparkles size={14} /> {text(content, language, "home", "hero_eyebrow", "SOLUSI IT TERINTEGRASI · BALI", "INTEGRATED IT SOLUTIONS · BALI")}</span>
             <h1>{text(content, language, "home", "hero_title", "Infrastruktur IT yang bekerja tanpa hambatan.", "IT infrastructure that works without interruption.")}</h1>
             <p>{text(content, language, "home", "hero_description", "Solusi jaringan, keamanan, komunikasi, dan software untuk operasional bisnis modern.", "Network, security, communications, and software solutions for modern business operations.")}</p>
@@ -291,7 +325,7 @@ export function HomePage({ content, language }: { content: CmsContent; language:
             </div>
             <div className={styles.heroTrust}><span><ShieldCheck size={17} /> {language === "id" ? "Instalasi terdokumentasi" : "Documented delivery"}</span><span><Clock3 size={17} /> {language === "id" ? "Respons dukungan cepat" : "Responsive support"}</span></div>
           </div>
-          <div className={styles.heroVisual} aria-label={language === "id" ? "Ilustrasi sistem terintegrasi" : "Integrated systems illustration"}>
+          <div className={styles.heroVisual} data-reveal data-reveal-delay="120" aria-label={language === "id" ? "Ilustrasi sistem terintegrasi" : "Integrated systems illustration"}>
             <div className={styles.visualGlow} /><div className={`${styles.orbit} ${styles.orbitOne}`} /><div className={`${styles.orbit} ${styles.orbitTwo}`} />
             <div className={styles.visualCenter}><img src="/perumnet-mark.png" alt="PerumNet Enterprise" /></div>
             <div className={`${styles.visualNode} ${styles.nodeWifi}`}><Wifi size={24} /><span>Managed WiFi</span><small>Online</small></div>
@@ -301,7 +335,7 @@ export function HomePage({ content, language }: { content: CmsContent; language:
             <div className={styles.signalCard}><span className={styles.liveDot} /> {language === "id" ? "Sistem terpantau" : "Monitored systems"} <strong>24/7</strong></div>
           </div>
         </div>
-        <div className={styles.statsBar}>
+        <div className={styles.statsBar} data-reveal data-reveal-delay="180">
           <div><strong>{content.services.length}</strong><span>{language === "id" ? "Solusi inti terintegrasi" : "Integrated core solutions"}</span></div>
           <div><strong>24/7</strong><span>{language === "id" ? "Dukungan operasional" : "Operational support"}</span></div>
           <div><strong>{language === "id" ? "1 tim" : "1 team"}</strong><span>{language === "id" ? "Dari survei hingga support" : "From survey to support"}</span></div>
@@ -309,20 +343,20 @@ export function HomePage({ content, language }: { content: CmsContent; language:
         </div>
       </section>
 
-      <section className={styles.aboutSection}>
+      <section className={styles.aboutSection} data-reveal>
         <div className={styles.sectionIntro}><span className={styles.eyebrowDark}>{text(content, language, "home", "about_eyebrow", "PARTNER TEKNOLOGI ANDA", "YOUR TECHNOLOGY PARTNER")}</span><h2>{text(content, language, "home", "about_title", "Satu tim untuk seluruh kebutuhan infrastruktur.", "One team for every infrastructure need.")}</h2></div>
         <div className={styles.aboutCopy}><p>{text(content, language, "home", "about_description", "Kami menggabungkan konsultasi, instalasi, dokumentasi, dan dukungan berkelanjutan dalam satu layanan.", "We combine consulting, installation, documentation, and ongoing support in one transparent service.")}</p><Link href="/tentang-kami">{language === "id" ? "Kenali cara kami bekerja" : "How we work"} <ArrowRight size={17} /></Link></div>
       </section>
 
-      <section className={styles.servicesSection}>
+      <section className={styles.servicesSection} data-reveal>
         <div className={styles.sectionHeader}><div><span className={styles.eyebrowDark}>{language === "id" ? "LAYANAN UTAMA" : "CORE SERVICES"}</span><h2>{text(content, language, "home", "services_title", "Solusi yang dibangun untuk kebutuhan nyata.", "Solutions built for real operational needs.")}</h2></div><p>{text(content, language, "home", "services_description", "Setiap sistem dirancang untuk stabil sejak hari pertama.", "Every system is designed to remain dependable from day one.")}</p></div>
         <div className={styles.serviceGrid}>{coreServices.map((service, index) => <ServiceCard key={service.id} service={service} index={index} language={language} />)}</div>
         <Link className={styles.inlineButton} href="/services">{language === "id" ? "Lihat seluruh layanan" : "View all services"} <ArrowRight size={17} /></Link>
       </section>
 
-      {labs && <LabsSection service={labs} language={language} />}
+      {labs && <div data-reveal><LabsSection service={labs} language={language} /></div>}
 
-      <section className={styles.processSection}>
+      <section className={styles.processSection} data-reveal>
         <div><span className={styles.eyebrowLight}>{language === "id" ? "CARA KAMI BEKERJA" : "HOW WE WORK"}</span><h2>{language === "id" ? "Sederhana untuk Anda, terukur untuk tim kami." : "Simple for you, measurable for our team."}</h2></div>
         <ol>
           <li><span>01</span><div><strong>{language === "id" ? "Survei & pemetaan" : "Survey & discovery"}</strong><p>{language === "id" ? "Kami memahami lokasi, pengguna, risiko, dan target operasional." : "We learn your site, users, risks, and operational targets."}</p></div></li>
@@ -331,21 +365,21 @@ export function HomePage({ content, language }: { content: CmsContent; language:
         </ol>
       </section>
 
-      <section className={styles.portfolioSection}>
+      <section className={styles.portfolioSection} data-reveal>
         <div className={styles.sectionHeader}><div><span className={styles.eyebrowDark}>{language === "id" ? "PORTOFOLIO PILIHAN" : "SELECTED WORK"}</span><h2>{text(content, language, "home", "portfolio_title", "Pekerjaan rapi. Hasil yang terukur.", "Structured delivery. Measurable outcomes.")}</h2></div><Link href="/portfolio">{language === "id" ? "Lihat semua proyek" : "View all projects"} <ArrowRight size={17} /></Link></div>
         <div className={styles.portfolioGrid}>{content.portfolios.slice(0, 3).map((item) => <PortfolioCard key={item.id} item={item} language={language} />)}</div>
       </section>
 
       <PartnersSection content={content} language={language} />
 
-      <section className={styles.testimonialSection}>
+      <section className={styles.testimonialSection} data-reveal>
         <div className={styles.sectionIntro}><span className={styles.eyebrowLight}>{language === "id" ? "CERITA KLIEN" : "CLIENT STORIES"}</span><h2>{text(content, language, "home", "testimonials_title", "Dipercaya untuk menjaga operasional tetap berjalan.", "Trusted to keep operations running.")}</h2></div>
         <div className={styles.testimonialGrid}>{content.testimonials.slice(0, 3).map((item) => <TestimonialCard key={item.id} item={item} language={language} />)}</div>
       </section>
 
-      <FaqSection content={content} language={language} />
+      <div data-reveal><FaqSection content={content} language={language} /></div>
 
-      <section className={styles.closingCta}>
+      <section className={styles.closingCta} data-reveal>
         <div className={styles.closingCtaCopy}><span>{language === "id" ? "KONSULTASI AWAL" : "INITIAL CONSULTATION"}</span><h2>{text(content, language, "home", "closing_title", "Mulai dari survei lokasi, kami bantu sampai sistem siap digunakan.", "From the first site survey to a system ready for daily use.")}</h2><p>{language === "id" ? "Ceritakan kebutuhan dan lokasi Anda. Tim kami akan membantu menentukan langkah pertama yang paling tepat." : "Tell us about your needs and location. Our team will recommend the most practical first step."}</p></div>
         <a href={waLink(content, language)} target="_blank" rel="noreferrer">{setting(content, language, "cta_text", "Konsultasikan Kebutuhan Anda", "Discuss Your Requirements")} <ArrowRight size={18} /></a>
       </section>
@@ -354,7 +388,7 @@ export function HomePage({ content, language }: { content: CmsContent; language:
 }
 
 export function PageHero({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
-  return <section className={styles.pageHero}><span className={styles.eyebrow}>{eyebrow}</span><h1>{title}</h1><p>{description}</p><div className={styles.pageHeroMark}><img src="/perumnet-mark.png" alt="" /></div></section>;
+  return <section className={styles.pageHero} data-reveal><span className={styles.eyebrow}>{eyebrow}</span><h1>{title}</h1><p>{description}</p><div className={styles.pageHeroMark}><img src="/perumnet-mark.png" alt="" /></div></section>;
 }
 
 export function ServicesPage({ content, language }: { content: CmsContent; language: PublicLanguage }) {

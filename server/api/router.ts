@@ -101,6 +101,10 @@ const invoiceSchema = z.object({
   dueDate: isoDateSchema,
   amount: positiveMoney,
 });
+const invoicePatchSchema = invoiceSchema
+  .omit({ projectId: true, issueDate: true })
+  .partial()
+  .extend({ issueDate: isoDateSchema.optional() });
 
 const quotationSchema = z.object({
   status: z.enum(["Draft", "Sent"]).default("Draft"),
@@ -1907,7 +1911,7 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
 
   if (invoiceId && !action && request.method === "PATCH") {
     if (!mutationRoles("invoices").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah invoice.");
-    const input = invoiceSchema.omit({ projectId: true }).partial().parse(await jsonBody(request));
+    const input = invoicePatchSchema.parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM invoices WHERE id=?", [invoiceId], "Invoice tidak ditemukan.");
     if (current.status === "Lunas") {
       assertAccess(user, "finance", "manage");

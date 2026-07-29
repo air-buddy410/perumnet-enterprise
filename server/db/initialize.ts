@@ -557,6 +557,8 @@ async function ensureCmsSeed(client: DatabaseClient) {
     ["linkedin_url", ""],
     ["website_url", "https://www.perumnet.id/"],
     ["dark_font_color", "#FFFFFF"],
+    ["motion_enabled", "true"],
+    ["partner_carousel_speed", "28"],
     ["cta_text", "Konsultasikan Kebutuhan Anda"],
     ["business_hours", "Senin–Minggu · 24/7 support"],
   ];
@@ -658,6 +660,14 @@ async function ensureCmsEnhancements(client: DatabaseClient) {
       ["cms-setting-dark_font_color", "dark_font_color", "#FFFFFF", timestamp],
     ),
     statement(
+      "INSERT INTO cms_site_settings (id,key_name,value_content,updated_at) VALUES (?,?,?,?) ON CONFLICT DO NOTHING",
+      ["cms-setting-motion-enabled", "motion_enabled", "true", timestamp],
+    ),
+    statement(
+      "INSERT INTO cms_site_settings (id,key_name,value_content,updated_at) VALUES (?,?,?,?) ON CONFLICT DO NOTHING",
+      ["cms-setting-partner-carousel-speed", "partner_carousel_speed", "28", timestamp],
+    ),
+    statement(
       "INSERT INTO cms_services (id,slug,title,summary,description,features_json,icon,sort_order,is_published,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT DO NOTHING",
       [
         "cms-service-smart-home",
@@ -737,6 +747,24 @@ async function ensureCmsBilingualSchema(client: DatabaseClient) {
 async function ensureCmsLandingFeatures(client: DatabaseClient) {
   const timestamp = new Date().toISOString();
   const statements: DatabaseStatement[] = [
+    statement(
+      `INSERT INTO cms_site_texts
+        (id,page_key,content_key,value_content,value_content_en,updated_at)
+       VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+      ["cms-text-home-partners-eyebrow", "home", "partners_eyebrow", "PARTNER & KLIEN", "PARTNERS & CLIENTS", timestamp],
+    ),
+    statement(
+      `INSERT INTO cms_site_texts
+        (id,page_key,content_key,value_content,value_content_en,updated_at)
+       VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+      ["cms-text-home-partners-title", "home", "partners_title", "Dipercaya berbagai bisnis, diperkuat partner teknologi.", "Trusted by businesses, strengthened by technology partners.", timestamp],
+    ),
+    statement(
+      `INSERT INTO cms_site_texts
+        (id,page_key,content_key,value_content,value_content_en,updated_at)
+       VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+      ["cms-text-home-partners-description", "home", "partners_description", "Kami bekerja bersama organisasi dari beragam sektor dan mitra yang mendukung kualitas implementasi.", "We work with organizations across industries and partners that support dependable implementation.", timestamp],
+    ),
     statement(
       `INSERT INTO cms_services
         (id,slug,title,title_en,summary,summary_en,description,description_en,features_json,features_json_en,icon,sort_order,is_published,created_at,updated_at)
