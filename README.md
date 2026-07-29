@@ -132,7 +132,34 @@ endpoint atau tombol hapus. Setiap penghapusan Admin masuk ke audit log.
 Bonus pegawai dan fee pemberi kerja dicatat sebagai biaya proyek. Pembagian
 keuntungan menggunakan alur Draft, persetujuan Admin, lalu pembayaran oleh
 Admin/Finance. Persentase total dibatasi 100%, jumlah penerima tidak dibatasi
-empat orang, dan pembayaran baru masuk arus kas setelah status Paid.
+empat orang, dan pembayaran baru masuk arus kas setelah status Paid. Laba yang
+boleh dibagikan juga dikurangi komitmen vendor aktif yang belum dibayar.
+
+## Procurement berbasis BoQ
+
+Alur procurement kanonis adalah:
+
+`BoQ Original/Addendum → Quotation Accepted → SPK/PO → termin atau penerimaan → pembayaran aktual`
+
+- SPK mengambil item Jasa/Mobilitas; PO mengambil Perangkat/Material.
+- Vendor diklasifikasikan sebagai Supplier, Jasa, atau Hybrid dan dapat memiliki
+  beberapa kategori yang dikelola Admin/Finance.
+- Quotation Accepted wajib memiliki tanggal dan lampiran bukti persetujuan.
+  Scope yang sudah diterima dikunci dari edit/hapus.
+- Nilai kontrak dihitung dari baris item dan harga negosiasi vendor. Alokasi
+  aktif lintas SPK/PO tidak dapat melampaui kuantitas BoQ.
+- Finance tidak dapat menyetujui draft yang dibuat atau diajukannya sendiri.
+  Admin dapat override dengan alasan yang masuk audit log.
+- DP dapat dibayar setelah approval. Termin jasa berikutnya memerlukan
+  verifikasi progres; pembayaran supplier mengikuti nilai barang yang sudah
+  diterima dan memperhitungkan DP sebagai uang muka.
+- Setiap pembayaran aktual membuat satu kas keluar. Void membuat reversal dan
+  pembayaran yang sudah direkonsiliasi harus dilepas terlebih dahulu.
+
+Endpoint kanonis tersedia di `/api/procurement-orders`. Endpoint `/api/spks`
+tetap menyediakan akses baca/PDF untuk kompatibilitas data lama. Mutasi melalui
+endpoint lama dibuat read-only pada production agar bukti, approval, dan audit
+procurement baru tidak dapat dilewati.
 
 ## Notifikasi email
 

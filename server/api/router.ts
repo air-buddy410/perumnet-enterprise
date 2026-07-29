@@ -49,6 +49,14 @@ import {
   renderValidationPdf,
 } from "./pdf";
 import { handleBankAccounts } from "./bank-router";
+import {
+  handleBoqScopes,
+  handleQuotationLifecycle,
+} from "./commercial-scope-router";
+import {
+  handleProcurementOrders,
+  handleVendorCategories,
+} from "./procurement-router";
 import { handleProfitShares } from "./profit-share-router";
 import { handleStandaloneBoqs } from "./standalone-boq-router";
 import { renderSopPdf } from "./sop-pdf";
@@ -107,18 +115,20 @@ const invoicePatchSchema = invoiceSchema
   .extend({ issueDate: isoDateSchema.optional() });
 
 const quotationSchema = z.object({
-  status: z.enum(["Draft", "Sent"]).default("Draft"),
+  status: z.enum(["Draft", "Sent", "Rejected", "Void"]).default("Draft"),
   issuedAt: isoDateSchema.default(() => new Date().toISOString().slice(0, 10)),
   validUntil: isoDateSchema.optional(),
 });
 
 const vendorSchema = z.object({
   name: z.string().trim().min(2).max(160),
-  category: z.string().trim().min(2).max(100),
+  vendorType: z.enum(["Supplier", "Jasa", "Hybrid"]).optional(),
+  categoryIds: z.array(idSchema).min(1).max(20).optional(),
+  category: z.string().trim().min(2).max(100).optional(),
   contact: z.string().trim().min(3).max(100),
   email: z.union([z.literal(""), emailSchema]).optional(),
   address: z.string().trim().max(300).optional(),
-  rate: nonNegativeMoney.default(0),
+  rate: nonNegativeMoney.optional(),
   status: z.enum(["Aktif", "Nonaktif"]).default("Aktif"),
 });
 
@@ -353,7 +363,9 @@ const resourceModules: Record<string, AccessModule> = {
   invoices: "billing",
   quotations: "billing",
   vendors: "procurement",
+  "vendor-categories": "procurement",
   spks: "procurement",
+  "procurement-orders": "procurement",
   bast: "bast",
   transactions: "finance",
   finance: "finance",
@@ -446,14 +458,23 @@ async function syncCommercialValues(
 ) {
   const totalResult = await client.execute({
     sql: `
-      SELECT COALESCE(SUM(i.quantity * i.selling_price), 0) AS total
+      SELECT
+        COALESCE(SUM(i.quantity * i.selling_price), 0) AS boq_total,
+        COALESCE((
+          SELECT SUM(q.total) FROM quotations q
+          WHERE q.project_id=? AND q.status='Accepted'
+        ),0) AS accepted_total
       FROM boq_items i
       JOIN boqs b ON b.id = i.boq_id
       WHERE b.project_id = ?
     `,
-    args: [projectId],
+    args: [projectId, projectId],
   });
-  const total = asNumber(totalResult.rows[0]?.total);
+  const acceptedTotal = asNumber(totalResult.rows[0]?.accepted_total);
+  const total =
+    acceptedTotal > 0
+      ? acceptedTotal
+      : asNumber(totalResult.rows[0]?.boq_total);
   const timestamp = now();
   await client.batch(
     [
@@ -462,8 +483,19 @@ async function syncCommercialValues(
         args: [total, timestamp, projectId],
       },
       {
-        sql: "UPDATE quotations SET total=?,status='Draft',updated_at=? WHERE project_id=?",
-        args: [total, timestamp, projectId],
+        sql: `UPDATE quotations SET total=COALESCE((
+          SELECT SUM(i.quantity*i.selling_price)
+          FROM boq_items i WHERE i.scope_id=quotations.scope_id
+        ),0),status='Draft',updated_at=? WHERE project_id=? AND status<>'Accepted'`,
+        args: [timestamp, projectId],
+      },
+      {
+        sql: `UPDATE boq_scopes SET status='Draft',updated_at=?
+          WHERE id IN (
+            SELECT q.scope_id FROM quotations q
+            WHERE q.project_id=? AND q.status='Draft'
+          )`,
+        args: [timestamp, projectId],
       },
     ],
     "write",
@@ -1253,6 +1285,10 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     await client.batch(
       [
         { sql: "DELETE FROM transactions WHERE project_id=?", args: [projectId] },
+        {
+          sql: "DELETE FROM spk_payments WHERE spk_id IN (SELECT id FROM spks WHERE project_id=?)",
+          args: [projectId],
+        },
         { sql: "DELETE FROM projects WHERE id = ?", args: [projectId] },
       ],
       "write",
@@ -1337,13 +1373,26 @@ async function ensureBoq(projectId: string) {
     sql: "SELECT id FROM boqs WHERE project_id = ? LIMIT 1",
     args: [projectId],
   });
-  if (existing.rows[0]) return String(existing.rows[0].id);
-  const id = randomUUID();
+  const id = existing.rows[0] ? String(existing.rows[0].id) : randomUUID();
   const timestamp = now();
-  await client.execute({
-    sql: "INSERT INTO boqs (id,project_id,status,notes,created_at,updated_at) VALUES (?,?,?,?,?,?)",
-    args: [id, projectId, "Draft", "", timestamp, timestamp],
+  if (!existing.rows[0]) {
+    await client.execute({
+      sql: "INSERT INTO boqs (id,project_id,status,notes,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+      args: [id, projectId, "Draft", "", timestamp, timestamp],
+    });
+  }
+  const scope = await client.execute({
+    sql: "SELECT id FROM boq_scopes WHERE boq_id=? AND sequence=0 LIMIT 1",
+    args: [id],
   });
+  if (!scope.rows[0]) {
+    await client.execute({
+      sql: `INSERT INTO boq_scopes
+        (id,boq_id,kind,sequence,title,status,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?)`,
+      args: [randomUUID(), id, "Original", 0, "BoQ Original", "Draft", timestamp, timestamp],
+    });
+  }
   return id;
 }
 
@@ -1460,16 +1509,28 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
     );
     await assertBoqTotalCoversInvoices(client, projectId, proposedTotal);
     const boqId = await ensureBoq(projectId);
+    const originalScope = await ensureExists(
+      "SELECT id,status FROM boq_scopes WHERE boq_id=? AND sequence=0 LIMIT 1",
+      [boqId],
+      "Scope BoQ Original tidak ditemukan.",
+    );
+    if (String(originalScope.status) === "Accepted") {
+      throw new ApiError(
+        409,
+        "ACCEPTED_SCOPE_LOCKED",
+        "BoQ Original sudah diterima klien dan tidak dapat diubah. Buat Addendum baru.",
+      );
+    }
     const timestamp = now();
     const statements = [
       {
         sql: "UPDATE boqs SET status=?,notes=?,updated_at=? WHERE id=?",
         args: [input.status, input.notes ?? "", timestamp, boqId],
       },
-      { sql: "DELETE FROM boq_items WHERE boq_id = ?", args: [boqId] },
+      { sql: "DELETE FROM boq_items WHERE scope_id = ?", args: [originalScope.id] },
       ...input.items.map((item, index) => ({
-        sql: "INSERT INTO boq_items (id,boq_id,category,description,quantity,unit,cost_price,selling_price,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        args: [item.id ?? randomUUID(), boqId, item.category, item.description, item.quantity, item.unit, item.costPrice, item.sellingPrice, index, timestamp, timestamp],
+        sql: "INSERT INTO boq_items (id,boq_id,scope_id,category,description,quantity,unit,cost_price,selling_price,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        args: [item.id ?? randomUUID(), boqId, originalScope.id, item.category, item.description, item.quantity, item.unit, item.costPrice, item.sellingPrice, index, timestamp, timestamp],
       })),
     ];
     await client.batch(statements, "write");
@@ -1483,6 +1544,18 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
     if (!mutationRoles("boq").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menambah item BoQ.");
     const input = boqItemSchema.parse(await jsonBody(request));
     const boqId = await ensureBoq(projectId);
+    const originalScope = await ensureExists(
+      "SELECT id,status FROM boq_scopes WHERE boq_id=? AND sequence=0 LIMIT 1",
+      [boqId],
+      "Scope BoQ Original tidak ditemukan.",
+    );
+    if (String(originalScope.status) === "Accepted") {
+      throw new ApiError(
+        409,
+        "ACCEPTED_SCOPE_LOCKED",
+        "BoQ Original sudah diterima klien. Tambahkan pekerjaan melalui Addendum.",
+      );
+    }
     const count = await client.execute({
       sql: "SELECT COUNT(*) AS count FROM boq_items WHERE boq_id = ?",
       args: [boqId],
@@ -1490,8 +1563,8 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
     const id = randomUUID();
     const timestamp = now();
     await client.execute({
-      sql: "INSERT INTO boq_items (id,boq_id,category,description,quantity,unit,cost_price,selling_price,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-      args: [id, boqId, input.category, input.description, input.quantity, input.unit, input.costPrice, input.sellingPrice, asNumber(count.rows[0]?.count), timestamp, timestamp],
+      sql: "INSERT INTO boq_items (id,boq_id,scope_id,category,description,quantity,unit,cost_price,selling_price,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+      args: [id, boqId, originalScope.id, input.category, input.description, input.quantity, input.unit, input.costPrice, input.sellingPrice, asNumber(count.rows[0]?.count), timestamp, timestamp],
     });
     await syncCommercialValues(client, projectId);
     await resetProjectValidation(client, projectId);
@@ -1503,10 +1576,20 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
     if (!mutationRoles("boq").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah item BoQ.");
     const input = boqItemSchema.partial().parse(await jsonBody(request));
     const current = await ensureExists(
-      "SELECT i.* FROM boq_items i JOIN boqs b ON b.id=i.boq_id WHERE i.id=? AND b.project_id=?",
+      `SELECT i.*,s.status AS scope_status FROM boq_items i
+        JOIN boqs b ON b.id=i.boq_id
+        LEFT JOIN boq_scopes s ON s.id=i.scope_id
+        WHERE i.id=? AND b.project_id=?`,
       [childId, projectId],
       "Item BoQ tidak ditemukan.",
     );
+    if (String(current.scope_status) === "Accepted") {
+      throw new ApiError(
+        409,
+        "ACCEPTED_SCOPE_LOCKED",
+        "Item yang sudah diterima klien tidak dapat diedit. Buat Addendum baru.",
+      );
+    }
     const currentBoq = await getBoq(projectId);
     const proposedTotal =
       currentBoq.totals.selling -
@@ -1548,11 +1631,21 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
 
   if (child === "items" && childId && request.method === "DELETE") {
     if (!mutationRoles("boq").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menghapus item BoQ.");
-    await ensureExists(
-      "SELECT i.id FROM boq_items i JOIN boqs b ON b.id=i.boq_id WHERE i.id=? AND b.project_id=?",
+    const itemScope = await ensureExists(
+      `SELECT i.id,s.status AS scope_status FROM boq_items i
+        JOIN boqs b ON b.id=i.boq_id
+        LEFT JOIN boq_scopes s ON s.id=i.scope_id
+        WHERE i.id=? AND b.project_id=?`,
       [childId, projectId],
       "Item BoQ tidak ditemukan.",
     );
+    if (String(itemScope.scope_status) === "Accepted") {
+      throw new ApiError(
+        409,
+        "ACCEPTED_SCOPE_LOCKED",
+        "Item yang sudah diterima klien tidak dapat dihapus. Buat Addendum baru.",
+      );
+    }
     const item = await ensureExists(
       "SELECT quantity,selling_price FROM boq_items WHERE id=?",
       [childId],
@@ -1583,7 +1676,12 @@ async function handleQuotations(request: Request, user: AuthUser) {
 
   if (request.method === "GET") {
     const result = await client.execute({
-      sql: "SELECT id,number,status,issued_at,valid_until,total FROM quotations WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
+      sql: `SELECT q.id,q.number,q.status,q.issued_at,q.valid_until,q.total,
+        q.accepted_at,q.acceptance_attachment_name
+        FROM quotations q
+        LEFT JOIN boq_scopes s ON s.id=q.scope_id
+        WHERE q.project_id=? AND (s.sequence=0 OR q.scope_id IS NULL)
+        ORDER BY q.created_at DESC LIMIT 1`,
       args: [projectId],
     });
     const row = result.rows[0];
@@ -1594,6 +1692,10 @@ async function handleQuotations(request: Request, user: AuthUser) {
       issuedAt: String(row.issued_at),
       validUntil: row.valid_until ? String(row.valid_until) : null,
       total: asNumber(row.total),
+      acceptedAt: row.accepted_at ? String(row.accepted_at) : null,
+      acceptanceAttachmentName: row.acceptance_attachment_name
+        ? String(row.acceptance_attachment_name)
+        : null,
     } : {
       id: null,
       number: null,
@@ -1615,8 +1717,29 @@ async function handleQuotations(request: Request, user: AuthUser) {
         "Tambahkan item BoQ terlebih dahulu sebelum membuat Quotation.",
       );
     }
+    const boqId = await ensureBoq(projectId);
+    const originalScope = await ensureExists(
+      "SELECT id,status FROM boq_scopes WHERE boq_id=? AND sequence=0 LIMIT 1",
+      [boqId],
+      "Scope BoQ Original tidak ditemukan.",
+    );
+    if (String(originalScope.status) === "Accepted") {
+      throw new ApiError(
+        409,
+        "ACCEPTED_QUOTATION_LOCKED",
+        "Quotation yang diterima klien sudah dikunci.",
+      );
+    }
+    const originalTotalResult = await client.execute({
+      sql: "SELECT COALESCE(SUM(quantity*selling_price),0) AS total FROM boq_items WHERE scope_id=?",
+      args: [originalScope.id],
+    });
+    const originalTotal = asNumber(originalTotalResult.rows[0]?.total);
     const current = await client.execute({
-      sql: "SELECT * FROM quotations WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
+      sql: `SELECT q.* FROM quotations q
+        LEFT JOIN boq_scopes s ON s.id=q.scope_id
+        WHERE q.project_id=? AND (s.sequence=0 OR q.scope_id IS NULL)
+        ORDER BY q.created_at DESC LIMIT 1`,
       args: [projectId],
     });
     const wasSent = String(current.rows[0]?.status ?? "") === "Sent";
@@ -1635,12 +1758,18 @@ async function handleQuotations(request: Request, user: AuthUser) {
           input.status ?? quotation.status,
           input.issuedAt ?? quotation.issued_at,
           input.validUntil === undefined ? quotation.valid_until : input.validUntil,
-          boq.totals.selling,
+          originalTotal,
           timestamp,
           quotationId,
         ],
       });
       await writeAuditLog(client, request, user, "update", "quotation", quotationId, input);
+      if (input.status) {
+        await client.execute({
+          sql: "UPDATE boq_scopes SET status=?,updated_at=? WHERE id=?",
+          args: [input.status, timestamp, originalScope.id],
+        });
+      }
     } else {
       const count = await client.execute("SELECT COUNT(*) AS count FROM quotations");
       quotationId = randomUUID();
@@ -1656,18 +1785,23 @@ async function handleQuotations(request: Request, user: AuthUser) {
         "Masa berlaku Quotation tidak boleh lebih awal dari tanggal terbit.",
       );
       await client.execute({
-        sql: "INSERT INTO quotations (id,project_id,number,status,issued_at,valid_until,total,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        sql: "INSERT INTO quotations (id,project_id,scope_id,number,status,issued_at,valid_until,total,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
         args: [
           quotationId,
           projectId,
+          originalScope.id,
           makeSequence("QUO", asNumber(count.rows[0]?.count)),
           input.status ?? "Draft",
           issuedAt,
           validUntil,
-          boq.totals.selling,
+          originalTotal,
           timestamp,
           timestamp,
         ],
+      });
+      await client.execute({
+        sql: "UPDATE boq_scopes SET status=?,updated_at=? WHERE id=?",
+        args: [input.status ?? "Draft", timestamp, originalScope.id],
       });
       await writeAuditLog(client, request, user, "create", "quotation", quotationId, { projectId, status: input.status });
     }
@@ -1700,7 +1834,10 @@ async function handleQuotations(request: Request, user: AuthUser) {
   if (request.method === "DELETE") {
     assertAccess(user, "billing", "manage");
     const result = await client.execute({
-      sql: "SELECT id FROM quotations WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
+      sql: `SELECT q.id FROM quotations q
+        LEFT JOIN boq_scopes s ON s.id=q.scope_id
+        WHERE q.project_id=? AND (s.sequence=0 OR q.scope_id IS NULL)
+        ORDER BY q.created_at DESC LIMIT 1`,
       args: [projectId],
     });
     const quotationId = result.rows[0]?.id;
@@ -1964,9 +2101,77 @@ function mapVendor(row: Record<string, unknown>) {
     contact: String(row.contact),
     email: row.email ? String(row.email) : undefined,
     address: row.address ? String(row.address) : undefined,
+    vendorType: String(row.vendor_type ?? "Jasa"),
+    categoryIds: parseJson<string[]>(row.category_ids_json, []),
+    categories: parseJson<Array<{ id: string; name: string; nameEn: string }>>(
+      row.categories_json,
+      [],
+    ),
     rate: asNumber(row.rate),
     status: String(row.status),
   };
+}
+
+async function vendorRowsWithCategories(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  rows: Array<Record<string, unknown>>,
+) {
+  if (!rows.length) return rows;
+  const assignments = await client.execute({
+    sql: `SELECT a.vendor_id,c.id,c.name,c.name_en
+      FROM vendor_category_assignments a
+      JOIN vendor_categories c ON c.id=a.category_id
+      WHERE a.vendor_id IN (${rows.map(() => "?").join(",")})
+      ORDER BY c.sort_order,c.name`,
+    args: rows.map((row) => row.id),
+  });
+  return rows.map((row) => {
+    const categories = assignments.rows
+      .filter((assignment) => String(assignment.vendor_id) === String(row.id))
+      .map((assignment) => ({
+        id: String(assignment.id),
+        name: String(assignment.name),
+        nameEn: String(assignment.name_en ?? ""),
+      }));
+    return {
+      ...row,
+      category_ids_json: JSON.stringify(categories.map((category) => category.id)),
+      categories_json: JSON.stringify(categories),
+    };
+  });
+}
+
+async function validateVendorCategories(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  categoryIds: string[],
+  vendorType: "Supplier" | "Jasa" | "Hybrid",
+) {
+  if (!categoryIds.length) {
+    throw new ApiError(422, "CATEGORY_REQUIRED", "Pilih minimal satu kategori vendor.");
+  }
+  const uniqueIds = [...new Set(categoryIds)];
+  const result = await client.execute({
+    sql: `SELECT id,vendor_type FROM vendor_categories
+      WHERE id IN (${uniqueIds.map(() => "?").join(",")}) AND status='Aktif'`,
+    args: uniqueIds,
+  });
+  if (result.rows.length !== uniqueIds.length) {
+    throw new ApiError(422, "INVALID_CATEGORY", "Salah satu kategori vendor tidak aktif atau tidak ditemukan.");
+  }
+  if (
+    vendorType !== "Hybrid" &&
+    result.rows.some(
+      (row) =>
+        ![vendorType, "Hybrid"].includes(String(row.vendor_type)),
+    )
+  ) {
+    throw new ApiError(
+      422,
+      "CATEGORY_TYPE_MISMATCH",
+      "Tipe kategori tidak sesuai dengan tipe vendor.",
+    );
+  }
+  return uniqueIds;
 }
 
 async function handleVendors(request: Request, path: string[], user: AuthUser) {
@@ -1991,48 +2196,139 @@ async function handleVendors(request: Request, path: string[], user: AuthUser) {
       sql: `SELECT * FROM vendors ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY status,name`,
       args: args as never[],
     });
-    return ok(result.rows.map((row) => mapVendor(row as Record<string, unknown>)));
+    const rows = await vendorRowsWithCategories(
+      client,
+      result.rows as Array<Record<string, unknown>>,
+    );
+    return ok(rows.map((row) => mapVendor(row)));
   }
 
   if (request.method === "POST" && !vendorId) {
     if (!["Admin", "Finance"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Hanya Admin dan Finance yang dapat menambah vendor.");
     const input = vendorSchema.parse(await jsonBody(request));
+    let categoryIds = input.categoryIds ?? [];
+    if (!categoryIds.length && input.category) {
+      const legacyCategory = await client.execute({
+        sql: "SELECT id FROM vendor_categories WHERE name=? AND status='Aktif' LIMIT 1",
+        args: [input.category],
+      });
+      if (legacyCategory.rows[0]) {
+        categoryIds = [String(legacyCategory.rows[0].id)];
+      } else {
+        const categoryId = randomUUID();
+        const inferredType = input.category.toLowerCase().includes("supplier")
+          ? "Supplier"
+          : "Jasa";
+        await client.execute({
+          sql: `INSERT INTO vendor_categories
+            (id,name,name_en,vendor_type,status,sort_order,created_by,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?)`,
+          args: [
+            categoryId,
+            input.category,
+            input.category,
+            inferredType,
+            "Aktif",
+            999,
+            user.id,
+            now(),
+            now(),
+          ],
+        });
+        categoryIds = [categoryId];
+      }
+    }
+    if (!categoryIds.length) {
+      throw new ApiError(422, "CATEGORY_REQUIRED", "Pilih minimal satu kategori vendor.");
+    }
+    const primaryCategory = await client.execute({
+      sql: "SELECT name,vendor_type FROM vendor_categories WHERE id=?",
+      args: [categoryIds[0]],
+    });
+    const vendorType =
+      input.vendorType ??
+      (String(primaryCategory.rows[0]?.vendor_type ?? "Jasa") as
+        | "Supplier"
+        | "Jasa"
+        | "Hybrid");
+    categoryIds = await validateVendorCategories(client, categoryIds, vendorType);
     const id = randomUUID();
     const timestamp = now();
-    await client.execute({
-      sql: "INSERT INTO vendors (id,name,category,contact,email,address,rate,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-      args: [id, input.name, input.category, input.contact, input.email || null, input.address ?? null, input.rate, input.status, timestamp, timestamp],
-    });
+    await client.batch([
+      {
+        sql: "INSERT INTO vendors (id,name,category,vendor_type,contact,email,address,rate,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        args: [id, input.name, primaryCategory.rows[0]?.name, vendorType, input.contact, input.email || null, input.address ?? null, input.rate ?? 0, input.status, timestamp, timestamp],
+      },
+      ...categoryIds.map((categoryId) => ({
+        sql: "INSERT INTO vendor_category_assignments (vendor_id,category_id,created_at) VALUES (?,?,?)",
+        args: [id, categoryId, timestamp],
+      })),
+    ], "write");
     await writeAuditLog(client, request, user, "create", "vendor", id, input);
-    return created({ id, ...input });
+    const createdRows = await vendorRowsWithCategories(client, [
+      (await ensureExists("SELECT * FROM vendors WHERE id=?", [id], "Vendor tidak ditemukan.")) as Record<string, unknown>,
+    ]);
+    return created(mapVendor(createdRows[0]));
   }
 
   if (vendorId && request.method === "GET") {
     const row = await ensureExists("SELECT * FROM vendors WHERE id=?", [vendorId], "Vendor tidak ditemukan.");
-    return ok(mapVendor(row as Record<string, unknown>));
+    const rows = await vendorRowsWithCategories(client, [row as Record<string, unknown>]);
+    return ok(mapVendor(rows[0]));
   }
 
   if (vendorId && request.method === "PATCH") {
     if (!["Admin", "Finance"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Hanya Admin dan Finance yang dapat mengubah vendor.");
     const input = vendorSchema.partial().parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM vendors WHERE id=?", [vendorId], "Vendor tidak ditemukan.");
-    await client.execute({
-      sql: "UPDATE vendors SET name=?,category=?,contact=?,email=?,address=?,rate=?,status=?,updated_at=? WHERE id=?",
-      args: [
-        input.name ?? current.name,
-        input.category ?? current.category,
-        input.contact ?? current.contact,
-        input.email === undefined ? current.email : input.email || null,
-        input.address === undefined ? current.address : input.address,
-        input.rate ?? current.rate,
-        input.status ?? current.status,
-        now(),
-        vendorId,
-      ],
-    });
+    const vendorType = input.vendorType ?? String(current.vendor_type ?? "Jasa") as "Supplier" | "Jasa" | "Hybrid";
+    let categoryIds = input.categoryIds;
+    if (!categoryIds && input.category) {
+      const legacyCategory = await client.execute({
+        sql: "SELECT id FROM vendor_categories WHERE name=? AND status='Aktif' LIMIT 1",
+        args: [input.category],
+      });
+      categoryIds = legacyCategory.rows[0] ? [String(legacyCategory.rows[0].id)] : [];
+    }
+    if (categoryIds) {
+      categoryIds = await validateVendorCategories(client, categoryIds, vendorType);
+    }
+    const primaryCategory = categoryIds?.length
+      ? await client.execute({
+          sql: "SELECT name FROM vendor_categories WHERE id=?",
+          args: [categoryIds[0]],
+        })
+      : null;
+    await client.batch([
+      {
+        sql: "UPDATE vendors SET name=?,category=?,vendor_type=?,contact=?,email=?,address=?,rate=?,status=?,updated_at=? WHERE id=?",
+        args: [
+          input.name ?? current.name,
+          primaryCategory?.rows[0]?.name ?? input.category ?? current.category,
+          vendorType,
+          input.contact ?? current.contact,
+          input.email === undefined ? current.email : input.email || null,
+          input.address === undefined ? current.address : input.address,
+          input.rate ?? current.rate,
+          input.status ?? current.status,
+          now(),
+          vendorId,
+        ],
+      },
+      ...(categoryIds
+        ? [
+            { sql: "DELETE FROM vendor_category_assignments WHERE vendor_id=?", args: [vendorId] },
+            ...categoryIds.map((categoryId) => ({
+              sql: "INSERT INTO vendor_category_assignments (vendor_id,category_id,created_at) VALUES (?,?,?)",
+              args: [vendorId, categoryId, now()],
+            })),
+          ]
+        : []),
+    ], "write");
     await writeAuditLog(client, request, user, "update", "vendor", vendorId, input);
     const updated = await ensureExists("SELECT * FROM vendors WHERE id=?", [vendorId], "Vendor tidak ditemukan.");
-    return ok(mapVendor(updated as Record<string, unknown>));
+    const updatedRows = await vendorRowsWithCategories(client, [updated as Record<string, unknown>]);
+    return ok(mapVendor(updatedRows[0]));
   }
 
   if (vendorId && request.method === "DELETE") {
@@ -2079,6 +2375,18 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
   const { client } = await getDatabase();
   const spkId = path[1];
   const action = path[2];
+
+  if (
+    request.method !== "GET" &&
+    process.env.NODE_ENV === "production" &&
+    process.env.ALLOW_LEGACY_SPK_MUTATIONS !== "true"
+  ) {
+    throw new ApiError(
+      410,
+      "LEGACY_ENDPOINT_READ_ONLY",
+      "Endpoint SPK lama hanya dapat dibaca. Gunakan /api/procurement-orders agar approval, verifikasi, bukti pembayaran, dan audit tetap lengkap.",
+    );
+  }
 
   if (request.method === "GET" && !spkId) {
     const projectId = new URL(request.url).searchParams.get("projectId");
@@ -2739,6 +3047,8 @@ function mapTransaction(
     source.startsWith("Bank:") ||
     source === "Profit Share" ||
     source === "Profit Share Reversal" ||
+    source === "Procurement Payment" ||
+    source === "Procurement Reversal" ||
     (Boolean(row.reference_id) &&
       (source === "Invoice" || source === "SPK"));
   return {
@@ -2851,7 +3161,28 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
             SELECT SUM(s.amount)
             FROM project_profit_shares s
             WHERE s.project_id=p.id AND s.status='Paid'
-          ),0) AS paid_amount
+          ),0) AS paid_amount,
+          COALESCE((
+            SELECT SUM(i.quantity*i.cost_price)
+            FROM boq_items i JOIN boqs b ON b.id=i.boq_id
+            WHERE b.project_id=p.id
+          ),0) AS budget_boq,
+          COALESCE((
+            SELECT SUM(o.cost) FROM spks o
+            WHERE o.project_id=p.id AND o.approval_status='Approved'
+              AND o.workflow_status<>'Void'
+          ),0) AS committed_vendor_cost,
+          COALESCE((
+            SELECT SUM(pay.amount)
+            FROM spk_payments pay JOIN spks o ON o.id=pay.spk_id
+            WHERE o.project_id=p.id AND pay.status='Posted'
+          ),0) AS procurement_paid,
+          COALESCE((
+            SELECT COUNT(*) FROM boq_scopes scope
+            JOIN boqs b ON b.id=scope.boq_id
+            WHERE b.project_id=p.id AND scope.kind='Addendum'
+              AND scope.status='Accepted'
+          ),0) AS accepted_addenda
         FROM projects p
         ${profitConditions.length ? `WHERE ${profitConditions.join(" AND ")}` : ""}
         ORDER BY p.code
@@ -2867,14 +3198,32 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           netProfit,
           allocatedAmount,
           paidAmount: asNumber(row.paid_amount),
-          retainedProfit: netProfit - allocatedAmount,
+          retainedProfit:
+            netProfit -
+            Math.max(
+              0,
+              asNumber(row.committed_vendor_cost) -
+                asNumber(row.procurement_paid),
+            ) -
+            allocatedAmount,
+          budgetBoq: asNumber(row.budget_boq),
+          committedVendorCost: asNumber(row.committed_vendor_cost),
+          procurementPaid: asNumber(row.procurement_paid),
+          outstandingVendorCost: Math.max(
+            0,
+            asNumber(row.committed_vendor_cost) -
+              asNumber(row.procurement_paid),
+          ),
+          acceptedAddenda: asNumber(row.accepted_addenda),
         };
       })
       .filter(
         (row) =>
           row.netProfit !== 0 ||
           row.allocatedAmount !== 0 ||
-          row.paidAmount !== 0,
+          row.paidAmount !== 0 ||
+          row.committedVendorCost !== 0 ||
+          row.acceptedAddenda !== 0,
       );
     if (transactionId === "report.csv") {
       const en = user.preferredLanguage === "en";
@@ -2917,6 +3266,26 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         );
       }
       if (profitRows.length) {
+        lines.push(
+          "",
+          [en ? "VENDOR COMMITMENTS" : "KOMITMEN VENDOR"].map(csvCell).join(","),
+          [
+            en ? "Project" : "Proyek",
+            en ? "BoQ Budget (IDR)" : "Budget BoQ (IDR)",
+            en ? "Committed (IDR)" : "Komitmen (IDR)",
+            en ? "Paid by Terms (IDR)" : "Dibayar per Termin (IDR)",
+            en ? "Outstanding (IDR)" : "Belum Dibayar (IDR)",
+            en ? "Accepted Addenda" : "Addendum Diterima",
+          ].map(csvCell).join(","),
+          ...profitRows.map((row) => [
+            row.project,
+            row.budgetBoq,
+            row.committedVendorCost,
+            row.procurementPaid,
+            row.outstandingVendorCost,
+            row.acceptedAddenda,
+          ].map(csvCell).join(",")),
+        );
         lines.push(
           "",
           [en ? "PROJECT PROFIT DISTRIBUTION - LIFETIME" : "DISTRIBUSI LABA PROYEK - SEPANJANG PROYEK"].map(csvCell).join(","),
@@ -2977,6 +3346,14 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         user.preferredLanguage,
         bankAccounts,
         profitRows,
+        profitRows.map((row) => ({
+          project: row.project,
+          budgetBoq: row.budgetBoq,
+          committedVendorCost: row.committedVendorCost,
+          paid: row.procurementPaid,
+          outstanding: row.outstandingVendorCost,
+          acceptedAddenda: row.acceptedAddenda,
+        })),
       );
     }
     return ok(transactions);
@@ -2988,6 +3365,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       ["invoice", "spk"].includes(input.source.toLowerCase()) ||
       input.source.toLowerCase().startsWith("bank:") ||
       input.source.toLowerCase().startsWith("profit share") ||
+      input.source.toLowerCase().startsWith("procurement ") ||
       input.category === "Bagi Hasil"
     ) {
       throw new ApiError(
@@ -3023,10 +3401,11 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       throw new ApiError(404, "NOT_FOUND", "Transaksi tidak ditemukan.");
     }
     if (
-      input.source &&
-      (["invoice", "spk"].includes(input.source.toLowerCase()) ||
-        input.source.toLowerCase().startsWith("bank:") ||
-        input.source.toLowerCase().startsWith("profit share")) ||
+      (input.source &&
+        (["invoice", "spk"].includes(input.source.toLowerCase()) ||
+          input.source.toLowerCase().startsWith("bank:") ||
+          input.source.toLowerCase().startsWith("profit share") ||
+          input.source.toLowerCase().startsWith("procurement "))) ||
       input.category === "Bagi Hasil"
     ) {
       throw new ApiError(
@@ -3039,7 +3418,8 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       (current.reference_id &&
         (current.source === "Invoice" || current.source === "SPK")) ||
       String(current.source).startsWith("Bank:") ||
-      String(current.source).startsWith("Profit Share")
+      String(current.source).startsWith("Profit Share") ||
+      String(current.source).startsWith("Procurement ")
     ) {
       throw new ApiError(
         409,
@@ -3077,7 +3457,8 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       (current.reference_id &&
         (current.source === "Invoice" || current.source === "SPK")) ||
       String(current.source).startsWith("Bank:") ||
-      String(current.source).startsWith("Profit Share")
+      String(current.source).startsWith("Profit Share") ||
+      String(current.source).startsWith("Procurement ")
     ) {
       throw new ApiError(
         409,
@@ -3718,10 +4099,22 @@ export async function dispatchApi(request: Request, path: string[]) {
   if (resource === "boq" && path[1] === "standalone") {
     return handleStandaloneBoqs(request, path, user);
   }
+  if (resource === "boq" && path[1] === "scopes") {
+    return handleBoqScopes(request, path, user);
+  }
   if (resource === "boq") return handleBoq(request, path, user);
+  if (resource === "quotations" && path[1]) {
+    return handleQuotationLifecycle(request, path, user);
+  }
   if (resource === "quotations") return handleQuotations(request, user);
   if (resource === "invoices") return handleInvoices(request, path, user);
   if (resource === "vendors") return handleVendors(request, path, user);
+  if (resource === "vendor-categories") {
+    return handleVendorCategories(request, path, user);
+  }
+  if (resource === "procurement-orders") {
+    return handleProcurementOrders(request, path, user);
+  }
   if (resource === "spks") return handleSpks(request, path, user);
   if (resource === "bast") return handleBast(request, path, user);
   if (resource === "validations") return handleValidations(request, path, user);

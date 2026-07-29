@@ -74,7 +74,35 @@ async function operatingProfit(client: DatabaseClient, projectId: string) {
   });
   const income = asNumber(result.rows[0]?.income);
   const expense = asNumber(result.rows[0]?.expense);
-  return { income, expense, netProfit: income - expense };
+  const commitments = await client.execute({
+    sql: `SELECT
+      COALESCE(SUM(s.cost),0) AS committed,
+      COALESCE(SUM((
+        SELECT COALESCE(SUM(pay.amount),0)
+        FROM spk_payments pay
+        WHERE pay.spk_id=s.id AND pay.status='Posted'
+      )),0) AS paid
+      FROM spks s
+      WHERE s.project_id=? AND s.approval_status='Approved'
+        AND s.workflow_status<>'Void'`,
+    args: [projectId],
+  });
+  const committedVendorCost = asNumber(commitments.rows[0]?.committed);
+  const paidVendorCost = asNumber(commitments.rows[0]?.paid);
+  const outstandingVendorCommitment = Math.max(
+    0,
+    committedVendorCost - paidVendorCost,
+  );
+  const netProfit = income - expense;
+  return {
+    income,
+    expense,
+    netProfit,
+    committedVendorCost,
+    paidVendorCost,
+    outstandingVendorCommitment,
+    distributableProfit: netProfit - outstandingVendorCommitment,
+  };
 }
 
 async function activePercentage(
@@ -136,7 +164,7 @@ async function summary(client: DatabaseClient, projectId: string) {
     args: [projectId],
   });
   const allocations = result.rows.map((row) =>
-    mapShare(row as Record<string, unknown>, profit.netProfit),
+    mapShare(row as Record<string, unknown>, profit.distributableProfit),
   );
   const active = allocations.filter((item) => item.status !== "Void");
   const allocatedAmount = active.reduce((total, item) => total + item.amount, 0);
@@ -157,7 +185,7 @@ async function summary(client: DatabaseClient, projectId: string) {
     ),
     allocatedAmount,
     paidAmount,
-    retainedProfit: profit.netProfit - allocatedAmount,
+    retainedProfit: profit.distributableProfit - allocatedAmount,
     allocations,
   };
 }
@@ -321,15 +349,15 @@ export async function handleProfitShares(
       );
     }
     const profit = await operatingProfit(client, String(current.project_id));
-    if (profit.netProfit <= 0) {
+    if (profit.distributableProfit <= 0) {
       throw new ApiError(
         409,
         "NO_DISTRIBUTABLE_PROFIT",
-        "Proyek belum memiliki laba bersih positif untuk dibagikan.",
+        "Laba belum aman dibagikan setelah memperhitungkan komitmen vendor yang belum dibayar.",
       );
     }
     const amount = Math.floor(
-      (profit.netProfit * asNumber(current.percentage_bps)) / 10_000,
+      (profit.distributableProfit * asNumber(current.percentage_bps)) / 10_000,
     );
     if (amount <= 0) {
       throw new ApiError(
@@ -350,6 +378,8 @@ export async function handleProfitShares(
     await writeAuditLog(client, request, user, "approve", "profit_share", shareId, {
       amount,
       baseNetProfit: profit.netProfit,
+      outstandingVendorCommitment: profit.outstandingVendorCommitment,
+      distributableProfit: profit.distributableProfit,
     });
     const response = await summary(client, String(current.project_id));
     return ok(response.allocations.find((item) => item.id === shareId));

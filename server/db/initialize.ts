@@ -1,5 +1,6 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
 import { hash } from "bcryptjs";
 import type { DatabaseClient, DatabaseStatement } from "./client";
 
@@ -133,9 +134,28 @@ CREATE TABLE IF NOT EXISTS boqs (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS boq_scopes (
+  id TEXT PRIMARY KEY,
+  boq_id TEXT NOT NULL REFERENCES boqs(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('Original', 'Addendum')),
+  sequence INTEGER NOT NULL DEFAULT 0 CHECK (sequence >= 0),
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Sent', 'Accepted', 'Rejected', 'Void')),
+  accepted_at TEXT,
+  acceptance_attachment_name TEXT,
+  acceptance_attachment_mime_type TEXT,
+  acceptance_attachment_content_base64 TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS boq_scopes_boq_idx ON boq_scopes(boq_id,sequence);
+CREATE UNIQUE INDEX IF NOT EXISTS boq_scopes_sequence_unique ON boq_scopes(boq_id,sequence);
+
 CREATE TABLE IF NOT EXISTS boq_items (
   id TEXT PRIMARY KEY,
   boq_id TEXT NOT NULL REFERENCES boqs(id) ON DELETE CASCADE,
+  scope_id TEXT REFERENCES boq_scopes(id) ON DELETE RESTRICT,
   category TEXT NOT NULL CHECK (category IN ('Perangkat', 'Material', 'Jasa', 'Mobilitas')),
   description TEXT NOT NULL,
   quantity INTEGER NOT NULL CHECK (quantity > 0),
@@ -201,15 +221,20 @@ CREATE INDEX IF NOT EXISTS standalone_boq_items_boq_idx
 CREATE TABLE IF NOT EXISTS quotations (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  scope_id TEXT REFERENCES boq_scopes(id) ON DELETE RESTRICT,
   number TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL DEFAULT 'Draft',
   issued_at TEXT NOT NULL,
   valid_until TEXT,
   total INTEGER NOT NULL,
+  accepted_at TEXT,
+  acceptance_attachment_name TEXT,
+  acceptance_attachment_mime_type TEXT,
+  acceptance_attachment_content_base64 TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS quotations_project_unique ON quotations(project_id);
+CREATE INDEX IF NOT EXISTS quotations_project_idx ON quotations(project_id,created_at);
 
 CREATE TABLE IF NOT EXISTS invoices (
   id TEXT PRIMARY KEY,
@@ -226,10 +251,24 @@ CREATE TABLE IF NOT EXISTS invoices (
 );
 CREATE INDEX IF NOT EXISTS invoices_project_idx ON invoices(project_id);
 
+CREATE TABLE IF NOT EXISTS vendor_categories (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  name_en TEXT NOT NULL DEFAULT '',
+  vendor_type TEXT NOT NULL CHECK (vendor_type IN ('Supplier', 'Jasa', 'Hybrid')),
+  status TEXT NOT NULL DEFAULT 'Aktif' CHECK (status IN ('Aktif', 'Nonaktif')),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS vendor_categories_sort_idx ON vendor_categories(status,sort_order,name);
+
 CREATE TABLE IF NOT EXISTS vendors (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   category TEXT NOT NULL,
+  vendor_type TEXT NOT NULL DEFAULT 'Jasa',
   contact TEXT NOT NULL,
   email TEXT,
   address TEXT,
@@ -239,6 +278,15 @@ CREATE TABLE IF NOT EXISTS vendors (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS vendor_category_assignments (
+  vendor_id TEXT NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+  category_id TEXT NOT NULL REFERENCES vendor_categories(id) ON DELETE RESTRICT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (vendor_id,category_id)
+);
+CREATE INDEX IF NOT EXISTS vendor_category_assignments_category_idx
+  ON vendor_category_assignments(category_id,vendor_id);
+
 CREATE TABLE IF NOT EXISTS spks (
   id TEXT PRIMARY KEY,
   number TEXT NOT NULL UNIQUE,
@@ -247,6 +295,17 @@ CREATE TABLE IF NOT EXISTS spks (
   scope TEXT NOT NULL,
   cost INTEGER NOT NULL CHECK (cost > 0),
   status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Dikirim', 'Dikerjakan', 'Selesai')),
+  document_type TEXT NOT NULL DEFAULT 'SPK',
+  workflow_status TEXT NOT NULL DEFAULT 'Draft',
+  approval_status TEXT NOT NULL DEFAULT 'Draft',
+  quotation_id TEXT REFERENCES quotations(id) ON DELETE RESTRICT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  submitted_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  submitted_at TEXT,
+  approved_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  approved_at TEXT,
+  override_reason TEXT,
+  legacy_imported INTEGER NOT NULL DEFAULT 0,
   payment_status TEXT NOT NULL DEFAULT 'Belum Dibayar' CHECK (payment_status IN ('Belum Dibayar', 'Dibayar')),
   paid_date TEXT,
   start_date TEXT,
@@ -255,6 +314,84 @@ CREATE TABLE IF NOT EXISTS spks (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS spks_project_idx ON spks(project_id);
+CREATE INDEX IF NOT EXISTS spks_vendor_idx ON spks(vendor_id,created_at);
+
+CREATE TABLE IF NOT EXISTS spk_items (
+  id TEXT PRIMARY KEY,
+  spk_id TEXT NOT NULL REFERENCES spks(id) ON DELETE CASCADE,
+  boq_item_id TEXT REFERENCES boq_items(id) ON DELETE RESTRICT,
+  quotation_id TEXT REFERENCES quotations(id) ON DELETE RESTRICT,
+  description_snapshot TEXT NOT NULL,
+  category_snapshot TEXT NOT NULL,
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  unit TEXT NOT NULL,
+  budget_unit_cost INTEGER NOT NULL DEFAULT 0 CHECK (budget_unit_cost >= 0),
+  agreed_unit_cost INTEGER NOT NULL DEFAULT 0 CHECK (agreed_unit_cost >= 0),
+  line_total INTEGER NOT NULL DEFAULT 0 CHECK (line_total >= 0),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  legacy_item INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS spk_items_spk_idx ON spk_items(spk_id,sort_order);
+CREATE INDEX IF NOT EXISTS spk_items_boq_item_idx ON spk_items(boq_item_id);
+CREATE INDEX IF NOT EXISTS spk_items_quotation_idx ON spk_items(quotation_id);
+
+CREATE TABLE IF NOT EXISTS spk_payment_terms (
+  id TEXT PRIMARY KEY,
+  spk_id TEXT NOT NULL REFERENCES spks(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  term_type TEXT NOT NULL CHECK (term_type IN ('DP', 'Progress', 'Final', 'Custom')),
+  percentage_bps INTEGER CHECK (percentage_bps IS NULL OR (percentage_bps > 0 AND percentage_bps <= 10000)),
+  planned_amount INTEGER NOT NULL CHECK (planned_amount > 0),
+  requires_verification INTEGER NOT NULL DEFAULT 1 CHECK (requires_verification IN (0,1)),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'Pending',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS spk_payment_terms_spk_idx ON spk_payment_terms(spk_id,sort_order);
+
+CREATE TABLE IF NOT EXISTS spk_verifications (
+  id TEXT PRIMARY KEY,
+  spk_id TEXT NOT NULL REFERENCES spks(id) ON DELETE CASCADE,
+  term_id TEXT REFERENCES spk_payment_terms(id) ON DELETE SET NULL,
+  verified_amount INTEGER NOT NULL CHECK (verified_amount > 0),
+  progress_percentage INTEGER CHECK (progress_percentage IS NULL OR (progress_percentage >= 0 AND progress_percentage <= 100)),
+  notes TEXT,
+  attachment_name TEXT,
+  attachment_mime_type TEXT,
+  attachment_content_base64 TEXT,
+  verified_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  verified_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS spk_verifications_spk_idx ON spk_verifications(spk_id,verified_at);
+CREATE INDEX IF NOT EXISTS spk_verifications_term_idx ON spk_verifications(term_id);
+
+CREATE TABLE IF NOT EXISTS po_receipts (
+  id TEXT PRIMARY KEY,
+  spk_id TEXT NOT NULL REFERENCES spks(id) ON DELETE CASCADE,
+  receipt_number TEXT,
+  received_at TEXT NOT NULL,
+  notes TEXT,
+  attachment_name TEXT,
+  attachment_mime_type TEXT,
+  attachment_content_base64 TEXT,
+  received_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS po_receipts_spk_idx ON po_receipts(spk_id,received_at);
+
+CREATE TABLE IF NOT EXISTS po_receipt_items (
+  id TEXT PRIMARY KEY,
+  receipt_id TEXT NOT NULL REFERENCES po_receipts(id) ON DELETE CASCADE,
+  spk_item_id TEXT NOT NULL REFERENCES spk_items(id) ON DELETE RESTRICT,
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS po_receipt_items_receipt_idx ON po_receipt_items(receipt_id);
+CREATE INDEX IF NOT EXISTS po_receipt_items_spk_item_idx ON po_receipt_items(spk_item_id);
 
 CREATE TABLE IF NOT EXISTS basts (
   id TEXT PRIMARY KEY,
@@ -360,6 +497,32 @@ CREATE INDEX IF NOT EXISTS transactions_date_idx ON transactions(date);
 CREATE UNIQUE INDEX IF NOT EXISTS transactions_source_reference_unique
   ON transactions(source, reference_id)
   WHERE reference_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS spk_payments (
+  id TEXT PRIMARY KEY,
+  spk_id TEXT NOT NULL REFERENCES spks(id) ON DELETE CASCADE,
+  term_id TEXT REFERENCES spk_payment_terms(id) ON DELETE SET NULL,
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  paid_date TEXT NOT NULL,
+  vendor_invoice_number TEXT NOT NULL,
+  payment_reference TEXT NOT NULL,
+  payment_method TEXT NOT NULL,
+  bank_account_id TEXT REFERENCES bank_accounts(id) ON DELETE RESTRICT,
+  attachment_name TEXT NOT NULL,
+  attachment_mime_type TEXT NOT NULL,
+  attachment_content_base64 TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'Posted' CHECK (status IN ('Posted', 'Void')),
+  transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  voided_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  voided_at TEXT,
+  void_reason TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS spk_payments_spk_idx ON spk_payments(spk_id,paid_date);
+CREATE INDEX IF NOT EXISTS spk_payments_term_idx ON spk_payments(term_id);
+CREATE INDEX IF NOT EXISTS spk_payments_bank_account_idx ON spk_payments(bank_account_id);
 
 CREATE TABLE IF NOT EXISTS project_profit_shares (
   id TEXT PRIMARY KEY,
@@ -646,6 +809,7 @@ async function ensureCmsSeed(client: DatabaseClient) {
   }
 
   await client.batch(statements, "write");
+  await ensureProcurementSchema(client);
 }
 
 async function ensureCmsEnhancements(client: DatabaseClient) {
@@ -1051,12 +1215,277 @@ async function ensureSpkPaymentColumns(client: DatabaseClient) {
   `);
 }
 
+function legacyVendorType(category: unknown) {
+  return String(category ?? "").toLowerCase().includes("supplier")
+    ? "Supplier"
+    : "Jasa";
+}
+
+async function ensureProcurementSchema(client: DatabaseClient) {
+  const columns: Array<[string, string, string]> = [
+    ["vendors", "vendor_type", "TEXT NOT NULL DEFAULT 'Jasa'"],
+    ["boq_items", "scope_id", "TEXT REFERENCES boq_scopes(id) ON DELETE RESTRICT"],
+    ["quotations", "scope_id", "TEXT REFERENCES boq_scopes(id) ON DELETE RESTRICT"],
+    ["quotations", "accepted_at", "TEXT"],
+    ["quotations", "acceptance_attachment_name", "TEXT"],
+    ["quotations", "acceptance_attachment_mime_type", "TEXT"],
+    ["quotations", "acceptance_attachment_content_base64", "TEXT"],
+    ["spks", "document_type", "TEXT NOT NULL DEFAULT 'SPK'"],
+    ["spks", "workflow_status", "TEXT NOT NULL DEFAULT 'Draft'"],
+    ["spks", "approval_status", "TEXT NOT NULL DEFAULT 'Draft'"],
+    ["spks", "quotation_id", "TEXT REFERENCES quotations(id) ON DELETE RESTRICT"],
+    ["spks", "created_by", "TEXT REFERENCES users(id) ON DELETE SET NULL"],
+    ["spks", "submitted_by", "TEXT REFERENCES users(id) ON DELETE SET NULL"],
+    ["spks", "submitted_at", "TEXT"],
+    ["spks", "approved_by", "TEXT REFERENCES users(id) ON DELETE SET NULL"],
+    ["spks", "approved_at", "TEXT"],
+    ["spks", "override_reason", "TEXT"],
+    ["spks", "legacy_imported", "INTEGER NOT NULL DEFAULT 0"],
+  ];
+  for (const [table, column, definition] of columns) {
+    await ensureColumn(client, table, column, definition);
+  }
+
+  await client.execute("DROP INDEX IF EXISTS quotations_project_unique");
+  await client.execute(
+    "CREATE UNIQUE INDEX IF NOT EXISTS quotations_scope_unique ON quotations(scope_id)",
+  );
+  await client.execute(
+    "CREATE INDEX IF NOT EXISTS boq_items_scope_idx ON boq_items(scope_id,sort_order)",
+  );
+  await client.execute(
+    "CREATE INDEX IF NOT EXISTS spks_quotation_idx ON spks(quotation_id)",
+  );
+
+  const timestamp = new Date().toISOString();
+  const vendorCategories = await client.execute(
+    "SELECT DISTINCT category FROM vendors WHERE trim(category)<>'' ORDER BY category",
+  );
+  for (const row of vendorCategories.rows) {
+    const name = String(row.category);
+    const existing = await client.execute({
+      sql: "SELECT id,vendor_type FROM vendor_categories WHERE name=? LIMIT 1",
+      args: [name],
+    });
+    const categoryId = existing.rows[0]
+      ? String(existing.rows[0].id)
+      : `vendor-category-${randomUUID()}`;
+    const type = legacyVendorType(name);
+    if (!existing.rows[0]) {
+      await client.execute({
+        sql: `INSERT INTO vendor_categories
+          (id,name,name_en,vendor_type,status,sort_order,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?)`,
+        args: [
+          categoryId,
+          name,
+          name,
+          type,
+          "Aktif",
+          vendorCategories.rows.indexOf(row),
+          timestamp,
+          timestamp,
+        ],
+      });
+    }
+    await client.batch(
+      [
+        {
+          sql: "UPDATE vendors SET vendor_type=? WHERE category=? AND (vendor_type IS NULL OR vendor_type='Jasa')",
+          args: [type, name],
+        },
+        {
+          sql: `INSERT INTO vendor_category_assignments (vendor_id,category_id,created_at)
+            SELECT id,?,? FROM vendors WHERE category=?
+            ON CONFLICT DO NOTHING`,
+          args: [categoryId, timestamp, name],
+        },
+      ],
+      "write",
+    );
+  }
+
+  const boqs = await client.execute(
+    "SELECT id,project_id,created_at FROM boqs ORDER BY created_at",
+  );
+  for (const boq of boqs.rows) {
+    const existingScope = await client.execute({
+      sql: "SELECT id FROM boq_scopes WHERE boq_id=? AND sequence=0 LIMIT 1",
+      args: [boq.id],
+    });
+    const scopeId = existingScope.rows[0]
+      ? String(existingScope.rows[0].id)
+      : `boq-scope-${randomUUID()}`;
+    if (!existingScope.rows[0]) {
+      const quotation = await client.execute({
+        sql: `SELECT id,status,accepted_at,acceptance_attachment_name,created_at
+          FROM quotations WHERE project_id=? ORDER BY created_at LIMIT 1`,
+        args: [boq.project_id],
+      });
+      const storedStatus = String(quotation.rows[0]?.status ?? "");
+      const acceptedHasProof =
+        Boolean(quotation.rows[0]?.accepted_at) &&
+        Boolean(String(quotation.rows[0]?.acceptance_attachment_name ?? "").trim());
+      const legacyStatus =
+        storedStatus === "Accepted" && !acceptedHasProof
+          ? "Sent"
+          : ["Draft", "Sent", "Accepted", "Rejected", "Void"].includes(storedStatus)
+            ? storedStatus
+            : "Draft";
+      await client.execute({
+        sql: `INSERT INTO boq_scopes
+          (id,boq_id,kind,sequence,title,status,accepted_at,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?)`,
+        args: [
+          scopeId,
+          boq.id,
+          "Original",
+          0,
+          "BoQ Original",
+          legacyStatus,
+          quotation.rows[0]?.accepted_at ?? null,
+          boq.created_at ?? timestamp,
+          timestamp,
+        ],
+      });
+    }
+    await client.batch(
+      [
+        {
+          sql: "UPDATE boq_items SET scope_id=? WHERE boq_id=? AND scope_id IS NULL",
+          args: [scopeId, boq.id],
+        },
+        {
+          sql: "UPDATE quotations SET scope_id=? WHERE project_id=? AND scope_id IS NULL",
+          args: [scopeId, boq.project_id],
+        },
+        {
+          sql: `UPDATE quotations SET status='Sent',accepted_at=NULL,updated_at=?
+            WHERE scope_id=? AND status='Accepted'
+              AND (accepted_at IS NULL OR acceptance_attachment_name IS NULL
+                OR trim(acceptance_attachment_name)='')`,
+          args: [timestamp, scopeId],
+        },
+        {
+          sql: `UPDATE boq_scopes SET status='Sent',accepted_at=NULL,updated_at=?
+            WHERE id=? AND EXISTS (
+              SELECT 1 FROM quotations q WHERE q.scope_id=boq_scopes.id
+                AND q.status='Sent'
+                AND (q.accepted_at IS NULL OR q.acceptance_attachment_name IS NULL
+                  OR trim(q.acceptance_attachment_name)='')
+            )`,
+          args: [timestamp, scopeId],
+        },
+      ],
+      "write",
+    );
+  }
+
+  const legacySpks = await client.execute(`
+    SELECT s.*,t.id AS transaction_id,t.date AS transaction_date,t.amount AS transaction_amount
+    FROM spks s
+    LEFT JOIN transactions t ON t.source='SPK' AND t.reference_id=s.id
+    WHERE NOT EXISTS (SELECT 1 FROM spk_items i WHERE i.spk_id=s.id)
+  `);
+  for (const spk of legacySpks.rows) {
+    const itemId = `spk-item-${randomUUID()}`;
+    const termId = `spk-term-${randomUUID()}`;
+    const workflowStatus =
+      String(spk.status) === "Draft"
+        ? "Draft"
+        : String(spk.status) === "Selesai"
+          ? "Selesai"
+          : String(spk.status);
+    await client.batch(
+      [
+        {
+          sql: `UPDATE spks SET document_type='SPK',workflow_status=?,
+            approval_status=?,legacy_imported=1,updated_at=? WHERE id=?`,
+          args: [
+            workflowStatus,
+            String(spk.status) === "Draft" ? "Draft" : "Approved",
+            timestamp,
+            spk.id,
+          ],
+        },
+        {
+          sql: `INSERT INTO spk_items
+            (id,spk_id,description_snapshot,category_snapshot,quantity,unit,
+             budget_unit_cost,agreed_unit_cost,line_total,sort_order,legacy_item,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          args: [
+            itemId,
+            spk.id,
+            spk.scope,
+            "Legacy",
+            1,
+            "paket",
+            spk.cost,
+            spk.cost,
+            spk.cost,
+            0,
+            1,
+            spk.created_at ?? timestamp,
+            timestamp,
+          ],
+        },
+        {
+          sql: `INSERT INTO spk_payment_terms
+            (id,spk_id,label,term_type,planned_amount,requires_verification,sort_order,status,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)`,
+          args: [
+            termId,
+            spk.id,
+            "Termin legacy",
+            "Custom",
+            spk.cost,
+            0,
+            0,
+            spk.payment_status === "Dibayar" ? "Paid" : "Pending",
+            spk.created_at ?? timestamp,
+            timestamp,
+          ],
+        },
+      ],
+      "write",
+    );
+    if (spk.transaction_id) {
+      await client.execute({
+        sql: `INSERT INTO spk_payments
+          (id,spk_id,term_id,amount,paid_date,vendor_invoice_number,payment_reference,
+           payment_method,attachment_name,attachment_mime_type,attachment_content_base64,
+           status,transaction_id,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT DO NOTHING`,
+        args: [
+          `spk-payment-${randomUUID()}`,
+          spk.id,
+          termId,
+          spk.transaction_amount ?? spk.cost,
+          spk.transaction_date ?? spk.paid_date ?? timestamp.slice(0, 10),
+          "LEGACY",
+          `LEGACY-${String(spk.number)}`,
+          "Legacy",
+          "Migrasi pembayaran lama",
+          "text/plain",
+          "bGVnYWN5",
+          "Posted",
+          spk.transaction_id,
+          spk.created_at ?? timestamp,
+          timestamp,
+        ],
+      });
+    }
+  }
+}
+
 export async function initializeDatabase(client: DatabaseClient) {
   await client.executeMultiple(schemaSql);
   await ensureCmsBilingualSchema(client);
   await ensureBastEngineerRoleColumn(client);
   await ensureTransactionCategoryColumn(client);
   await ensureSpkPaymentColumns(client);
+  await ensureProcurementSchema(client);
   await ensureCmsSeed(client);
   await ensureCmsEnhancements(client);
   await ensureCmsLandingFeatures(client);
@@ -1220,4 +1649,8 @@ export async function initializeDatabase(client: DatabaseClient) {
   }
 
   await client.batch(statements, "write");
+  // Fresh installations seed legacy-compatible rows above. Run the same
+  // idempotent migration once more so those rows immediately receive their
+  // Original scope, vendor classification, procurement lines, and payments.
+  await ensureProcurementSchema(client);
 }

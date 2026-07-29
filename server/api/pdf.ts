@@ -66,6 +66,15 @@ export type FinancialReportProfitRow = {
   retainedProfit: number;
 };
 
+export type FinancialReportProcurementRow = {
+  project: string;
+  budgetBoq: number;
+  committedVendorCost: number;
+  paid: number;
+  outstanding: number;
+  acceptedAddenda: number;
+};
+
 const PAGE_WIDTH = 210;
 const MARGIN = 14;
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
@@ -679,8 +688,18 @@ function response(context: PdfContext, filename: string) {
   });
 }
 
-async function quotationPdf(projectId: string, language: PdfLanguage) {
+async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage) {
   const { client } = await getDatabase();
+  const directQuotation = await client.execute({
+    sql: `SELECT q.*,s.kind AS scope_kind,s.title AS scope_title,s.sequence
+      FROM quotations q
+      LEFT JOIN boq_scopes s ON s.id=q.scope_id
+      WHERE q.id=? LIMIT 1`,
+    args: [projectOrQuotationId],
+  });
+  const projectId = directQuotation.rows[0]
+    ? String(directQuotation.rows[0].project_id)
+    : projectOrQuotationId;
   const projectResult = await client.execute({
     sql: "SELECT * FROM projects WHERE id=? LIMIT 1",
     args: [projectId],
@@ -689,9 +708,26 @@ async function quotationPdf(projectId: string, language: PdfLanguage) {
   if (!project) {
     throw new ApiError(404, "NOT_FOUND", "Proyek tidak ditemukan.");
   }
+  const quotationResult = directQuotation.rows[0]
+    ? directQuotation
+    : await client.execute({
+        sql: `SELECT q.*,s.kind AS scope_kind,s.title AS scope_title,s.sequence
+          FROM quotations q
+          LEFT JOIN boq_scopes s ON s.id=q.scope_id
+          WHERE q.project_id=? AND (s.sequence=0 OR q.scope_id IS NULL)
+          ORDER BY q.created_at DESC LIMIT 1`,
+        args: [projectId],
+      });
+  const quotation = quotationResult.rows[0];
   const itemResult = await client.execute({
-    sql: "SELECT i.* FROM boq_items i JOIN boqs b ON b.id=i.boq_id WHERE b.project_id=? ORDER BY i.sort_order",
-    args: [projectId],
+    sql: quotation?.scope_id
+      ? "SELECT i.* FROM boq_items i WHERE i.scope_id=? ORDER BY i.sort_order"
+      : `SELECT i.* FROM boq_items i
+          JOIN boqs b ON b.id=i.boq_id
+          LEFT JOIN boq_scopes s ON s.id=i.scope_id
+          WHERE b.project_id=? AND (s.sequence=0 OR i.scope_id IS NULL)
+          ORDER BY i.sort_order`,
+    args: [quotation?.scope_id ?? projectId],
   });
   if (!itemResult.rows.length) {
     throw new ApiError(409, "EMPTY_BOQ", "BoQ belum memiliki item.");
@@ -701,11 +737,6 @@ async function quotationPdf(projectId: string, language: PdfLanguage) {
       sum + asNumber(item.quantity) * asNumber(item.selling_price),
     0,
   );
-  const quotationResult = await client.execute({
-    sql: "SELECT number,status,issued_at,valid_until,total FROM quotations WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
-    args: [projectId],
-  });
-  const quotation = quotationResult.rows[0];
   const number = quotation
     ? String(quotation.number)
     : `QUO/${String(project.code).replace("PN-", "")}`;
@@ -731,6 +762,18 @@ async function quotationPdf(projectId: string, language: PdfLanguage) {
         quotation?.valid_until ?? project.target_date,
         language,
       ),
+    },
+    {
+      label: tr(language, "Jenis ruang lingkup", "Scope type"),
+      value: quotation?.scope_kind
+        ? `${localizeValue(quotation.scope_kind, language)} · ${String(quotation.scope_title ?? "")}`
+        : tr(language, "BoQ Original", "Original BoQ"),
+    },
+    {
+      label: tr(language, "Persetujuan klien", "Client acceptance"),
+      value: quotation?.accepted_at
+        ? `${displayDate(quotation.accepted_at, language)} · ${String(quotation.acceptance_attachment_name ?? "-")}`
+        : tr(language, "Belum diterima", "Not accepted"),
     },
   ]);
   y = drawSectionTitle(
@@ -881,24 +924,77 @@ async function invoicePdf(invoiceId: string, language: PdfLanguage) {
 async function spkPdf(spkId: string, language: PdfLanguage) {
   const { client } = await getDatabase();
   const result = await client.execute({
-    sql: "SELECT s.*,v.name AS vendor_name,v.category AS vendor_category,v.contact,v.email,v.address,p.code AS project_code,p.name AS project_name,p.location FROM spks s JOIN vendors v ON v.id=s.vendor_id JOIN projects p ON p.id=s.project_id WHERE s.id=? LIMIT 1",
+    sql: `SELECT s.*,v.name AS vendor_name,v.category AS vendor_category,
+      v.vendor_type,v.contact,v.email,v.address,p.code AS project_code,
+      p.name AS project_name,p.location,q.number AS quotation_number,
+      bs.kind AS scope_kind,bs.title AS scope_title
+      FROM spks s
+      JOIN vendors v ON v.id=s.vendor_id
+      JOIN projects p ON p.id=s.project_id
+      LEFT JOIN quotations q ON q.id=s.quotation_id
+      LEFT JOIN boq_scopes bs ON bs.id=q.scope_id
+      WHERE s.id=? LIMIT 1`,
     args: [spkId],
   });
   const spk = result.rows[0];
   if (!spk) {
     throw new ApiError(404, "NOT_FOUND", "SPK tidak ditemukan.");
   }
+  const documentType = String(spk.document_type ?? "SPK");
+  const [itemsResult, termsResult, verificationResult, receiptResult, paymentResult] =
+    await Promise.all([
+      client.execute({
+        sql: "SELECT * FROM spk_items WHERE spk_id=? ORDER BY sort_order,created_at",
+        args: [spkId],
+      }),
+      client.execute({
+        sql: "SELECT * FROM spk_payment_terms WHERE spk_id=? ORDER BY sort_order,created_at",
+        args: [spkId],
+      }),
+      client.execute({
+        sql: `SELECT v.*,t.label AS term_label,u.name AS verifier_name
+          FROM spk_verifications v
+          LEFT JOIN spk_payment_terms t ON t.id=v.term_id
+          LEFT JOIN users u ON u.id=v.verified_by
+          WHERE v.spk_id=? ORDER BY v.verified_at`,
+        args: [spkId],
+      }),
+      client.execute({
+        sql: `SELECT r.received_at,r.receipt_number,u.name AS receiver_name,
+          COALESCE(SUM(ri.quantity),0) AS received_quantity
+          FROM po_receipts r
+          LEFT JOIN po_receipt_items ri ON ri.receipt_id=r.id
+          LEFT JOIN users u ON u.id=r.received_by
+          WHERE r.spk_id=?
+          GROUP BY r.id,u.name ORDER BY r.received_at`,
+        args: [spkId],
+      }),
+      client.execute({
+        sql: `SELECT pay.*,t.label AS term_label,a.bank_name,a.account_number_masked
+          FROM spk_payments pay
+          LEFT JOIN spk_payment_terms t ON t.id=pay.term_id
+          LEFT JOIN bank_accounts a ON a.id=pay.bank_account_id
+          WHERE pay.spk_id=? ORDER BY pay.paid_date,pay.created_at`,
+        args: [spkId],
+      }),
+    ]);
   const context = await createDocument({
-    title: tr(language, "Surat Perintah Kerja", "Work Order"),
+    title:
+      documentType === "PO"
+        ? tr(language, "Purchase Order", "Purchase Order")
+        : tr(language, "Surat Perintah Kerja", "Work Order"),
     number: String(spk.number),
-    status: localizeValue(spk.status, language),
-    subject: tr(language, `SPK ${String(spk.project_name)}`, `Work Order ${String(spk.project_name)}`),
+    status: localizeValue(spk.workflow_status ?? spk.status, language),
+    subject:
+      documentType === "PO"
+        ? tr(language, `PO ${String(spk.project_name)}`, `Purchase Order ${String(spk.project_name)}`)
+        : tr(language, `SPK ${String(spk.project_name)}`, `Work Order ${String(spk.project_name)}`),
   }, language);
   let y = BODY_TOP;
   y = drawInfoGrid(context, y, [
     {
       label: tr(language, "Vendor / pelaksana", "Vendor / contractor"),
-      value: `${String(spk.vendor_name)} - ${String(spk.vendor_category)}`,
+      value: `${String(spk.vendor_name)} - ${String(spk.vendor_type ?? spk.vendor_category)}`,
     },
     {
       label: tr(language, "Kontak vendor", "Vendor contact"),
@@ -916,7 +1012,49 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
         : tr(language, "Dikoordinasikan bersama Project Manager", "To be coordinated with the Project Manager"),
     },
     { label: tr(language, "Nilai pekerjaan", "Work value"), value: rupiah(spk.cost, language) },
+    {
+      label: tr(language, "Sumber komersial", "Commercial source"),
+      value: spk.quotation_number
+        ? `${String(spk.quotation_number)} · ${String(spk.scope_kind ?? "")} · ${String(spk.scope_title ?? "")}`
+        : tr(language, "Dokumen legacy tanpa relasi BoQ", "Legacy document without BoQ relation"),
+    },
+    {
+      label: tr(language, "Status persetujuan", "Approval status"),
+      value: localizeValue(spk.approval_status ?? "Draft", language),
+    },
   ]);
+  if (itemsResult.rows.length) {
+    y = drawSectionTitle(
+      context,
+      y,
+      tr(language, "Rincian Komitmen", "Commitment Details"),
+      tr(
+        language,
+        "Budget BoQ dan harga negosiasi vendor dicatat terpisah",
+        "BoQ budget and negotiated vendor prices are recorded separately",
+      ),
+    );
+    y = drawTable(
+      context,
+      y,
+      [
+        { title: "No.", width: 10, align: "center" },
+        { title: tr(language, "Item", "Item"), width: 62 },
+        { title: "Qty", width: 18, align: "center" },
+        { title: tr(language, "Budget", "Budget"), width: 34, align: "right" },
+        { title: tr(language, "Harga Vendor", "Vendor Price"), width: 34, align: "right" },
+        { title: tr(language, "Jumlah", "Total"), width: 24, align: "right" },
+      ],
+      itemsResult.rows.map((item, index) => [
+        index + 1,
+        `${String(item.description_snapshot)}\n${localizeValue(item.category_snapshot, language)}`,
+        `${asNumber(item.quantity)} ${String(item.unit)}`,
+        rupiah(item.budget_unit_cost, language),
+        rupiah(item.agreed_unit_cost, language),
+        rupiah(item.line_total, language),
+      ]),
+    );
+  }
   y = drawSectionTitle(context, y, tr(language, "Lingkup Pekerjaan", "Scope of Work"));
   y = drawCallout(
     context,
@@ -932,6 +1070,114 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
       highlight: true,
     },
   ]);
+  if (termsResult.rows.length) {
+    y = drawSectionTitle(
+      context,
+      y,
+      tr(language, "Jadwal Termin", "Payment Terms"),
+    );
+    y = drawTable(
+      context,
+      y,
+      [
+        { title: "No.", width: 12, align: "center" },
+        { title: tr(language, "Termin", "Term"), width: 72 },
+        { title: tr(language, "Jenis", "Type"), width: 34 },
+        { title: tr(language, "Nilai", "Amount"), width: 40, align: "right" },
+        { title: tr(language, "Verifikasi", "Verification"), width: 24 },
+      ],
+      termsResult.rows.map((term, index) => [
+        index + 1,
+        String(term.label),
+        localizeValue(term.term_type, language),
+        `${rupiah(term.planned_amount, language)}${
+          term.percentage_bps
+            ? `\n${(asNumber(term.percentage_bps) / 100).toFixed(2)}%`
+            : ""
+        }`,
+        asNumber(term.requires_verification)
+          ? tr(language, "Wajib", "Required")
+          : tr(language, "Tidak", "No"),
+      ]),
+    );
+  }
+  if (verificationResult.rows.length || receiptResult.rows.length) {
+    y = drawSectionTitle(
+      context,
+      y,
+      documentType === "PO"
+        ? tr(language, "Penerimaan Barang", "Goods Receipts")
+        : tr(language, "Verifikasi Progres", "Progress Verification"),
+    );
+    y = drawTable(
+      context,
+      y,
+      [
+        { title: tr(language, "Tanggal", "Date"), width: 30 },
+        { title: tr(language, "Referensi", "Reference"), width: 56 },
+        { title: tr(language, "Petugas", "Officer"), width: 46 },
+        { title: tr(language, "Nilai / Qty", "Amount / Qty"), width: 50, align: "right" },
+      ],
+      documentType === "PO"
+        ? receiptResult.rows.map((receipt) => [
+            displayDate(receipt.received_at, language),
+            receipt.receipt_number
+              ? String(receipt.receipt_number)
+              : tr(language, "Tanpa nomor surat jalan", "No delivery note number"),
+            String(receipt.receiver_name ?? "-"),
+            `${asNumber(receipt.received_quantity)} ${tr(language, "unit item", "item units")}`,
+          ])
+        : verificationResult.rows.map((verification) => [
+            displayDate(verification.verified_at, language),
+            String(verification.term_label ?? tr(language, "Progres", "Progress")),
+            String(verification.verifier_name ?? "-"),
+            rupiah(verification.verified_amount, language),
+          ]),
+    );
+  }
+  if (paymentResult.rows.length) {
+    y = drawSectionTitle(
+      context,
+      y,
+      tr(language, "Histori Pembayaran", "Payment History"),
+    );
+    y = drawTable(
+      context,
+      y,
+      [
+        { title: tr(language, "Tanggal", "Date"), width: 26 },
+        { title: tr(language, "Termin / Tagihan", "Term / Invoice"), width: 52 },
+        { title: tr(language, "Referensi", "Reference"), width: 48 },
+        { title: tr(language, "Status", "Status"), width: 24 },
+        { title: tr(language, "Nominal", "Amount"), width: 32, align: "right" },
+      ],
+      paymentResult.rows.map((payment) => [
+        displayDate(payment.paid_date, language),
+        `${String(payment.term_label ?? "-")}\n${String(payment.vendor_invoice_number)}`,
+        `${String(payment.payment_reference)}${
+          payment.bank_name
+            ? `\n${String(payment.bank_name)} ${String(payment.account_number_masked ?? "")}`
+            : ""
+        }`,
+        localizeValue(payment.status, language),
+        rupiah(payment.amount, language),
+      ]),
+    );
+    const posted = paymentResult.rows
+      .filter((payment) => String(payment.status) === "Posted")
+      .reduce((sum, payment) => sum + asNumber(payment.amount), 0);
+    y = drawTotals(context, y, [
+      {
+        label: tr(language, "Total dibayar", "Total paid"),
+        value: rupiah(posted, language),
+      },
+      {
+        label: tr(language, "Sisa komitmen", "Outstanding commitment"),
+        value: rupiah(Math.max(0, asNumber(spk.cost) - posted), language),
+        highlight: true,
+      },
+    ]);
+  }
   y = drawSectionTitle(
     context,
     y,
@@ -1214,6 +1460,7 @@ export async function renderFinancialReportPdf(
   language: PdfLanguage = "id",
   bankAccounts: FinancialReportBankAccount[] = [],
   profitRows: FinancialReportProfitRow[] = [],
+  procurementRows: FinancialReportProcurementRow[] = [],
 ) {
   const sortedDates = entries
     .map((entry) => entry.dateIso)
@@ -1308,6 +1555,37 @@ export async function renderFinancialReportPdf(
         rupiah(row.netProfit, language),
         `${rupiah(row.allocatedAmount, language)}\n${tr(language, "Sisa", "Retained")}: ${rupiah(row.retainedProfit, language)}`,
         rupiah(row.paidAmount, language),
+      ]),
+    );
+  }
+
+  if (procurementRows.length) {
+    y = drawSectionTitle(
+      context,
+      y,
+      tr(language, "Komitmen Vendor", "Vendor Commitments"),
+      tr(
+        language,
+        "Komitmen belum dibayar adalah kewajiban, bukan kas keluar",
+        "Unpaid commitments are liabilities, not cash outflows",
+      ),
+    );
+    y = drawTable(
+      context,
+      y,
+      [
+        { title: tr(language, "Proyek", "Project"), width: 54 },
+        { title: tr(language, "Budget BoQ", "BoQ Budget"), width: 32, align: "right" },
+        { title: tr(language, "Komitmen", "Committed"), width: 32, align: "right" },
+        { title: tr(language, "Dibayar", "Paid"), width: 32, align: "right" },
+        { title: tr(language, "Belum Dibayar", "Outstanding"), width: 32, align: "right" },
+      ],
+      procurementRows.map((row) => [
+        `${row.project}\n${tr(language, "Addendum diterima", "Accepted addenda")}: ${row.acceptedAddenda}`,
+        rupiah(row.budgetBoq, language),
+        rupiah(row.committedVendorCost, language),
+        rupiah(row.paid, language),
+        rupiah(row.outstanding, language),
       ]),
     );
   }

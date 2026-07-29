@@ -73,8 +73,131 @@ export interface Vendor {
   contact: string;
   email?: string;
   address?: string;
+  vendorType?: "Supplier" | "Jasa" | "Hybrid";
+  categoryIds?: string[];
+  categories?: Array<{ id: string; name: string; nameEn: string }>;
+  /** @deprecated Retained only for legacy API compatibility. */
   rate: number;
   status: "Aktif" | "Nonaktif";
+}
+
+export interface VendorCategory {
+  id: string;
+  name: string;
+  nameEn: string;
+  vendorType: "Supplier" | "Jasa" | "Hybrid";
+  status: "Aktif" | "Nonaktif";
+  sortOrder: number;
+  vendorCount: number;
+}
+
+export interface CommercialScope {
+  id: string;
+  projectId: string;
+  kind: "Original" | "Addendum";
+  sequence: number;
+  title: string;
+  status: "Draft" | "Sent" | "Accepted" | "Rejected" | "Void";
+  acceptedAt?: string | null;
+  quotation: {
+    id: string;
+    number: string;
+    status: "Draft" | "Sent" | "Accepted" | "Rejected" | "Void";
+    issuedAt: string;
+    validUntil?: string | null;
+    total: number;
+    acceptedAt?: string | null;
+    attachmentName?: string | null;
+  } | null;
+  items: BoqItem[];
+}
+
+export interface ProcurementOrder {
+  id: string;
+  number: string;
+  documentType: "SPK" | "PO";
+  vendorId: string;
+  vendor: string;
+  vendorType: "Supplier" | "Jasa" | "Hybrid";
+  projectId: string;
+  project: string;
+  projectCode: string;
+  quotationId?: string | null;
+  quotationNumber?: string | null;
+  scopeKind?: "Original" | "Addendum" | null;
+  scopeTitle?: string | null;
+  scope: string;
+  cost: number;
+  budgetCost: number;
+  workflowStatus: string;
+  approvalStatus: "Draft" | "Pending" | "Approved" | "Rejected" | "Void";
+  startDate?: string | null;
+  endDate?: string | null;
+  legacy: boolean;
+  createdBy?: string | null;
+  submittedBy?: string | null;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  overrideReason?: string | null;
+  paid: number;
+  verifiedPayable: number;
+  outstanding: number;
+  availableToPay: number;
+  paymentStatus: "Belum Dibayar" | "Dibayar Sebagian" | "Lunas";
+  items: Array<{
+    id: string;
+    boqItemId?: string | null;
+    quotationId?: string | null;
+    description: string;
+    category: string;
+    quantity: number;
+    unit: string;
+    budgetUnitCost: number;
+    agreedUnitCost: number;
+    total: number;
+    legacy: boolean;
+  }>;
+  terms: Array<{
+    id: string;
+    label: string;
+    type: "DP" | "Progress" | "Final" | "Custom";
+    percentage?: number | null;
+    plannedAmount: number;
+    requiresVerification: boolean;
+    status: string;
+  }>;
+  verifications: Array<{
+    id: string;
+    termId?: string | null;
+    verifiedAmount: number;
+    progressPercentage?: number | null;
+    notes: string;
+    verifiedBy?: string | null;
+    verifiedAt: string;
+  }>;
+  receipts: Array<{
+    id: string;
+    receiptNumber?: string | null;
+    receivedAt: string;
+    notes: string;
+    receivedBy?: string | null;
+    items: Array<{ spkItemId: string; quantity: number }>;
+  }>;
+  payments: Array<{
+    id: string;
+    termId?: string | null;
+    amount: number;
+    paidDate: string;
+    vendorInvoiceNumber: string;
+    paymentReference: string;
+    paymentMethod: string;
+    bankAccountId?: string | null;
+    bankAccount?: string | null;
+    attachmentName: string;
+    status: "Posted" | "Void";
+    createdBy?: string | null;
+    voidReason?: string | null;
+  }>;
 }
 
 export interface WorkOrder {

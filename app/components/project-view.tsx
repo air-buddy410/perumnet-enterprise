@@ -70,6 +70,15 @@ interface ProjectDocument {
   preview?: string;
 }
 
+interface ProcurementSummary {
+  budgetBoq: number;
+  committedVendorCost: number;
+  verifiedPayable: number;
+  paid: number;
+  outstanding: number;
+  variance: number;
+}
+
 function taskStatusClass(status: ProjectTask["status"]) {
   if (status === "Selesai") return "success";
   if (status === "Berjalan") return "info";
@@ -96,6 +105,8 @@ export function ProjectView({
   const [taskOwner, setTaskOwner] = useState("");
   const [taskDate, setTaskDate] = useState(new Date().toISOString().slice(0, 10));
   const [accessUsers, setAccessUsers] = useState<ProjectAccessUser[]>([]);
+  const [procurementSummary, setProcurementSummary] = useState<ProcurementSummary | null>(null);
+  const [serverToday, setServerToday] = useState("");
 
   const refreshTasks = useCallback(async () => {
     try {
@@ -128,6 +139,18 @@ export function ProjectView({
       .catch((error) => notify(messageOf(error, language)));
   }, [canManageAccess, language, notify, projectId]);
 
+  useEffect(() => {
+    Promise.all([
+      api<ProcurementSummary>(`/api/procurement-orders?projectId=${encodeURIComponent(projectId)}&summary=1`),
+      api<{ today: string }>("/api/system/time"),
+    ])
+      .then(([summary, time]) => {
+        setProcurementSummary(summary);
+        setServerToday(time.today);
+      })
+      .catch((error) => notify(messageOf(error, language)));
+  }, [language, notify, projectId]);
+
   const availableOwners = project?.teamNames?.length
     ? project.teamNames
     : project?.manager
@@ -145,6 +168,14 @@ export function ProjectView({
   const completed = tasks.filter((task) => task.status === "Selesai").length;
   const active = tasks.filter((task) => task.status === "Berjalan").length;
   const remaining = tasks.filter((task) => task.status === "Belum Mulai").length;
+  const daysRemaining = project?.targetDateIso && serverToday
+    ? Math.max(0, Math.ceil((new Date(`${project.targetDateIso}T23:59:59`).getTime() - new Date(`${serverToday}T00:00:00`).getTime()) / 86_400_000))
+    : 0;
+  const money = (value: number) => new Intl.NumberFormat(language === "id" ? "id-ID" : "en-US", {
+    style: "currency",
+    currency: "IDR",
+    maximumFractionDigits: 0,
+  }).format(value);
 
   async function toggleTask(id: string) {
     const task = tasks.find((item) => item.id === id);
@@ -322,9 +353,40 @@ export function ProjectView({
         </article>
         <article>
           <span className="summary-dot warning" />
-          <div><strong>14</strong><span>{id ? "Hari tersisa" : "Days remaining"}</span></div>
+          <div><strong>{daysRemaining}</strong><span>{id ? "Hari tersisa" : "Days remaining"}</span></div>
         </article>
       </section>
+
+      {procurementSummary && (
+        <section className="panel project-procurement-panel">
+          <div className="panel-head">
+            <div>
+              <span className="eyebrow">{id ? "POSISI PROCUREMENT" : "PROCUREMENT POSITION"}</span>
+              <h2>{id ? "Budget, komitmen, dan kewajiban vendor" : "Vendor budget, commitments, and liabilities"}</h2>
+              <p className="panel-description">
+                {id
+                  ? "Komitmen yang belum dibayar tetap dicatat sebagai kewajiban dan belum menjadi arus kas keluar."
+                  : "Unpaid commitments remain liabilities and are not recorded as cash outflows yet."}
+              </p>
+            </div>
+          </div>
+          <div className="project-procurement-grid">
+            {[
+              [id ? "Budget BoQ" : "BoQ budget", procurementSummary.budgetBoq],
+              [id ? "Komitmen vendor" : "Vendor committed", procurementSummary.committedVendorCost],
+              [id ? "Layak dibayar" : "Verified payable", procurementSummary.verifiedPayable],
+              [id ? "Sudah dibayar" : "Paid", procurementSummary.paid],
+              [id ? "Belum dibayar" : "Outstanding", procurementSummary.outstanding],
+              [id ? "Sisa budget" : "Budget variance", procurementSummary.variance],
+            ].map(([label, value]) => (
+              <article key={String(label)}>
+                <span>{label}</span>
+                <strong>{money(Number(value))}</strong>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="panel timeline-panel">
         <div className="panel-head timeline-head">

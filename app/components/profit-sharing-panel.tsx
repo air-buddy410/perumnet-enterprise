@@ -30,6 +30,10 @@ interface ProfitSummary {
   income: number;
   expense: number;
   netProfit: number;
+  committedVendorCost: number;
+  paidVendorCost: number;
+  outstandingVendorCommitment: number;
+  distributableProfit: number;
   allocatedPercentage: number;
   allocatedAmount: number;
   paidAmount: number;
@@ -221,8 +225,8 @@ export function ProfitSharingPanel({
             <h2>{id ? "Pembagian keuntungan" : "Profit sharing"}</h2>
             <p>
               {id
-                ? "Laba dasar = kas masuk proyek dikurangi seluruh biaya operasional, bonus, dan fee; pembayaran bagi hasil tidak dihitung ulang sebagai biaya dasar."
-                : "Base profit equals project inflows less operating expenses, bonuses, and fees; profit-share payments are excluded from the base-profit loop."}
+                ? "Laba yang boleh dibagikan dikurangi komitmen vendor aktif yang belum dibayar. Dengan begitu kas untuk kewajiban SPK/PO tetap terlindungi."
+                : "Distributable profit deducts unpaid active vendor commitments, protecting the cash reserved for Work Orders and Purchase Orders."}
             </p>
           </div>
           <div className="title-actions">
@@ -264,6 +268,24 @@ export function ProfitSharingPanel({
               <div className={summary.netProfit >= 0 ? "positive" : "negative"}>
                 <span>{id ? "Laba bersih dasar" : "Base net profit"}</span>
                 <strong>{formatCurrency(summary.netProfit, language)}</strong>
+              </div>
+              <div>
+                <span>
+                  {id ? "Komitmen vendor belum dibayar" : "Unpaid vendor commitments"}
+                </span>
+                <strong>
+                  {formatCurrency(summary.outstandingVendorCommitment, language)}
+                </strong>
+              </div>
+              <div
+                className={
+                  summary.distributableProfit >= 0 ? "positive" : "negative"
+                }
+              >
+                <span>{id ? "Laba aman dibagikan" : "Safe distributable profit"}</span>
+                <strong>
+                  {formatCurrency(summary.distributableProfit, language)}
+                </strong>
               </div>
               <div>
                 <span>{id ? "Laba ditahan" : "Retained profit"}</span>

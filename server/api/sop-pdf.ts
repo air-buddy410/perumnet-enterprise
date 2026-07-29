@@ -60,15 +60,22 @@ const sopSections: SopSection[] = [
     ],
   },
   {
-    title: ["4. Vendor, SPK, dan pembayaran", "4. Vendors, Work Orders, and payments"],
+    title: ["4. Vendor, SPK/PO, dan pembayaran", "4. Vendors, Work Orders/POs, and payments"],
     intro: [
-      "Master vendor bersifat global dan hanya dikelola Admin/Finance. SPK selalu terkait proyek.",
-      "The vendor master is global and managed only by Admin/Finance. A Work Order always belongs to a project.",
+      "Procurement mengikuti Quotation Accepted. Harga pokok BoQ tetap menjadi budget; harga negosiasi vendor menjadi komitmen.",
+      "Procurement follows an Accepted Quotation. BoQ cost remains the budget; negotiated vendor prices become commitments.",
     ],
     steps: [
-      ["Tambahkan vendor walau belum ada proyek.", "Add vendors even when no project exists yet."],
-      ["Setelah proyek dipilih, buat SPK dengan lingkup, biaya, dan periode yang jelas.", "After selecting a project, create a Work Order with clear scope, cost, and dates."],
-      ["Konfirmasi pembayaran hanya pada tanggal dana benar-benar keluar.", "Confirm payment only when funds actually leave the account."],
+      ["Admin/Finance membuat kategori dan vendor bertipe Supplier, Jasa, atau Hybrid.", "Admin/Finance creates categories and Supplier, Service, or Hybrid vendors."],
+      ["Gunakan SPK untuk Jasa/Mobilitas dan PO untuk Perangkat/Material.", "Use Work Orders for Services/Mobility and POs for Devices/Materials."],
+      ["Pilih item dari Quotation Accepted; alokasi aktif tidak boleh melebihi qty BoQ.", "Select items from an Accepted Quotation; active allocations cannot exceed BoQ quantities."],
+      ["PM/Engineer mengajukan draft; Admin/Finance menyetujui. Finance dilarang self-approve.", "PM/Engineer submits a draft; Admin/Finance approves it. Finance self-approval is forbidden."],
+      ["Bayar DP setelah approval. Termin jasa perlu verifikasi progres; PO perlu penerimaan barang.", "Pay a down payment after approval. Service terms need progress verification; POs need goods receipts."],
+      ["Catat nominal aktual, tagihan vendor, referensi, rekening, dan bukti pembayaran.", "Record the actual amount, vendor invoice, reference, bank account, and payment proof."],
+    ],
+    control: [
+      "Pembayaran yang sudah direkonsiliasi harus dilepas sebelum Admin membuat Void/reversal.",
+      "A reconciled payment must be detached before an Admin posts a Void/reversal.",
     ],
   },
   {
@@ -78,7 +85,8 @@ const sopSections: SopSection[] = [
       "Commercial documents follow the active project and BoQ to keep amounts synchronized.",
     ],
     steps: [
-      ["Finalkan BoQ, terbitkan Quotation, lalu buat Invoice sesuai termin.", "Finalize the BoQ, issue a Quotation, then create milestone Invoices."],
+      ["Kirim Quotation lalu simpan tanggal dan bukti persetujuan klien untuk status Accepted.", "Send the Quotation, then save the client acceptance date and proof for Accepted status."],
+      ["Pekerjaan tambah wajib memakai BoQ dan Quotation Addendum baru.", "Additional work requires a new BoQ and Quotation Addendum."],
       ["Konfirmasi Invoice Lunas saat mutasi masuk tersedia.", "Confirm an Invoice as Paid when the incoming bank entry is available."],
       ["Selesaikan checklist perangkat sebelum BAST Final.", "Complete the device checklist before final handover."],
     ],
@@ -116,8 +124,8 @@ const sopSections: SopSection[] = [
   {
     title: ["8. Bonus, fee, dan pembagian keuntungan", "8. Bonuses, fees, and profit sharing"],
     intro: [
-      "Bonus Pegawai dan Fee Pemberi Kerja adalah biaya proyek yang mengurangi laba bersih dasar.",
-      "Employee Bonus and Referral Fee are project expenses that reduce base net profit.",
+      "Laba aman dibagikan mengurangi komitmen vendor aktif yang belum dibayar.",
+      "Safe distributable profit deducts unpaid active vendor commitments.",
     ],
     steps: [
       ["Catat bonus/fee sebagai Pengeluaran pada proyek dan kategori yang tepat.", "Record bonuses/fees as project Expenses in the correct category."],

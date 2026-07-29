@@ -17,6 +17,7 @@ export interface DatabaseStatement {
 export interface DatabaseClient {
   execute(statement: string | DatabaseStatement): Promise<QueryResult>;
   batch(statements: DatabaseStatement[], mode?: "read" | "write" | "deferred"): Promise<unknown>;
+  transaction<T>(callback: (client: DatabaseClient) => Promise<T>): Promise<T>;
   executeMultiple(sql: string): Promise<unknown>;
   close?(): void | Promise<void>;
 }
@@ -45,6 +46,45 @@ function libSqlAdapter(client: Client): DatabaseClient {
         mode,
       );
     },
+    async transaction(callback) {
+      const transaction = await client.transaction("write");
+      const transactionClient: DatabaseClient = {
+        async execute(input) {
+          const statement =
+            typeof input === "string"
+              ? input
+              : ({ sql: input.sql, args: (input.args ?? []) as never[] } satisfies InStatement);
+          const result = await transaction.execute(statement);
+          return { rows: result.rows as unknown as Array<Record<string, unknown>> };
+        },
+        batch(statements) {
+          return transaction.batch(
+            statements.map((item) => ({
+              sql: item.sql,
+              args: (item.args ?? []) as never[],
+            })),
+          );
+        },
+        async transaction(nestedCallback) {
+          return nestedCallback(transactionClient);
+        },
+        async executeMultiple(sql) {
+          for (const statement of sql.split(";").map((item) => item.trim()).filter(Boolean)) {
+            await transaction.execute(statement);
+          }
+        },
+      };
+      try {
+        const result = await callback(transactionClient);
+        await transaction.commit();
+        return result;
+      } catch (error) {
+        await transaction.rollback();
+        throw error;
+      } finally {
+        transaction.close();
+      }
+    },
     executeMultiple(sql) {
       return client.executeMultiple(sql);
     },
@@ -55,7 +95,7 @@ function libSqlAdapter(client: Client): DatabaseClient {
 }
 
 function d1Adapter(database: D1DatabaseLike): DatabaseClient {
-  return {
+  const adapter: DatabaseClient = {
     async execute(input) {
       const statement = typeof input === "string" ? { sql: input, args: [] } : input;
       const result = await database
@@ -71,6 +111,12 @@ function d1Adapter(database: D1DatabaseLike): DatabaseClient {
         ),
       );
     },
+    async transaction(callback) {
+      // D1 only exposes atomic prepared-statement batches. The canonical
+      // production/demo runtime uses PostgreSQL; keep callback semantics for
+      // read/validation compatibility when this adapter is used.
+      return callback(adapter);
+    },
     executeMultiple(sql) {
       const statements = sql
         .split(";")
@@ -80,6 +126,7 @@ function d1Adapter(database: D1DatabaseLike): DatabaseClient {
       return database.batch(statements);
     },
   };
+  return adapter;
 }
 
 function postgresQuery(sql: string) {
@@ -109,6 +156,44 @@ function postgresAdapter(pool: Pool): DatabaseClient {
         throw error;
       } finally {
         client.release();
+      }
+    },
+    async transaction(callback) {
+      const connection = await pool.connect();
+      const transactionClient: DatabaseClient = {
+        async execute(input) {
+          const statement = typeof input === "string" ? { sql: input, args: [] } : input;
+          const result = await connection.query(
+            postgresQuery(statement.sql),
+            statement.args ?? [],
+          );
+          return { rows: result.rows as Array<Record<string, unknown>> };
+        },
+        async batch(statements) {
+          for (const statement of statements) {
+            await connection.query(
+              postgresQuery(statement.sql),
+              statement.args ?? [],
+            );
+          }
+        },
+        async transaction(nestedCallback) {
+          return nestedCallback(transactionClient);
+        },
+        async executeMultiple(sql) {
+          await connection.query(sql);
+        },
+      };
+      try {
+        await connection.query("BEGIN");
+        const result = await callback(transactionClient);
+        await connection.query("COMMIT");
+        return result;
+      } catch (error) {
+        await connection.query("ROLLBACK");
+        throw error;
+      } finally {
+        connection.release();
       }
     },
     async executeMultiple(sql) {

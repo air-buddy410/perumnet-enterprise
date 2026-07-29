@@ -190,6 +190,37 @@ export const boqs = sqliteTable(
   (table) => [uniqueIndex("boqs_project_unique").on(table.projectId)],
 );
 
+export const boqScopes = sqliteTable(
+  "boq_scopes",
+  {
+    id: text("id").primaryKey(),
+    boqId: text("boq_id")
+      .notNull()
+      .references(() => boqs.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    sequence: integer("sequence").notNull().default(0),
+    title: text("title").notNull(),
+    status: text("status").notNull().default("Draft"),
+    acceptedAt: text("accepted_at"),
+    acceptanceAttachmentName: text("acceptance_attachment_name"),
+    acceptanceAttachmentMimeType: text("acceptance_attachment_mime_type"),
+    acceptanceAttachmentContentBase64: text(
+      "acceptance_attachment_content_base64",
+    ),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    ...timestamps,
+  },
+  (table) => [
+    index("boq_scopes_boq_idx").on(table.boqId, table.sequence),
+    uniqueIndex("boq_scopes_sequence_unique").on(
+      table.boqId,
+      table.sequence,
+    ),
+  ],
+);
+
 export const boqItems = sqliteTable(
   "boq_items",
   {
@@ -197,6 +228,9 @@ export const boqItems = sqliteTable(
     boqId: text("boq_id")
       .notNull()
       .references(() => boqs.id, { onDelete: "cascade" }),
+    scopeId: text("scope_id").references(() => boqScopes.id, {
+      onDelete: "restrict",
+    }),
     category: text("category").notNull(),
     description: text("description").notNull(),
     quantity: integer("quantity").notNull(),
@@ -206,7 +240,10 @@ export const boqItems = sqliteTable(
     sortOrder: integer("sort_order").notNull().default(0),
     ...timestamps,
   },
-  (table) => [index("boq_items_boq_idx").on(table.boqId)],
+  (table) => [
+    index("boq_items_boq_idx").on(table.boqId),
+    index("boq_items_scope_idx").on(table.scopeId, table.sortOrder),
+  ],
 );
 
 export const boqTemplates = sqliteTable("boq_templates", {
@@ -283,16 +320,26 @@ export const quotations = sqliteTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
+    scopeId: text("scope_id").references(() => boqScopes.id, {
+      onDelete: "restrict",
+    }),
     number: text("number").notNull(),
     status: text("status").notNull().default("Draft"),
     issuedAt: text("issued_at").notNull(),
     validUntil: text("valid_until"),
     total: integer("total").notNull(),
+    acceptedAt: text("accepted_at"),
+    acceptanceAttachmentName: text("acceptance_attachment_name"),
+    acceptanceAttachmentMimeType: text("acceptance_attachment_mime_type"),
+    acceptanceAttachmentContentBase64: text(
+      "acceptance_attachment_content_base64",
+    ),
     ...timestamps,
   },
   (table) => [
     uniqueIndex("quotations_number_unique").on(table.number),
-    uniqueIndex("quotations_project_unique").on(table.projectId),
+    uniqueIndex("quotations_scope_unique").on(table.scopeId),
+    index("quotations_project_idx").on(table.projectId, table.createdAt),
   ],
 );
 
@@ -318,10 +365,35 @@ export const invoices = sqliteTable(
   ],
 );
 
+export const vendorCategories = sqliteTable(
+  "vendor_categories",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    nameEn: text("name_en").notNull().default(""),
+    vendorType: text("vendor_type").notNull(),
+    status: text("status").notNull().default("Aktif"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("vendor_categories_name_unique").on(table.name),
+    index("vendor_categories_sort_idx").on(
+      table.status,
+      table.sortOrder,
+      table.name,
+    ),
+  ],
+);
+
 export const vendors = sqliteTable("vendors", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   category: text("category").notNull(),
+  vendorType: text("vendor_type").notNull().default("Jasa"),
   contact: text("contact").notNull(),
   email: text("email"),
   address: text("address"),
@@ -329,6 +401,29 @@ export const vendors = sqliteTable("vendors", {
   status: text("status").notNull().default("Aktif"),
   ...timestamps,
 });
+
+export const vendorCategoryAssignments = sqliteTable(
+  "vendor_category_assignments",
+  {
+    vendorId: text("vendor_id")
+      .notNull()
+      .references(() => vendors.id, { onDelete: "cascade" }),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => vendorCategories.id, { onDelete: "restrict" }),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("vendor_category_assignments_unique").on(
+      table.vendorId,
+      table.categoryId,
+    ),
+    index("vendor_category_assignments_category_idx").on(
+      table.categoryId,
+      table.vendorId,
+    ),
+  ],
+);
 
 export const spks = sqliteTable(
   "spks",
@@ -344,6 +439,25 @@ export const spks = sqliteTable(
     scope: text("scope").notNull(),
     cost: integer("cost").notNull(),
     status: text("status").notNull().default("Draft"),
+    documentType: text("document_type").notNull().default("SPK"),
+    workflowStatus: text("workflow_status").notNull().default("Draft"),
+    approvalStatus: text("approval_status").notNull().default("Draft"),
+    quotationId: text("quotation_id").references(() => quotations.id, {
+      onDelete: "restrict",
+    }),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    submittedBy: text("submitted_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    submittedAt: text("submitted_at"),
+    approvedBy: text("approved_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    approvedAt: text("approved_at"),
+    overrideReason: text("override_reason"),
+    legacyImported: integer("legacy_imported").notNull().default(0),
     paymentStatus: text("payment_status").notNull().default("Belum Dibayar"),
     paidDate: text("paid_date"),
     startDate: text("start_date"),
@@ -353,6 +467,130 @@ export const spks = sqliteTable(
   (table) => [
     uniqueIndex("spks_number_unique").on(table.number),
     index("spks_project_idx").on(table.projectId),
+    index("spks_vendor_idx").on(table.vendorId, table.createdAt),
+    index("spks_quotation_idx").on(table.quotationId),
+  ],
+);
+
+export const spkItems = sqliteTable(
+  "spk_items",
+  {
+    id: text("id").primaryKey(),
+    spkId: text("spk_id")
+      .notNull()
+      .references(() => spks.id, { onDelete: "cascade" }),
+    boqItemId: text("boq_item_id").references(() => boqItems.id, {
+      onDelete: "restrict",
+    }),
+    quotationId: text("quotation_id").references(() => quotations.id, {
+      onDelete: "restrict",
+    }),
+    descriptionSnapshot: text("description_snapshot").notNull(),
+    categorySnapshot: text("category_snapshot").notNull(),
+    quantity: integer("quantity").notNull(),
+    unit: text("unit").notNull(),
+    budgetUnitCost: integer("budget_unit_cost").notNull().default(0),
+    agreedUnitCost: integer("agreed_unit_cost").notNull().default(0),
+    lineTotal: integer("line_total").notNull().default(0),
+    sortOrder: integer("sort_order").notNull().default(0),
+    legacyItem: integer("legacy_item").notNull().default(0),
+    ...timestamps,
+  },
+  (table) => [
+    index("spk_items_spk_idx").on(table.spkId, table.sortOrder),
+    index("spk_items_boq_item_idx").on(table.boqItemId),
+    index("spk_items_quotation_idx").on(table.quotationId),
+  ],
+);
+
+export const spkPaymentTerms = sqliteTable(
+  "spk_payment_terms",
+  {
+    id: text("id").primaryKey(),
+    spkId: text("spk_id")
+      .notNull()
+      .references(() => spks.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    termType: text("term_type").notNull(),
+    percentageBps: integer("percentage_bps"),
+    plannedAmount: integer("planned_amount").notNull(),
+    requiresVerification: integer("requires_verification").notNull().default(1),
+    sortOrder: integer("sort_order").notNull().default(0),
+    status: text("status").notNull().default("Pending"),
+    ...timestamps,
+  },
+  (table) => [
+    index("spk_payment_terms_spk_idx").on(table.spkId, table.sortOrder),
+  ],
+);
+
+export const spkVerifications = sqliteTable(
+  "spk_verifications",
+  {
+    id: text("id").primaryKey(),
+    spkId: text("spk_id")
+      .notNull()
+      .references(() => spks.id, { onDelete: "cascade" }),
+    termId: text("term_id").references(() => spkPaymentTerms.id, {
+      onDelete: "set null",
+    }),
+    verifiedAmount: integer("verified_amount").notNull(),
+    progressPercentage: integer("progress_percentage"),
+    notes: text("notes"),
+    attachmentName: text("attachment_name"),
+    attachmentMimeType: text("attachment_mime_type"),
+    attachmentContentBase64: text("attachment_content_base64"),
+    verifiedBy: text("verified_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    verifiedAt: text("verified_at").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("spk_verifications_spk_idx").on(table.spkId, table.verifiedAt),
+    index("spk_verifications_term_idx").on(table.termId),
+  ],
+);
+
+export const poReceipts = sqliteTable(
+  "po_receipts",
+  {
+    id: text("id").primaryKey(),
+    spkId: text("spk_id")
+      .notNull()
+      .references(() => spks.id, { onDelete: "cascade" }),
+    receiptNumber: text("receipt_number"),
+    receivedAt: text("received_at").notNull(),
+    notes: text("notes"),
+    attachmentName: text("attachment_name"),
+    attachmentMimeType: text("attachment_mime_type"),
+    attachmentContentBase64: text("attachment_content_base64"),
+    receivedBy: text("received_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("po_receipts_spk_idx").on(table.spkId, table.receivedAt),
+  ],
+);
+
+export const poReceiptItems = sqliteTable(
+  "po_receipt_items",
+  {
+    id: text("id").primaryKey(),
+    receiptId: text("receipt_id")
+      .notNull()
+      .references(() => poReceipts.id, { onDelete: "cascade" }),
+    spkItemId: text("spk_item_id")
+      .notNull()
+      .references(() => spkItems.id, { onDelete: "restrict" }),
+    quantity: integer("quantity").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("po_receipt_items_receipt_idx").on(table.receiptId),
+    index("po_receipt_items_spk_item_idx").on(table.spkItemId),
   ],
 );
 
@@ -495,6 +733,48 @@ export const transactions = sqliteTable(
       table.source,
       table.referenceId,
     ),
+  ],
+);
+
+export const spkPayments = sqliteTable(
+  "spk_payments",
+  {
+    id: text("id").primaryKey(),
+    spkId: text("spk_id")
+      .notNull()
+      .references(() => spks.id, { onDelete: "cascade" }),
+    termId: text("term_id").references(() => spkPaymentTerms.id, {
+      onDelete: "set null",
+    }),
+    amount: integer("amount").notNull(),
+    paidDate: text("paid_date").notNull(),
+    vendorInvoiceNumber: text("vendor_invoice_number").notNull(),
+    paymentReference: text("payment_reference").notNull(),
+    paymentMethod: text("payment_method").notNull(),
+    bankAccountId: text("bank_account_id").references(() => bankAccounts.id, {
+      onDelete: "restrict",
+    }),
+    attachmentName: text("attachment_name").notNull(),
+    attachmentMimeType: text("attachment_mime_type").notNull(),
+    attachmentContentBase64: text("attachment_content_base64").notNull(),
+    status: text("status").notNull().default("Posted"),
+    transactionId: text("transaction_id").references(() => transactions.id, {
+      onDelete: "set null",
+    }),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    voidedBy: text("voided_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    voidedAt: text("voided_at"),
+    voidReason: text("void_reason"),
+    ...timestamps,
+  },
+  (table) => [
+    index("spk_payments_spk_idx").on(table.spkId, table.paidDate),
+    index("spk_payments_term_idx").on(table.termId),
+    index("spk_payments_bank_account_idx").on(table.bankAccountId),
   ],
 );
 

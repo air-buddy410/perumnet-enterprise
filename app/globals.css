@@ -3239,6 +3239,47 @@ h3 {
   font-size: 9px;
 }
 
+.project-procurement-panel .panel-description {
+  max-width: 760px;
+  margin-top: 6px;
+}
+
+.project-procurement-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+}
+
+.project-procurement-grid article {
+  min-width: 0;
+  padding: 18px 20px;
+  border-right: 1px solid var(--line);
+}
+
+.project-procurement-grid article:last-child {
+  border-right: 0;
+}
+
+.project-procurement-grid span,
+.project-procurement-grid strong {
+  display: block;
+}
+
+.project-procurement-grid span {
+  min-height: 30px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.project-procurement-grid strong {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+  color: var(--navy);
+  font-family: "Plus Jakarta Sans", sans-serif;
+  font-size: clamp(12px, 1vw, 16px);
+}
+
 .timeline-controls {
   display: flex;
   align-items: center;
@@ -3684,6 +3725,264 @@ h3 {
   gap: 7px;
   color: var(--muted);
   font-size: 8px;
+}
+
+.vendor-category-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.vendor-category-chips span {
+  border-radius: 999px;
+  padding: 4px 7px;
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+  font-size: 7px;
+  font-weight: 700;
+}
+
+.vendor-contract-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  border-top: 1px solid var(--line);
+  padding-top: 11px;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.vendor-contract-note svg {
+  flex: 0 0 auto;
+  color: var(--teal-dark);
+}
+
+.category-master-grid,
+.commercial-scope-list,
+.procurement-order-list {
+  display: grid;
+}
+
+.category-master-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 17px;
+}
+
+.category-master-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 13px;
+}
+
+.category-master-card > div,
+.commercial-scope-main,
+.commercial-scope-value,
+.order-main,
+.order-values,
+.order-statuses {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.category-master-card strong,
+.commercial-scope-main strong,
+.commercial-scope-value strong,
+.order-main strong,
+.order-values strong {
+  color: var(--navy);
+  font-size: 10px;
+}
+
+.category-master-card span,
+.commercial-scope-main small,
+.commercial-scope-value span,
+.order-main span,
+.order-main small,
+.order-values span,
+.order-values small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.commercial-scope-card {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(130px, .45fr) auto auto;
+  align-items: center;
+  gap: 16px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.commercial-scope-card:last-child {
+  border-bottom: 0;
+}
+
+.procurement-order-card {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr) minmax(230px, .8fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.procurement-order-card:last-child {
+  border-bottom: 0;
+}
+
+.order-document-mark {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
+
+.order-document-mark strong {
+  font-size: 7px;
+}
+
+.order-statuses {
+  justify-items: end;
+}
+
+.order-actions,
+.table-row-actions {
+  display: flex;
+  grid-column: 2 / -1;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.commercial-scope-card .table-row-actions {
+  grid-column: auto;
+}
+
+.order-history {
+  grid-column: 2 / -1;
+  border-radius: 9px;
+  background: var(--surface-soft);
+  padding: 9px 11px;
+}
+
+.order-history summary {
+  cursor: pointer;
+  color: var(--teal-dark);
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.order-payment-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.order-payment-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.order-payment-list span,
+.order-payment-list small {
+  display: block;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.order-payment-list strong {
+  color: var(--navy);
+  font-size: 9px;
+}
+
+.category-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 12px;
+}
+
+.category-picker legend {
+  padding: 0 5px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.category-picker label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 6px 9px;
+  background: var(--surface-soft);
+  color: var(--navy);
+  font-size: 8px;
+}
+
+.procurement-line-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.procurement-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px 150px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 9px;
+}
+
+.procurement-line > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.procurement-line > label span,
+.procurement-line > label small {
+  display: block;
+}
+
+.procurement-line > label strong {
+  color: var(--navy);
+  font-size: 9px;
+}
+
+.procurement-line > label small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.order-total-preview {
+  justify-content: center;
+  border-radius: 9px;
+  padding: 10px 12px;
+  background: var(--teal-soft);
+}
+
+.order-total-preview strong {
+  color: var(--teal-dark);
+  font-size: 14px;
 }
 
 .vendor-rate {
@@ -4510,7 +4809,7 @@ h3 {
 
 .profit-summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   border-top: 1px solid #e3ecec;
   border-bottom: 1px solid #e3ecec;
 }
@@ -4523,6 +4822,14 @@ h3 {
 
 .profit-summary-grid > div:last-child {
   border-right: 0;
+}
+
+.profit-summary-grid > div:nth-child(3n) {
+  border-right: 0;
+}
+
+.profit-summary-grid > div:nth-child(-n + 3) {
+  border-bottom: 1px solid #e3ecec;
 }
 
 .profit-summary-grid span,
@@ -4633,7 +4940,15 @@ h3 {
     border-right: 0;
   }
 
-  .profit-summary-grid > div:nth-child(-n + 2) {
+  .profit-summary-grid > div:nth-child(3) {
+    border-right: 1px solid #e3ecec;
+  }
+
+  .profit-summary-grid > div:nth-child(even) {
+    border-right: 0;
+  }
+
+  .profit-summary-grid > div:nth-child(-n + 4) {
     border-bottom: 1px solid #e3ecec;
   }
 
@@ -4678,7 +4993,8 @@ h3 {
   }
 
   .profit-summary-grid > div,
-  .profit-summary-grid > div:nth-child(2) {
+  .profit-summary-grid > div:nth-child(2),
+  .profit-summary-grid > div:nth-child(3) {
     border-right: 0;
     border-bottom: 1px solid #e3ecec;
   }
@@ -5360,6 +5676,99 @@ h3 {
 
 .modal-card.wide {
   width: min(100%, 650px);
+}
+
+.modal-card.extra-wide {
+  width: min(100%, 880px);
+}
+
+@media (max-width: 1100px) {
+  .category-master-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .commercial-scope-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .commercial-scope-card .commercial-scope-value,
+  .commercial-scope-card .table-row-actions {
+    grid-column: 1 / -1;
+  }
+
+  .commercial-scope-card .table-row-actions {
+    justify-content: flex-start;
+  }
+
+  .procurement-order-card {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .procurement-order-card .order-values,
+  .procurement-order-card .order-actions,
+  .procurement-order-card .order-history {
+    grid-column: 2 / -1;
+  }
+}
+
+@media (max-width: 700px) {
+  .category-master-grid,
+  .vendor-grid {
+    padding: 12px;
+  }
+
+  .category-master-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .category-master-card .button {
+    width: 100%;
+    grid-column: 1 / -1;
+  }
+
+  .commercial-scope-card {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .commercial-scope-card > *,
+  .commercial-scope-card .commercial-scope-value,
+  .commercial-scope-card .table-row-actions {
+    grid-column: 1;
+  }
+
+  .procurement-order-card {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 11px;
+    padding: 14px;
+  }
+
+  .procurement-order-card .order-values,
+  .procurement-order-card .order-statuses,
+  .procurement-order-card .order-actions,
+  .procurement-order-card .order-history {
+    width: 100%;
+    grid-column: 1 / -1;
+    justify-items: start;
+  }
+
+  .procurement-order-card .order-actions {
+    justify-content: flex-start;
+  }
+
+  .procurement-line {
+    grid-template-columns: 1fr 82px 1fr;
+  }
+
+  .procurement-line > label {
+    grid-column: 1 / -1;
+  }
+
+  .modal-card.extra-wide {
+    width: 100%;
+  }
 }
 
 .modal-head {
@@ -6812,6 +7221,22 @@ h3 {
 
   .project-summary-grid article {
     padding: 11px 13px;
+  }
+
+  .project-procurement-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .project-procurement-grid article {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .project-procurement-grid article:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .project-procurement-grid article:nth-last-child(-n + 2) {
+    border-bottom: 0;
   }
 
   .timeline-head {

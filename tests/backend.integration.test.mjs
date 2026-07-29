@@ -1166,6 +1166,466 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     0,
   );
 
+  const quotationForProcurement = await json(
+    `/api/quotations?projectId=${project.id}`,
+  );
+  const acceptanceAttachment = {
+    name: "persetujuan-klien.png",
+    mimeType: "image/png",
+    contentBase64: Buffer.from("client-approval").toString("base64"),
+  };
+  const acceptedOriginal = await json(
+    `/api/quotations/${quotationForProcurement.id}/accept`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        acceptedAt: "2026-07-29",
+        attachment: acceptanceAttachment,
+      }),
+    },
+  );
+  assert.equal(acceptedOriginal.status, "Accepted");
+  assert.equal(acceptedOriginal.quotation.status, "Accepted");
+  assert.equal(
+    (
+      await request(`/api/boq/items/${boqItem.id}?projectId=${project.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ sellingPrice: 2_000_000 }),
+      })
+    ).status,
+    409,
+  );
+
+  const categories = await json("/api/vendor-categories");
+  const supplierCategory = categories.find(
+    (category) => category.name === "Supplier Perangkat",
+  );
+  assert.ok(supplierCategory);
+  assert.equal(supplierCategory.vendorType, "Supplier");
+  const updatedFinanceVendor = await json(`/api/vendors/${financeVendor.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      vendorType: "Supplier",
+      categoryIds: [supplierCategory.id],
+    }),
+  });
+  assert.equal(updatedFinanceVendor.vendorType, "Supplier");
+  assert.deepEqual(updatedFinanceVendor.categoryIds, [supplierCategory.id]);
+
+  const purchaseOrder = await json(
+    "/api/procurement-orders",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        documentType: "PO",
+        vendorId: financeVendor.id,
+        projectId: project.id,
+        quotationId: quotationForProcurement.id,
+        items: [
+          {
+            boqItemId: boqItem.id,
+            quantity: 1,
+            agreedUnitCost: 900_000,
+          },
+        ],
+        terms: [
+          { label: "DP 50%", type: "DP", percentage: 50 },
+          { label: "Pelunasan", type: "Final", percentage: 50 },
+        ],
+      }),
+    },
+    201,
+  );
+  assert.equal(purchaseOrder.documentType, "PO");
+  assert.equal(purchaseOrder.cost, 900_000);
+  assert.equal(purchaseOrder.budgetCost, 1_000_000);
+  assert.equal(purchaseOrder.paymentStatus, "Belum Dibayar");
+  assert.equal(
+    (
+      await request("/api/procurement-orders", {
+        method: "POST",
+        body: JSON.stringify({
+          documentType: "PO",
+          vendorId: financeVendor.id,
+          projectId: project.id,
+          quotationId: quotationForProcurement.id,
+          items: [
+            {
+              boqItemId: boqItem.id,
+              quantity: 1,
+              agreedUnitCost: 800_000,
+            },
+          ],
+          terms: [{ label: "Penuh", type: "Final", percentage: 100 }],
+        }),
+      })
+    ).status,
+    409,
+  );
+  await json(`/api/procurement-orders/${purchaseOrder.id}/submit`, {
+    method: "POST",
+  });
+  assert.equal(
+    (
+      await request(`/api/procurement-orders/${purchaseOrder.id}/approve`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      })
+    ).status,
+    422,
+  );
+  const approvedPurchaseOrder = await json(
+    `/api/procurement-orders/${purchaseOrder.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        overrideReason: "Admin menguji workflow demo dengan audit lengkap.",
+      }),
+    },
+  );
+  assert.equal(approvedPurchaseOrder.approvalStatus, "Approved");
+  assert.equal(
+    (
+      await json(`/api/procurement-orders/${purchaseOrder.id}/send`, {
+        method: "POST",
+      })
+    ).workflowStatus,
+    "Dikirim",
+  );
+
+  const paymentEvidence = {
+    name: "bukti-transfer.png",
+    mimeType: "image/png",
+    contentBase64: Buffer.from("payment-evidence").toString("base64"),
+  };
+  const dpPayment = await json(
+    `/api/procurement-orders/${purchaseOrder.id}/payments`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        termId: approvedPurchaseOrder.terms.find((term) => term.type === "DP").id,
+        amount: 450_000,
+        paidDate: "2026-07-29",
+        vendorInvoiceNumber: "TAG-PO-001",
+        paymentReference: "BCA-PO-DP-001",
+        paymentMethod: "Transfer Bank",
+        bankAccountId: bankAccount.id,
+        attachment: paymentEvidence,
+      }),
+    },
+    201,
+  );
+  assert.equal(dpPayment.paid, 450_000);
+  assert.equal(dpPayment.paymentStatus, "Dibayar Sebagian");
+  assert.equal(
+    (
+      await request(`/api/procurement-orders/${purchaseOrder.id}/payments`, {
+        method: "POST",
+        body: JSON.stringify({
+          amount: 450_000,
+          paidDate: "2026-07-29",
+          vendorInvoiceNumber: "TAG-PO-002",
+          paymentReference: "BCA-PO-FINAL-EARLY",
+          paymentMethod: "Transfer Bank",
+          bankAccountId: bankAccount.id,
+          attachment: paymentEvidence,
+        }),
+      })
+    ).status,
+    409,
+  );
+  assert.equal(
+    (
+      await json(`/api/transactions?projectId=${project.id}`)
+    ).find(
+      (transaction) =>
+        transaction.source === "Procurement Payment" &&
+        transaction.amount === 450_000,
+    )?.amount,
+    450_000,
+  );
+
+  const receivingEngineer = await json(
+    "/api/users",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Engineer Procurement",
+        email: "procurement.engineer@perumnet.id",
+        password: "Engineer-Aman-2026",
+        role: "Engineer",
+        status: "Aktif",
+        permissions: {
+          dashboard: "view",
+          projects: "view",
+          boq: "view",
+          billing: "view",
+          procurement: "manage",
+          bast: "manage",
+          finance: "none",
+          users: "none",
+          settings: "view",
+        },
+      }),
+    },
+    201,
+  );
+  await json(`/api/projects/${project.id}/access`, {
+    method: "PUT",
+    body: JSON.stringify({ userIds: [receivingEngineer.id] }),
+  });
+  await json("/api/auth/logout", { method: "POST" });
+  cookie = "";
+  await json("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "procurement.engineer@perumnet.id",
+      password: "Engineer-Aman-2026",
+      remember: false,
+    }),
+  });
+  const receivedPurchaseOrder = await json(
+    `/api/procurement-orders/${purchaseOrder.id}/receipts`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        receiptNumber: "SJ-PO-001",
+        receivedAt: "2026-07-30",
+        notes: "Perangkat diterima lengkap dan sesuai.",
+        items: [
+          {
+            spkItemId: approvedPurchaseOrder.items[0].id,
+            quantity: 1,
+          },
+        ],
+      }),
+    },
+    201,
+  );
+  assert.equal(receivedPurchaseOrder.workflowStatus, "Diterima");
+  assert.equal(receivedPurchaseOrder.verifiedPayable, 900_000);
+  assert.equal(
+    (
+      await json(`/api/procurement-orders/${purchaseOrder.id}/complete`, {
+        method: "POST",
+      })
+    ).workflowStatus,
+    "Selesai",
+  );
+
+  await json("/api/auth/logout", { method: "POST" });
+  cookie = "";
+  await json("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "admin@perumnet.id",
+      password: "perumnet123",
+      remember: false,
+    }),
+  });
+  const completedPurchaseOrder = await json(
+    `/api/procurement-orders/${purchaseOrder.id}/payments`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        termId: approvedPurchaseOrder.terms.find((term) => term.type === "Final").id,
+        amount: 450_000,
+        paidDate: "2026-07-30",
+        vendorInvoiceNumber: "TAG-PO-002",
+        paymentReference: "BCA-PO-FINAL-001",
+        paymentMethod: "Transfer Bank",
+        bankAccountId: bankAccount.id,
+        attachment: paymentEvidence,
+      }),
+    },
+    201,
+  );
+  assert.equal(completedPurchaseOrder.paymentStatus, "Lunas");
+  assert.equal(completedPurchaseOrder.paid, 900_000);
+  const finalPayment = completedPurchaseOrder.payments.find(
+    (payment) => payment.paymentReference === "BCA-PO-FINAL-001",
+  );
+  assert.ok(finalPayment);
+  const voidedPurchaseOrder = await json(
+    `/api/procurement-orders/${purchaseOrder.id}/payments/${finalPayment.id}/void`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        reason: "Referensi pembayaran salah dan perlu dicatat ulang.",
+      }),
+    },
+  );
+  assert.equal(voidedPurchaseOrder.paymentStatus, "Dibayar Sebagian");
+  assert.equal(
+    (
+      await json(`/api/transactions?projectId=${project.id}`)
+    ).some(
+      (transaction) =>
+        transaction.source === "Procurement Reversal" &&
+        transaction.amount === 450_000,
+    ),
+    true,
+  );
+  assert.equal(
+    (
+      await request(`/api/procurement-orders/${purchaseOrder.id}/void`, {
+        method: "POST",
+        body: JSON.stringify({
+          reason: "Percobaan void dengan pembayaran DP yang masih aktif.",
+        }),
+      })
+    ).status,
+    409,
+  );
+  const procurementSummary = await json(
+    `/api/procurement-orders?projectId=${project.id}&summary=1`,
+  );
+  assert.equal(procurementSummary.committedVendorCost, 900_000);
+  assert.equal(procurementSummary.paid, 450_000);
+  assert.equal(procurementSummary.outstanding, 450_000);
+  const protectedProfit = await json(
+    `/api/profit-shares?projectId=${project.id}`,
+  );
+  assert.equal(protectedProfit.outstandingVendorCommitment, 450_000);
+  assert.equal(
+    protectedProfit.distributableProfit,
+    Math.max(0, protectedProfit.netProfit - 450_000),
+  );
+  const procurementPdf = await request(
+    `/api/procurement-orders/${purchaseOrder.id}/pdf`,
+  );
+  assert.equal(procurementPdf.status, 200);
+  assert.equal(
+    Buffer.from(await procurementPdf.arrayBuffer()).subarray(0, 4).toString(),
+    "%PDF",
+  );
+
+  const addendum = await json(
+    `/api/boq/scopes?projectId=${project.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Pekerjaan Tambah Konfigurasi",
+        issuedAt: "2026-07-30",
+        validUntil: "2026-08-13",
+        items: [
+          {
+            category: "Jasa",
+            description: "Konfigurasi tambahan controller",
+            quantity: 1,
+            unit: "paket",
+            costPrice: 300_000,
+            sellingPrice: 500_000,
+          },
+        ],
+      }),
+    },
+    201,
+  );
+  assert.equal(addendum.kind, "Addendum");
+  await json(`/api/quotations/${addendum.quotation.id}/send`, {
+    method: "POST",
+  });
+  const acceptedAddendum = await json(
+    `/api/quotations/${addendum.quotation.id}/accept`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        acceptedAt: "2026-07-31",
+        attachment: {
+          ...acceptanceAttachment,
+          name: "persetujuan-addendum.png",
+        },
+      }),
+    },
+  );
+  assert.equal(acceptedAddendum.status, "Accepted");
+  assert.equal((await json(`/api/projects/${project.id}`)).value, 2_300_000);
+
+  await json("/api/auth/logout", { method: "POST" });
+  cookie = "";
+  await json("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "sri@perumnet.id",
+      password: "perumnet123",
+      remember: false,
+    }),
+  });
+  const financeSpk = await json(
+    "/api/procurement-orders",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        documentType: "SPK",
+        vendorId: vendor.id,
+        projectId: project.id,
+        quotationId: addendum.quotation.id,
+        items: [
+          {
+            boqItemId: acceptedAddendum.items[0].id,
+            quantity: 1,
+            agreedUnitCost: 250_000,
+          },
+        ],
+        terms: [{ label: "Pelunasan", type: "Final", percentage: 100 }],
+      }),
+    },
+    201,
+  );
+  const editedFinanceSpk = await json(
+    `/api/procurement-orders/${financeSpk.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        documentType: "SPK",
+        vendorId: vendor.id,
+        projectId: project.id,
+        quotationId: addendum.quotation.id,
+        items: [
+          {
+            boqItemId: acceptedAddendum.items[0].id,
+            quantity: 1,
+            agreedUnitCost: 240_000,
+          },
+        ],
+        terms: [{ label: "Pelunasan", type: "Final", percentage: 100 }],
+      }),
+    },
+  );
+  assert.equal(editedFinanceSpk.cost, 240_000);
+  await json(`/api/procurement-orders/${financeSpk.id}/submit`, {
+    method: "POST",
+  });
+  assert.equal(
+    (
+      await request(`/api/procurement-orders/${financeSpk.id}/approve`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      })
+    ).status,
+    409,
+  );
+  await json("/api/auth/logout", { method: "POST" });
+  cookie = "";
+  await json("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "admin@perumnet.id",
+      password: "perumnet123",
+      remember: false,
+    }),
+  });
+  assert.equal(
+    (
+      await json(`/api/procurement-orders/${financeSpk.id}/approve`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      })
+    ).approvalStatus,
+    "Approved",
+  );
+
   assert.equal(
     (
       await request(`/api/bank-accounts/${bankAccount.id}/sync`, {
@@ -1209,6 +1669,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   assert.equal(englishValidationPdf.status, 200);
   assert.match(csvText, /PROJECT PROFIT DISTRIBUTION - LIFETIME/);
   assert.match(csvText, /COMPANY BANK POSITION/);
+  assert.match(csvText, /VENDOR COMMITMENTS/);
   const sopPdf = await request("/api/help/sop.pdf?language=en");
   assert.equal(sopPdf.status, 200);
   assert.equal(sopPdf.headers.get("content-type"), "application/pdf");
