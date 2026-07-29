@@ -182,7 +182,7 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
                   {id ? "Portal operasional PerumNet" : "PerumNet operations portal"}
                 </span>
                 <span className="eyebrow">{id ? "AKSES TIM" : "TEAM ACCESS"}</span>
-                <h2>{id ? "Selamat datang kembali." : "Welcome back."}</h2>
+                <h1>{id ? "Selamat datang kembali." : "Welcome back."}</h1>
                 <p>{id ? "Masuk untuk melanjutkan pekerjaan dan memantau proyek Anda." : "Sign in to continue your work and monitor projects."}</p>
               </div>
               <form
@@ -270,7 +270,7 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
               <div className="auth-heading compact">
                 <span className="auth-page-icon"><Mail size={24} /></span>
                 <span className="eyebrow">{id ? "PEMULIHAN AKSES" : "ACCESS RECOVERY"}</span>
-                <h2>{id ? "Lupa kata sandi?" : "Forgot your password?"}</h2>
+                <h1>{id ? "Lupa kata sandi?" : "Forgot your password?"}</h1>
                 <p>{id ? "Kami akan mengirimkan tautan pemulihan ke email yang terdaftar." : "We will send a recovery link to your registered email."}</p>
               </div>
               {!sent ? (
@@ -317,7 +317,7 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
               <div className="auth-heading compact">
                 <span className="auth-page-icon"><KeyRound size={24} /></span>
                 <span className="eyebrow">{id ? "KATA SANDI BARU" : "NEW PASSWORD"}</span>
-                <h2>{id ? "Amankan akun Anda." : "Secure your account."}</h2>
+                <h1>{id ? "Amankan akun Anda." : "Secure your account."}</h1>
                 <p>{id ? "Gunakan minimal 8 karakter agar akun tetap terlindungi." : "Use at least 8 characters to protect your account."}</p>
               </div>
               <form className="auth-form" onSubmit={submitReset}>

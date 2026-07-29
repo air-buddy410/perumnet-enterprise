@@ -1129,7 +1129,7 @@ h3 {
   gap: 11px;
 }
 
-.auth-heading h2 {
+.auth-heading h1 {
   font-size: clamp(30px, 3vw, 40px);
 }
 
