@@ -395,7 +395,7 @@ export function ProjectView({
             <h2>{id ? "Timeline & tugas lapangan" : "Timeline & field tasks"}</h2>
           </div>
           <div className="timeline-controls">
-            <div className="segmented-control icon-segmented" aria-label={id ? "Mode tampilan jadwal" : "Schedule view mode"}>
+            <div className="segmented-control icon-segmented" role="group" aria-label={id ? "Mode tampilan jadwal" : "Schedule view mode"}>
               <button className={viewMode === "timeline" ? "active" : ""} type="button" onClick={() => setViewMode("timeline")}>
                 <LayoutList size={15} /> Timeline
               </button>

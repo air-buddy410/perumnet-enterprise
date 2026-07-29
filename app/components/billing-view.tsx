@@ -18,9 +18,10 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api, downloadApiFile, messageOf } from "../api-client";
-import { BoqItem, formatCurrency, Invoice, Project } from "../data";
+import { BankAccount, BoqItem, formatCurrency, Invoice, Project } from "../data";
 import { type AppLanguage, localizedDate, localizedLabel } from "../i18n";
 import { appPath } from "../paths";
+import { DocumentTaxEditor } from "./document-tax-editor";
 
 interface BillingViewProps {
   language: AppLanguage;
@@ -28,6 +29,7 @@ interface BillingViewProps {
   projectId: string;
   canManage: boolean;
   canManagePayments: boolean;
+  canManageTaxes: boolean;
 }
 
 type BillingTab = "quotation" | "invoice";
@@ -41,12 +43,27 @@ interface Quotation {
   total: number;
 }
 
+async function attachmentFromFile(file: File) {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.readAsDataURL(file);
+  });
+  return {
+    name: file.name,
+    mimeType: file.type,
+    contentBase64: dataUrl.split(",")[1] ?? "",
+  };
+}
+
 export function BillingView({
   language,
   notify,
   projectId,
   canManage,
   canManagePayments,
+  canManageTaxes,
 }: BillingViewProps) {
   const id = language === "id";
   const [activeTab, setActiveTab] = useState<BillingTab>("quotation");
@@ -67,6 +84,14 @@ export function BillingView({
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
   const [paymentDate, setPaymentDate] = useState("");
   const [paymentSaving, setPaymentSaving] = useState(false);
+  const [paymentGross, setPaymentGross] = useState(0);
+  const [paymentCash, setPaymentCash] = useState(0);
+  const [paymentWithholding, setPaymentWithholding] = useState(0);
+  const [paymentReference, setPaymentReference] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("Transfer Bank");
+  const [paymentBankId, setPaymentBankId] = useState("");
+  const [paymentFile, setPaymentFile] = useState<File | null>(null);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
 
   useEffect(() => {
     let active = true;
@@ -103,6 +128,22 @@ export function BillingView({
     };
   }, [language, notify]);
 
+  useEffect(() => {
+    if (!canManagePayments) return;
+    let active = true;
+    api<BankAccount[]>("/api/bank-accounts")
+      .then((accounts) => {
+        if (!active) return;
+        const available = accounts.filter((account) => account.status === "Aktif");
+        setBankAccounts(available);
+        setPaymentBankId((current) => current || available[0]?.id || "");
+      })
+      .catch((error) => notify(messageOf(error, language)));
+    return () => {
+      active = false;
+    };
+  }, [canManagePayments, language, notify]);
+
   const boqTotal = useMemo(
     () =>
       quotationItems.reduce(
@@ -112,13 +153,15 @@ export function BillingView({
     [quotationItems],
   );
   const quotationTotal = quotation?.total ?? boqTotal;
-  const paidTotal = invoices
-    .filter((invoice) => invoice.status === "Lunas")
-    .reduce((sum, invoice) => sum + invoice.amount, 0);
-  const outstanding = invoices
-    .filter((invoice) => invoice.status === "Belum Lunas")
-    .reduce((sum, invoice) => sum + invoice.amount, 0);
-  const invoicedTotal = paidTotal + outstanding;
+  const paidTotal = invoices.reduce(
+    (sum, invoice) => sum + (invoice.paidGross ?? (invoice.status === "Lunas" ? invoice.amount : 0)),
+    0,
+  );
+  const outstanding = invoices.reduce(
+    (sum, invoice) => sum + (invoice.outstanding ?? (invoice.status === "Lunas" ? 0 : invoice.amount)),
+    0,
+  );
+  const invoicedTotal = invoices.reduce((sum, invoice) => sum + invoice.amount, 0);
 
   async function updateQuotation(
     input: Partial<Pick<Quotation, "status" | "issuedAt" | "validUntil">>,
@@ -185,25 +228,53 @@ export function BillingView({
   }
 
   function openPayment(invoice: Invoice) {
+    const gross = invoice.outstanding ?? invoice.grossTotal ?? invoice.amount;
+    const withholding = Math.min(
+      gross,
+      Math.max(0, (invoice.taxWithholdings ?? 0) - (invoice.withheldTax ?? 0)),
+    );
     setPaymentInvoice(invoice);
     setPaymentDate(
       invoice.paidDateIso ??
-        (invoice.status === "Belum Lunas" ? serverToday : ""),
+        (invoice.status !== "Lunas" ? serverToday : ""),
     );
+    setPaymentGross(gross);
+    setPaymentWithholding(withholding);
+    setPaymentCash(Math.max(0, gross - withholding));
+    setPaymentReference("");
+    setPaymentMethod("Transfer Bank");
+    setPaymentBankId(bankAccounts[0]?.id ?? "");
+    setPaymentFile(null);
   }
 
   async function persistPayment(
     event: FormEvent<HTMLFormElement>,
   ) {
     event.preventDefault();
-    if (!paymentInvoice || !paymentDate) return;
+    if (
+      !paymentInvoice ||
+      !paymentDate ||
+      !paymentFile ||
+      paymentGross <= 0 ||
+      paymentGross !== paymentCash + paymentWithholding
+    ) return;
     setPaymentSaving(true);
     try {
       const updated = await api<Invoice>(
-        `/api/invoices/${paymentInvoice.id}/payment`,
+        `/api/invoices/${paymentInvoice.id}/payments`,
         {
-          method: "PATCH",
-          body: JSON.stringify({ status: "Lunas", paidDate: paymentDate }),
+          method: "POST",
+          body: JSON.stringify({
+            grossAmount: paymentGross,
+            cashAmount: paymentCash,
+            withholdingAmount: paymentWithholding,
+            paidDate: paymentDate,
+            paymentReference,
+            paymentMethod,
+            bankAccountId:
+              paymentMethod === "Transfer Bank" ? paymentBankId : undefined,
+            attachment: await attachmentFromFile(paymentFile),
+          }),
         },
       );
       setInvoices((current) =>
@@ -212,7 +283,7 @@ export function BillingView({
         ),
       );
       setPaymentInvoice(null);
-      notify(id ? "Pembayaran dan transaksi pembukuan telah disinkronkan." : "Payment and finance transaction synchronized.");
+      notify(id ? "Pembayaran parsial, kas aktual, dan pajak telah disinkronkan." : "Partial payment, actual cash, and tax were synchronized.");
     } catch (error) {
       notify(messageOf(error, language));
     } finally {
@@ -222,22 +293,21 @@ export function BillingView({
 
   async function cancelPayment() {
     if (!paymentInvoice) return;
-    if (
-      !window.confirm(
-        id
-          ? `Batalkan konfirmasi pembayaran ${paymentInvoice.number}? Mutasi bank yang sudah dicocokkan tetap dipertahankan untuk ditinjau.`
-          : `Cancel payment confirmation for ${paymentInvoice.number}? Any matched bank statement remains available for review.`,
-      )
-    ) {
-      return;
-    }
+    const posted = [...(paymentInvoice.payments ?? [])]
+      .reverse()
+      .find((payment) => payment.status === "Posted");
+    if (!posted) return;
+    const reason = window.prompt(
+      id ? "Alasan pembatalan pembayaran:" : "Payment void reason:",
+    );
+    if (!reason) return;
     setPaymentSaving(true);
     try {
       const updated = await api<Invoice>(
-        `/api/invoices/${paymentInvoice.id}/payment`,
+        `/api/invoices/${paymentInvoice.id}/payments/${posted.id}/void`,
         {
-          method: "PATCH",
-          body: JSON.stringify({ status: "Belum Lunas" }),
+          method: "POST",
+          body: JSON.stringify({ reason }),
         },
       );
       setInvoices((current) =>
@@ -387,6 +457,15 @@ export function BillingView({
                 <span>{quotation?.number ?? (id ? "Nomor dibuat saat Quotation disimpan" : "Number created when the Quotation is saved")}</span>
               </div>
               <div className="title-actions">
+                {canManageTaxes && quotation?.id ? (
+                  <DocumentTaxEditor
+                    language={language}
+                    notify={notify}
+                    documentType="Quotation"
+                    documentId={quotation.id}
+                    canManage
+                  />
+                ) : null}
                 {canManage && (
                   <button className="button secondary small" type="button" onClick={() => setShowQuotationForm(true)}>
                     <Pencil size={15} /> {id ? "Edit" : "Edit"}
@@ -468,7 +547,7 @@ export function BillingView({
         <div className="page-stack">
           <section className="metric-grid invoice-metrics">
             <article className="metric-card"><span className="metric-icon green"><CircleCheck size={20} /></span><div className="metric-main"><span>{id ? "Sudah diterima" : "Received"}</span><strong>{formatCurrency(paidTotal, language)}</strong></div><span className="metric-change positive">{quotationTotal ? Math.round((paidTotal / quotationTotal) * 100) : 0}% {id ? "proyek" : "of project"}</span></article>
-            <article className="metric-card"><span className="metric-icon orange"><Clock3 size={20} /></span><div className="metric-main"><span>{id ? "Belum dibayar" : "Outstanding"}</span><strong>{formatCurrency(outstanding, language)}</strong></div><span className="metric-change warning-text">{invoices.filter((invoice) => invoice.status === "Belum Lunas").length} {id ? "invoice aktif" : "active invoices"}</span></article>
+            <article className="metric-card"><span className="metric-icon orange"><Clock3 size={20} /></span><div className="metric-main"><span>{id ? "Belum dibayar" : "Outstanding"}</span><strong>{formatCurrency(outstanding, language)}</strong></div><span className="metric-change warning-text">{invoices.filter((invoice) => invoice.status !== "Lunas").length} {id ? "invoice aktif" : "active invoices"}</span></article>
             <article className="metric-card"><span className="metric-icon blue"><FileCheck2 size={20} /></span><div className="metric-main"><span>{id ? "Sisa dapat ditagihkan" : "Remaining billable"}</span><strong>{formatCurrency(Math.max(0, quotationTotal - invoicedTotal), language)}</strong></div><span className="metric-change">{id ? "Dari" : "Of"} {formatCurrency(quotationTotal, language)}</span></article>
           </section>
           <section className="panel">
@@ -481,11 +560,15 @@ export function BillingView({
                 <article className="invoice-row" key={invoice.id}>
                   <span className={`invoice-status-icon ${invoice.status === "Lunas" ? "paid" : "unpaid"}`}>{invoice.status === "Lunas" ? <Check size={18} /> : <Clock3 size={18} />}</span>
                   <div className="invoice-primary"><strong>{invoice.number}</strong><span>{invoice.type} · {id ? "Terbit" : "Issued"} {localizedDate(language, invoice.issueDateIso)}</span></div>
-                  <div className="invoice-amount"><span>{id ? "Nilai tagihan" : "Invoice amount"}</span><strong>{formatCurrency(invoice.amount, language)}</strong></div>
+                  <div className="invoice-amount"><span>{id ? "Dasar / bruto" : "Base / gross"}</span><strong>{formatCurrency(invoice.amount, language)} / {formatCurrency(invoice.grossTotal ?? invoice.amount, language)}</strong></div>
                   <div className="invoice-due"><span>{invoice.status === "Lunas" ? (id ? "Dibayar" : "Paid") : (id ? "Jatuh tempo" : "Due date")}</span><strong>{invoice.status === "Lunas" ? localizedDate(language, invoice.paidDateIso ?? invoice.paidDate) : localizedDate(language, invoice.dueDateIso)}</strong></div>
                   <span className={`status-badge ${invoice.status === "Lunas" ? "success" : "warning"}`}>{localizedLabel(language, invoice.status)}</span>
                   <div className="invoice-actions">
                     <button className="button subtle small" type="button" onClick={() => downloadInvoice(invoice)}><Download size={15} /> PDF</button>
+                    {canManageTaxes && !(invoice.payments?.length) && <DocumentTaxEditor language={language} notify={notify} documentType="Invoice" documentId={invoice.id} canManage onSaved={async () => {
+                      const updated = await api<Invoice>(`/api/invoices/${invoice.id}`);
+                      setInvoices((current) => current.map((item) => item.id === updated.id ? updated : item));
+                    }} />}
                     {canManage && (invoice.status !== "Lunas" || canManagePayments) && <button className="icon-button" type="button" aria-label={`Edit ${invoice.number}`} onClick={() => openEditInvoice(invoice)}><Pencil size={15} /></button>}
                     {canManagePayments && <button className={`button small ${invoice.status === "Lunas" ? "subtle" : "primary"}`} type="button" onClick={() => openPayment(invoice)}><Check size={15} /> {invoice.status === "Lunas" ? (id ? "Koreksi bayar" : "Correct payment") : (id ? "Konfirmasi" : "Confirm")}</button>}
                     {canManage && (invoice.status !== "Lunas" || canManagePayments) && <button className="icon-button danger" type="button" aria-label={`Hapus ${invoice.number}`} onClick={() => deleteInvoice(invoice)}><Trash2 size={15} /></button>}
@@ -506,12 +589,19 @@ export function BillingView({
               <button className="icon-button" type="button" aria-label={id ? "Tutup" : "Close"} onClick={() => setPaymentInvoice(null)}><X size={18} /></button>
             </div>
             <form className="form-grid" onSubmit={persistPayment}>
+              <label className="field"><span>{id ? "Nilai bruto diselesaikan" : "Gross amount settled"}</span><input type="number" required min="1" max={paymentInvoice.outstanding ?? paymentInvoice.grossTotal ?? paymentInvoice.amount} value={paymentGross || ""} onChange={(event) => { const gross = Number(event.target.value); setPaymentGross(gross); setPaymentCash(Math.max(0, gross - paymentWithholding)); }} /></label>
+              <label className="field"><span>{id ? "Pajak dipotong klien" : "Tax withheld by client"}</span><input type="number" required min="0" max={paymentInvoice.taxWithholdings ?? 0} value={paymentWithholding} onChange={(event) => { const withholding = Number(event.target.value); setPaymentWithholding(withholding); setPaymentCash(Math.max(0, paymentGross - withholding)); }} /></label>
+              <label className="field"><span>{id ? "Kas aktual diterima" : "Actual cash received"}</span><input type="number" required min="0" value={paymentCash} onChange={(event) => setPaymentCash(Number(event.target.value))} /></label>
               <label className="field full"><span>{id ? "Tanggal dana diterima" : "Payment received date"}</span><input type="date" required min={paymentInvoice.issueDateIso} max={serverToday || undefined} value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} /></label>
+              <label className="field full"><span>{id ? "Referensi pembayaran" : "Payment reference"}</span><input required value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} /></label>
+              <label className="field"><span>{id ? "Metode" : "Method"}</span><select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option value="Transfer Bank">{id ? "Transfer Bank" : "Bank Transfer"}</option><option value="Tunai">{id ? "Tunai" : "Cash"}</option><option value="Kartu">{id ? "Kartu" : "Card"}</option><option value="Lainnya">{id ? "Lainnya" : "Other"}</option></select></label>
+              {paymentMethod === "Transfer Bank" ? <label className="field"><span>{id ? "Rekening perusahaan" : "Company bank account"}</span><select required value={paymentBankId} onChange={(event) => setPaymentBankId(event.target.value)}><option value="">{id ? "Pilih rekening" : "Select account"}</option>{bankAccounts.map((account) => <option value={account.id} key={account.id}>{account.bankName} · {account.accountNumberMasked}</option>)}</select></label> : null}
+              <label className="field full"><span>{id ? "Bukti pembayaran (PDF/gambar)" : "Payment proof (PDF/image)"}</span><input type="file" required accept="application/pdf,image/png,image/jpeg,image/webp" onChange={(event) => setPaymentFile(event.target.files?.[0] ?? null)} /></label>
               <div className="statement-guidance full"><Clock3 size={18} /><span><strong>{id ? "Gunakan tanggal mutasi rekening" : "Use the bank statement date"}</strong><small>{id ? "Tanggal ini menentukan periode arus kas dan kandidat rekonsiliasi bank." : "This date determines the cash-flow period and bank reconciliation candidates."}</small></span></div>
               <div className="modal-actions full">
-                {paymentInvoice.status === "Lunas" ? <button className="button danger" type="button" disabled={paymentSaving} onClick={cancelPayment}>{id ? "Batalkan pembayaran" : "Cancel payment"}</button> : null}
+                {paymentInvoice.payments?.some((payment) => payment.status === "Posted") ? <button className="button danger" type="button" disabled={paymentSaving} onClick={cancelPayment}>{id ? "Void pembayaran terakhir" : "Void latest payment"}</button> : null}
                 <button className="button secondary" type="button" onClick={() => setPaymentInvoice(null)}>{id ? "Tutup" : "Close"}</button>
-                <button className="button primary" type="submit" disabled={paymentSaving || !paymentDate}><Check size={15} /> {paymentSaving ? (id ? "Menyimpan..." : "Saving...") : paymentInvoice.status === "Lunas" ? (id ? "Simpan koreksi" : "Save correction") : (id ? "Konfirmasi pembayaran" : "Confirm payment")}</button>
+                <button className="button primary" type="submit" disabled={paymentSaving || !paymentDate || !paymentFile || paymentGross !== paymentCash + paymentWithholding}><Check size={15} /> {paymentSaving ? (id ? "Menyimpan..." : "Saving...") : (id ? "Posting pembayaran" : "Post payment")}</button>
               </div>
             </form>
           </section>

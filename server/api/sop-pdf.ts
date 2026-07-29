@@ -87,7 +87,7 @@ const sopSections: SopSection[] = [
     steps: [
       ["Kirim Quotation lalu simpan tanggal dan bukti persetujuan klien untuk status Accepted.", "Send the Quotation, then save the client acceptance date and proof for Accepted status."],
       ["Pekerjaan tambah wajib memakai BoQ dan Quotation Addendum baru.", "Additional work requires a new BoQ and Quotation Addendum."],
-      ["Konfirmasi Invoice Lunas saat mutasi masuk tersedia.", "Confirm an Invoice as Paid when the incoming bank entry is available."],
+      ["Catat pembayaran Invoice parsial dengan bruto, pajak potong, kas aktual, rekening, referensi, dan bukti.", "Record partial Invoice payments with gross value, withholding, actual cash, account, reference, and proof."],
       ["Selesaikan checklist perangkat sebelum BAST Final.", "Complete the device checklist before final handover."],
     ],
   },
@@ -135,7 +135,25 @@ const sopSections: SopSection[] = [
     ],
   },
   {
-    title: ["9. Laporan keuangan", "9. Financial reports"],
+    title: ["9. Pajak opsional dan email", "9. Optional tax and email"],
+    intro: [
+      "Pajak nonaktif secara default; email bisnis diproses melalui transactional outbox.",
+      "Tax is disabled by default; business email is processed through a transactional outbox.",
+    ],
+    steps: [
+      ["Admin mengaktifkan pajak dan mengisi tarif aturan tanpa nilai legal hardcoded.", "An Admin enables tax and enters rule rates without hardcoded legal values."],
+      ["Admin/Finance menerapkan pajak per dokumen sebelum snapshot terkunci.", "Admin/Finance applies tax per document before its snapshot locks."],
+      ["Finance menyelesaikan utang/piutang pajak dengan referensi, rekening, dan bukti.", "Finance settles tax payables/receivables with a reference, account, and evidence."],
+      ["Produksi mengirim melalui Mailcow-Brevo; demo hanya menyimpan capture.", "Production sends through Mailcow-Brevo; demo stores captures only."],
+      ["Admin meninjau Pending/Failed dan menjalankan retry bila diperlukan.", "An Admin reviews Pending/Failed messages and retries when needed."],
+    ],
+    control: [
+      "Fitur ini adalah pencatatan operasional; keputusan jenis, tarif, dan perlakuan pajak akhir tetap ditentukan Admin/Finance bersama penasihat pajak.",
+      "This is an operational record; final tax type, rate, and treatment remain an Admin/Finance decision made with a tax adviser.",
+    ],
+  },
+  {
+    title: ["10. Laporan keuangan", "10. Financial reports"],
     intro: [
       "PDF dan CSV mengikuti periode, proyek, bahasa, kategori, posisi rekening, dan otoritas akun.",
       "PDF and CSV follow the period, project, language, category, bank position, and account authority.",
@@ -147,7 +165,7 @@ const sopSections: SopSection[] = [
     ],
   },
   {
-    title: ["10. Penutupan proyek", "10. Project closeout"],
+    title: ["11. Penutupan proyek", "11. Project closeout"],
     intro: [
       "Tutup proyek hanya setelah dokumen, pekerjaan lapangan, dan arus kas konsisten.",
       "Close a project only after documents, field work, and cash flow are consistent.",

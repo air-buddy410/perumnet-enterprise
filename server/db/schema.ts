@@ -91,6 +91,36 @@ export const emailDeliveries = sqliteTable(
   ],
 );
 
+export const emailOutbox = sqliteTable(
+  "email_outbox",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
+    eventType: text("event_type").notNull(),
+    recipient: text("recipient").notNull(),
+    subject: text("subject").notNull(),
+    bodyHtml: text("body_html").notNull(),
+    status: text("status").notNull().default("Pending"),
+    provider: text("provider"),
+    providerId: text("provider_id"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    nextAttemptAt: text("next_attempt_at").notNull(),
+    lockedAt: text("locked_at"),
+    lastError: text("last_error"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    sentAt: text("sent_at"),
+  },
+  (table) => [
+    index("email_outbox_status_retry_idx").on(
+      table.status,
+      table.nextAttemptAt,
+      table.createdAt,
+    ),
+    index("email_outbox_user_idx").on(table.userId, table.createdAt),
+  ],
+);
+
 export const userPermissions = sqliteTable("user_permissions", {
   userId: text("user_id")
     .primaryKey()
@@ -746,6 +776,8 @@ export const spkPayments = sqliteTable(
     termId: text("term_id").references(() => spkPaymentTerms.id, {
       onDelete: "set null",
     }),
+    grossAmount: integer("gross_amount").notNull().default(0),
+    withholdingAmount: integer("withholding_amount").notNull().default(0),
     amount: integer("amount").notNull(),
     paidDate: text("paid_date").notNull(),
     vendorInvoiceNumber: text("vendor_invoice_number").notNull(),
@@ -775,6 +807,200 @@ export const spkPayments = sqliteTable(
     index("spk_payments_spk_idx").on(table.spkId, table.paidDate),
     index("spk_payments_term_idx").on(table.termId),
     index("spk_payments_bank_account_idx").on(table.bankAccountId),
+  ],
+);
+
+export const invoicePayments = sqliteTable(
+  "invoice_payments",
+  {
+    id: text("id").primaryKey(),
+    invoiceId: text("invoice_id")
+      .notNull()
+      .references(() => invoices.id, { onDelete: "restrict" }),
+    grossAmount: integer("gross_amount").notNull(),
+    cashAmount: integer("cash_amount").notNull(),
+    withholdingAmount: integer("withholding_amount").notNull().default(0),
+    paidDate: text("paid_date").notNull(),
+    paymentReference: text("payment_reference").notNull(),
+    paymentMethod: text("payment_method").notNull(),
+    bankAccountId: text("bank_account_id").references(() => bankAccounts.id, {
+      onDelete: "restrict",
+    }),
+    attachmentName: text("attachment_name"),
+    attachmentMimeType: text("attachment_mime_type"),
+    attachmentContentBase64: text("attachment_content_base64"),
+    status: text("status").notNull().default("Posted"),
+    transactionId: text("transaction_id").references(() => transactions.id, {
+      onDelete: "set null",
+    }),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    voidedBy: text("voided_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    voidedAt: text("voided_at"),
+    voidReason: text("void_reason"),
+    ...timestamps,
+  },
+  (table) => [
+    index("invoice_payments_invoice_idx").on(table.invoiceId, table.paidDate),
+    index("invoice_payments_bank_account_idx").on(table.bankAccountId),
+  ],
+);
+
+export const taxSettings = sqliteTable("tax_settings", {
+  id: text("id").primaryKey(),
+  enabled: integer("enabled").notNull().default(0),
+  updatedBy: text("updated_by").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const taxRules = sqliteTable(
+  "tax_rules",
+  {
+    id: text("id").primaryKey(),
+    code: text("code").notNull(),
+    name: text("name").notNull(),
+    nameEn: text("name_en").notNull(),
+    scope: text("scope").notNull(),
+    effect: text("effect").notNull(),
+    rateBps: integer("rate_bps").notNull().default(0),
+    accountingTreatment: text("accounting_treatment").notNull(),
+    status: text("status").notNull().default("Inactive"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    updatedBy: text("updated_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("tax_rules_code_unique").on(table.code),
+    index("tax_rules_scope_sort_idx").on(
+      table.scope,
+      table.status,
+      table.sortOrder,
+      table.code,
+    ),
+  ],
+);
+
+export const documentTaxes = sqliteTable(
+  "document_taxes",
+  {
+    id: text("id").primaryKey(),
+    documentType: text("document_type").notNull(),
+    documentId: text("document_id").notNull(),
+    projectId: text("project_id").references(() => projects.id, {
+      onDelete: "set null",
+    }),
+    ruleId: text("rule_id").references(() => taxRules.id, {
+      onDelete: "restrict",
+    }),
+    ruleCode: text("rule_code").notNull(),
+    ruleName: text("rule_name").notNull(),
+    ruleNameEn: text("rule_name_en").notNull(),
+    scope: text("scope").notNull(),
+    effect: text("effect").notNull(),
+    accountingTreatment: text("accounting_treatment").notNull(),
+    rateBps: integer("rate_bps").notNull(),
+    taxableBase: integer("taxable_base").notNull(),
+    amount: integer("amount").notNull(),
+    locked: integer("locked").notNull().default(0),
+    lockedAt: text("locked_at"),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("document_taxes_document_rule_unique").on(
+      table.documentType,
+      table.documentId,
+      table.ruleId,
+    ),
+    index("document_taxes_document_idx").on(
+      table.documentType,
+      table.documentId,
+    ),
+    index("document_taxes_project_idx").on(
+      table.projectId,
+      table.documentType,
+    ),
+  ],
+);
+
+export const taxObligations = sqliteTable(
+  "tax_obligations",
+  {
+    id: text("id").primaryKey(),
+    documentTaxId: text("document_tax_id")
+      .notNull()
+      .references(() => documentTaxes.id, { onDelete: "restrict" }),
+    projectId: text("project_id").references(() => projects.id, {
+      onDelete: "set null",
+    }),
+    direction: text("direction").notNull(),
+    amount: integer("amount").notNull(),
+    settledAmount: integer("settled_amount").notNull().default(0),
+    status: text("status").notNull().default("Outstanding"),
+    dueDate: text("due_date"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("tax_obligations_document_tax_unique").on(table.documentTaxId),
+    index("tax_obligations_status_idx").on(
+      table.direction,
+      table.status,
+      table.dueDate,
+    ),
+    index("tax_obligations_project_idx").on(table.projectId, table.status),
+  ],
+);
+
+export const taxSettlements = sqliteTable(
+  "tax_settlements",
+  {
+    id: text("id").primaryKey(),
+    obligationId: text("obligation_id")
+      .notNull()
+      .references(() => taxObligations.id, { onDelete: "restrict" }),
+    amount: integer("amount").notNull(),
+    settlementDate: text("settlement_date").notNull(),
+    paymentReference: text("payment_reference").notNull(),
+    paymentMethod: text("payment_method").notNull(),
+    bankAccountId: text("bank_account_id").references(() => bankAccounts.id, {
+      onDelete: "restrict",
+    }),
+    attachmentName: text("attachment_name"),
+    attachmentMimeType: text("attachment_mime_type"),
+    attachmentContentBase64: text("attachment_content_base64"),
+    status: text("status").notNull().default("Posted"),
+    transactionId: text("transaction_id").references(() => transactions.id, {
+      onDelete: "set null",
+    }),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    voidedBy: text("voided_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    voidedAt: text("voided_at"),
+    voidReason: text("void_reason"),
+    ...timestamps,
+  },
+  (table) => [
+    index("tax_settlements_obligation_idx").on(
+      table.obligationId,
+      table.settlementDate,
+    ),
+    index("tax_settlements_bank_account_idx").on(table.bankAccountId),
   ],
 );
 

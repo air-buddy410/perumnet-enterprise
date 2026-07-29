@@ -273,7 +273,7 @@ export function DashboardView({
                   onChange={(event) => setQuery(event.target.value)}
                 />
               </label>
-              <div className="segmented-control" aria-label={id ? "Filter status proyek" : "Filter project status"}>
+              <div className="segmented-control" role="group" aria-label={id ? "Filter status proyek" : "Filter project status"}>
                 {filters.map((item) => (
                   <button
                     type="button"
@@ -313,7 +313,14 @@ export function DashboardView({
                       <span>{id ? "Progres pekerjaan" : "Work progress"}</span>
                       <strong>{project.progress}%</strong>
                     </div>
-                    <div className="progress-track" aria-label={`${id ? "Progres" : "Progress"} ${project.progress}%`}>
+                    <div
+                      className="progress-track"
+                      role="progressbar"
+                      aria-label={id ? "Progres proyek" : "Project progress"}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={project.progress}
+                    >
                       <span style={{ width: `${project.progress}%` }} />
                     </div>
                   </div>

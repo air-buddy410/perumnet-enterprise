@@ -28,12 +28,16 @@ import {
 import { getDatabase } from "../db/client";
 import {
   emailDeliveryConfigured,
+  emailMode,
+  emailProviderName,
   notifyProjectStakeholders,
+  retryEmailOutbox,
   sendAccountCreatedEmail,
   sendPasswordResetEmail,
   sendTestEmail,
 } from "../email";
 import { asNumber, formatDate, initials, parseJson } from "../format";
+import { documentTaxSummary, lockDocumentTaxes } from "../tax";
 import { deleteProjectFile, readProjectFile, storeProjectFile } from "../storage";
 import {
   ApiError,
@@ -60,6 +64,7 @@ import {
 import { handleProfitShares } from "./profit-share-router";
 import { handleStandaloneBoqs } from "./standalone-boq-router";
 import { renderSopPdf } from "./sop-pdf";
+import { handleDocumentTaxes, handleTax } from "./tax-router";
 
 const emailSchema = z.string().trim().email().max(254).transform((value) => value.toLowerCase());
 const idSchema = z.string().trim().min(1).max(100);
@@ -113,6 +118,32 @@ const invoicePatchSchema = invoiceSchema
   .omit({ projectId: true, issueDate: true })
   .partial()
   .extend({ issueDate: isoDateSchema.optional() });
+const invoicePaymentSchema = z
+  .object({
+    grossAmount: positiveMoney,
+    cashAmount: nonNegativeMoney,
+    withholdingAmount: nonNegativeMoney.default(0),
+    paidDate: isoDateSchema,
+    paymentReference: z.string().trim().min(1).max(160),
+    paymentMethod: z.enum(["Transfer Bank", "Tunai", "Kartu", "Lainnya"]),
+    bankAccountId: idSchema.optional(),
+    attachment: z.object({
+      name: z.string().trim().min(1).max(240),
+      mimeType: z
+        .string()
+        .trim()
+        .regex(/^(application\/pdf|image\/(png|jpeg|webp))$/),
+      contentBase64: z.string().min(4).max(8_500_000),
+    }),
+  })
+  .superRefine((input, context) => {
+    if (input.grossAmount !== input.cashAmount + input.withholdingAmount) {
+      context.addIssue({
+        code: "custom",
+        message: "Nilai bruto harus sama dengan kas ditambah pajak potong.",
+      });
+    }
+  });
 
 const quotationSchema = z.object({
   status: z.enum(["Draft", "Sent", "Rejected", "Void"]).default("Draft"),
@@ -650,72 +681,6 @@ async function reattachImportedBankTransaction(
   return true;
 }
 
-async function syncInvoiceTransaction(
-  client: Awaited<ReturnType<typeof getDatabase>>["client"],
-  invoiceId: string,
-  userId: string,
-) {
-  const invoice = await ensureExists(
-    "SELECT * FROM invoices WHERE id=?",
-    [invoiceId],
-    "Invoice tidak ditemukan.",
-  );
-  if (invoice.status !== "Lunas") {
-    await detachOrDeleteSystemTransaction(client, "Invoice", invoiceId);
-    return;
-  }
-  const timestamp = now();
-  const existing = await client.execute({
-    sql: "SELECT id FROM transactions WHERE source='Invoice' AND reference_id=? LIMIT 1",
-    args: [invoiceId],
-  });
-  if (existing.rows[0]) {
-    await client.execute({
-      sql: "UPDATE transactions SET project_id=?,date=?,type='Pemasukan',description=?,amount=?,category='Penjualan',updated_at=? WHERE id=?",
-      args: [
-        invoice.project_id,
-        invoice.paid_date ?? invoice.issue_date,
-        `Pembayaran ${invoice.number}`,
-        invoice.amount,
-        timestamp,
-        existing.rows[0].id,
-      ],
-    });
-    return;
-  }
-  if (
-    await reattachImportedBankTransaction(client, {
-      projectId: String(invoice.project_id),
-      date: String(invoice.paid_date ?? invoice.issue_date),
-      type: "Pemasukan",
-      amount: asNumber(invoice.amount),
-      source: "Invoice",
-      referenceId: invoiceId,
-      description: `Pembayaran ${String(invoice.number)}`,
-      category: "Penjualan",
-    })
-  ) {
-    return;
-  }
-  await client.execute({
-    sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,reference_id,category,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-    args: [
-      randomUUID(),
-      invoice.project_id,
-      invoice.paid_date ?? invoice.issue_date,
-      "Pemasukan",
-      `Pembayaran ${invoice.number}`,
-      invoice.amount,
-      "Invoice",
-      invoiceId,
-      "Penjualan",
-      userId,
-      timestamp,
-      timestamp,
-    ],
-  });
-}
-
 async function syncSpkTransaction(
   client: Awaited<ReturnType<typeof getDatabase>>["client"],
   spkId: string,
@@ -900,8 +865,15 @@ async function listProjects(searchParams: URLSearchParams, user: AuthUser) {
       SELECT p.*, manager.name AS manager_name,
         (SELECT COUNT(*) FROM project_tasks t WHERE t.project_id = p.id) AS task_count,
         (SELECT COUNT(*) FROM project_tasks t WHERE t.project_id = p.id AND t.status = 'Selesai') AS completed_count,
-        (SELECT COALESCE(SUM(i.amount), 0) FROM invoices i WHERE i.project_id = p.id) AS invoice_total,
-        (SELECT COALESCE(SUM(i.amount), 0) FROM invoices i WHERE i.project_id = p.id AND i.status = 'Lunas') AS paid_total,
+        (SELECT COALESCE(SUM(i.amount + COALESCE((
+          SELECT SUM(dt.amount) FROM document_taxes dt
+          WHERE dt.document_type='Invoice' AND dt.document_id=i.id
+            AND dt.effect='Add'
+        ),0)), 0) FROM invoices i WHERE i.project_id = p.id) AS invoice_total,
+        (SELECT COALESCE(SUM(pay.gross_amount), 0)
+          FROM invoice_payments pay
+          JOIN invoices i ON i.id=pay.invoice_id
+          WHERE i.project_id=p.id AND pay.status='Posted') AS paid_total,
         (SELECT group_concat(u.name, '|') FROM project_members pm JOIN users u ON u.id = pm.user_id WHERE pm.project_id = p.id) AS team_names
       FROM projects p
       LEFT JOIN users manager ON manager.id = p.manager_id
@@ -1284,9 +1256,61 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     });
     await client.batch(
       [
+        {
+          sql: `DELETE FROM tax_settlements WHERE obligation_id IN (
+            SELECT o.id FROM tax_obligations o
+            JOIN document_taxes dt ON dt.id=o.document_tax_id
+            WHERE dt.project_id=?
+          )`,
+          args: [projectId],
+        },
+        {
+          sql: `DELETE FROM tax_obligations WHERE document_tax_id IN (
+            SELECT id FROM document_taxes WHERE project_id=?
+          )`,
+          args: [projectId],
+        },
+        {
+          sql: "DELETE FROM document_taxes WHERE project_id=?",
+          args: [projectId],
+        },
+        {
+          sql: `DELETE FROM invoice_payments WHERE invoice_id IN (
+            SELECT id FROM invoices WHERE project_id=?
+          )`,
+          args: [projectId],
+        },
+        {
+          sql: `DELETE FROM po_receipt_items WHERE receipt_id IN (
+            SELECT r.id FROM po_receipts r
+            JOIN spks s ON s.id=r.spk_id
+            WHERE s.project_id=?
+          )`,
+          args: [projectId],
+        },
+        {
+          sql: "DELETE FROM po_receipts WHERE spk_id IN (SELECT id FROM spks WHERE project_id=?)",
+          args: [projectId],
+        },
+        {
+          sql: "DELETE FROM spk_verifications WHERE spk_id IN (SELECT id FROM spks WHERE project_id=?)",
+          args: [projectId],
+        },
         { sql: "DELETE FROM transactions WHERE project_id=?", args: [projectId] },
         {
           sql: "DELETE FROM spk_payments WHERE spk_id IN (SELECT id FROM spks WHERE project_id=?)",
+          args: [projectId],
+        },
+        {
+          sql: "DELETE FROM spk_payment_terms WHERE spk_id IN (SELECT id FROM spks WHERE project_id=?)",
+          args: [projectId],
+        },
+        {
+          sql: "DELETE FROM spk_items WHERE spk_id IN (SELECT id FROM spks WHERE project_id=?)",
+          args: [projectId],
+        },
+        {
+          sql: "DELETE FROM spks WHERE project_id=?",
           args: [projectId],
         },
         { sql: "DELETE FROM projects WHERE id = ?", args: [projectId] },
@@ -1887,7 +1911,73 @@ async function getInvoice(client: Awaited<ReturnType<typeof getDatabase>>["clien
     args: [id],
   });
   if (!result.rows[0]) throw new ApiError(404, "NOT_FOUND", "Invoice tidak ditemukan.");
-  return mapInvoice(result.rows[0] as Record<string, unknown>);
+  const row = result.rows[0] as Record<string, unknown>;
+  const [tax, payments] = await Promise.all([
+    documentTaxSummary(client, "Invoice", id, asNumber(row.amount)),
+    client.execute({
+      sql: `SELECT pay.*,u.name AS created_by_name,a.bank_name,
+        a.account_number_masked
+        FROM invoice_payments pay
+        LEFT JOIN users u ON u.id=pay.created_by
+        LEFT JOIN bank_accounts a ON a.id=pay.bank_account_id
+        WHERE pay.invoice_id=?
+        ORDER BY pay.paid_date,pay.created_at`,
+      args: [id],
+    }),
+  ]);
+  const posted = payments.rows.filter((payment) => String(payment.status) === "Posted");
+  const paidGross = posted.reduce(
+    (sum, payment) => sum + asNumber(payment.gross_amount),
+    0,
+  );
+  const paidCash = posted.reduce(
+    (sum, payment) => sum + asNumber(payment.cash_amount),
+    0,
+  );
+  const withheldTax = posted.reduce(
+    (sum, payment) => sum + asNumber(payment.withholding_amount),
+    0,
+  );
+  const status =
+    paidGross <= 0
+      ? "Belum Lunas"
+      : paidGross >= tax.grossTotal
+        ? "Lunas"
+        : "Dibayar Sebagian";
+  return {
+    ...mapInvoice(row),
+    status,
+    ...tax,
+    paidGross,
+    paidCash,
+    withheldTax,
+    outstanding: Math.max(0, tax.grossTotal - paidGross),
+    payments: payments.rows.map((payment) => ({
+      id: String(payment.id),
+      grossAmount: asNumber(payment.gross_amount),
+      cashAmount: asNumber(payment.cash_amount),
+      withholdingAmount: asNumber(payment.withholding_amount),
+      paidDate: String(payment.paid_date),
+      paymentReference: String(payment.payment_reference),
+      paymentMethod: String(payment.payment_method),
+      bankAccountId: payment.bank_account_id
+        ? String(payment.bank_account_id)
+        : undefined,
+      bankAccount: payment.bank_name
+        ? `${String(payment.bank_name)} ${String(payment.account_number_masked ?? "")}`.trim()
+        : undefined,
+      attachmentName: payment.attachment_name
+        ? String(payment.attachment_name)
+        : undefined,
+      status: String(payment.status),
+      createdBy: payment.created_by_name
+        ? String(payment.created_by_name)
+        : undefined,
+      voidReason: payment.void_reason
+        ? String(payment.void_reason)
+        : undefined,
+    })),
+  };
 }
 
 async function assertInvoiceAmountWithinQuotation(
@@ -1948,7 +2038,11 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
       sql: `SELECT i.*,p.name AS project_name FROM invoices i JOIN projects p ON p.id=i.project_id ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY i.issue_date DESC,i.created_at DESC`,
       args,
     });
-    return ok(result.rows.map((row) => mapInvoice(row as Record<string, unknown>)));
+    return ok(
+      await Promise.all(
+        result.rows.map((row) => getInvoice(client, String(row.id))),
+      ),
+    );
   }
 
   if (request.method === "POST" && !invoiceId) {
@@ -1988,6 +2082,254 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
     return renderBusinessPdf("invoice", invoiceId, user.preferredLanguage);
   }
 
+  if (invoiceId && action === "payments" && request.method === "GET" && !path[3]) {
+    const invoice = await ensureExists(
+      "SELECT project_id FROM invoices WHERE id=?",
+      [invoiceId],
+      "Invoice tidak ditemukan.",
+    );
+    await assertProjectAccess(user, String(invoice.project_id));
+    return ok((await getInvoice(client, invoiceId)).payments);
+  }
+
+  if (invoiceId && action === "payments" && request.method === "POST" && !path[3]) {
+    if (!mutationRoles("invoices").includes(user.role)) {
+      throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mencatat pembayaran invoice.");
+    }
+    assertAccess(user, "finance", "manage");
+    const input = invoicePaymentSchema.parse(await jsonBody(request));
+    const invoice = await ensureExists(
+      "SELECT * FROM invoices WHERE id=?",
+      [invoiceId],
+      "Invoice tidak ditemukan.",
+    );
+    await assertProjectAccess(user, String(invoice.project_id));
+    if (input.paymentMethod === "Transfer Bank" && !input.bankAccountId) {
+      throw new ApiError(422, "BANK_ACCOUNT_REQUIRED", "Pilih rekening perusahaan.");
+    }
+    if (input.bankAccountId) {
+      const bank = await client.execute({
+        sql: "SELECT id FROM bank_accounts WHERE id=? AND status='Aktif' LIMIT 1",
+        args: [input.bankAccountId],
+      });
+      if (!bank.rows.length) {
+        throw new ApiError(404, "NOT_FOUND", "Rekening perusahaan aktif tidak ditemukan.");
+      }
+    }
+    const paymentId = `invoice-payment-${randomUUID()}`;
+    const transactionId = input.cashAmount > 0 ? randomUUID() : null;
+    const timestamp = now();
+    await client.transaction(async (tx) => {
+      await tx.execute({
+        sql: "UPDATE invoices SET updated_at=updated_at WHERE id=?",
+        args: [invoiceId],
+      });
+      const current = await getInvoice(tx, invoiceId);
+      if (current.paidGross + input.grossAmount > current.grossTotal) {
+        throw new ApiError(
+          409,
+          "OVERPAYMENT",
+          "Pembayaran melebihi nilai bruto invoice.",
+        );
+      }
+      if (
+        current.withheldTax + input.withholdingAmount >
+        current.taxWithholdings
+      ) {
+        throw new ApiError(
+          409,
+          "WITHHOLDING_EXCEEDED",
+          "Pajak yang dipotong klien melebihi snapshot pajak invoice.",
+        );
+      }
+      await lockDocumentTaxes(
+        tx,
+        "Invoice",
+        invoiceId,
+        String(invoice.due_date),
+      );
+      if (transactionId) {
+        await tx.execute({
+          sql: `INSERT INTO transactions
+            (id,project_id,date,type,description,amount,source,reference_id,
+             category,created_by,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          args: [
+            transactionId,
+            invoice.project_id,
+            input.paidDate,
+            "Pemasukan",
+            `Pembayaran ${String(invoice.number)} - ${input.paymentReference}`,
+            input.cashAmount,
+            "Invoice Payment",
+            paymentId,
+            "Penjualan",
+            user.id,
+            timestamp,
+            timestamp,
+          ],
+        });
+      }
+      await tx.execute({
+        sql: `INSERT INTO invoice_payments
+          (id,invoice_id,gross_amount,cash_amount,withholding_amount,paid_date,
+           payment_reference,payment_method,bank_account_id,attachment_name,
+           attachment_mime_type,attachment_content_base64,status,transaction_id,
+           created_by,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        args: [
+          paymentId,
+          invoiceId,
+          input.grossAmount,
+          input.cashAmount,
+          input.withholdingAmount,
+          input.paidDate,
+          input.paymentReference,
+          input.paymentMethod,
+          input.bankAccountId ?? null,
+          input.attachment.name,
+          input.attachment.mimeType,
+          input.attachment.contentBase64,
+          "Posted",
+          transactionId,
+          user.id,
+          timestamp,
+          timestamp,
+        ],
+      });
+      const paidGross = current.paidGross + input.grossAmount;
+      await tx.execute({
+        sql: "UPDATE invoices SET status=?,paid_date=?,updated_at=? WHERE id=?",
+        args: [
+          paidGross >= current.grossTotal ? "Lunas" : "Belum Lunas",
+          paidGross >= current.grossTotal ? input.paidDate : null,
+          timestamp,
+          invoiceId,
+        ],
+      });
+    });
+    await writeAuditLog(client, request, user, "pay", "invoice", invoiceId, {
+      paymentId,
+      grossAmount: input.grossAmount,
+      cashAmount: input.cashAmount,
+      withholdingAmount: input.withholdingAmount,
+      paymentReference: input.paymentReference,
+    });
+    const updated = await getInvoice(client, invoiceId);
+    await notifyProjectStakeholders(client, {
+      projectId: String(invoice.project_id),
+      eventType: "invoice_paid",
+      subject: `Pembayaran ${String(invoice.number)} diterima`,
+      message: `pembayaran invoice ${String(invoice.number)} sebesar Rp ${input.grossAmount.toLocaleString("id-ID")} telah dicatat.`,
+      subjectEn: `Payment for ${String(invoice.number)} received`,
+      messageEn: `an invoice payment of IDR ${input.grossAmount.toLocaleString("en-US")} for ${String(invoice.number)} was recorded.`,
+      includeFinance: true,
+    });
+    return created(updated);
+  }
+
+  if (
+    invoiceId &&
+    action === "payments" &&
+    path[3] &&
+    path[4] === "void" &&
+    request.method === "POST"
+  ) {
+    if (user.role !== "Admin") {
+      throw new ApiError(403, "FORBIDDEN", "Hanya Admin yang dapat membatalkan pembayaran.");
+    }
+    assertAccess(user, "finance", "manage");
+    const input = z
+      .object({ reason: z.string().trim().min(5).max(500) })
+      .parse(await jsonBody(request));
+    const paymentId = path[3];
+    const paymentResult = await client.execute({
+      sql: `SELECT pay.*,i.project_id,i.number,i.amount AS invoice_amount
+        FROM invoice_payments pay
+        JOIN invoices i ON i.id=pay.invoice_id
+        WHERE pay.id=? AND pay.invoice_id=? AND pay.status='Posted' LIMIT 1`,
+      args: [paymentId, invoiceId],
+    });
+    const payment = paymentResult.rows[0];
+    if (!payment) {
+      throw new ApiError(404, "NOT_FOUND", "Pembayaran aktif tidak ditemukan.");
+    }
+    await assertProjectAccess(user, String(payment.project_id));
+    if (payment.transaction_id) {
+      const reconciled = await client.execute({
+        sql: `SELECT 1 FROM bank_statement_entries
+          WHERE transaction_id=? AND reconciliation_status='Matched' LIMIT 1`,
+        args: [payment.transaction_id],
+      });
+      if (reconciled.rows.length) {
+        throw new ApiError(
+          409,
+          "PAYMENT_RECONCILED",
+          "Lepaskan rekonsiliasi bank sebelum membatalkan pembayaran.",
+        );
+      }
+    }
+    const timestamp = now();
+    await client.transaction(async (tx) => {
+      await tx.execute({
+        sql: `UPDATE invoice_payments SET status='Void',voided_by=?,voided_at=?,
+          void_reason=?,updated_at=? WHERE id=?`,
+        args: [user.id, timestamp, input.reason, timestamp, paymentId],
+      });
+      if (asNumber(payment.cash_amount) > 0) {
+        await tx.execute({
+          sql: `INSERT INTO transactions
+            (id,project_id,date,type,description,amount,source,reference_id,
+             category,created_by,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          args: [
+            randomUUID(),
+            payment.project_id,
+            timestamp.slice(0, 10),
+            "Pengeluaran",
+            `Reversal pembayaran ${String(payment.number)}`,
+            payment.cash_amount,
+            "Invoice Payment Reversal",
+            paymentId,
+            "Penjualan",
+            user.id,
+            timestamp,
+            timestamp,
+          ],
+        });
+      }
+      const remaining = await tx.execute({
+        sql: `SELECT COALESCE(SUM(gross_amount),0) AS total,
+          MAX(paid_date) AS last_paid
+          FROM invoice_payments WHERE invoice_id=? AND status='Posted'`,
+        args: [invoiceId],
+      });
+      const tax = await documentTaxSummary(
+        tx,
+        "Invoice",
+        invoiceId,
+        asNumber(payment.invoice_amount),
+      );
+      const paidGross = asNumber(remaining.rows[0]?.total);
+      await tx.execute({
+        sql: "UPDATE invoices SET status=?,paid_date=?,updated_at=? WHERE id=?",
+        args: [
+          paidGross >= tax.grossTotal ? "Lunas" : "Belum Lunas",
+          paidGross >= tax.grossTotal
+            ? remaining.rows[0]?.last_paid ?? null
+            : null,
+          timestamp,
+          invoiceId,
+        ],
+      });
+    });
+    await writeAuditLog(client, request, user, "void_payment", "invoice", invoiceId, {
+      paymentId,
+      reason: input.reason,
+    });
+    return ok(await getInvoice(client, invoiceId));
+  }
+
   if (
     invoiceId &&
     action === "payment" &&
@@ -2008,15 +2350,90 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
       })
       .parse(await jsonBody(request));
     const paidDate =
-      input.status === "Lunas"
-        ? input.paidDate ?? invoice.paid_date ?? now().slice(0, 10)
-        : null;
+      input.paidDate ?? invoice.paid_date ?? now().slice(0, 10);
     const timestamp = now();
-    await client.execute({
-      sql: "UPDATE invoices SET status=?,paid_date=?,updated_at=? WHERE id=?",
-      args: [input.status, paidDate, timestamp, invoiceId],
-    });
-    await syncInvoiceTransaction(client, invoiceId, user.id);
+    const current = await getInvoice(client, invoiceId);
+    if (input.status === "Belum Lunas") {
+      if (current.payments.some((payment) => payment.status === "Posted")) {
+        throw new ApiError(
+          409,
+          "PAYMENT_VOID_REQUIRED",
+          "Batalkan setiap pembayaran aktif melalui histori pembayaran.",
+        );
+      }
+      await detachOrDeleteSystemTransaction(client, "Invoice", invoiceId);
+      await client.execute({
+        sql: "UPDATE invoices SET status='Belum Lunas',paid_date=NULL,updated_at=? WHERE id=?",
+        args: [timestamp, invoiceId],
+      });
+    } else if (current.outstanding > 0) {
+      const withholdingAmount = Math.min(
+        current.outstanding,
+        Math.max(0, current.taxWithholdings - current.withheldTax),
+      );
+      const cashAmount = current.outstanding - withholdingAmount;
+      const paymentId = `invoice-payment-${randomUUID()}`;
+      const transactionId = cashAmount > 0 ? randomUUID() : null;
+      await client.transaction(async (tx) => {
+        await lockDocumentTaxes(
+          tx,
+          "Invoice",
+          invoiceId,
+          String(invoice.due_date),
+        );
+        if (transactionId) {
+          await tx.execute({
+            sql: `INSERT INTO transactions
+              (id,project_id,date,type,description,amount,source,reference_id,
+               category,created_by,created_at,updated_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+            args: [
+              transactionId,
+              invoice.project_id,
+              paidDate,
+              "Pemasukan",
+              `Pembayaran ${String(invoice.number)}`,
+              cashAmount,
+              "Invoice Payment",
+              paymentId,
+              "Penjualan",
+              user.id,
+              timestamp,
+              timestamp,
+            ],
+          });
+        }
+        await tx.execute({
+          sql: `INSERT INTO invoice_payments
+            (id,invoice_id,gross_amount,cash_amount,withholding_amount,paid_date,
+             payment_reference,payment_method,attachment_name,
+             attachment_mime_type,attachment_content_base64,status,
+             transaction_id,created_by,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,'Posted',?,?,?,?)`,
+          args: [
+            paymentId,
+            invoiceId,
+            current.outstanding,
+            cashAmount,
+            withholdingAmount,
+            paidDate,
+            `LEGACY-${String(invoice.number)}`,
+            "Lainnya",
+            "Konfirmasi pembayaran kompatibilitas",
+            "text/plain",
+            "S29uZmlybWFzaSBwZW1iYXlhcmFu",
+            transactionId,
+            user.id,
+            timestamp,
+            timestamp,
+          ],
+        });
+        await tx.execute({
+          sql: "UPDATE invoices SET status='Lunas',paid_date=?,updated_at=? WHERE id=?",
+          args: [paidDate, timestamp, invoiceId],
+        });
+      });
+    }
     await writeAuditLog(
       client,
       request,
@@ -2050,10 +2467,26 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
     if (!mutationRoles("invoices").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah invoice.");
     const input = invoicePatchSchema.parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM invoices WHERE id=?", [invoiceId], "Invoice tidak ditemukan.");
-    if (current.status === "Lunas") {
-      assertAccess(user, "finance", "manage");
-    }
     await assertProjectAccess(user, String(current.project_id));
+    const locked = await client.execute({
+      sql: `SELECT
+        EXISTS(SELECT 1 FROM invoice_payments WHERE invoice_id=?) AS has_payment,
+        EXISTS(SELECT 1 FROM document_taxes
+          WHERE document_type='Invoice' AND document_id=? AND locked=1) AS tax_locked`,
+      args: [invoiceId, invoiceId],
+    });
+    if (
+      Number(locked.rows[0]?.has_payment) === 1 ||
+      locked.rows[0]?.has_payment === true ||
+      Number(locked.rows[0]?.tax_locked) === 1 ||
+      locked.rows[0]?.tax_locked === true
+    ) {
+      throw new ApiError(
+        409,
+        "INVOICE_LOCKED",
+        "Invoice yang sudah memiliki histori pembayaran atau snapshot pajak terkunci tidak dapat diedit.",
+      );
+    }
     assertDateOrder(
       input.issueDate ?? current.issue_date,
       input.dueDate ?? current.due_date,
@@ -2069,7 +2502,6 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
       sql: "UPDATE invoices SET type=?,issue_date=?,due_date=?,amount=?,updated_at=? WHERE id=?",
       args: [input.type ?? current.type, input.issueDate ?? current.issue_date, input.dueDate ?? current.due_date, input.amount ?? current.amount, now(), invoiceId],
     });
-    await syncInvoiceTransaction(client, invoiceId, user.id);
     await writeAuditLog(client, request, user, "update", "invoice", invoiceId, input);
     return ok(await getInvoice(client, invoiceId));
   }
@@ -2077,10 +2509,26 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
   if (invoiceId && !action && request.method === "DELETE") {
     if (!mutationRoles("invoices").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menghapus invoice.");
     const invoice = await ensureExists("SELECT project_id,status FROM invoices WHERE id=?", [invoiceId], "Invoice tidak ditemukan.");
-    if (invoice.status === "Lunas") {
-      assertAccess(user, "finance", "manage");
-    }
     await assertProjectAccess(user, String(invoice.project_id));
+    const history = await client.execute({
+      sql: `SELECT
+        EXISTS(SELECT 1 FROM invoice_payments WHERE invoice_id=?) AS has_payment,
+        EXISTS(SELECT 1 FROM document_taxes
+          WHERE document_type='Invoice' AND document_id=?) AS has_tax`,
+      args: [invoiceId, invoiceId],
+    });
+    if (
+      Number(history.rows[0]?.has_payment) === 1 ||
+      history.rows[0]?.has_payment === true ||
+      Number(history.rows[0]?.has_tax) === 1 ||
+      history.rows[0]?.has_tax === true
+    ) {
+      throw new ApiError(
+        409,
+        "INVOICE_HISTORY_EXISTS",
+        "Invoice dengan histori pembayaran atau pajak tidak dapat dihapus. Gunakan void pada pembayaran.",
+      );
+    }
     await detachOrDeleteSystemTransaction(client, "Invoice", invoiceId);
     await client.execute({
       sql: "DELETE FROM invoices WHERE id=?",
@@ -3049,6 +3497,10 @@ function mapTransaction(
     source === "Profit Share Reversal" ||
     source === "Procurement Payment" ||
     source === "Procurement Reversal" ||
+    source === "Invoice Payment" ||
+    source === "Invoice Payment Reversal" ||
+    source === "Tax Settlement" ||
+    source === "Tax Settlement Reversal" ||
     (Boolean(row.reference_id) &&
       (source === "Invoice" || source === "SPK"));
   return {
@@ -3168,12 +3620,18 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
             WHERE b.project_id=p.id
           ),0) AS budget_boq,
           COALESCE((
-            SELECT SUM(o.cost) FROM spks o
+            SELECT SUM(o.cost + COALESCE((
+              SELECT SUM(dt.amount) FROM document_taxes dt
+              WHERE dt.document_id=o.id
+                AND dt.document_type=o.document_type
+                AND dt.effect='Add'
+            ),0)) FROM spks o
             WHERE o.project_id=p.id AND o.approval_status='Approved'
               AND o.workflow_status<>'Void'
           ),0) AS committed_vendor_cost,
           COALESCE((
-            SELECT SUM(pay.amount)
+            SELECT SUM(CASE WHEN pay.gross_amount>0
+              THEN pay.gross_amount ELSE pay.amount END)
             FROM spk_payments pay JOIN spks o ON o.id=pay.spk_id
             WHERE o.project_id=p.id AND pay.status='Posted'
           ),0) AS procurement_paid,
@@ -3225,6 +3683,35 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           row.committedVendorCost !== 0 ||
           row.acceptedAddenda !== 0,
       );
+    const taxResult = await client.execute({
+      sql: `SELECT p.code,p.name,dt.rule_name,dt.rule_name_en,o.direction,
+        o.amount,o.settled_amount,o.status
+        FROM tax_obligations o
+        JOIN document_taxes dt ON dt.id=o.document_tax_id
+        LEFT JOIN projects p ON p.id=o.project_id
+        ${profitConditions.length ? `WHERE ${profitConditions.join(" AND ")}` : ""}
+        ORDER BY p.code,o.direction,dt.rule_code`,
+      args: profitArgs as never[],
+    });
+    const taxRows = taxResult.rows.map((row) => ({
+      project: row.code
+        ? `${String(row.code)} - ${String(row.name ?? "")}`
+        : user.preferredLanguage === "en"
+          ? "General"
+          : "Umum",
+      rule:
+        user.preferredLanguage === "en"
+          ? String(row.rule_name_en)
+          : String(row.rule_name),
+      direction: String(row.direction),
+      amount: asNumber(row.amount),
+      settled: asNumber(row.settled_amount),
+      outstanding: Math.max(
+        0,
+        asNumber(row.amount) - asNumber(row.settled_amount),
+      ),
+      status: String(row.status),
+    }));
     if (transactionId === "report.csv") {
       const en = user.preferredLanguage === "en";
       const csvCell = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
@@ -3305,6 +3792,32 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           ].map(csvCell).join(",")),
         );
       }
+      if (taxRows.length) {
+        lines.push(
+          "",
+          [en ? "TAX POSITION" : "POSISI PAJAK"].map(csvCell).join(","),
+          [
+            en ? "Project" : "Proyek",
+            en ? "Tax rule" : "Aturan Pajak",
+            en ? "Position" : "Posisi",
+            en ? "Amount (IDR)" : "Nilai (IDR)",
+            en ? "Settled (IDR)" : "Settlement (IDR)",
+            "Outstanding (IDR)",
+            "Status",
+          ].map(csvCell).join(","),
+          ...taxRows.map((row) => [
+            row.project,
+            row.rule,
+            row.direction === "Payable"
+              ? en ? "Payable" : "Utang"
+              : en ? "Receivable" : "Piutang",
+            row.amount,
+            row.settled,
+            row.outstanding,
+            row.status,
+          ].map(csvCell).join(",")),
+        );
+      }
       const reportDate = new Intl.DateTimeFormat("en-CA", {
         timeZone: "Asia/Makassar",
         year: "numeric",
@@ -3354,6 +3867,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           outstanding: row.outstandingVendorCost,
           acceptedAddenda: row.acceptedAddenda,
         })),
+        taxRows,
       );
     }
     return ok(transactions);
@@ -3366,6 +3880,8 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       input.source.toLowerCase().startsWith("bank:") ||
       input.source.toLowerCase().startsWith("profit share") ||
       input.source.toLowerCase().startsWith("procurement ") ||
+      input.source.toLowerCase().startsWith("invoice payment") ||
+      input.source.toLowerCase().startsWith("tax settlement") ||
       input.category === "Bagi Hasil"
     ) {
       throw new ApiError(
@@ -3405,7 +3921,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         (["invoice", "spk"].includes(input.source.toLowerCase()) ||
           input.source.toLowerCase().startsWith("bank:") ||
           input.source.toLowerCase().startsWith("profit share") ||
-          input.source.toLowerCase().startsWith("procurement "))) ||
+          input.source.toLowerCase().startsWith("procurement ") ||
+          input.source.toLowerCase().startsWith("invoice payment") ||
+          input.source.toLowerCase().startsWith("tax settlement"))) ||
       input.category === "Bagi Hasil"
     ) {
       throw new ApiError(
@@ -3419,7 +3937,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         (current.source === "Invoice" || current.source === "SPK")) ||
       String(current.source).startsWith("Bank:") ||
       String(current.source).startsWith("Profit Share") ||
-      String(current.source).startsWith("Procurement ")
+      String(current.source).startsWith("Procurement ") ||
+      String(current.source).startsWith("Invoice Payment") ||
+      String(current.source).startsWith("Tax Settlement")
     ) {
       throw new ApiError(
         409,
@@ -3458,7 +3978,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         (current.source === "Invoice" || current.source === "SPK")) ||
       String(current.source).startsWith("Bank:") ||
       String(current.source).startsWith("Profit Share") ||
-      String(current.source).startsWith("Procurement ")
+      String(current.source).startsWith("Procurement ") ||
+      String(current.source).startsWith("Invoice Payment") ||
+      String(current.source).startsWith("Tax Settlement")
     ) {
       throw new ApiError(
         409,
@@ -3903,6 +4425,8 @@ async function handleSettings(request: Request, user: AuthUser) {
       preferredLanguage: profile.preferredLanguage,
       emailNotifications: profile.emailNotifications,
       emailDeliveryConfigured: emailDeliveryConfigured(),
+      emailMode: emailMode(),
+      emailProvider: emailProviderName(),
     });
   }
   if (request.method === "PATCH") {
@@ -3917,7 +4441,12 @@ async function handleSettings(request: Request, user: AuthUser) {
       args: [user.id, input.preferredLanguage, input.emailNotifications ? 1 : 0, timestamp],
     });
     await writeAuditLog(client, request, user, "update_settings", "user", user.id, input);
-    return ok({ ...input, emailDeliveryConfigured: emailDeliveryConfigured() });
+    return ok({
+      ...input,
+      emailDeliveryConfigured: emailDeliveryConfigured(),
+      emailMode: emailMode(),
+      emailProvider: emailProviderName(),
+    });
   }
   throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
 }
@@ -3940,8 +4469,18 @@ async function handleNotifications(
   if (request.method === "GET" && !path[2]) {
     const result = await client.execute({
       sql: `
-        SELECT id,user_id,event_type,recipient,subject,status,error_message,created_at
-        FROM email_deliveries
+        SELECT * FROM (
+          SELECT id,user_id,event_type,recipient,subject,lower(status) AS status,
+            last_error AS error_message,provider,provider_id,attempt_count,
+            next_attempt_at,created_at
+          FROM email_outbox
+          UNION ALL
+          SELECT d.id,d.user_id,d.event_type,d.recipient,d.subject,d.status,
+            d.error_message,NULL AS provider,d.provider_id,0 AS attempt_count,
+            d.created_at AS next_attempt_at,d.created_at
+          FROM email_deliveries d
+          WHERE NOT EXISTS (SELECT 1 FROM email_outbox o WHERE o.id=d.id)
+        ) history
         ${user.role === "Admin" ? "" : "WHERE user_id=?"}
         ORDER BY created_at DESC
         LIMIT 25
@@ -3957,6 +4496,12 @@ async function handleNotifications(
         subject: String(row.subject),
         status: String(row.status),
         error: row.error_message ? String(row.error_message) : undefined,
+        provider: row.provider ? String(row.provider) : undefined,
+        providerId: row.provider_id ? String(row.provider_id) : undefined,
+        attemptCount: asNumber(row.attempt_count),
+        nextAttemptAt: row.next_attempt_at
+          ? String(row.next_attempt_at)
+          : undefined,
         createdAt: String(row.created_at),
       })),
     );
@@ -3974,6 +4519,33 @@ async function handleNotifications(
       { status: result.status },
     );
     return ok(result);
+  }
+
+  if (
+    request.method === "POST" &&
+    path[2] &&
+    path[3] === "retry"
+  ) {
+    if (user.role !== "Admin") {
+      throw new ApiError(403, "FORBIDDEN", "Hanya Admin yang dapat mencoba ulang email.");
+    }
+    const retry = await retryEmailOutbox(client, path[2]);
+    if (!retry) {
+      throw new ApiError(
+        409,
+        "EMAIL_NOT_RETRYABLE",
+        "Email tidak ditemukan atau statusnya tidak dapat dicoba ulang.",
+      );
+    }
+    await writeAuditLog(
+      client,
+      request,
+      user,
+      "retry",
+      "email_outbox",
+      path[2],
+    );
+    return ok({ id: path[2], status: "pending" });
   }
 
   throw new ApiError(404, "NOT_FOUND", "Endpoint notifikasi tidak ditemukan.");
@@ -4104,15 +4676,42 @@ export async function dispatchApi(request: Request, path: string[]) {
   }
   if (resource === "boq") return handleBoq(request, path, user);
   if (resource === "quotations" && path[1]) {
+    if (path[2] === "taxes") {
+      return handleDocumentTaxes(
+        request,
+        ["tax", "documents", "Quotation", path[1]],
+        user,
+      );
+    }
     return handleQuotationLifecycle(request, path, user);
   }
   if (resource === "quotations") return handleQuotations(request, user);
+  if (resource === "invoices" && path[1] && path[2] === "taxes") {
+    return handleDocumentTaxes(
+      request,
+      ["tax", "documents", "Invoice", path[1]],
+      user,
+    );
+  }
   if (resource === "invoices") return handleInvoices(request, path, user);
   if (resource === "vendors") return handleVendors(request, path, user);
   if (resource === "vendor-categories") {
     return handleVendorCategories(request, path, user);
   }
   if (resource === "procurement-orders") {
+    if (path[1] && path[2] === "taxes") {
+      const typeResult = await (await getDatabase()).client.execute({
+        sql: "SELECT document_type FROM spks WHERE id=? LIMIT 1",
+        args: [path[1]],
+      });
+      const documentType =
+        String(typeResult.rows[0]?.document_type) === "PO" ? "PO" : "SPK";
+      return handleDocumentTaxes(
+        request,
+        ["tax", "documents", documentType, path[1]],
+        user,
+      );
+    }
     return handleProcurementOrders(request, path, user);
   }
   if (resource === "spks") return handleSpks(request, path, user);
@@ -4122,6 +4721,7 @@ export async function dispatchApi(request: Request, path: string[]) {
   if (resource === "finance" && path[1] === "summary") return handleFinance(request, user);
   if (resource === "bank-accounts") return handleBankAccounts(request, path, user);
   if (resource === "profit-shares") return handleProfitShares(request, path, user);
+  if (resource === "tax") return handleTax(request, path, user);
   if (resource === "users") return handleUsers(request, path, user);
   if (resource === "profile") return handleProfile(request, path, user);
   if (resource === "settings") return handleSettings(request, user);

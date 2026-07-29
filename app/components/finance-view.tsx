@@ -37,6 +37,7 @@ import {
 import { type AppLanguage, localizedDate, localizedLabel } from "../i18n";
 import { BankingPanel } from "./banking-panel";
 import { ProfitSharingPanel } from "./profit-sharing-panel";
+import { TaxPanel } from "./tax-panel";
 
 interface FinanceViewProps {
   language: AppLanguage;
@@ -47,6 +48,7 @@ interface FinanceViewProps {
   canUseBanking: boolean;
   canConfigureBanking: boolean;
   canApproveProfitShares: boolean;
+  canConfigureTax: boolean;
 }
 
 const transactionCategories = [
@@ -157,6 +159,7 @@ export function FinanceView({
   canUseBanking,
   canConfigureBanking,
   canApproveProfitShares,
+  canConfigureTax,
 }: FinanceViewProps) {
   const id = language === "id";
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -579,6 +582,16 @@ export function FinanceView({
         />
       ) : null}
 
+      {canUseBanking ? (
+        <TaxPanel
+          language={language}
+          notify={notify}
+          canManage={canManage}
+          canConfigure={canConfigureTax}
+          serverToday={serverToday}
+        />
+      ) : null}
+
       {canManage && projects.length ? (
         <ProfitSharingPanel
           key={projectId ?? "all-projects"}
@@ -601,6 +614,7 @@ export function FinanceView({
             <label className="select-compact">
               <CalendarRange size={15} />
               <select
+                aria-label={id ? "Periode grafik arus kas" : "Cash flow chart period"}
                 value={periodMonths}
                 onChange={(event) =>
                   setPeriodMonths(Number(event.target.value) as 3 | 6 | 12)
@@ -620,6 +634,7 @@ export function FinanceView({
           </div>
           <div
             className="bar-chart"
+            role="img"
             aria-label={
               id
                 ? `Grafik arus kas ${periodMonths} bulan`

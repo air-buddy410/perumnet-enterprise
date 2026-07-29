@@ -1,16 +1,16 @@
 @import "tailwindcss";
 
 :root {
-  --teal: #04a99f;
-  --teal-bright: #00a79d;
-  --teal-dark: #008d85;
+  --teal: #007a74;
+  --teal-bright: #00756f;
+  --teal-dark: #006f69;
   --teal-soft: #def6f2;
   --teal-pale: #f1fbf9;
   --navy: #31505e;
   --navy-deep: #233d49;
   --ink: #263d46;
   --grey: #555557;
-  --muted: #798283;
+  --muted: #657173;
   --muted-2: #9aa7a8;
   --line: #dfe9e7;
   --line-strong: #cadbd7;
@@ -19,9 +19,9 @@
   --background: #f4f8f7;
   --orange: #f6ad3b;
   --orange-soft: #fff5df;
-  --green: #36a773;
+  --green: #267653;
   --green-soft: #e6f7ef;
-  --red: #d9655d;
+  --red: #a53e39;
   --red-soft: #fceceb;
   --blue: #5a82c4;
   --blue-soft: #edf3fb;
@@ -545,7 +545,7 @@ h3 {
 
 .status-badge.success {
   background: var(--green-soft);
-  color: #24855a;
+  color: var(--green);
 }
 
 .status-badge.info {
@@ -555,12 +555,12 @@ h3 {
 
 .status-badge.warning {
   background: var(--orange-soft);
-  color: #ae7116;
+  color: #8a570e;
 }
 
 .status-badge.danger {
   background: var(--red-soft);
-  color: #b84e48;
+  color: var(--red);
 }
 
 .status-badge.neutral {
@@ -888,7 +888,7 @@ h3 {
 .data-table th {
   padding: 12px 15px;
   background: #f8fbfa;
-  color: #768487;
+  color: var(--muted);
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.06em;
@@ -918,6 +918,7 @@ h3 {
 
 .table-scroll {
   overflow-x: auto;
+  contain: inline-size layout;
   scrollbar-width: thin;
   scrollbar-color: #c8dbd7 transparent;
 }
@@ -960,7 +961,7 @@ h3 {
   padding: 44px clamp(36px, 5vw, 76px);
   background:
     radial-gradient(circle at 18% 12%, rgba(91, 215, 205, 0.32), transparent 30%),
-    linear-gradient(145deg, #04a99f 0%, #008d85 58%, #0b776f 100%);
+    linear-gradient(145deg, #007a74 0%, #006f69 58%, #075f5a 100%);
   color: #fff;
 }
 
@@ -1981,7 +1982,7 @@ h3 {
 
 .metric-change.warning-text,
 .warning-text {
-  color: #b97918;
+  color: #8a570e;
 }
 
 .negative {
@@ -2229,7 +2230,7 @@ h3 {
 
 .attention-icon.warning {
   background: var(--orange-soft);
-  color: #b97918;
+  color: #8a570e;
 }
 
 .attention-icon.info {
@@ -2450,7 +2451,7 @@ h3 {
 
 .category-icon.jasa {
   background: var(--orange-soft);
-  color: #b97918;
+  color: #8a570e;
 }
 
 .category-icon.mobilitas {
@@ -3035,7 +3036,7 @@ h3 {
 
 .invoice-status-icon.unpaid {
   background: var(--orange-soft);
-  color: #b97918;
+  color: #8a570e;
 }
 
 .invoice-primary,
@@ -3615,7 +3616,7 @@ h3 {
 
 .activity-event-icon.teal { background: var(--teal-soft); color: var(--teal-dark); }
 .activity-event-icon.green { background: var(--green-soft); color: var(--green); }
-.activity-event-icon.orange { background: var(--orange-soft); color: #b97918; }
+.activity-event-icon.orange { background: var(--orange-soft); color: #8a570e; }
 
 .activity-event > div {
   display: grid;
@@ -3695,7 +3696,7 @@ h3 {
 }
 
 .vendor-logo.variant-1 { background: var(--blue-soft); color: var(--blue); }
-.vendor-logo.variant-2 { background: var(--orange-soft); color: #b97918; }
+.vendor-logo.variant-2 { background: var(--orange-soft); color: #8a570e; }
 .vendor-logo.variant-3 { background: var(--green-soft); color: var(--green); }
 
 .vendor-card-copy {
@@ -4420,7 +4421,7 @@ h3 {
 
 .bast-status-list > div.pending > span {
   background: var(--orange-soft);
-  color: #b97918;
+  color: #8a570e;
 }
 
 .bast-status-list > div > div {
@@ -4582,7 +4583,7 @@ h3 {
 }
 
 .chart-y-axis span {
-  color: #9aa6a7;
+  color: var(--muted);
   font-size: 7px;
   text-align: right;
 }
@@ -4802,7 +4803,7 @@ h3 {
 .profit-sharing-panel > .panel-head p {
   max-width: 760px;
   margin: 6px 0 0;
-  color: #70848b;
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -4839,7 +4840,7 @@ h3 {
 
 .profit-summary-grid span {
   margin-bottom: 6px;
-  color: #74888f;
+  color: var(--muted);
   font-size: 11px;
 }
 
@@ -4849,11 +4850,11 @@ h3 {
 }
 
 .profit-summary-grid .positive strong {
-  color: #158d67;
+  color: var(--green);
 }
 
 .profit-summary-grid .negative strong {
-  color: #c8584f;
+  color: var(--red);
 }
 
 .profit-allocation-head {
@@ -4861,7 +4862,7 @@ h3 {
   justify-content: space-between;
   gap: 12px;
   padding: 18px 20px 8px;
-  color: #667d85;
+  color: var(--muted);
   font-size: 12px;
 }
 
@@ -5530,7 +5531,7 @@ h3 {
 }
 
 .user-avatar.admin { background: linear-gradient(145deg, #3e6372, #233d49); }
-.user-avatar.pm { background: linear-gradient(145deg, #04a99f, #007b74); }
+.user-avatar.pm { background: linear-gradient(145deg, #007a74, #006f69); }
 .user-avatar.engineer { background: linear-gradient(145deg, #7395c9, #4c6c9d); }
 .user-avatar.finance { background: linear-gradient(145deg, #e8a63f, #bd7620); }
 
@@ -6249,6 +6250,11 @@ h3 {
   white-space: nowrap;
 }
 
+.email-retry-button {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
 .email-status-icon {
   display: grid;
   width: 28px;
@@ -6542,6 +6548,26 @@ h3 {
   padding: 18px;
 }
 
+.document-tax-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.document-tax-summary > span {
+  display: grid;
+  gap: 5px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--soft-bg);
+}
+
+.document-tax-summary small {
+  color: var(--muted);
+}
+
 .installed-item.editable {
   grid-template-columns: auto minmax(220px, 1fr) minmax(150px, .55fr) auto;
 }
@@ -6590,6 +6616,115 @@ h3 {
 }
 
 /* Responsive */
+.tax-panel {
+  overflow: hidden;
+}
+
+.tax-panel-head {
+  align-items: flex-start;
+}
+
+.tax-panel-head p {
+  max-width: 760px;
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.tax-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 0 22px 22px;
+}
+
+.tax-summary-grid article {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--soft-bg);
+}
+
+.tax-summary-grid span,
+.tax-summary-grid article > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tax-summary-grid strong {
+  color: var(--ink);
+  font-size: clamp(17px, 2vw, 22px);
+  overflow-wrap: anywhere;
+}
+
+.tax-rules-block,
+.tax-obligation-block {
+  padding: 20px 22px;
+  border-top: 1px solid var(--line);
+}
+
+.tax-rule-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.tax-rule-list > button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.tax-rule-list > button:hover {
+  border-color: var(--teal);
+  background: var(--teal-soft);
+}
+
+.tax-rule-list > button > span:first-child {
+  display: grid;
+  min-width: 0;
+}
+
+.tax-rule-list small,
+.tax-table td small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+.responsive-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  contain: inline-size layout;
+  margin-top: 14px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tax-obligation-block,
+.transaction-panel {
+  overflow: hidden;
+}
+
+.tax-table {
+  min-width: 760px;
+}
+
+.empty-state.compact {
+  min-height: 100px;
+  padding: 20px;
+}
+
 @media (max-width: 1280px) {
   .dashboard-layout,
   .billing-layout,
@@ -6840,6 +6975,24 @@ h3 {
 }
 
 @media (max-width: 760px) {
+  .tax-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 0 14px 14px;
+  }
+
+  .tax-rules-block,
+  .tax-obligation-block {
+    padding: 16px 14px;
+  }
+
+  .tax-rule-list {
+    grid-template-columns: 1fr;
+  }
+
+  .tax-panel-head .title-actions {
+    width: 100%;
+  }
+
   .help-guide-grid,
   .language-options {
     grid-template-columns: 1fr;
@@ -7329,6 +7482,10 @@ h3 {
 }
 
 @media (max-width: 480px) {
+  .tax-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
   h1 {
     font-size: 25px;
   }
@@ -7383,6 +7540,10 @@ h3 {
     align-items: flex-start;
     flex-direction: column;
     gap: 3px;
+  }
+
+  .finance-kpi .metric-change {
+    align-self: flex-start;
   }
 
   .bank-account-card {

@@ -34,6 +34,7 @@ import {
   VendorCategory,
 } from "../data";
 import { type AppLanguage, localizedLabel } from "../i18n";
+import { DocumentTaxEditor } from "./document-tax-editor";
 
 interface ProcurementViewProps {
   language: AppLanguage;
@@ -138,6 +139,8 @@ export function ProcurementViewV2({
   const [paymentOrder, setPaymentOrder] = useState<ProcurementOrder | null>(null);
   const [paymentTermId, setPaymentTermId] = useState("");
   const [paymentAmount, setPaymentAmount] = useState(0);
+  const [paymentCashAmount, setPaymentCashAmount] = useState(0);
+  const [paymentWithholdingAmount, setPaymentWithholdingAmount] = useState(0);
   const [paymentDate, setPaymentDate] = useState("");
   const [vendorInvoice, setVendorInvoice] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
@@ -572,24 +575,46 @@ export function ProcurementViewV2({
       order.terms.find((candidate) => candidate.type !== "DP");
     setPaymentOrder(order);
     setPaymentTermId(term?.id ?? "");
-    setPaymentAmount(Math.min(term?.plannedAmount ?? order.availableToPay, order.availableToPay));
+    const gross = Math.min(
+      term?.plannedAmount ?? order.availableToPay,
+      order.availableToPay,
+    );
+    const withholding = Math.min(
+      gross,
+      Math.max(
+        0,
+        (order.taxWithholdings ?? 0) - (order.withheldTax ?? 0),
+      ),
+    );
+    setPaymentAmount(gross);
+    setPaymentWithholdingAmount(withholding);
+    setPaymentCashAmount(Math.max(0, gross - withholding));
     setPaymentDate(serverToday);
     setVendorInvoice("");
     setPaymentReference("");
     setPaymentMethod("Transfer Bank");
+    setBankAccountId(
+      banks.find((bank) => bank.status === "Aktif")?.id ?? "",
+    );
     setPaymentFile(null);
   }
 
   async function savePayment(event: FormEvent) {
     event.preventDefault();
-    if (!paymentOrder || !paymentFile) return;
+    if (
+      !paymentOrder ||
+      !paymentFile ||
+      paymentAmount !== paymentCashAmount + paymentWithholdingAmount
+    ) return;
     setBusy("payment");
     try {
       await api(`/api/procurement-orders/${paymentOrder.id}/payments`, {
         method: "POST",
         body: JSON.stringify({
           termId: paymentTermId || undefined,
-          amount: paymentAmount,
+          grossAmount: paymentAmount,
+          cashAmount: paymentCashAmount,
+          withholdingAmount: paymentWithholdingAmount,
           paidDate: paymentDate,
           vendorInvoiceNumber: vendorInvoice,
           paymentReference,
@@ -717,13 +742,13 @@ export function ProcurementViewV2({
         </article>
         <article className="metric-card">
           <span className="metric-icon blue"><FileText size={20} /></span>
-          <div className="metric-main"><span>{id ? "Komitmen aktif" : "Active commitments"}</span><strong>{formatCurrency(orders.filter((order) => order.approvalStatus === "Approved" && order.workflowStatus !== "Void").reduce((sum, order) => sum + order.cost, 0), language)}</strong></div>
+          <div className="metric-main"><span>{id ? "Komitmen aktif" : "Active commitments"}</span><strong>{formatCurrency(orders.filter((order) => order.approvalStatus === "Approved" && order.workflowStatus !== "Void").reduce((sum, order) => sum + (order.grossTotal ?? order.cost), 0), language)}</strong></div>
           <span className="metric-change">{orders.filter((order) => order.approvalStatus === "Approved" && order.workflowStatus !== "Void").length} SPK/PO</span>
         </article>
         <article className="metric-card">
           <span className="metric-icon orange"><CircleDollarSign size={20} /></span>
           <div className="metric-main"><span>{id ? "Outstanding vendor" : "Vendor outstanding"}</span><strong>{formatCurrency(orders.filter((order) => order.approvalStatus === "Approved" && order.workflowStatus !== "Void").reduce((sum, order) => sum + order.outstanding, 0), language)}</strong></div>
-          <span className="metric-change warning-text">{formatCurrency(orders.filter((order) => order.approvalStatus === "Approved" && order.workflowStatus !== "Void").reduce((sum, order) => sum + order.paid, 0), language)} {id ? "dibayar" : "paid"}</span>
+          <span className="metric-change warning-text">{formatCurrency(orders.filter((order) => order.approvalStatus === "Approved" && order.workflowStatus !== "Void").reduce((sum, order) => sum + (order.paidCash ?? order.paid), 0), language)} {id ? "kas dibayar" : "cash paid"}</span>
         </article>
       </section>
 
@@ -805,6 +830,7 @@ export function ProcurementViewV2({
                 <span className={`status-badge ${statusTone(scope.quotation?.status ?? scope.status)}`}>{scope.quotation?.status ?? scope.status}</span>
                 <div className="table-row-actions">
                   {scope.quotation && <button className="button subtle small" type="button" onClick={() => downloadApiFile(`/api/quotations/${scope.quotation?.id}/pdf`, `${scope.quotation?.number.replaceAll("/", "-")}.pdf`)}><Download size={14} /> PDF</button>}
+                  {scope.quotation && ["Admin", "Finance"].includes(userRole) && ["Draft", "Sent"].includes(scope.quotation.status) && <DocumentTaxEditor language={language} notify={notify} documentType="Quotation" documentId={scope.quotation.id} canManage onSaved={load} />}
                   {canManageCommercial && scope.quotation?.status === "Draft" && <button className="button secondary small" type="button" onClick={() => scopeAction(scope, "send")}><Send size={14} /> {id ? "Kirim" : "Send"}</button>}
                   {canManageCommercial && scope.quotation?.status === "Sent" && <button className="button primary small" type="button" onClick={() => { setAcceptingScope(scope); setAcceptanceDate(serverToday); setAcceptanceFile(null); }}><BadgeCheck size={14} /> Accept</button>}
                   {canManageCommercial && scope.quotation?.status === "Sent" && <button className="button danger small" type="button" onClick={() => scopeAction(scope, "reject")}><X size={14} /> {id ? "Tolak" : "Reject"}</button>}
@@ -824,9 +850,10 @@ export function ProcurementViewV2({
               <article className="procurement-order-card" key={order.id}>
                 <div className="order-document-mark">{order.documentType === "PO" ? <Boxes size={20} /> : <FileText size={20} />}<strong>{order.documentType}</strong></div>
                 <div className="order-main"><strong>{order.number}</strong><span>{order.vendor} · {order.quotationNumber ?? (id ? "Legacy" : "Legacy")}</span><small>{order.scopeTitle ?? order.scope}</small></div>
-                <div className="order-values"><span>{id ? "Budget / komitmen" : "Budget / committed"}</span><strong>{formatCurrency(order.budgetCost, language)} / {formatCurrency(order.cost, language)}</strong><small>{id ? "Dibayar" : "Paid"} {formatCurrency(order.paid, language)} · {id ? "Sisa" : "Outstanding"} {formatCurrency(order.outstanding, language)}</small></div>
+                <div className="order-values"><span>{id ? "Budget / bruto" : "Budget / gross"}</span><strong>{formatCurrency(order.budgetCost, language)} / {formatCurrency(order.grossTotal ?? order.cost, language)}</strong><small>{id ? "Bruto dibayar" : "Gross paid"} {formatCurrency(order.paidGross ?? order.paid, language)} · {id ? "Kas" : "Cash"} {formatCurrency(order.paidCash ?? order.paid, language)} · {id ? "Sisa" : "Outstanding"} {formatCurrency(order.outstanding, language)}</small></div>
                 <div className="order-statuses"><span className={`status-badge ${statusTone(order.workflowStatus)}`}>{order.workflowStatus}</span><span className={`status-badge ${statusTone(order.paymentStatus)}`}>{order.paymentStatus}</span></div>
                 <div className="order-actions">
+                  {["Admin", "Finance"].includes(userRole) && ["Draft", "Pending"].includes(order.approvalStatus) && <DocumentTaxEditor language={language} notify={notify} documentType={order.documentType} documentId={order.id} canManage onSaved={load} />}
                   {canManage && !order.legacy && order.workflowStatus === "Draft" && <button className="button secondary small" type="button" onClick={() => orderAction(order, "submit")}><Send size={14} /> {id ? "Ajukan" : "Submit"}</button>}
                   {canManage && order.workflowStatus === "Draft" && !order.legacy && <button className="button subtle small" type="button" onClick={() => openOrderEdit(order)}><Pencil size={14} /> {id ? "Edit" : "Edit"}</button>}
                   {["Admin", "Finance"].includes(userRole) && !order.legacy && order.approvalStatus === "Pending" && <button className="button primary small" type="button" onClick={() => orderAction(order, "approve")}><CheckCircle2 size={14} /> {id ? "Setujui" : "Approve"}</button>}
@@ -840,7 +867,7 @@ export function ProcurementViewV2({
                   {canManage && !order.legacy && order.workflowStatus === "Draft" && <button className="icon-button danger" type="button" onClick={() => deleteOrder(order)} aria-label={id ? "Hapus draft" : "Delete draft"}><Trash2 size={14} /></button>}
                 </div>
                 {order.payments.length > 0 && (
-                  <details className="order-history"><summary>{id ? "Termin & histori pembayaran" : "Terms & payment history"}</summary><div className="order-payment-list">{order.payments.map((payment) => <div key={payment.id}><span>{payment.paidDate} · {payment.vendorInvoiceNumber}<small>{payment.paymentReference} · {payment.status}</small></span><strong>{formatCurrency(payment.amount, language)}</strong>{userRole === "Admin" && payment.status === "Posted" && <button className="button danger small" type="button" onClick={() => voidPayment(order, payment.id)}>Void</button>}</div>)}</div></details>
+                  <details className="order-history"><summary>{id ? "Termin & histori pembayaran" : "Terms & payment history"}</summary><div className="order-payment-list">{order.payments.map((payment) => <div key={payment.id}><span>{payment.paidDate} · {payment.vendorInvoiceNumber}<small>{payment.paymentReference} · {payment.status} · {id ? "kas" : "cash"} {formatCurrency(payment.cashAmount ?? payment.amount, language)}</small></span><strong>{formatCurrency(payment.grossAmount ?? payment.amount, language)}</strong>{userRole === "Admin" && payment.status === "Posted" && <button className="button danger small" type="button" onClick={() => voidPayment(order, payment.id)}>Void</button>}</div>)}</div></details>
                 )}
               </article>
             ))}
@@ -883,7 +910,7 @@ export function ProcurementViewV2({
 
       {showAddendum && <div className="modal-backdrop" onMouseDown={() => setShowAddendum(false)}><section className="modal-card wide" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">BOQ ADDENDUM</span><h2>{id ? "Pekerjaan tambah" : "Additional work"}</h2></div><button className="icon-button" type="button" onClick={() => setShowAddendum(false)}><X size={18} /></button></div><form className="form-grid" onSubmit={saveAddendum}><label className="field full"><span>{id ? "Judul addendum" : "Addendum title"}</span><input required value={addendumTitle} onChange={(event) => setAddendumTitle(event.target.value)} /></label><label className="field"><span>{id ? "Kategori item" : "Item category"}</span><select value={addendumCategory} onChange={(event) => setAddendumCategory(event.target.value as typeof addendumCategory)}><option>Perangkat</option><option>Material</option><option>Jasa</option><option>Mobilitas</option></select></label><label className="field"><span>{id ? "Satuan" : "Unit"}</span><input required value={addendumUnit} onChange={(event) => setAddendumUnit(event.target.value)} /></label><label className="field full"><span>{id ? "Deskripsi pekerjaan tambah" : "Additional work description"}</span><input required value={addendumDescription} onChange={(event) => setAddendumDescription(event.target.value)} /></label><label className="field"><span>Qty</span><input required type="number" min="1" value={addendumQuantity} onChange={(event) => setAddendumQuantity(Number(event.target.value))} /></label><label className="field"><span>{id ? "Harga pokok" : "Cost price"}</span><input required type="number" min="0" value={addendumCost || ""} onChange={(event) => setAddendumCost(Number(event.target.value))} /></label><label className="field full"><span>{id ? "Harga jual" : "Selling price"}</span><input required type="number" min="0" value={addendumSelling || ""} onChange={(event) => setAddendumSelling(Number(event.target.value))} /></label><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowAddendum(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "addendum"}>{id ? "Buat Addendum" : "Create Addendum"}</button></div></form></section></div>}
 
-      {paymentOrder && <div className="modal-backdrop" onMouseDown={() => setPaymentOrder(null)}><section className="modal-card wide" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">{id ? "PEMBAYARAN AKTUAL" : "ACTUAL PAYMENT"}</span><h2>{paymentOrder.number}</h2></div><button className="icon-button" type="button" onClick={() => setPaymentOrder(null)}><X size={18} /></button></div><form className="form-grid" onSubmit={savePayment}><label className="field"><span>{id ? "Termin" : "Term"}</span><select value={paymentTermId} onChange={(event) => setPaymentTermId(event.target.value)}>{paymentOrder.terms.map((term) => <option value={term.id} key={term.id}>{term.label} · {formatCurrency(term.plannedAmount, language)}</option>)}</select></label><label className="field"><span>{id ? "Nominal" : "Amount"}</span><input required type="number" min="1" max={paymentOrder.availableToPay} value={paymentAmount || ""} onChange={(event) => setPaymentAmount(Number(event.target.value))} /></label><label className="field"><span>{id ? "Tanggal bayar" : "Payment date"}</span><input required type="date" max={serverToday} value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} /></label><label className="field"><span>{id ? "Nomor tagihan vendor" : "Vendor invoice number"}</span><input required value={vendorInvoice} onChange={(event) => setVendorInvoice(event.target.value)} /></label><label className="field"><span>{id ? "Referensi pembayaran" : "Payment reference"}</span><input required value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} /></label><label className="field"><span>{id ? "Metode" : "Method"}</span><select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as typeof paymentMethod)}><option>Transfer Bank</option><option>Tunai</option><option>Kartu</option><option>Lainnya</option></select></label>{paymentMethod === "Transfer Bank" && <label className="field full"><span>{id ? "Rekening perusahaan" : "Company bank account"}</span><select required value={bankAccountId} onChange={(event) => setBankAccountId(event.target.value)}>{banks.filter((bank) => bank.status === "Aktif").map((bank) => <option value={bank.id} key={bank.id}>{bank.bankName} · {bank.accountNumberMasked}</option>)}</select></label>}<label className="field full"><span>{id ? "Bukti pembayaran" : "Payment proof"}</span><input required type="file" accept=".pdf,image/png,image/jpeg,image/webp" onChange={(event) => setPaymentFile(event.target.files?.[0] ?? null)} /></label><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setPaymentOrder(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "payment" || paymentAmount <= 0}>{id ? "Catat pembayaran" : "Post payment"}</button></div></form></section></div>}
+      {paymentOrder && <div className="modal-backdrop" onMouseDown={() => setPaymentOrder(null)}><section className="modal-card wide" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">{id ? "PEMBAYARAN AKTUAL" : "ACTUAL PAYMENT"}</span><h2>{paymentOrder.number}</h2></div><button className="icon-button" type="button" onClick={() => setPaymentOrder(null)}><X size={18} /></button></div><form className="form-grid" onSubmit={savePayment}><label className="field"><span>{id ? "Termin" : "Term"}</span><select value={paymentTermId} onChange={(event) => setPaymentTermId(event.target.value)}>{paymentOrder.terms.map((term) => <option value={term.id} key={term.id}>{term.label} · {formatCurrency(term.plannedAmount, language)}</option>)}</select></label><label className="field"><span>{id ? "Bruto diselesaikan" : "Gross settled"}</span><input required type="number" min="1" max={paymentOrder.availableToPay} value={paymentAmount || ""} onChange={(event) => { const gross = Number(event.target.value); setPaymentAmount(gross); setPaymentCashAmount(Math.max(0, gross - paymentWithholdingAmount)); }} /></label><label className="field"><span>{id ? "Pajak dipotong" : "Tax withheld"}</span><input required type="number" min="0" max={paymentOrder.taxWithholdings ?? 0} value={paymentWithholdingAmount} onChange={(event) => { const withholding = Number(event.target.value); setPaymentWithholdingAmount(withholding); setPaymentCashAmount(Math.max(0, paymentAmount - withholding)); }} /></label><label className="field"><span>{id ? "Kas aktual dibayar" : "Actual cash paid"}</span><input required type="number" min="0" value={paymentCashAmount} onChange={(event) => setPaymentCashAmount(Number(event.target.value))} /></label><label className="field"><span>{id ? "Tanggal bayar" : "Payment date"}</span><input required type="date" max={serverToday} value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} /></label><label className="field"><span>{id ? "Nomor tagihan vendor" : "Vendor invoice number"}</span><input required value={vendorInvoice} onChange={(event) => setVendorInvoice(event.target.value)} /></label><label className="field"><span>{id ? "Referensi pembayaran" : "Payment reference"}</span><input required value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} /></label><label className="field"><span>{id ? "Metode" : "Method"}</span><select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as typeof paymentMethod)}><option>Transfer Bank</option><option>Tunai</option><option>Kartu</option><option>Lainnya</option></select></label>{paymentMethod === "Transfer Bank" && <label className="field full"><span>{id ? "Rekening perusahaan" : "Company bank account"}</span><select required value={bankAccountId} onChange={(event) => setBankAccountId(event.target.value)}>{banks.filter((bank) => bank.status === "Aktif").map((bank) => <option value={bank.id} key={bank.id}>{bank.bankName} · {bank.accountNumberMasked}</option>)}</select></label>}<label className="field full"><span>{id ? "Bukti pembayaran" : "Payment proof"}</span><input required type="file" accept=".pdf,image/png,image/jpeg,image/webp" onChange={(event) => setPaymentFile(event.target.files?.[0] ?? null)} /></label><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setPaymentOrder(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "payment" || paymentAmount <= 0 || paymentAmount !== paymentCashAmount + paymentWithholdingAmount}>{id ? "Catat pembayaran" : "Post payment"}</button></div></form></section></div>}
 
       {verificationOrder && <div className="modal-backdrop" onMouseDown={() => setVerificationOrder(null)}><section className="modal-card" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">{verificationOrder.documentType === "PO" ? "GOODS RECEIPT" : "PROGRESS VERIFICATION"}</span><h2>{verificationOrder.number}</h2></div><button className="icon-button" type="button" onClick={() => setVerificationOrder(null)}><X size={18} /></button></div><form className="form-grid" onSubmit={saveVerification}>{verificationOrder.documentType === "PO" ? <><label className="field full"><span>{id ? "Nomor surat jalan" : "Delivery note number"}</span><input required value={receiptNumber} onChange={(event) => setReceiptNumber(event.target.value)} /></label><div className="statement-guidance full"><PackageCheck size={18} /><span><strong>{id ? "Terima seluruh sisa item" : "Receive all remaining items"}</strong><small>{id ? "Kuantitas yang sudah diterima tidak akan dihitung ulang." : "Previously received quantities will not be counted twice."}</small></span></div></> : <><label className="field full"><span>{id ? "Termin" : "Term"}</span><select value={verificationTermId} onChange={(event) => setVerificationTermId(event.target.value)}>{verificationOrder.terms.filter((term) => term.type !== "DP").map((term) => <option value={term.id} key={term.id}>{term.label}</option>)}</select></label><label className="field"><span>{id ? "Nilai terverifikasi" : "Verified amount"}</span><input required type="number" min="1" value={verificationAmount || ""} onChange={(event) => setVerificationAmount(Number(event.target.value))} /></label><label className="field"><span>{id ? "Progres (%)" : "Progress (%)"}</span><input required type="number" min="0" max="100" value={verificationProgress} onChange={(event) => setVerificationProgress(Number(event.target.value))} /></label><label className="field full"><span>{id ? "Catatan" : "Notes"}</span><textarea value={verificationNotes} onChange={(event) => setVerificationNotes(event.target.value)} /></label></>}<div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setVerificationOrder(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "verification"}>{verificationOrder.documentType === "PO" ? (id ? "Catat penerimaan" : "Record receipt") : (id ? "Simpan verifikasi" : "Save verification")}</button></div></form></section></div>}
     </div>

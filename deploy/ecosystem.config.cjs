@@ -13,5 +13,19 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
+    {
+      name: "perumnet-enterprise-email-worker",
+      cwd: "/var/www/perumnet-enterprise",
+      script: "scripts/email-worker.mjs",
+      instances: 1,
+      exec_mode: "fork",
+      autorestart: true,
+      restart_delay: 5000,
+      max_memory_restart: "180M",
+      env: {
+        NODE_ENV: "production",
+        EMAIL_ENV_FILE: ".env.production",
+      },
+    },
   ],
 };

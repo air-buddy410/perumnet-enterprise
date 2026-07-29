@@ -20,6 +20,7 @@ interface SettingsViewProps {
   language: AppLanguage;
   notify: (message: string) => void;
   onLanguageChange: (language: AppLanguage) => void;
+  isAdmin: boolean;
 }
 
 interface EmailDelivery {
@@ -27,15 +28,24 @@ interface EmailDelivery {
   eventType: string;
   recipient: string;
   subject: string;
-  status: "sent" | "failed" | "skipped";
+  status: "pending" | "sent" | "failed" | "skipped";
   error?: string;
+  provider?: string;
+  attemptCount?: number;
   createdAt: string;
 }
 
-export function SettingsView({ language, notify, onLanguageChange }: SettingsViewProps) {
+export function SettingsView({
+  language,
+  notify,
+  onLanguageChange,
+  isAdmin,
+}: SettingsViewProps) {
   const [selectedLanguage, setSelectedLanguage] = useState<AppLanguage>(language);
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [emailDeliveryConfigured, setEmailDeliveryConfigured] = useState(false);
+  const [emailMode, setEmailMode] = useState("disabled");
+  const [emailProvider, setEmailProvider] = useState("disabled");
   const [emailDeliveries, setEmailDeliveries] = useState<EmailDelivery[]>([]);
   const [testingEmail, setTestingEmail] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -46,7 +56,7 @@ export function SettingsView({ language, notify, onLanguageChange }: SettingsVie
   useEffect(() => {
     let active = true;
     Promise.all([
-      api<{ preferredLanguage: AppLanguage; emailNotifications: boolean; emailDeliveryConfigured: boolean }>("/api/settings"),
+      api<{ preferredLanguage: AppLanguage; emailNotifications: boolean; emailDeliveryConfigured: boolean; emailMode: string; emailProvider: string }>("/api/settings"),
       api<EmailDelivery[]>("/api/notifications/email"),
     ])
       .then(([settings, deliveries]) => {
@@ -54,6 +64,8 @@ export function SettingsView({ language, notify, onLanguageChange }: SettingsVie
         setSelectedLanguage(settings.preferredLanguage);
         setEmailNotifications(settings.emailNotifications);
         setEmailDeliveryConfigured(settings.emailDeliveryConfigured);
+        setEmailMode(settings.emailMode);
+        setEmailProvider(settings.emailProvider);
         setEmailDeliveries(deliveries);
       })
       .catch((error) => notify(messageOf(error, language)));
@@ -79,6 +91,8 @@ export function SettingsView({ language, notify, onLanguageChange }: SettingsVie
       await refreshEmailDeliveries();
       if (result.status === "sent") {
         notify(id ? "Email uji berhasil dikirim." : "Test email sent successfully.");
+      } else if (result.status === "pending") {
+        notify(id ? "Email uji masuk antrean pengiriman." : "Test email queued for delivery.");
       } else if (!result.configured) {
         notify(
           id
@@ -92,6 +106,22 @@ export function SettingsView({ language, notify, onLanguageChange }: SettingsVie
       notify(messageOf(error, language));
     } finally {
       setTestingEmail(false);
+    }
+  }
+
+  async function retryDelivery(deliveryId: string) {
+    try {
+      await api(`/api/notifications/email/${deliveryId}/retry`, {
+        method: "POST",
+      });
+      await refreshEmailDeliveries();
+      notify(
+        id
+          ? "Email dikembalikan ke antrean pengiriman."
+          : "Email returned to the delivery queue.",
+      );
+    } catch (error) {
+      notify(messageOf(error, language));
     }
   }
 
@@ -138,12 +168,12 @@ export function SettingsView({ language, notify, onLanguageChange }: SettingsVie
         <form className="panel settings-card" onSubmit={savePreferences}>
           <div className="settings-section-head"><span className="metric-icon teal"><Languages size={20} /></span><div><h2>{id ? "Bahasa aplikasi" : "Application language"}</h2><p>{id ? "Bahasa disimpan untuk akun ini dan dipakai saat login berikutnya." : "Your choice is saved to this account and reused on the next sign-in."}</p></div></div>
           <div className="language-options">
-            <label className={selectedLanguage === "id" ? "active" : ""}><input type="radio" name="language" checked={selectedLanguage === "id"} onChange={() => setSelectedLanguage("id")} /><span><strong>Bahasa Indonesia</strong><small>Gunakan antarmuka dalam Bahasa Indonesia</small></span></label>
+            <label className={selectedLanguage === "id" ? "active" : ""}><input type="radio" name="language" checked={selectedLanguage === "id"} onChange={() => setSelectedLanguage("id")} /><span><strong>Bahasa Indonesia</strong><small>{id ? "Gunakan antarmuka dalam Bahasa Indonesia" : "Use the interface in Indonesian"}</small></span></label>
             <label className={selectedLanguage === "en" ? "active" : ""}><input type="radio" name="language" checked={selectedLanguage === "en"} onChange={() => setSelectedLanguage("en")} /><span><strong>English</strong><small>Use the interface in English</small></span></label>
           </div>
           <div className="settings-divider" />
           <label className="toggle-setting"><span className="metric-icon blue"><Bell size={19} /></span><span><strong>{id ? "Notifikasi email" : "Email notifications"}</strong><small>{id ? "Terima pembaruan saat akun dibuat, proyek ditugaskan, invoice dibayar, validasi selesai, dan BAST difinalkan." : "Receive updates when accounts are created, projects assigned, invoices paid, validations completed, and handovers finalized."}</small></span><input type="checkbox" checked={emailNotifications} onChange={(event) => setEmailNotifications(event.target.checked)} /></label>
-          <div className={`email-delivery-status ${emailDeliveryConfigured ? "configured" : "pending"}`}><span className="badge-dot" /><span><strong>{emailDeliveryConfigured ? (id ? "Konfigurasi provider terdeteksi" : "Provider configuration detected") : (id ? "Provider email belum dikonfigurasi" : "Email provider is not configured")}</strong><small>{emailDeliveryConfigured ? (id ? "Kirim email uji untuk memastikan API key, domain pengirim, dan alamat tujuan valid." : "Send a test email to verify the API key, sender domain, and recipient.") : (id ? "Riwayat tetap dicatat sebagai dilewati sampai RESEND_API_KEY tersedia di server." : "Attempts remain logged as skipped until RESEND_API_KEY is available on the server.")}</small></span></div>
+          <div className={`email-delivery-status ${emailDeliveryConfigured || emailMode === "capture" ? "configured" : "pending"}`}><span className="badge-dot" /><span><strong>{emailMode === "capture" ? (id ? "Mode demo capture aktif" : "Demo capture mode enabled") : emailDeliveryConfigured ? (id ? `Provider ${emailProvider.toUpperCase()} terdeteksi` : `${emailProvider.toUpperCase()} provider detected`) : (id ? "Provider email belum dikonfigurasi" : "Email provider is not configured")}</strong><small>{emailMode === "capture" ? (id ? "Pesan disimpan ke outbox demo tanpa dikirim ke penerima." : "Messages are stored in the demo outbox without being sent.") : emailDeliveryConfigured ? (id ? "Email diproses lewat transactional outbox; kegagalan SMTP tidak membatalkan transaksi bisnis." : "Email is processed through a transactional outbox; SMTP failures do not roll back business transactions.") : (id ? "Isi SMTP Mailcow melalui secret server atau pertahankan Resend untuk kompatibilitas." : "Configure Mailcow SMTP through server secrets or retain Resend for compatibility.")}</small></span></div>
           <div className="email-test-actions">
             <button className="button secondary" type="button" disabled={testingEmail} onClick={sendTestNotification}>
               {testingEmail ? <RefreshCw className="spin" size={16} /> : <MailCheck size={16} />}
@@ -178,7 +208,11 @@ export function SettingsView({ language, notify, onLanguageChange }: SettingsVie
                         ? id ? "Terkirim" : "Sent"
                         : delivery.status === "failed"
                           ? id ? "Gagal" : "Failed"
-                          : id ? "Dilewati" : "Skipped"}
+                          : delivery.status === "pending"
+                            ? id ? "Menunggu antrean" : "Pending"
+                            : id ? "Dilewati" : "Skipped"}
+                      {delivery.provider ? ` · ${delivery.provider}` : ""}
+                      {delivery.attemptCount ? ` · ${delivery.attemptCount}x` : ""}
                       {" · "}
                       {new Intl.DateTimeFormat(id ? "id-ID" : "en-US", {
                         dateStyle: "medium",
@@ -188,6 +222,16 @@ export function SettingsView({ language, notify, onLanguageChange }: SettingsVie
                     </small>
                     {delivery.error ? <small>{delivery.error}</small> : null}
                   </div>
+                  {isAdmin && delivery.status === "failed" ? (
+                    <button
+                      className="button subtle small email-retry-button"
+                      type="button"
+                      onClick={() => void retryDelivery(delivery.id)}
+                    >
+                      <RefreshCw size={13} />
+                      {id ? "Coba lagi" : "Retry"}
+                    </button>
+                  ) : null}
                 </article>
               ))}
               {!emailDeliveries.length ? (

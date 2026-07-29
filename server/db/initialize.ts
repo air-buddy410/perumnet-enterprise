@@ -65,6 +65,30 @@ CREATE TABLE IF NOT EXISTS email_deliveries (
 CREATE INDEX IF NOT EXISTS email_deliveries_user_idx ON email_deliveries(user_id,created_at);
 CREATE INDEX IF NOT EXISTS email_deliveries_status_idx ON email_deliveries(status,created_at);
 
+CREATE TABLE IF NOT EXISTS email_outbox (
+  id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  event_type TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  body_html TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'Pending'
+    CHECK (status IN ('Pending', 'Processing', 'Sent', 'Failed', 'Skipped')),
+  provider TEXT,
+  provider_id TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  next_attempt_at TEXT NOT NULL,
+  locked_at TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  sent_at TEXT
+);
+CREATE INDEX IF NOT EXISTS email_outbox_status_retry_idx
+  ON email_outbox(status,next_attempt_at,created_at);
+CREATE INDEX IF NOT EXISTS email_outbox_user_idx
+  ON email_outbox(user_id,created_at);
+
 CREATE TABLE IF NOT EXISTS user_permissions (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   permissions_json TEXT NOT NULL,
@@ -523,6 +547,136 @@ CREATE TABLE IF NOT EXISTS spk_payments (
 CREATE INDEX IF NOT EXISTS spk_payments_spk_idx ON spk_payments(spk_id,paid_date);
 CREATE INDEX IF NOT EXISTS spk_payments_term_idx ON spk_payments(term_id);
 CREATE INDEX IF NOT EXISTS spk_payments_bank_account_idx ON spk_payments(bank_account_id);
+
+CREATE TABLE IF NOT EXISTS invoice_payments (
+  id TEXT PRIMARY KEY,
+  invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE RESTRICT,
+  gross_amount INTEGER NOT NULL CHECK (gross_amount > 0),
+  cash_amount INTEGER NOT NULL CHECK (cash_amount >= 0),
+  withholding_amount INTEGER NOT NULL DEFAULT 0 CHECK (withholding_amount >= 0),
+  paid_date TEXT NOT NULL,
+  payment_reference TEXT NOT NULL,
+  payment_method TEXT NOT NULL,
+  bank_account_id TEXT REFERENCES bank_accounts(id) ON DELETE RESTRICT,
+  attachment_name TEXT,
+  attachment_mime_type TEXT,
+  attachment_content_base64 TEXT,
+  status TEXT NOT NULL DEFAULT 'Posted' CHECK (status IN ('Posted', 'Void')),
+  transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  voided_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  voided_at TEXT,
+  void_reason TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK (gross_amount = cash_amount + withholding_amount)
+);
+CREATE INDEX IF NOT EXISTS invoice_payments_invoice_idx
+  ON invoice_payments(invoice_id,paid_date);
+CREATE INDEX IF NOT EXISTS invoice_payments_bank_account_idx
+  ON invoice_payments(bank_account_id);
+
+CREATE TABLE IF NOT EXISTS tax_settings (
+  id TEXT PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),
+  updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tax_rules (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  name_en TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK (scope IN ('Client', 'Vendor', 'Both')),
+  effect TEXT NOT NULL CHECK (effect IN ('Add', 'Withhold')),
+  rate_bps INTEGER NOT NULL DEFAULT 0
+    CHECK (rate_bps >= 0 AND rate_bps <= 10000),
+  accounting_treatment TEXT NOT NULL
+    CHECK (accounting_treatment IN ('Payable', 'Receivable', 'Recoverable', 'Expense')),
+  status TEXT NOT NULL DEFAULT 'Inactive'
+    CHECK (status IN ('Active', 'Inactive')),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tax_rules_scope_sort_idx
+  ON tax_rules(scope,status,sort_order,code);
+
+CREATE TABLE IF NOT EXISTS document_taxes (
+  id TEXT PRIMARY KEY,
+  document_type TEXT NOT NULL
+    CHECK (document_type IN ('Quotation', 'Invoice', 'SPK', 'PO')),
+  document_id TEXT NOT NULL,
+  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  rule_id TEXT REFERENCES tax_rules(id) ON DELETE RESTRICT,
+  rule_code TEXT NOT NULL,
+  rule_name TEXT NOT NULL,
+  rule_name_en TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK (scope IN ('Client', 'Vendor', 'Both')),
+  effect TEXT NOT NULL CHECK (effect IN ('Add', 'Withhold')),
+  accounting_treatment TEXT NOT NULL
+    CHECK (accounting_treatment IN ('Payable', 'Receivable', 'Recoverable', 'Expense')),
+  rate_bps INTEGER NOT NULL CHECK (rate_bps >= 0 AND rate_bps <= 10000),
+  taxable_base INTEGER NOT NULL CHECK (taxable_base >= 0),
+  amount INTEGER NOT NULL CHECK (amount >= 0),
+  locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0,1)),
+  locked_at TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (document_type,document_id,rule_id)
+);
+CREATE INDEX IF NOT EXISTS document_taxes_document_idx
+  ON document_taxes(document_type,document_id);
+CREATE INDEX IF NOT EXISTS document_taxes_project_idx
+  ON document_taxes(project_id,document_type);
+
+CREATE TABLE IF NOT EXISTS tax_obligations (
+  id TEXT PRIMARY KEY,
+  document_tax_id TEXT NOT NULL UNIQUE
+    REFERENCES document_taxes(id) ON DELETE RESTRICT,
+  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('Payable', 'Receivable')),
+  amount INTEGER NOT NULL CHECK (amount >= 0),
+  settled_amount INTEGER NOT NULL DEFAULT 0 CHECK (settled_amount >= 0),
+  status TEXT NOT NULL DEFAULT 'Outstanding'
+    CHECK (status IN ('Outstanding', 'Partially Settled', 'Settled', 'Void')),
+  due_date TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tax_obligations_status_idx
+  ON tax_obligations(direction,status,due_date);
+CREATE INDEX IF NOT EXISTS tax_obligations_project_idx
+  ON tax_obligations(project_id,status);
+
+CREATE TABLE IF NOT EXISTS tax_settlements (
+  id TEXT PRIMARY KEY,
+  obligation_id TEXT NOT NULL REFERENCES tax_obligations(id) ON DELETE RESTRICT,
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  settlement_date TEXT NOT NULL,
+  payment_reference TEXT NOT NULL,
+  payment_method TEXT NOT NULL,
+  bank_account_id TEXT REFERENCES bank_accounts(id) ON DELETE RESTRICT,
+  attachment_name TEXT,
+  attachment_mime_type TEXT,
+  attachment_content_base64 TEXT,
+  status TEXT NOT NULL DEFAULT 'Posted' CHECK (status IN ('Posted', 'Void')),
+  transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  voided_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  voided_at TEXT,
+  void_reason TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tax_settlements_obligation_idx
+  ON tax_settlements(obligation_id,settlement_date);
+CREATE INDEX IF NOT EXISTS tax_settlements_bank_account_idx
+  ON tax_settlements(bank_account_id);
 
 CREATE TABLE IF NOT EXISTS project_profit_shares (
   id TEXT PRIMARY KEY,
@@ -1479,6 +1633,155 @@ async function ensureProcurementSchema(client: DatabaseClient) {
   }
 }
 
+async function ensureTaxAndEmailSchema(client: DatabaseClient) {
+  const timestamp = new Date().toISOString();
+
+  await ensureColumn(
+    client,
+    "spk_payments",
+    "gross_amount",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
+  await ensureColumn(
+    client,
+    "spk_payments",
+    "withholding_amount",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
+  await client.execute(
+    "UPDATE spk_payments SET gross_amount=amount WHERE gross_amount=0",
+  );
+
+  await client.execute({
+    sql: `INSERT INTO tax_settings (id,enabled,updated_at)
+      VALUES ('global',0,?)
+      ON CONFLICT (id) DO NOTHING`,
+    args: [timestamp],
+  });
+
+  const presets: Array<
+    [string, string, string, string, string, string, string, number]
+  > = [
+    [
+      "tax-rule-ppn",
+      "PPN",
+      "Pajak Pertambahan Nilai",
+      "Value Added Tax",
+      "Client",
+      "Add",
+      "Payable",
+      10,
+    ],
+    [
+      "tax-rule-pph21",
+      "PPH21",
+      "PPh Pasal 21",
+      "Article 21 Income Tax",
+      "Vendor",
+      "Withhold",
+      "Payable",
+      20,
+    ],
+    [
+      "tax-rule-pph23",
+      "PPH23",
+      "PPh Pasal 23",
+      "Article 23 Income Tax",
+      "Vendor",
+      "Withhold",
+      "Payable",
+      30,
+    ],
+    [
+      "tax-rule-pph4-2",
+      "PPH4-2",
+      "PPh Pasal 4 ayat (2)",
+      "Article 4(2) Final Income Tax",
+      "Vendor",
+      "Withhold",
+      "Payable",
+      40,
+    ],
+    [
+      "tax-rule-other",
+      "OTHER",
+      "Pajak Lainnya",
+      "Other Tax",
+      "Both",
+      "Add",
+      "Expense",
+      90,
+    ],
+  ];
+  for (const [
+    id,
+    code,
+    name,
+    nameEn,
+    scope,
+    effect,
+    treatment,
+    sortOrder,
+  ] of presets) {
+    await client.execute({
+      sql: `INSERT INTO tax_rules
+        (id,code,name,name_en,scope,effect,rate_bps,accounting_treatment,
+         status,sort_order,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,0,?,'Inactive',?,?,?)
+        ON CONFLICT (code) DO NOTHING`,
+      args: [
+        id,
+        code,
+        name,
+        nameEn,
+        scope,
+        effect,
+        treatment,
+        sortOrder,
+        timestamp,
+        timestamp,
+      ],
+    });
+  }
+
+  const legacyPaidInvoices = await client.execute(`
+    SELECT i.*,
+      (SELECT t.id FROM transactions t
+       WHERE t.source='Invoice' AND t.reference_id=i.id
+       ORDER BY t.created_at LIMIT 1) AS transaction_id
+    FROM invoices i
+    WHERE i.status='Lunas'
+      AND NOT EXISTS (
+        SELECT 1 FROM invoice_payments p
+        WHERE p.invoice_id=i.id AND p.status='Posted'
+      )
+  `);
+  for (const invoice of legacyPaidInvoices.rows) {
+    const paymentId = `invoice-payment-${randomUUID()}`;
+    await client.execute({
+      sql: `INSERT INTO invoice_payments
+        (id,invoice_id,gross_amount,cash_amount,withholding_amount,paid_date,
+         payment_reference,payment_method,status,transaction_id,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT DO NOTHING`,
+      args: [
+        paymentId,
+        invoice.id,
+        invoice.amount,
+        invoice.amount,
+        0,
+        invoice.paid_date ?? invoice.issue_date,
+        `LEGACY-${String(invoice.number)}`,
+        "Legacy",
+        "Posted",
+        invoice.transaction_id ?? null,
+        invoice.created_at ?? timestamp,
+        timestamp,
+      ],
+    });
+  }
+}
+
 export async function initializeDatabase(client: DatabaseClient) {
   await client.executeMultiple(schemaSql);
   await ensureCmsBilingualSchema(client);
@@ -1486,6 +1789,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureTransactionCategoryColumn(client);
   await ensureSpkPaymentColumns(client);
   await ensureProcurementSchema(client);
+  await ensureTaxAndEmailSchema(client);
   await ensureCmsSeed(client);
   await ensureCmsEnhancements(client);
   await ensureCmsLandingFeatures(client);
@@ -1653,4 +1957,5 @@ export async function initializeDatabase(client: DatabaseClient) {
   // idempotent migration once more so those rows immediately receive their
   // Original scope, vendor classification, procurement lines, and payments.
   await ensureProcurementSchema(client);
+  await ensureTaxAndEmailSchema(client);
 }

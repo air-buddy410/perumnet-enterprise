@@ -6,6 +6,8 @@ import { canAccess } from "@/shared/access";
 import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
+import { notifyProjectStakeholders } from "../email";
+import { documentTaxSummary, lockDocumentTaxes } from "../tax";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
 import { renderBusinessPdf } from "./pdf";
 
@@ -87,16 +89,44 @@ const receiptSchema = z.object({
     .max(500),
 });
 
-const paymentSchema = z.object({
-  termId: idSchema.optional(),
-  amount: moneySchema,
-  paidDate: isoDateSchema,
-  vendorInvoiceNumber: z.string().trim().min(1).max(160),
-  paymentReference: z.string().trim().min(1).max(160),
-  paymentMethod: z.enum(["Transfer Bank", "Tunai", "Kartu", "Lainnya"]),
-  bankAccountId: idSchema.optional(),
-  attachment: attachmentSchema,
-});
+const paymentSchema = z
+  .object({
+    termId: idSchema.optional(),
+    amount: moneySchema.optional(),
+    grossAmount: moneySchema.optional(),
+    cashAmount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+    withholdingAmount: z
+      .number()
+      .int()
+      .min(0)
+      .max(Number.MAX_SAFE_INTEGER)
+      .default(0),
+    paidDate: isoDateSchema,
+    vendorInvoiceNumber: z.string().trim().min(1).max(160),
+    paymentReference: z.string().trim().min(1).max(160),
+    paymentMethod: z.enum(["Transfer Bank", "Tunai", "Kartu", "Lainnya"]),
+    bankAccountId: idSchema.optional(),
+    attachment: attachmentSchema,
+  })
+  .superRefine((input, context) => {
+    const cash = input.cashAmount ?? input.amount;
+    const gross =
+      input.grossAmount ??
+      (cash === undefined ? undefined : cash + input.withholdingAmount);
+    if (cash === undefined || gross === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Isi amount atau grossAmount dan cashAmount.",
+      });
+      return;
+    }
+    if (gross !== cash + input.withholdingAmount) {
+      context.addIssue({
+        code: "custom",
+        message: "Nilai bruto harus sama dengan kas ditambah pajak potong.",
+      });
+    }
+  });
 
 function now() {
   return new Date().toISOString();
@@ -156,13 +186,20 @@ async function updateOrderPaymentCompatibility(
 ) {
   const totals = await client.execute({
     sql: `SELECT s.cost,
-      COALESCE((SELECT SUM(p.amount) FROM spk_payments p
-        WHERE p.spk_id=s.id AND p.status='Posted'),0) AS paid
+      s.document_type,
+      COALESCE((SELECT SUM(CASE WHEN p.gross_amount>0 THEN p.gross_amount ELSE p.amount END)
+        FROM spk_payments p WHERE p.spk_id=s.id AND p.status='Posted'),0) AS paid
       FROM spks s WHERE s.id=?`,
     args: [orderId],
   });
   if (!totals.rows[0]) return;
-  const cost = numberValue(totals.rows[0].cost);
+  const tax = await documentTaxSummary(
+    client,
+    String(totals.rows[0].document_type) === "PO" ? "PO" : "SPK",
+    orderId,
+    numberValue(totals.rows[0].cost),
+  );
+  const cost = tax.grossTotal;
   const paid = numberValue(totals.rows[0].paid);
   await client.execute({
     sql: "UPDATE spks SET payment_status=?,paid_date=?,updated_at=? WHERE id=?",
@@ -309,7 +346,11 @@ type OrderRow = Record<string, unknown>;
 async function orderReleaseSummary(client: DatabaseClient, order: OrderRow) {
   const [paidResult, dpResult, verifiedResult, receivedResult] = await Promise.all([
     client.execute({
-      sql: "SELECT COALESCE(SUM(amount),0) AS total FROM spk_payments WHERE spk_id=? AND status='Posted'",
+      sql: `SELECT
+        COALESCE(SUM(CASE WHEN gross_amount>0 THEN gross_amount ELSE amount END),0) AS gross,
+        COALESCE(SUM(amount),0) AS cash,
+        COALESCE(SUM(withholding_amount),0) AS withholding
+        FROM spk_payments WHERE spk_id=? AND status='Posted'`,
       args: [order.id],
     }),
     client.execute({
@@ -329,8 +370,18 @@ async function orderReleaseSummary(client: DatabaseClient, order: OrderRow) {
       args: [order.id],
     }),
   ]);
-  const contract = numberValue(order.cost);
-  const paid = numberValue(paidResult.rows[0]?.total);
+  const baseContract = numberValue(order.cost);
+  const tax = await documentTaxSummary(
+    client,
+    String(order.document_type) === "PO" ? "PO" : "SPK",
+    String(order.id),
+    baseContract,
+  );
+  const contract = tax.grossTotal;
+  const paid = numberValue(paidResult.rows[0]?.gross);
+  const paidCash = numberValue(paidResult.rows[0]?.cash);
+  const withheld = numberValue(paidResult.rows[0]?.withholding);
+  const grossFactor = baseContract > 0 ? contract / baseContract : 1;
   const dp = numberValue(dpResult.rows[0]?.total);
   const earned =
     String(order.document_type) === "PO"
@@ -341,14 +392,22 @@ async function orderReleaseSummary(client: DatabaseClient, order: OrderRow) {
   // SPK verifications, by contrast, are recorded against non-DP terms only.
   const verifiedPayable =
     String(order.document_type) === "PO"
-      ? Math.min(contract, Math.max(dp, earned))
-      : Math.min(contract, dp + earned);
+      ? Math.min(contract, Math.round(Math.max(dp, earned) * grossFactor))
+      : Math.min(contract, Math.round((dp + earned) * grossFactor));
   return {
     paid,
+    paidGross: paid,
+    paidCash,
+    withheldTax: withheld,
     verifiedPayable,
     outstanding: Math.max(0, contract - paid),
     availableToPay: Math.max(0, verifiedPayable - paid),
     paymentStatus: paymentState(contract, paid),
+    taxAdditions: tax.taxAdditions,
+    taxWithholdings: tax.taxWithholdings,
+    grossTotal: tax.grossTotal,
+    netCashDue: tax.netCashDue,
+    taxes: tax.taxes,
   };
 }
 
@@ -508,6 +567,10 @@ async function getOrder(client: DatabaseClient, orderId: string) {
       id: String(payment.id),
       termId: payment.term_id ? String(payment.term_id) : null,
       amount: numberValue(payment.amount),
+      cashAmount: numberValue(payment.amount),
+      grossAmount:
+        numberValue(payment.gross_amount) || numberValue(payment.amount),
+      withholdingAmount: numberValue(payment.withholding_amount),
       paidDate: String(payment.paid_date),
       vendorInvoiceNumber: String(payment.vendor_invoice_number),
       paymentReference: String(payment.payment_reference),
@@ -1037,20 +1100,25 @@ async function projectProcurementSummary(
       COALESCE((SELECT SUM(i.quantity*i.cost_price)
         FROM boq_items i JOIN boqs b ON b.id=i.boq_id
         WHERE b.project_id=?),0) AS budget_boq,
-      COALESCE((SELECT SUM(s.cost) FROM spks s
-        WHERE s.project_id=? AND s.approval_status='Approved'
-          AND s.workflow_status<>'Void'),0) AS committed,
-      COALESCE((SELECT SUM(p.amount) FROM spk_payments p
-        JOIN spks s ON s.id=p.spk_id
-        WHERE s.project_id=? AND p.status='Posted'),0) AS paid`,
-    args: [projectId, projectId, projectId],
+      0 AS compatibility`,
+    args: [projectId],
   });
   const orders = await listOrders(client, user, projectId);
   const budget = numberValue(result.rows[0]?.budget_boq);
-  const committed = numberValue(result.rows[0]?.committed);
-  const paid = numberValue(result.rows[0]?.paid);
-  const verified = orders
-    .filter((order) => order.approvalStatus === "Approved" && order.workflowStatus !== "Void")
+  const activeOrders = orders.filter(
+    (order) =>
+      order.approvalStatus === "Approved" && order.workflowStatus !== "Void",
+  );
+  const committed = activeOrders.reduce(
+    (sum, order) => sum + order.grossTotal,
+    0,
+  );
+  const paid = activeOrders.reduce((sum, order) => sum + order.paidGross, 0);
+  const paidCash = activeOrders.reduce(
+    (sum, order) => sum + order.paidCash,
+    0,
+  );
+  const verified = activeOrders
     .reduce((sum, order) => sum + order.verifiedPayable, 0);
   return {
     projectId,
@@ -1058,6 +1126,8 @@ async function projectProcurementSummary(
     committedVendorCost: committed,
     verifiedPayable: verified,
     paid,
+    paidGross: paid,
+    paidCash,
     outstanding: Math.max(0, committed - paid),
     variance: budget - committed,
   };
@@ -1081,6 +1151,15 @@ async function submitOrder(
     args: [user.id, now(), now(), orderId],
   });
   await writeAuditLog(client, request, user, "submit", "procurement_order", orderId);
+  await notifyProjectStakeholders(client, {
+    projectId: order.projectId,
+    eventType: "procurement_approval_requested",
+    subject: `${order.documentType} ${order.number} menunggu persetujuan`,
+    message: `dokumen ${order.documentType} ${order.number} telah diajukan untuk persetujuan nilai komitmen.`,
+    subjectEn: `${order.documentType} ${order.number} awaits approval`,
+    messageEn: `${order.documentType} ${order.number} was submitted for commitment approval.`,
+    includeFinance: true,
+  });
   return getOrder(client, orderId);
 }
 
@@ -1129,7 +1208,22 @@ async function approveOrder(
       orderId,
     ],
   });
+  await lockDocumentTaxes(
+    client,
+    order.documentType === "PO" ? "PO" : "SPK",
+    orderId,
+    order.endDate ?? undefined,
+  );
   await writeAuditLog(client, request, user, "approve", "procurement_order", orderId, input);
+  await notifyProjectStakeholders(client, {
+    projectId: order.projectId,
+    eventType: "procurement_approved",
+    subject: `${order.documentType} ${order.number} disetujui`,
+    message: `dokumen ${order.documentType} ${order.number} sudah disetujui dan snapshot pajaknya telah dikunci.`,
+    subjectEn: `${order.documentType} ${order.number} approved`,
+    messageEn: `${order.documentType} ${order.number} was approved and its tax snapshot was locked.`,
+    includeFinance: true,
+  });
   return getOrder(client, orderId);
 }
 
@@ -1314,6 +1408,15 @@ async function verifyOrder(
     ...input,
     attachment: input.attachment ? { ...input.attachment, contentBase64: "[redacted]" } : undefined,
   });
+  await notifyProjectStakeholders(client, {
+    projectId: order.projectId,
+    eventType: "procurement_progress_verified",
+    subject: `Progres ${order.number} diverifikasi`,
+    message: `progres sebesar Rp ${input.verifiedAmount.toLocaleString("id-ID")} pada ${order.number} telah diverifikasi.`,
+    subjectEn: `Progress for ${order.number} verified`,
+    messageEn: `progress of IDR ${input.verifiedAmount.toLocaleString("en-US")} for ${order.number} was verified.`,
+    includeFinance: true,
+  });
   return getOrder(client, orderId);
 }
 
@@ -1415,6 +1518,15 @@ async function receiveOrder(
     ...input,
     attachment: input.attachment ? { ...input.attachment, contentBase64: "[redacted]" } : undefined,
   });
+  await notifyProjectStakeholders(client, {
+    projectId: order.projectId,
+    eventType: "procurement_goods_received",
+    subject: `Penerimaan barang ${order.number} dicatat`,
+    message: `penerimaan barang untuk ${order.number} telah diverifikasi di lapangan.`,
+    subjectEn: `Goods receipt for ${order.number} recorded`,
+    messageEn: `goods receipt for ${order.number} was verified in the field.`,
+    includeFinance: true,
+  });
   return getOrder(client, orderId);
 }
 
@@ -1428,6 +1540,9 @@ async function payOrder(
   }
   assertManage(user, "finance");
   const input = paymentSchema.parse(await jsonBody(request));
+  const cashAmount = input.cashAmount ?? input.amount ?? 0;
+  const grossAmount =
+    input.grossAmount ?? cashAmount + input.withholdingAmount;
   if (input.paymentMethod === "Transfer Bank" && !input.bankAccountId) {
     throw new ApiError(
       422,
@@ -1454,7 +1569,7 @@ async function payOrder(
     }
   }
   const paymentId = randomUUID();
-  const transactionId = randomUUID();
+  const transactionId = cashAmount > 0 ? randomUUID() : null;
   const timestamp = now();
   await client.transaction(async (tx) => {
     await tx.execute({
@@ -1462,48 +1577,60 @@ async function payOrder(
       args: [orderId],
     });
     const current = await getOrder(tx, orderId);
-    if (current.paid + input.amount > current.cost) {
+    if (current.paidGross + grossAmount > current.grossTotal) {
       throw new ApiError(409, "OVERPAYMENT", "Pembayaran melebihi nilai kontrak vendor.");
     }
-    if (current.paid + input.amount > current.verifiedPayable) {
+    if (current.paidGross + grossAmount > current.verifiedPayable) {
       throw new ApiError(
         409,
         "PAYMENT_NOT_EARNED",
         "Nominal melebihi nilai yang sudah berhak dibayar. Verifikasi progres atau penerimaan barang terlebih dahulu.",
       );
     }
-    await tx.execute({
-      sql: `INSERT INTO transactions
-        (id,project_id,date,type,description,amount,source,reference_id,category,
-         created_by,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-      args: [
-        transactionId,
-        current.projectId,
-        input.paidDate,
-        "Pengeluaran",
-        `Pembayaran ${current.documentType} ${current.number} - ${current.vendor}`,
-        input.amount,
-        "Procurement Payment",
-        paymentId,
-        "Vendor",
-        user.id,
-        timestamp,
-        timestamp,
-      ],
-    });
+    if (current.withheldTax + input.withholdingAmount > current.taxWithholdings) {
+      throw new ApiError(
+        409,
+        "WITHHOLDING_EXCEEDED",
+        "Pajak potong pembayaran melebihi snapshot pajak dokumen.",
+      );
+    }
+    if (transactionId) {
+      await tx.execute({
+        sql: `INSERT INTO transactions
+          (id,project_id,date,type,description,amount,source,reference_id,category,
+           created_by,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        args: [
+          transactionId,
+          current.projectId,
+          input.paidDate,
+          "Pengeluaran",
+          `Pembayaran ${current.documentType} ${current.number} - ${current.vendor}`,
+          cashAmount,
+          "Procurement Payment",
+          paymentId,
+          "Vendor",
+          user.id,
+          timestamp,
+          timestamp,
+        ],
+      });
+    }
     await tx.execute({
       sql: `INSERT INTO spk_payments
-        (id,spk_id,term_id,amount,paid_date,vendor_invoice_number,
+        (id,spk_id,term_id,amount,gross_amount,withholding_amount,
+         paid_date,vendor_invoice_number,
          payment_reference,payment_method,bank_account_id,attachment_name,
          attachment_mime_type,attachment_content_base64,status,transaction_id,
          created_by,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       args: [
         paymentId,
         orderId,
         input.termId ?? null,
-        input.amount,
+        cashAmount,
+        grossAmount,
+        input.withholdingAmount,
         input.paidDate,
         input.vendorInvoiceNumber,
         input.paymentReference,
@@ -1513,7 +1640,7 @@ async function payOrder(
         input.attachment.mimeType,
         input.attachment.contentBase64,
         "Posted",
-        transactionId,
+        transactionId ?? null,
         user.id,
         timestamp,
         timestamp,
@@ -1525,6 +1652,15 @@ async function payOrder(
     paymentId,
     ...input,
     attachment: { ...input.attachment, contentBase64: "[redacted]" },
+  });
+  await notifyProjectStakeholders(client, {
+    projectId: order.projectId,
+    eventType: "procurement_payment_posted",
+    subject: `Pembayaran ${order.number} dicatat`,
+    message: `pembayaran bruto Rp ${grossAmount.toLocaleString("id-ID")} dengan kas aktual Rp ${cashAmount.toLocaleString("id-ID")} telah diposting.`,
+    subjectEn: `Payment for ${order.number} posted`,
+    messageEn: `a gross payment of IDR ${grossAmount.toLocaleString("en-US")} with actual cash of IDR ${cashAmount.toLocaleString("en-US")} was posted.`,
+    includeFinance: true,
   });
   return getOrder(client, orderId);
 }
@@ -1572,31 +1708,42 @@ async function voidPayment(
         void_reason=?,updated_at=? WHERE id=?`,
       args: [user.id, timestamp, input.reason, timestamp, paymentId],
     });
-    await tx.execute({
-      sql: `INSERT INTO transactions
+    if (numberValue(payment.amount) > 0) {
+      await tx.execute({
+        sql: `INSERT INTO transactions
         (id,project_id,date,type,description,amount,source,reference_id,category,
          created_by,created_at,updated_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-      args: [
-        randomUUID(),
-        order.projectId,
-        timestamp.slice(0, 10),
-        "Pemasukan",
-        `Reversal pembayaran ${order.documentType} ${order.number}`,
-        payment.amount,
-        "Procurement Reversal",
-        `${paymentId}:void`,
-        "Vendor",
-        user.id,
-        timestamp,
-        timestamp,
-      ],
-    });
+        args: [
+          randomUUID(),
+          order.projectId,
+          timestamp.slice(0, 10),
+          "Pemasukan",
+          `Reversal pembayaran ${order.documentType} ${order.number}`,
+          payment.amount,
+          "Procurement Reversal",
+          `${paymentId}:void`,
+          "Vendor",
+          user.id,
+          timestamp,
+          timestamp,
+        ],
+      });
+    }
   });
   await updateOrderPaymentCompatibility(client, orderId);
   await writeAuditLog(client, request, user, "void_payment", "procurement_order", orderId, {
     paymentId,
     reason: input.reason,
+  });
+  await notifyProjectStakeholders(client, {
+    projectId: order.projectId,
+    eventType: "procurement_payment_voided",
+    subject: `Pembayaran ${order.number} dibatalkan`,
+    message: `pembayaran pada ${order.number} dibatalkan oleh Admin dengan alasan yang tercatat.`,
+    subjectEn: `Payment for ${order.number} voided`,
+    messageEn: `a payment for ${order.number} was voided by an administrator with an audited reason.`,
+    includeFinance: true,
   });
   return getOrder(client, orderId);
 }

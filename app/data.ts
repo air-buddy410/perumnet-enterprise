@@ -61,9 +61,32 @@ export interface Invoice {
   issueDateIso?: string;
   dueDateIso?: string;
   amount: number;
-  status: "Lunas" | "Belum Lunas";
+  status: "Lunas" | "Belum Lunas" | "Dibayar Sebagian";
   paidDate?: string;
   paidDateIso?: string;
+  taxAdditions?: number;
+  taxWithholdings?: number;
+  grossTotal?: number;
+  netCashDue?: number;
+  paidGross?: number;
+  paidCash?: number;
+  withheldTax?: number;
+  outstanding?: number;
+  payments?: Array<{
+    id: string;
+    grossAmount: number;
+    cashAmount: number;
+    withholdingAmount: number;
+    paidDate: string;
+    paymentReference: string;
+    paymentMethod: string;
+    bankAccountId?: string;
+    bankAccount?: string;
+    attachmentName?: string;
+    status: "Posted" | "Void";
+    createdBy?: string;
+    voidReason?: string;
+  }>;
 }
 
 export interface Vendor {
@@ -140,6 +163,13 @@ export interface ProcurementOrder {
   approvedAt?: string | null;
   overrideReason?: string | null;
   paid: number;
+  paidGross?: number;
+  paidCash?: number;
+  withheldTax?: number;
+  taxAdditions?: number;
+  taxWithholdings?: number;
+  grossTotal?: number;
+  netCashDue?: number;
   verifiedPayable: number;
   outstanding: number;
   availableToPay: number;
@@ -187,6 +217,9 @@ export interface ProcurementOrder {
     id: string;
     termId?: string | null;
     amount: number;
+    cashAmount?: number;
+    grossAmount?: number;
+    withholdingAmount?: number;
     paidDate: string;
     vendorInvoiceNumber: string;
     paymentReference: string;

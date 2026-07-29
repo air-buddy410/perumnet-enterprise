@@ -462,7 +462,7 @@ export function EnterpriseApp() {
           {currentView === "dashboard" && canUse("dashboard") && <DashboardView language={language} navigate={navigate} notify={notify} selectedProjectId={selectedProjectId} userName={user.name} canManage={canManage("projects")} canUseBoq={canUse("boq")} canUseBilling={canUse("billing")} onSelectProject={selectProject} onProjectCreated={projectCreated} />}
           {currentView === "project" && canUse("projects") && (activeProjectId ? <ProjectView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} project={projects.find((item) => item.id === activeProjectId)} canManage={canManage("projects")} canDelete={user.role === "Admin"} canManageAccess={user.role === "Admin"} onProjectDeleted={projectDeleted} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "boq" && canUse("boq") && (activeProjectId ? <BoqView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} canManage={canManage("boq")} /> : ["Admin", "Finance"].includes(user.role) && canManage("boq") ? <StandaloneBoqView language={language} notify={notify} projects={projects} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
-          {currentView === "billing" && canUse("billing") && (activeProjectId ? <BillingView language={language} notify={notify} projectId={activeProjectId} canManage={canManage("billing")} canManagePayments={canManage("billing") && canManage("finance")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "billing" && canUse("billing") && (activeProjectId ? <BillingView language={language} notify={notify} projectId={activeProjectId} canManage={canManage("billing")} canManagePayments={canManage("billing") && canManage("finance")} canManageTaxes={["Admin", "Finance"].includes(user.role) && canManage("billing") && canManage("finance")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "procurement" && canUse("procurement") && (activeProjectId || ["Admin", "Finance"].includes(user.role) ? <ProcurementView language={language} notify={notify} projectId={activeProjectId || undefined} canManage={canManage("procurement")} canManageCommercial={canManage("boq") && canManage("billing")} canManageVendors={["Admin", "Finance"].includes(user.role) && canManage("procurement")} canManagePayments={canManage("procurement") && canManage("finance")} userRole={user.role} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "validation" && canUse("bast") && (activeProjectId ? <ValidationView projectId={activeProjectId} language={language} canManage={canManage("bast")} notify={notify} navigate={navigate} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "bast" && canUse("bast") && (activeProjectId ? <BastView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} canManage={canManage("bast")} userName={user.name} onProjectUpdated={projectCreated} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
@@ -480,11 +480,16 @@ export function EnterpriseApp() {
               canApproveProfitShares={
                 user.role === "Admin" && canManage("finance")
               }
+              canConfigureTax={
+                user.role === "Admin" &&
+                canManage("finance") &&
+                canManage("settings")
+              }
             />
           )}
           {currentView === "users" && canUse("users") && <UsersView notify={notify} language={language} currentUserId={user.id} canManage={user.role === "Admin"} />}
           {currentView === "profile" && <ProfileView language={language} user={user} notify={notify} onUserChange={setUser} />}
-          {currentView === "settings" && canUse("settings") && <SettingsView language={language} notify={notify} onLanguageChange={(next) => { setLanguage(next); window.localStorage.setItem("perumnet-language", next); setUser((current) => current ? { ...current, preferredLanguage: next } : current); }} />}
+          {currentView === "settings" && canUse("settings") && <SettingsView language={language} notify={notify} isAdmin={user.role === "Admin"} onLanguageChange={(next) => { setLanguage(next); window.localStorage.setItem("perumnet-language", next); setUser((current) => current ? { ...current, preferredLanguage: next } : current); }} />}
           {currentView === "help" && <HelpView language={language} />}
         </main>
       </div>

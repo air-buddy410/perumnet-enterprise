@@ -163,12 +163,58 @@ procurement baru tidak dapat dilewati.
 
 ## Notifikasi email
 
-Jika `RESEND_API_KEY` tersedia, aplikasi mengirim dan mencatat notifikasi untuk
-pembuatan akun, perubahan akses proyek, quotation terkirim, invoice dibuat atau
-dibayar, SPK dibuat/dikirim/selesai/dibayar, validasi selesai, dan BAST final.
-Setiap pengguna dapat menonaktifkan notifikasi bisnis, mengirim email uji, serta
-melihat status pengiriman terbaru. Email keamanan reset kata sandi tetap
-dikirim terlepas dari preferensi notifikasi.
+Production menggunakan SMTP privat Mailcow melalui Tailscale, sedangkan Mailcow
+merelay email keluar domain `perumnet.id` melalui Brevo. Enterprise tidak
+menyimpan SMTP key Brevo; aplikasi hanya memakai app password Mailcow khusus:
+
+```bash
+EMAIL_MODE=live
+SMTP_HOST=100.65.248.6
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_TLS_SERVERNAME=mail.perumnet.id
+SMTP_USER=it@perumnet.id
+SMTP_PASS=app-password-khusus-enterprise
+EMAIL_FROM="PerumNet Enterprise <it@perumnet.id>"
+EMAIL_REPLY_TO="PerumNet Enterprise <it@perumnet.id>"
+EMAIL_WORKER_SECRET=secret-random-internal
+EMAIL_WORKER_APP_URL=http://127.0.0.1:3100
+```
+
+Pesan masuk ke transactional outbox lebih dahulu sehingga kegagalan SMTP tidak
+membatalkan transaksi bisnis. Worker PM2 mencoba ulang setelah 1, 5, 15, dan 60
+menit, maksimal lima percobaan. Admin dapat melihat status Pending, Sent,
+Failed, atau Skipped serta mencoba ulang email gagal dari Pengaturan. Resend
+tetap didukung sebagai fallback kompatibilitas bila SMTP belum dikonfigurasi.
+
+Notifikasi mencakup pembuatan akun dan reset kata sandi, akses proyek,
+Quotation/Invoice, approval dan pembayaran SPK/PO, verifikasi atau penerimaan,
+void, validasi, serta BAST. Preferensi pengguna dan RBAC memfilter penerima;
+email keamanan tidak bergantung pada preferensi notifikasi bisnis. Mode demo
+selalu capture dan tidak pernah mengirim pesan keluar.
+
+## Pajak opsional
+
+Modul Finance → Pajak nonaktif secara default. Admin mengaktifkan switch global
+dan mengelola master aturan; Admin/Finance kemudian memilih pajak per
+Quotation, Invoice, SPK, atau PO. Preset PPN, PPh 21, PPh 23, PPh 4(2), dan
+pajak lain dimulai dengan tarif nol dan status nonaktif—tarif serta perlakuan
+akhir wajib ditentukan perusahaan.
+
+Snapshot dikunci saat Quotation diterima, procurement disetujui, atau
+pembayaran Invoice diposting. Buku Kas hanya mencatat kas aktual:
+
+```text
+Bruto = dasar pengenaan + pajak tambah
+Kas bersih = bruto - pajak potong
+```
+
+Utang/piutang pajak dilacak terpisah sampai settlement. Settlement atau
+pembayaran yang sudah direkonsiliasi dengan mutasi bank harus dilepas dahulu
+sebelum void. PDF/CSV bisnis dan laporan keuangan menampilkan dasar pengenaan,
+setiap pajak, bruto, potongan, kas bersih, posisi, dan outstanding. Utang pajak
+aktif mengurangi laba yang boleh dibagikan; pajak recoverable tidak dianggap
+sebagai laba.
 
 ## Verifikasi
 

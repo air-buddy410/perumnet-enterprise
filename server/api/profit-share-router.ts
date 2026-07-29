@@ -76,9 +76,15 @@ async function operatingProfit(client: DatabaseClient, projectId: string) {
   const expense = asNumber(result.rows[0]?.expense);
   const commitments = await client.execute({
     sql: `SELECT
-      COALESCE(SUM(s.cost),0) AS committed,
+      COALESCE(SUM(s.cost + COALESCE((
+        SELECT SUM(dt.amount) FROM document_taxes dt
+        WHERE dt.document_id=s.id
+          AND dt.document_type=s.document_type
+          AND dt.effect='Add'
+      ),0)),0) AS committed,
       COALESCE(SUM((
-        SELECT COALESCE(SUM(pay.amount),0)
+        SELECT COALESCE(SUM(CASE WHEN pay.gross_amount>0
+          THEN pay.gross_amount ELSE pay.amount END),0)
         FROM spk_payments pay
         WHERE pay.spk_id=s.id AND pay.status='Posted'
       )),0) AS paid
@@ -93,7 +99,41 @@ async function operatingProfit(client: DatabaseClient, projectId: string) {
     0,
     committedVendorCost - paidVendorCost,
   );
-  const netProfit = income - expense;
+  const taxPosition = await client.execute({
+    sql: `SELECT
+      COALESCE(SUM(CASE WHEN o.direction='Payable' AND o.status<>'Void'
+        THEN o.amount-o.settled_amount ELSE 0 END),0) AS outstanding_payable
+      FROM document_taxes dt
+      LEFT JOIN tax_obligations o ON o.document_tax_id=dt.id
+      WHERE dt.project_id=? AND dt.locked=1`,
+    args: [projectId],
+  });
+  const recoverableRows = await client.execute({
+    sql: `SELECT s.cost,
+      COALESCE((SELECT SUM(dt.amount) FROM document_taxes dt
+        WHERE dt.document_id=s.id AND dt.document_type=s.document_type
+          AND dt.effect='Add'),0) AS additions,
+      COALESCE((SELECT SUM(dt.amount) FROM document_taxes dt
+        WHERE dt.document_id=s.id AND dt.document_type=s.document_type
+          AND dt.accounting_treatment='Recoverable'),0) AS recoverable,
+      COALESCE((SELECT SUM(CASE WHEN pay.gross_amount>0
+        THEN pay.gross_amount ELSE pay.amount END)
+        FROM spk_payments pay
+        WHERE pay.spk_id=s.id AND pay.status='Posted'),0) AS paid
+      FROM spks s
+      WHERE s.project_id=? AND s.approval_status='Approved'
+        AND s.workflow_status<>'Void'`,
+    args: [projectId],
+  });
+  const outstandingTaxPayable = asNumber(
+    taxPosition.rows[0]?.outstanding_payable,
+  );
+  const recoverableTax = recoverableRows.rows.reduce((sum, row) => {
+    const gross = asNumber(row.cost) + asNumber(row.additions);
+    const ratio = gross > 0 ? Math.min(1, asNumber(row.paid) / gross) : 0;
+    return sum + Math.round(asNumber(row.recoverable) * ratio);
+  }, 0);
+  const netProfit = income - expense + recoverableTax;
   return {
     income,
     expense,
@@ -101,7 +141,10 @@ async function operatingProfit(client: DatabaseClient, projectId: string) {
     committedVendorCost,
     paidVendorCost,
     outstandingVendorCommitment,
-    distributableProfit: netProfit - outstandingVendorCommitment,
+    outstandingTaxPayable,
+    recoverableTax,
+    distributableProfit:
+      netProfit - outstandingVendorCommitment - outstandingTaxPayable,
   };
 }
 

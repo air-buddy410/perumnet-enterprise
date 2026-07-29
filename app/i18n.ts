@@ -90,6 +90,7 @@ export function localizedLabel(language: AppLanguage, value: string) {
     Sebagian: "Partially Paid",
     "Belum Dibayar": "Unpaid",
     "Belum Lunas": "Unpaid",
+    "Dibayar Sebagian": "Partially Paid",
     "Belum Ada Tagihan": "Not Invoiced",
     "Tidak Diizinkan": "Restricted",
     Pemasukan: "Income",

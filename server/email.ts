@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db/client";
 
-export type EmailDeliveryStatus = "sent" | "failed" | "skipped";
+export type EmailDeliveryStatus = "pending" | "sent" | "failed" | "skipped";
 
 interface EmailDeliveryInput {
   userId?: string;
@@ -51,7 +51,7 @@ function emailFrame(
   const safeTitle = escapeHtml(title);
   const safeMessage = escapeHtml(message).replaceAll("\n", "<br />");
   const actionHtml = action
-    ? `<p style="margin:28px 0"><a href="${escapeHtml(action.url)}" style="display:inline-block;background:#04a99f;color:#fff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:9px">${escapeHtml(action.label)}</a></p>`
+    ? `<p style="margin:28px 0"><a href="${escapeHtml(action.url)}" style="display:inline-block;background:#007a74;color:#fff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:9px">${escapeHtml(action.label)}</a></p>`
     : "";
   return `
     <div style="background:#f3f8f8;padding:32px 16px;font-family:Arial,sans-serif;color:#203f4d">
@@ -98,6 +98,11 @@ async function recordDelivery(
       INSERT INTO email_deliveries
         (id,user_id,event_type,recipient,subject,status,provider_id,error_message,created_at)
       VALUES (?,?,?,?,?,?,?,?,?)
+      ON CONFLICT (id) DO UPDATE SET
+        status=excluded.status,
+        provider_id=excluded.provider_id,
+        error_message=excluded.error_message,
+        created_at=excluded.created_at
     `,
     args: [
       result.id,
@@ -114,19 +119,81 @@ async function recordDelivery(
 }
 
 export function emailDeliveryConfigured() {
-  return process.env.APP_MODE !== "demo" && Boolean(process.env.RESEND_API_KEY);
+  return (
+    emailMode() === "live" &&
+    (smtpConfigured() || Boolean(process.env.RESEND_API_KEY))
+  );
+}
+
+export function emailMode() {
+  if (process.env.APP_MODE === "demo") return "capture" as const;
+  const configured = process.env.EMAIL_MODE?.toLowerCase();
+  if (configured === "capture" || configured === "disabled") return configured;
+  return "live" as const;
+}
+
+function smtpConfigured() {
+  return Boolean(
+    process.env.SMTP_HOST &&
+      process.env.SMTP_PORT &&
+      process.env.SMTP_USER &&
+      process.env.SMTP_PASS,
+  );
+}
+
+export function emailProviderName() {
+  if (emailMode() === "capture") return "capture";
+  if (smtpConfigured()) return "smtp";
+  if (process.env.RESEND_API_KEY) return "resend";
+  return "disabled";
+}
+
+async function enqueueOutbox(
+  client: DatabaseClient,
+  input: EmailDeliveryInput,
+  status: "Pending" | "Skipped",
+  error?: string,
+) {
+  const id = randomUUID();
+  const timestamp = new Date().toISOString();
+  await client.execute({
+    sql: `INSERT INTO email_outbox
+      (id,user_id,event_type,recipient,subject,body_html,status,provider,
+       attempt_count,next_attempt_at,last_error,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?)`,
+    args: [
+      id,
+      input.userId ?? null,
+      input.eventType,
+      input.recipient,
+      input.subject,
+      input.html,
+      status,
+      emailProviderName(),
+      timestamp,
+      error ?? null,
+      timestamp,
+      timestamp,
+    ],
+  });
+  return id;
 }
 
 export async function sendEmailDelivery(
   client: DatabaseClient,
   input: EmailDeliveryInput,
 ): Promise<EmailDeliveryResult> {
-  const id = randomUUID();
   const configured = emailDeliveryConfigured();
   if (
     input.respectPreference !== false &&
     !(await preferenceAllowsEmail(client, input.userId))
   ) {
+    const id = await enqueueOutbox(
+      client,
+      input,
+      "Skipped",
+      "Preferensi notifikasi email dinonaktifkan.",
+    );
     const result = {
       id,
       configured,
@@ -136,60 +203,251 @@ export async function sendEmailDelivery(
     await recordDelivery(client, input, result);
     return result;
   }
+  if (emailMode() === "capture") {
+    const id = await enqueueOutbox(
+      client,
+      input,
+      "Skipped",
+      "Mode demo capture: email tidak dikirim ke penerima.",
+    );
+    const result = {
+      id,
+      configured: true,
+      status: "skipped" as const,
+      error: "Mode demo capture: email tidak dikirim ke penerima.",
+    };
+    await recordDelivery(client, input, result);
+    return result;
+  }
   if (!configured) {
+    const id = await enqueueOutbox(
+      client,
+      input,
+      "Skipped",
+      "Provider SMTP/Resend belum dikonfigurasi.",
+    );
     const result = {
       id,
       configured: false,
       status: "skipped" as const,
-      error: "Provider email belum dikonfigurasi.",
+      error: "Provider SMTP/Resend belum dikonfigurasi.",
     };
     await recordDelivery(client, input, result);
     return result;
   }
+  const id = await enqueueOutbox(client, input, "Pending");
+  return { id, configured: true, status: "pending" };
+}
 
-  try {
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from:
-          process.env.EMAIL_FROM ??
-          "PerumNet Enterprise <noreply@perumnet.id>",
-        to: [input.recipient],
-        subject: input.subject,
-        html: input.html,
-      }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    const payload = (await response.json().catch(() => null)) as
-      | { id?: string; message?: string }
-      | null;
-    if (!response.ok) {
-      const result = {
-        id,
-        configured: true,
-        status: "failed" as const,
-        error: payload?.message ?? `Provider email merespons ${response.status}.`,
-      };
-      await recordDelivery(client, input, result);
-      return result;
-    }
-    const result = { id, configured: true, status: "sent" as const };
-    await recordDelivery(client, input, result, payload?.id);
-    return result;
-  } catch (error) {
-    const result = {
-      id,
-      configured: true,
-      status: "failed" as const,
-      error: error instanceof Error ? error.message.slice(0, 500) : "Pengiriman email gagal.",
-    };
-    await recordDelivery(client, input, result);
-    return result;
+const retryMinutes = [1, 5, 15, 60] as const;
+
+async function sendWithSmtp(row: Record<string, unknown>) {
+  const nodemailer = (await import("nodemailer")).default;
+  const port = Number(process.env.SMTP_PORT ?? 465);
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port,
+    secure:
+      process.env.SMTP_SECURE === "true" ||
+      (process.env.SMTP_SECURE !== "false" && port === 465),
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+    tls: {
+      servername:
+        process.env.SMTP_TLS_SERVERNAME ?? process.env.SMTP_HOST,
+      rejectUnauthorized: true,
+    },
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    socketTimeout: 30_000,
+  });
+  const info = await transporter.sendMail({
+    from:
+      process.env.EMAIL_FROM ??
+      "PerumNet Enterprise <it@perumnet.id>",
+    replyTo:
+      process.env.EMAIL_REPLY_TO ??
+      "PerumNet Enterprise <it@perumnet.id>",
+    to: String(row.recipient),
+    subject: String(row.subject),
+    html: String(row.body_html),
+  });
+  transporter.close();
+  return info.messageId;
+}
+
+async function sendWithResend(row: Record<string, unknown>) {
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from:
+        process.env.EMAIL_FROM ??
+        "PerumNet Enterprise <it@perumnet.id>",
+      reply_to:
+        process.env.EMAIL_REPLY_TO ?? "it@perumnet.id",
+      to: [String(row.recipient)],
+      subject: String(row.subject),
+      html: String(row.body_html),
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | { id?: string; message?: string }
+    | null;
+  if (!response.ok) {
+    throw new Error(
+      payload?.message ?? `Provider email merespons ${response.status}.`,
+    );
   }
+  return payload?.id;
+}
+
+async function deliverOutboxRow(
+  client: DatabaseClient,
+  row: Record<string, unknown>,
+) {
+  const provider = emailProviderName();
+  const attempt = Number(row.attempt_count ?? 0) + 1;
+  const timestamp = new Date().toISOString();
+  const input: EmailDeliveryInput = {
+    userId: row.user_id ? String(row.user_id) : undefined,
+    recipient: String(row.recipient),
+    eventType: String(row.event_type),
+    subject: String(row.subject),
+    html: String(row.body_html),
+  };
+  try {
+    const providerId =
+      provider === "smtp"
+        ? await sendWithSmtp(row)
+        : provider === "resend"
+          ? await sendWithResend(row)
+          : undefined;
+    if (!providerId && provider === "disabled") {
+      throw new Error("Provider email belum dikonfigurasi.");
+    }
+    await client.execute({
+      sql: `UPDATE email_outbox SET status='Sent',provider=?,provider_id=?,
+        attempt_count=?,locked_at=NULL,last_error=NULL,sent_at=?,updated_at=?
+        WHERE id=?`,
+      args: [
+        provider,
+        providerId ?? null,
+        attempt,
+        timestamp,
+        timestamp,
+        row.id,
+      ],
+    });
+    await recordDelivery(
+      client,
+      input,
+      {
+        id: String(row.id),
+        configured: true,
+        status: "sent",
+      },
+      providerId,
+    );
+    return { id: String(row.id), status: "sent" as const };
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message.slice(0, 500)
+        : "Pengiriman email gagal.";
+    const exhausted = attempt >= 5;
+    const retryAt = new Date(
+      Date.now() +
+        (retryMinutes[Math.min(attempt - 1, retryMinutes.length - 1)] ?? 60) *
+          60_000,
+    ).toISOString();
+    await client.execute({
+      sql: `UPDATE email_outbox SET status='Failed',provider=?,
+        attempt_count=?,next_attempt_at=?,locked_at=NULL,last_error=?,updated_at=?
+        WHERE id=?`,
+      args: [provider, attempt, retryAt, message, timestamp, row.id],
+    });
+    if (exhausted) {
+      await recordDelivery(client, input, {
+        id: String(row.id),
+        configured: true,
+        status: "failed",
+        error: message,
+      });
+    }
+    return {
+      id: String(row.id),
+      status: "failed" as const,
+      exhausted,
+      error: message,
+    };
+  }
+}
+
+export async function dispatchEmailOutbox(
+  client: DatabaseClient,
+  batchSize = 20,
+) {
+  if (emailMode() !== "live" || !emailDeliveryConfigured()) {
+    return [];
+  }
+  const timestamp = new Date().toISOString();
+  const staleLock = new Date(Date.now() - 10 * 60_000).toISOString();
+  await client.execute({
+    sql: `UPDATE email_outbox SET status='Failed',locked_at=NULL,
+      next_attempt_at=?,last_error='Worker lock expired',updated_at=?
+      WHERE status='Processing' AND locked_at<?`,
+    args: [timestamp, timestamp, staleLock],
+  });
+  const candidates = await client.execute({
+    sql: `SELECT id FROM email_outbox
+      WHERE status IN ('Pending','Failed') AND attempt_count<5
+        AND next_attempt_at<=?
+      ORDER BY next_attempt_at,created_at LIMIT ?`,
+    args: [timestamp, Math.max(1, Math.min(100, batchSize))],
+  });
+  const results: Array<Record<string, unknown>> = [];
+  for (const candidate of candidates.rows) {
+    const lockedAt = new Date().toISOString();
+    await client.execute({
+      sql: `UPDATE email_outbox SET status='Processing',locked_at=?,updated_at=?
+        WHERE id=? AND status IN ('Pending','Failed') AND attempt_count<5
+          AND next_attempt_at<=?`,
+      args: [lockedAt, lockedAt, candidate.id, lockedAt],
+    });
+    const claimed = await client.execute({
+      sql: "SELECT * FROM email_outbox WHERE id=? AND status='Processing' AND locked_at=? LIMIT 1",
+      args: [candidate.id, lockedAt],
+    });
+    if (!claimed.rows[0]) continue;
+    results.push(await deliverOutboxRow(client, claimed.rows[0]));
+  }
+  return results;
+}
+
+export async function retryEmailOutbox(
+  client: DatabaseClient,
+  outboxId: string,
+) {
+  const current = await client.execute({
+    sql: "SELECT id FROM email_outbox WHERE id=? AND status='Failed' LIMIT 1",
+    args: [outboxId],
+  });
+  if (!current.rows.length) return false;
+  const timestamp = new Date().toISOString();
+  await client.execute({
+    sql: `UPDATE email_outbox SET status='Pending',attempt_count=0,
+      next_attempt_at=?,locked_at=NULL,last_error=NULL,updated_at=?
+      WHERE id=? AND status='Failed'`,
+    args: [timestamp, timestamp, outboxId],
+  });
+  return true;
 }
 
 export async function sendAccountCreatedEmail(

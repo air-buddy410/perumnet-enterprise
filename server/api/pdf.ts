@@ -6,6 +6,7 @@ import { jsPDF } from "jspdf";
 import { ApiError } from "./errors";
 import { getDatabase } from "../db/client";
 import { asNumber, formatDate, parseJson } from "../format";
+import { documentTaxSummary } from "../tax";
 
 type PdfKind = "quotation" | "invoice" | "spk" | "bast";
 type PdfLanguage = "id" | "en";
@@ -75,6 +76,16 @@ export type FinancialReportProcurementRow = {
   acceptedAddenda: number;
 };
 
+export type FinancialReportTaxRow = {
+  project: string;
+  rule: string;
+  direction: string;
+  amount: number;
+  settled: number;
+  outstanding: number;
+  status: string;
+};
+
 const PAGE_WIDTH = 210;
 const MARGIN = 14;
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
@@ -125,6 +136,7 @@ function localizeValue(value: unknown, language: PdfLanguage) {
     Dikerjakan: "In Progress",
     Lunas: "Paid",
     "Belum Lunas": "Unpaid",
+    "Dibayar Sebagian": "Partially Paid",
     Pemasukan: "Income",
     Pengeluaran: "Expense",
     Perangkat: "Device",
@@ -737,6 +749,20 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
       sum + asNumber(item.quantity) * asNumber(item.selling_price),
     0,
   );
+  const quotationTax = quotation?.id
+    ? await documentTaxSummary(
+        client,
+        "Quotation",
+        String(quotation.id),
+        total,
+      )
+    : {
+        taxes: [],
+        taxAdditions: 0,
+        taxWithholdings: 0,
+        grossTotal: total,
+        netCashDue: total,
+      };
   const number = quotation
     ? String(quotation.number)
     : `QUO/${String(project.code).replace("PN-", "")}`;
@@ -802,7 +828,19 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
   );
   y = drawTotals(context, y, [
     { label: "Subtotal", value: rupiah(total, language) },
-    { label: tr(language, "Total penawaran", "Quotation total"), value: rupiah(total, language), highlight: true },
+    ...quotationTax.taxes.map((tax) => ({
+      label: `${language === "en" ? tax.nameEn : tax.name} (${tax.effect === "Add" ? "+" : "-"})`,
+      value: rupiah(tax.amount, language),
+    })),
+    {
+      label: tr(language, "Nilai bruto", "Gross total"),
+      value: rupiah(quotationTax.grossTotal, language),
+    },
+    {
+      label: tr(language, "Kas bersih", "Net cash due"),
+      value: rupiah(quotationTax.netCashDue, language),
+      highlight: true,
+    },
   ]);
   y = drawCallout(
     context,
@@ -839,10 +877,30 @@ async function invoicePdf(invoiceId: string, language: PdfLanguage) {
   if (!invoice) {
     throw new ApiError(404, "NOT_FOUND", "Invoice tidak ditemukan.");
   }
+  const invoiceTax = await documentTaxSummary(
+    client,
+    "Invoice",
+    invoiceId,
+    asNumber(invoice.amount),
+  );
+  const invoicePayments = await client.execute({
+    sql: `SELECT COALESCE(SUM(gross_amount),0) AS gross,
+      COALESCE(SUM(cash_amount),0) AS cash,
+      COALESCE(SUM(withholding_amount),0) AS withholding
+      FROM invoice_payments WHERE invoice_id=? AND status='Posted'`,
+    args: [invoiceId],
+  });
+  const paidGross = asNumber(invoicePayments.rows[0]?.gross);
+  const displayStatus =
+    paidGross <= 0
+      ? "Belum Lunas"
+      : paidGross >= invoiceTax.grossTotal
+        ? "Lunas"
+        : "Dibayar Sebagian";
   const context = await createDocument({
     title: "Invoice",
     number: String(invoice.number),
-    status: localizeValue(invoice.status, language),
+    status: localizeValue(displayStatus, language),
     subject: tr(language, `Tagihan ${String(invoice.project_name)}`, `Invoice for ${String(invoice.project_name)}`),
   }, language);
   let y = BODY_TOP;
@@ -891,7 +949,23 @@ async function invoicePdf(invoiceId: string, language: PdfLanguage) {
   );
   y = drawTotals(context, y, [
     { label: "Subtotal", value: rupiah(invoice.amount, language) },
-    { label: tr(language, "Total tagihan", "Invoice total"), value: rupiah(invoice.amount, language), highlight: true },
+    ...invoiceTax.taxes.map((tax) => ({
+      label: `${language === "en" ? tax.nameEn : tax.name} (${tax.effect === "Add" ? "+" : "-"})`,
+      value: rupiah(tax.amount, language),
+    })),
+    {
+      label: tr(language, "Nilai bruto", "Gross total"),
+      value: rupiah(invoiceTax.grossTotal, language),
+    },
+    {
+      label: tr(language, "Kas bersih jatuh tempo", "Net cash due"),
+      value: rupiah(invoiceTax.netCashDue, language),
+      highlight: true,
+    },
+    {
+      label: tr(language, "Bruto sudah dibayar", "Gross paid"),
+      value: rupiah(paidGross, language),
+    },
   ]);
   y = drawCallout(
     context,
@@ -941,6 +1015,12 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
     throw new ApiError(404, "NOT_FOUND", "SPK tidak ditemukan.");
   }
   const documentType = String(spk.document_type ?? "SPK");
+  const spkTax = await documentTaxSummary(
+    client,
+    documentType === "PO" ? "PO" : "SPK",
+    spkId,
+    asNumber(spk.cost),
+  );
   const [itemsResult, termsResult, verificationResult, receiptResult, paymentResult] =
     await Promise.all([
       client.execute({
@@ -1067,6 +1147,18 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
     {
       label: tr(language, "Nilai pekerjaan disepakati", "Agreed work value"),
       value: rupiah(spk.cost, language),
+    },
+    ...spkTax.taxes.map((tax) => ({
+      label: `${language === "en" ? tax.nameEn : tax.name} (${tax.effect === "Add" ? "+" : "-"})`,
+      value: rupiah(tax.amount, language),
+    })),
+    {
+      label: tr(language, "Nilai bruto", "Gross total"),
+      value: rupiah(spkTax.grossTotal, language),
+    },
+    {
+      label: tr(language, "Kas bersih jatuh tempo", "Net cash due"),
+      value: rupiah(spkTax.netCashDue, language),
       highlight: true,
     },
   ]);
@@ -1160,12 +1252,16 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
             : ""
         }`,
         localizeValue(payment.status, language),
-        rupiah(payment.amount, language),
+        `${rupiah(payment.gross_amount || payment.amount, language)}\n${tr(language, "Kas", "Cash")}: ${rupiah(payment.amount, language)}`,
       ]),
     );
     const posted = paymentResult.rows
       .filter((payment) => String(payment.status) === "Posted")
-      .reduce((sum, payment) => sum + asNumber(payment.amount), 0);
+      .reduce(
+        (sum, payment) =>
+          sum + asNumber(payment.gross_amount || payment.amount),
+        0,
+      );
     y = drawTotals(context, y, [
       {
         label: tr(language, "Total dibayar", "Total paid"),
@@ -1173,7 +1269,7 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
       },
       {
         label: tr(language, "Sisa komitmen", "Outstanding commitment"),
-        value: rupiah(Math.max(0, asNumber(spk.cost) - posted), language),
+        value: rupiah(Math.max(0, spkTax.grossTotal - posted), language),
         highlight: true,
       },
     ]);
@@ -1461,6 +1557,7 @@ export async function renderFinancialReportPdf(
   bankAccounts: FinancialReportBankAccount[] = [],
   profitRows: FinancialReportProfitRow[] = [],
   procurementRows: FinancialReportProcurementRow[] = [],
+  taxRows: FinancialReportTaxRow[] = [],
 ) {
   const sortedDates = entries
     .map((entry) => entry.dateIso)
@@ -1585,6 +1682,41 @@ export async function renderFinancialReportPdf(
         rupiah(row.budgetBoq, language),
         rupiah(row.committedVendorCost, language),
         rupiah(row.paid, language),
+        rupiah(row.outstanding, language),
+      ]),
+    );
+  }
+
+  if (taxRows.length) {
+    y = drawSectionTitle(
+      context,
+      y,
+      tr(language, "Posisi Pajak", "Tax Position"),
+      tr(
+        language,
+        "Pajak tambah, potong, settlement, serta outstanding berdasarkan snapshot terkunci",
+        "Tax additions, withholdings, settlements, and outstanding amounts from locked snapshots",
+      ),
+    );
+    y = drawTable(
+      context,
+      y,
+      [
+        { title: tr(language, "Proyek", "Project"), width: 47 },
+        { title: tr(language, "Pajak", "Tax"), width: 31 },
+        { title: tr(language, "Posisi", "Position"), width: 27 },
+        { title: tr(language, "Nilai", "Amount"), width: 28, align: "right" },
+        { title: tr(language, "Settlement", "Settled"), width: 24, align: "right" },
+        { title: "Outstanding", width: 25, align: "right" },
+      ],
+      taxRows.map((row) => [
+        row.project,
+        `${row.rule}\n${localizeValue(row.status, language)}`,
+        row.direction === "Payable"
+          ? tr(language, "Utang", "Payable")
+          : tr(language, "Piutang", "Receivable"),
+        rupiah(row.amount, language),
+        rupiah(row.settled, language),
         rupiah(row.outstanding, language),
       ]),
     );

@@ -300,30 +300,36 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     body: JSON.stringify({ paidDate: "2026-07-18" }),
   });
   assert.equal(confirmedInvoice.status, "Lunas");
-  const editedPaidInvoice = await json(`/api/invoices/${invoice.id}`, {
-    method: "PATCH",
-    body: JSON.stringify({ amount: 850_000 }),
-  });
-  assert.equal(editedPaidInvoice.amount, 850_000);
+  assert.equal(
+    (
+      await request(`/api/invoices/${invoice.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ amount: 850_000 }),
+      })
+    ).status,
+    409,
+  );
   assert.equal(
     (await json(`/api/transactions?projectId=${project.id}`)).find(
-      (entry) => entry.source === "Invoice",
+      (entry) => entry.source === "Invoice Payment",
     )?.amount,
-    850_000,
+    800_000,
   );
   const correctedInvoice = await json(
-    `/api/invoices/${invoice.id}/payment`,
+    `/api/invoices/${invoice.id}/payments/${confirmedInvoice.payments[0].id}/void`,
     {
-      method: "PATCH",
-      body: JSON.stringify({ status: "Belum Lunas" }),
+      method: "POST",
+      body: JSON.stringify({
+        reason: "Referensi pembayaran integrasi perlu dikoreksi.",
+      }),
     },
   );
   assert.equal(correctedInvoice.status, "Belum Lunas");
   assert.equal(
     (await json(`/api/transactions?projectId=${project.id}`)).some(
-      (entry) => entry.source === "Invoice",
+      (entry) => entry.source === "Invoice Payment Reversal",
     ),
-    false,
+    true,
   );
   await json(`/api/invoices/${invoice.id}/payment`, {
     method: "PATCH",
@@ -554,9 +560,9 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   assert.equal(transaction.project, "Proyek Integrasi Backend");
   assert.equal(transaction.category, "Operasional");
   const finance = await json(`/api/finance/summary?projectId=${project.id}`);
-  assert.equal(finance.income, 850_000);
-  assert.equal(finance.expense, 725_000);
-  assert.equal(finance.netCash, 125_000);
+  assert.equal(finance.income, 1_600_000);
+  assert.equal(finance.expense, 1_525_000);
+  assert.equal(finance.netCash, 75_000);
 
   const incorrectBonus = await json(
     "/api/transactions",
@@ -603,7 +609,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     { method: "POST" },
   );
   assert.equal(approvedAllocation.status, "Approved");
-  assert.equal(approvedAllocation.amount, 25_000);
+  assert.equal(approvedAllocation.amount, 12_500);
   const paidAllocation = await json(
     `/api/profit-shares/${allocation.id}/pay`,
     {
@@ -615,10 +621,10 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   const profitSummary = await json(
     `/api/profit-shares?projectId=${project.id}`,
   );
-  assert.equal(profitSummary.netProfit, 100_000);
-  assert.equal(profitSummary.allocatedAmount, 25_000);
-  assert.equal(profitSummary.paidAmount, 25_000);
-  assert.equal(profitSummary.retainedProfit, 75_000);
+  assert.equal(profitSummary.netProfit, 50_000);
+  assert.equal(profitSummary.allocatedAmount, 12_500);
+  assert.equal(profitSummary.paidAmount, 12_500);
+  assert.equal(profitSummary.retainedProfit, 37_500);
   assert.equal(
     (
       await request("/api/profit-shares", {
@@ -635,7 +641,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   const financeAfterDistribution = await json(
     `/api/finance/summary?projectId=${project.id}`,
   );
-  assert.equal(financeAfterDistribution.netCash, 75_000);
+  assert.equal(financeAfterDistribution.netCash, 37_500);
 
   const bankAccount = await json(
     "/api/bank-accounts",
@@ -654,6 +660,218 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   assert.equal(bankAccount.accountNumberMasked, "•••• 7890");
   assert.equal(bankAccount.currentBalance, 1_000_000);
   assert.equal(bankAccount.apiConfigured, false);
+
+  const initialTaxSettings = await json("/api/tax/settings");
+  assert.equal(initialTaxSettings.enabled, false);
+  const taxRules = await json("/api/tax/rules");
+  const ppnRule = taxRules.find((rule) => rule.code === "PPN");
+  const pph23Rule = taxRules.find((rule) => rule.code === "PPH23");
+  assert.ok(ppnRule);
+  assert.ok(pph23Rule);
+  assert.equal(ppnRule.rateBps, 0);
+  assert.equal(ppnRule.status, "Inactive");
+
+  const taxProject = await json(
+    "/api/projects",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Proyek Integrasi Pajak",
+        client: "Klien Pajak",
+        location: "Denpasar",
+        status: "Aktif",
+        value: 1_000_000,
+      }),
+    },
+    201,
+  );
+  await json(
+    `/api/boq/items?projectId=${taxProject.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        category: "Jasa",
+        description: "Implementasi integrasi pajak",
+        quantity: 1,
+        unit: "paket",
+        costPrice: 150_000,
+        sellingPrice: 500_000,
+      }),
+    },
+    201,
+  );
+  const taxableInvoice = await json(
+    "/api/invoices",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: taxProject.id,
+        type: "Termin Pajak",
+        issueDate: "2026-07-20",
+        dueDate: "2026-08-03",
+        amount: 300_000,
+      }),
+    },
+    201,
+  );
+  assert.equal(
+    (
+      await request(`/api/invoices/${taxableInvoice.id}/taxes`, {
+        method: "PUT",
+        body: JSON.stringify({ ruleIds: [ppnRule.id] }),
+      })
+    ).status,
+    409,
+  );
+  await json(`/api/tax/rules/${ppnRule.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      rateBps: 1_100,
+      status: "Active",
+    }),
+  });
+  await json(`/api/tax/rules/${pph23Rule.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      scope: "Client",
+      accountingTreatment: "Receivable",
+      rateBps: 200,
+      status: "Active",
+    }),
+  });
+  assert.equal(
+    (
+      await json("/api/tax/settings", {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: true }),
+      })
+    ).enabled,
+    true,
+  );
+  const taxableSummary = await json(
+    `/api/invoices/${taxableInvoice.id}/taxes`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ ruleIds: [ppnRule.id, pph23Rule.id] }),
+    },
+  );
+  assert.equal(taxableSummary.baseAmount, 300_000);
+  assert.equal(taxableSummary.taxAdditions, 33_000);
+  assert.equal(taxableSummary.taxWithholdings, 6_000);
+  assert.equal(taxableSummary.grossTotal, 333_000);
+  assert.equal(taxableSummary.netCashDue, 327_000);
+
+  const taxAttachment = {
+    name: "bukti-pajak.png",
+    mimeType: "image/png",
+    contentBase64: Buffer.from("tax-payment-evidence").toString("base64"),
+  };
+  const taxablePaidInvoice = await json(
+    `/api/invoices/${taxableInvoice.id}/payments`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        grossAmount: 333_000,
+        cashAmount: 327_000,
+        withholdingAmount: 6_000,
+        paidDate: "2026-07-29",
+        paymentReference: "BCA-INV-TAX-001",
+        paymentMethod: "Transfer Bank",
+        bankAccountId: bankAccount.id,
+        attachment: taxAttachment,
+      }),
+    },
+    201,
+  );
+  assert.equal(taxablePaidInvoice.status, "Lunas");
+  assert.equal(taxablePaidInvoice.paidGross, 333_000);
+  assert.equal(taxablePaidInvoice.paidCash, 327_000);
+  assert.equal(taxablePaidInvoice.withheldTax, 6_000);
+  const taxTransactions = await json(
+    `/api/transactions?projectId=${taxProject.id}`,
+  );
+  assert.ok(
+    taxTransactions.some(
+      (entry) =>
+        entry.source === "Invoice Payment" && entry.amount === 327_000,
+    ),
+  );
+  const taxObligations = await json("/api/tax/obligations");
+  const ppnObligation = taxObligations.find(
+    (obligation) =>
+      obligation.documentId === taxableInvoice.id &&
+      obligation.ruleCode === "PPN",
+  );
+  const pphObligation = taxObligations.find(
+    (obligation) =>
+      obligation.documentId === taxableInvoice.id &&
+      obligation.ruleCode === "PPH23",
+  );
+  assert.equal(ppnObligation.direction, "Payable");
+  assert.equal(ppnObligation.outstandingAmount, 33_000);
+  assert.equal(pphObligation.direction, "Receivable");
+  assert.equal(pphObligation.outstandingAmount, 6_000);
+  const taxProtectedProfit = await json(
+    `/api/profit-shares?projectId=${taxProject.id}`,
+  );
+  assert.equal(taxProtectedProfit.outstandingTaxPayable, 33_000);
+
+  const taxSettlement = await json(
+    "/api/tax/settlements",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        obligationId: ppnObligation.id,
+        amount: 20_000,
+        settlementDate: "2026-07-30",
+        paymentReference: "BCA-PAJAK-001",
+        paymentMethod: "Transfer Bank",
+        bankAccountId: bankAccount.id,
+        attachment: taxAttachment,
+      }),
+    },
+    201,
+  );
+  assert.equal(taxSettlement.status, "Posted");
+  assert.equal(
+    (await json("/api/tax/obligations")).find(
+      (obligation) => obligation.id === ppnObligation.id,
+    ).outstandingAmount,
+    13_000,
+  );
+  const taxCsv = await request("/api/tax/report.csv");
+  assert.equal(taxCsv.status, 200);
+  assert.match(await taxCsv.text(), /Pajak Pertambahan Nilai/);
+  const taxPdf = await request("/api/tax/report.pdf");
+  assert.equal(taxPdf.status, 200);
+  assert.equal(
+    Buffer.from(await taxPdf.arrayBuffer()).subarray(0, 4).toString(),
+    "%PDF",
+  );
+  const voidedTaxSettlement = await json(
+    `/api/tax/settlements/${taxSettlement.id}/void`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        reason: "Referensi settlement pajak perlu dikoreksi.",
+      }),
+    },
+  );
+  assert.equal(voidedTaxSettlement.status, "Void");
+  assert.equal(
+    (
+      await json("/api/tax/settings", {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: false }),
+      })
+    ).enabled,
+    false,
+  );
+  const retainedTaxSnapshot = await json(
+    `/api/invoices/${taxableInvoice.id}/taxes`,
+  );
+  assert.equal(retainedTaxSnapshot.locked, true);
+  assert.equal(retainedTaxSnapshot.grossTotal, 333_000);
 
   const statementFile = [
     "MUTASI REKENING BCA",
@@ -1816,7 +2034,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
         body: JSON.stringify({ amount: 860_000 }),
       })
     ).status,
-    403,
+    404,
   );
   assert.equal(
     (
@@ -1824,7 +2042,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
         method: "DELETE",
       })
     ).status,
-    403,
+    404,
   );
   assert.equal(
     (
@@ -1974,6 +2192,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     }),
   });
   await json(`/api/projects/${project.id}`, { method: "DELETE" }, 204);
+  await json(`/api/projects/${taxProject.id}`, { method: "DELETE" }, 204);
   await json(`/api/projects/${projectManagerProject.id}`, { method: "DELETE" }, 204);
   assert.equal((await request(`/api/projects/${project.id}`)).status, 404);
   assert.equal((await request(`/api/invoices/${invoice.id}`)).status, 404);

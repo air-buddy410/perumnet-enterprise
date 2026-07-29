@@ -6,6 +6,7 @@ import { canAccess } from "@/shared/access";
 import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
+import { lockDocumentTaxes } from "../tax";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
 import { renderBusinessPdf } from "./pdf";
 
@@ -482,6 +483,12 @@ export async function handleQuotationLifecycle(
         },
       ], "write");
     });
+    await lockDocumentTaxes(
+      client,
+      "Quotation",
+      quotationId,
+      input.acceptedAt,
+    );
     await syncProjectCommercialValue(client, String(quotation.project_id));
     await writeAuditLog(client, request, user, "accept", "quotation", quotationId, {
       acceptedAt: input.acceptedAt,
