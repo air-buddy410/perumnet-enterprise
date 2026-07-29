@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import type { PublicLanguage } from "@/server/public-language";
 import styles from "../site.module.css";
 
@@ -12,11 +12,20 @@ export function PublicLanguageSwitcher({
   compact?: boolean;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
 
   const select = (next: PublicLanguage) => {
     if (next === language) return;
     document.cookie = `perumnet_language=${next}; path=/; max-age=31536000; SameSite=Lax`;
-    router.refresh();
+    const withoutEnglishPrefix = pathname === "/en"
+      ? "/"
+      : pathname.startsWith("/en/")
+        ? pathname.slice(3)
+        : pathname;
+    const nextPath = next === "en"
+      ? withoutEnglishPrefix === "/" ? "/en" : `/en${withoutEnglishPrefix}`
+      : withoutEnglishPrefix;
+    router.push(`${nextPath}${window.location.hash}`);
   };
 
   return (

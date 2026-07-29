@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
 import { PortfolioPage } from "../components/cms-public";
 import { getCmsContent } from "@/server/cms";
-import { getPublicLanguage } from "@/server/public-language";
+import { publicMetadata } from "@/server/public-seo";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "Portofolio" };
+export async function generateMetadata(): Promise<Metadata> {
+  return publicMetadata(await getCmsContent(), "id", "/portfolio", "Portofolio Proyek IT", "Lihat dokumentasi proyek jaringan, keamanan, komunikasi, otomatisasi bangunan, dan perangkat lunak PerumNet Enterprise.");
+}
 
 export default async function Page() {
-  const [content, language] = await Promise.all([getCmsContent(), getPublicLanguage()]);
-  return <PortfolioPage content={content} language={language} />;
+  const content = await getCmsContent();
+  return <PortfolioPage content={content} language="id" />;
 }

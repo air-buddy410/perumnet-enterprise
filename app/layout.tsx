@@ -1,19 +1,16 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { appPath } from "./paths";
+import { publicOrigin } from "@/server/public-seo";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(
-    process.env.APP_URL
-      ? new URL(process.env.APP_URL).origin
-      : "https://enterprise.perumnet.com",
-  ),
+  metadataBase: new URL(publicOrigin),
   title: {
     default: "PerumNet Enterprise — Konsultan IT Bali",
     template: "%s — PerumNet Enterprise",
   },
   description:
-    "Konsultan IT untuk Managed WiFi, CCTV, dan IP PABX di Bali. Dari survei, instalasi, hingga dukungan operasional.",
+    "PerumNet Enterprise membantu hotel, villa, kantor, sekolah, dan area komersial di Bali menata Managed WiFi, Smart Home, CCTV, IP PABX, dan sistem perangkat lunak.",
   icons: {
     icon: appPath("/favicon.png"),
     shortcut: appPath("/favicon.png"),
@@ -21,7 +18,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: "PerumNet Enterprise — Konsultan IT Bali",
-    description: "Managed WiFi, CCTV, dan IP PABX yang dirancang untuk operasional bisnis modern.",
+    description: "Layanan IT untuk hotel, villa, kantor, sekolah, dan area komersial di Bali.",
     url: "/",
     siteName: "PerumNet Enterprise",
     type: "website",
@@ -30,7 +27,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "PerumNet Enterprise — Konsultan IT Bali",
-    description: "Managed WiFi, CCTV, dan IP PABX yang dirancang untuk operasional bisnis modern.",
+    description: "Layanan IT untuk hotel, villa, kantor, sekolah, dan area komersial di Bali.",
     images: [appPath("/og.png")],
   },
 };

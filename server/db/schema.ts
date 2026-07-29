@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 const timestamps = {
   createdAt: text("created_at").notNull(),
@@ -1224,3 +1224,68 @@ export const cmsPartners = sqliteTable("cms_partners", {
   isVisible: integer("is_visible").notNull().default(1),
   ...timestamps,
 });
+
+export const cmsLeads = sqliteTable(
+  "cms_leads",
+  {
+    id: text("id").primaryKey(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    fullName: text("full_name").notNull(),
+    whatsapp: text("whatsapp").notNull(),
+    email: text("email"),
+    companyName: text("company_name"),
+    jobTitle: text("job_title"),
+    location: text("location").notNull(),
+    serviceInterest: text("service_interest").notNull(),
+    budgetRange: text("budget_range"),
+    targetStart: text("target_start"),
+    message: text("message").notNull(),
+    privacyConsentAt: text("privacy_consent_at").notNull(),
+    sourcePath: text("source_path").notNull().default("/"),
+    language: text("language").notNull().default("id"),
+    status: text("status").notNull().default("New"),
+    assignedTo: text("assigned_to").references(() => users.id, { onDelete: "set null" }),
+    retentionUntil: text("retention_until").notNull(),
+    retentionExtendedAt: text("retention_extended_at"),
+    retentionExtendedBy: text("retention_extended_by").references(() => users.id, { onDelete: "set null" }),
+    anonymizedAt: text("anonymized_at"),
+    deletedAt: text("deleted_at"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("cms_leads_idempotency_unique").on(table.idempotencyKey),
+    index("cms_leads_status_created_idx").on(table.status, table.createdAt),
+    index("cms_leads_assigned_idx").on(table.assignedTo, table.status),
+    index("cms_leads_retention_idx").on(table.retentionUntil, table.anonymizedAt),
+  ],
+);
+
+export const cmsLeadNotes = sqliteTable(
+  "cms_lead_notes",
+  {
+    id: text("id").primaryKey(),
+    leadId: text("lead_id").notNull().references(() => cmsLeads.id, { onDelete: "cascade" }),
+    noteType: text("note_type").notNull().default("note"),
+    body: text("body").notNull(),
+    fromStatus: text("from_status"),
+    toStatus: text("to_status"),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [index("cms_lead_notes_lead_idx").on(table.leadId, table.createdAt)],
+);
+
+export const publicFormRateLimits = sqliteTable(
+  "public_form_rate_limits",
+  {
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    routeKey: text("route_key").notNull(),
+    windowStartedAt: text("window_started_at").notNull(),
+    requestCount: integer("request_count").notNull().default(0),
+    blockedUntil: text("blocked_until"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.fingerprintHash, table.routeKey] }),
+  ],
+);

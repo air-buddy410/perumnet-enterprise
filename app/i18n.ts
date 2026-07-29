@@ -116,8 +116,24 @@ export function localizedDate(language: AppLanguage, value?: string | null) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(source)) return value;
   return new Intl.DateTimeFormat(language === "id" ? "id-ID" : "en-GB", {
     day: "2-digit",
-    month: "short",
+    month: "long",
     year: "numeric",
     timeZone: "Asia/Makassar",
   }).format(new Date(`${source}T00:00:00+08:00`));
+}
+
+export function localizedTimestamp(language: AppLanguage, value?: string | null) {
+  if (!value) return language === "id" ? "Belum ditentukan" : "Not specified";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const formatted = new Intl.DateTimeFormat(language === "id" ? "id-ID" : "en-GB", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: "Asia/Makassar",
+  }).format(date);
+  return `${formatted.replace(":", ".")} WITA`;
 }

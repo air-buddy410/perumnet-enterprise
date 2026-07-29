@@ -177,7 +177,7 @@ function displayDate(value: unknown, language: PdfLanguage = "id") {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return cleanText(formatDate(value));
   return new Intl.DateTimeFormat(language === "en" ? "en-GB" : "id-ID", {
     day: "2-digit",
-    month: "short",
+    month: "long",
     year: "numeric",
     timeZone: "Asia/Makassar",
   }).format(new Date(`${raw}T00:00:00+08:00`));

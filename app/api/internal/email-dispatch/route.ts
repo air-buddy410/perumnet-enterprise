@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { getDatabase } from "@/server/db/client";
 import { dispatchEmailOutbox } from "@/server/email";
+import { anonymizeExpiredLeads } from "@/server/api/lead-router";
 import { ApiError, errorResponse, ok } from "@/server/api/errors";
 
 export const runtime = "nodejs";
@@ -24,14 +25,15 @@ export async function POST(request: Request) {
       throw new ApiError(401, "UNAUTHORIZED", "Worker email tidak terotorisasi.");
     }
     const { client } = await getDatabase();
+    const anonymizedLeads = await anonymizeExpiredLeads(client);
     const result = await dispatchEmailOutbox(client, 25);
     return ok({
       processed: result.length,
       sent: result.filter((item) => item.status === "sent").length,
       failed: result.filter((item) => item.status === "failed").length,
+      anonymizedLeads,
     });
   } catch (error) {
     return errorResponse(error);
   }
 }
-

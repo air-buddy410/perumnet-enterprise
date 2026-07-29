@@ -67,7 +67,7 @@ export async function downloadDocument(
   pdf.setFontSize(8);
   pdf.setFont("helvetica", "normal");
   pdf.text("PerumNet Enterprise · Konsultan IT & Managed Services", 15, 288);
-  pdf.text(`Dibuat ${new Date().toLocaleDateString("id-ID")}`, pageWidth - 15, 288, {
+  pdf.text(`Dibuat ${new Intl.DateTimeFormat("id-ID", { day: "2-digit", month: "long", year: "numeric", timeZone: "Asia/Makassar" }).format(new Date())}`, pageWidth - 15, 288, {
     align: "right",
   });
   pdf.save(filename);

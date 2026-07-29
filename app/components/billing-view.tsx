@@ -30,6 +30,7 @@ interface BillingViewProps {
   canManage: boolean;
   canManagePayments: boolean;
   canManageTaxes: boolean;
+  canManageValidity: boolean;
 }
 
 type BillingTab = "quotation" | "invoice";
@@ -37,7 +38,7 @@ type BillingTab = "quotation" | "invoice";
 interface Quotation {
   id: string | null;
   number: string | null;
-  status: "Draft" | "Sent";
+  status: "Draft" | "Sent" | "Accepted" | "Rejected" | "Void";
   issuedAt: string;
   validUntil: string | null;
   total: number;
@@ -64,6 +65,7 @@ export function BillingView({
   canManage,
   canManagePayments,
   canManageTaxes,
+  canManageValidity,
 }: BillingViewProps) {
   const id = language === "id";
   const [activeTab, setActiveTab] = useState<BillingTab>("quotation");
@@ -162,6 +164,19 @@ export function BillingView({
     0,
   );
   const invoicedTotal = invoices.reduce((sum, invoice) => sum + invoice.amount, 0);
+  const quotationExpired = Boolean(
+    quotation?.validUntil &&
+    serverToday &&
+    quotation.validUntil < serverToday &&
+    quotation.status !== "Accepted",
+  );
+
+  function setValidityDays(days: number) {
+    if (!quotationIssuedAt) return;
+    const base = new Date(`${quotationIssuedAt}T00:00:00.000Z`);
+    base.setUTCDate(base.getUTCDate() + days);
+    setQuotationValidUntil(base.toISOString().slice(0, 10));
+  }
 
   async function updateQuotation(
     input: Partial<Pick<Quotation, "status" | "issuedAt" | "validUntil">>,
@@ -450,9 +465,9 @@ export function BillingView({
           <div className="document-canvas">
             <div className="document-toolbar">
               <div>
-                <span className={`status-badge ${quotation?.status === "Sent" ? "success" : "info"}`}>
+                <span className={`status-badge ${quotationExpired ? "danger" : quotation?.status === "Sent" ? "success" : "info"}`}>
                   {quotation?.status === "Sent" ? <CircleCheck size={14} /> : <Clock3 size={14} />}
-                  {quotation?.status === "Sent" ? (id ? "Sudah dikirim" : "Sent") : "Draft"}
+                  {quotationExpired ? (id ? "Kedaluwarsa" : "Expired") : quotation?.status === "Sent" ? (id ? "Sudah dikirim" : "Sent") : quotation?.status ?? "Draft"}
                 </span>
                 <span>{quotation?.number ?? (id ? "Nomor dibuat saat Quotation disimpan" : "Number created when the Quotation is saved")}</span>
               </div>
@@ -466,7 +481,7 @@ export function BillingView({
                     canManage
                   />
                 ) : null}
-                {canManage && (
+                {canManageValidity && quotation?.status !== "Accepted" && (
                   <button className="button secondary small" type="button" onClick={() => setShowQuotationForm(true)}>
                     <Pencil size={15} /> {id ? "Edit" : "Edit"}
                   </button>
@@ -534,7 +549,7 @@ export function BillingView({
                 <div className={quotation?.status === "Sent" ? "done" : "active"}><span><Mail size={14} /></span><div><strong>{quotation?.status === "Sent" ? (id ? "Sudah dikirim" : "Sent") : (id ? "Menunggu dikirim" : "Awaiting delivery")}</strong><small>{quotation?.status === "Sent" ? (id ? "Nilai terkunci sampai BoQ berubah" : "Value is locked until the BoQ changes") : (id ? "Periksa tanggal dan isi dokumen" : "Review dates and document content")}</small></div></div>
               </div>
               {canManage && (
-                <button className="button primary full-width" type="button" disabled={!quotationItems.length || quotation?.status === "Sent"} onClick={markQuotationSent}>
+                <button className="button primary full-width" type="button" disabled={!quotationItems.length || quotation?.status === "Sent" || quotationExpired} onClick={markQuotationSent}>
                   <Send size={16} /> {quotation?.status === "Sent" ? (id ? "Sudah dikirim" : "Sent") : (id ? "Tandai sudah dikirim" : "Mark as sent")}
                 </button>
               )}
@@ -631,6 +646,7 @@ export function BillingView({
             <form className="form-grid" onSubmit={saveQuotation}>
               <label className="field full"><span>{id ? "Tanggal terbit" : "Issue date"}</span><input required type="date" value={quotationIssuedAt} onChange={(event) => setQuotationIssuedAt(event.target.value)} /></label>
               <label className="field full"><span>{id ? "Berlaku sampai" : "Valid until"}</span><input required type="date" value={quotationValidUntil} onChange={(event) => setQuotationValidUntil(event.target.value)} /></label>
+              <div className="field full"><span>{id ? "Pilihan cepat masa berlaku" : "Quick validity"}</span><div className="title-actions">{[7, 14, 30, 60].map((days) => <button className="button subtle small" type="button" key={days} onClick={() => setValidityDays(days)}>{days} {id ? "hari" : "days"}</button>)}</div></div>
               <div className="invoice-form-summary full"><span>{id ? "Nilai otomatis dari BoQ" : "Automatic value from BoQ"}</span><strong>{formatCurrency(boqTotal, language)}</strong></div>
               <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowQuotationForm(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit"><Pencil size={16} /> {id ? "Simpan Quotation" : "Save Quotation"}</button></div>
             </form>

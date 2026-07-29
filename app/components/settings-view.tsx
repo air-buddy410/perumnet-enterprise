@@ -215,7 +215,7 @@ export function SettingsView({
                       {delivery.attemptCount ? ` · ${delivery.attemptCount}x` : ""}
                       {" · "}
                       {new Intl.DateTimeFormat(id ? "id-ID" : "en-US", {
-                        dateStyle: "medium",
+                        dateStyle: "long",
                         timeStyle: "short",
                         timeZone: "Asia/Makassar",
                       }).format(new Date(delivery.createdAt))}

@@ -316,7 +316,7 @@ function localizedApiDate(value: unknown, language: AuthUser["preferredLanguage"
   if (Number.isNaN(date.getTime())) return String(value);
   return new Intl.DateTimeFormat(language === "en" ? "en-US" : "id-ID", {
     day: "2-digit",
-    month: "short",
+    month: "long",
     year: "numeric",
     timeZone: "Asia/Makassar",
   }).format(date);
@@ -1733,6 +1733,16 @@ async function handleQuotations(request: Request, user: AuthUser) {
   if (request.method === "PATCH") {
     assertAccess(user, "billing", "manage");
     const input = quotationSchema.partial().parse(await jsonBody(request));
+    if (
+      (input.issuedAt !== undefined || input.validUntil !== undefined) &&
+      !["Admin", "Finance"].includes(user.role)
+    ) {
+      throw new ApiError(
+        403,
+        "QUOTATION_VALIDITY_FORBIDDEN",
+        "Hanya Admin dan Finance yang dapat mengubah tanggal dan masa berlaku Quotation.",
+      );
+    }
     const boq = await getBoq(projectId);
     if (!boq.items.length || boq.totals.selling <= 0) {
       throw new ApiError(
@@ -2781,10 +2791,35 @@ async function handleVendors(request: Request, path: string[], user: AuthUser) {
 
   if (vendorId && request.method === "DELETE") {
     if (!["Admin", "Finance"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Hanya Admin dan Finance yang dapat menghapus vendor.");
-    const usage = await client.execute({ sql: "SELECT id FROM spks WHERE vendor_id=? LIMIT 1", args: [vendorId] });
-    if (usage.rows.length) throw new ApiError(409, "VENDOR_IN_USE", "Vendor masih digunakan oleh SPK dan tidak dapat dihapus.");
+    const vendor = await ensureExists("SELECT id,name,status FROM vendors WHERE id=?", [vendorId], "Vendor tidak ditemukan.");
+    const usage = await client.execute({
+      sql: `SELECT number,document_type,workflow_status,approval_status
+        FROM spks WHERE vendor_id=? ORDER BY created_at DESC LIMIT 25`,
+      args: [vendorId],
+    });
+    if (usage.rows.length) {
+      const documents = usage.rows.map((row) => ({
+        number: String(row.number),
+        type: String(row.document_type ?? "SPK"),
+        workflowStatus: String(row.workflow_status ?? "Draft"),
+        approvalStatus: String(row.approval_status ?? "Draft"),
+      }));
+      const active = documents.filter((document) => !["Selesai", "Void"].includes(document.workflowStatus));
+      throw new ApiError(
+        409,
+        active.length ? "VENDOR_HAS_ACTIVE_CONTRACT" : "VENDOR_HAS_HISTORY",
+        active.length
+          ? `Vendor masih terikat ${active.length} kontrak aktif dan tidak dapat dihapus. Selesaikan kontrak atau nonaktifkan vendor.`
+          : "Vendor memiliki histori SPK/PO dan tidak dapat dihapus. Nonaktifkan vendor agar histori tetap utuh.",
+        { vendorName: vendor.name, activeCount: active.length, documents },
+      );
+    }
     await client.execute({ sql: "DELETE FROM vendors WHERE id=?", args: [vendorId] });
-    await writeAuditLog(client, request, user, "delete", "vendor", vendorId);
+    await writeAuditLog(client, request, user, "delete", "vendor", vendorId, {
+      vendorName: vendor.name,
+      status: vendor.status,
+      contractCount: 0,
+    });
     return noContent();
   }
 

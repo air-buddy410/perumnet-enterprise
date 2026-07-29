@@ -106,6 +106,7 @@ export function ProcurementViewV2({
   const [vendorContact, setVendorContact] = useState("");
   const [vendorEmail, setVendorEmail] = useState("");
   const [vendorAddress, setVendorAddress] = useState("");
+  const [vendorStatus, setVendorStatus] = useState<"Aktif" | "Nonaktif">("Aktif");
 
   const [showCategory, setShowCategory] = useState(false);
   const [editingCategory, setEditingCategory] = useState<VendorCategory | null>(null);
@@ -128,6 +129,9 @@ export function ProcurementViewV2({
   const [acceptanceDate, setAcceptanceDate] = useState("");
   const [acceptanceFile, setAcceptanceFile] = useState<File | null>(null);
   const [showAddendum, setShowAddendum] = useState(false);
+  const [editingScopeValidity, setEditingScopeValidity] = useState<CommercialScope | null>(null);
+  const [scopeIssuedAt, setScopeIssuedAt] = useState("");
+  const [scopeValidUntil, setScopeValidUntil] = useState("");
   const [addendumTitle, setAddendumTitle] = useState("");
   const [addendumCategory, setAddendumCategory] = useState<"Perangkat" | "Material" | "Jasa" | "Mobilitas">("Jasa");
   const [addendumDescription, setAddendumDescription] = useState("");
@@ -229,6 +233,7 @@ export function ProcurementViewV2({
   const acceptedScopes = scopes.filter(
     (scope) => scope.quotation?.status === "Accepted",
   );
+  const canManageValidity = ["Admin", "Finance"].includes(userRole);
   const selectedScope = acceptedScopes.find(
     (scope) => scope.quotation?.id === quotationId,
   );
@@ -252,6 +257,7 @@ export function ProcurementViewV2({
     setVendorContact(vendor?.contact ?? "");
     setVendorEmail(vendor?.email ?? "");
     setVendorAddress(vendor?.address ?? "");
+    setVendorStatus(vendor?.status ?? "Aktif");
     setShowVendor(true);
   }
 
@@ -272,11 +278,32 @@ export function ProcurementViewV2({
           contact: vendorContact,
           email: vendorEmail,
           address: vendorAddress,
-          status: editingVendor?.status ?? "Aktif",
+          status: vendorStatus,
         }),
       });
       setShowVendor(false);
       notify(id ? "Master vendor tersimpan." : "Vendor master saved.");
+      await load();
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteVendor() {
+    if (!editingVendor) return;
+    const confirmed = window.confirm(
+      id
+        ? `Hapus vendor ${editingVendor.name}? Vendor dengan histori atau kontrak aktif akan ditolak dan harus dinonaktifkan.`
+        : `Delete ${editingVendor.name}? Vendors with active contracts or history will be blocked and must be disabled.`,
+    );
+    if (!confirmed) return;
+    setBusy("vendor-delete");
+    try {
+      await api(`/api/vendors/${editingVendor.id}`, { method: "DELETE" });
+      setShowVendor(false);
+      notify(id ? "Vendor tanpa histori berhasil dihapus." : "Unused vendor deleted.");
       await load();
     } catch (error) {
       notify(messageOf(error, language));
@@ -546,7 +573,7 @@ export function ProcurementViewV2({
         method: "POST",
         body: JSON.stringify({
           title: addendumTitle,
-          issuedAt: serverToday,
+          ...(canManageValidity ? { issuedAt: serverToday } : {}),
           items: [
             {
               category: addendumCategory,
@@ -561,6 +588,39 @@ export function ProcurementViewV2({
       });
       setShowAddendum(false);
       notify(id ? "Addendum draft dan Quotation baru dibuat." : "Addendum draft and new Quotation created.");
+      await load();
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function openScopeValidity(scope: CommercialScope) {
+    if (!scope.quotation) return;
+    setEditingScopeValidity(scope);
+    setScopeIssuedAt(scope.quotation.issuedAt);
+    setScopeValidUntil(scope.quotation.validUntil ?? "");
+  }
+
+  function setScopeValidityDays(days: number) {
+    if (!scopeIssuedAt) return;
+    const date = new Date(`${scopeIssuedAt}T00:00:00.000Z`);
+    date.setUTCDate(date.getUTCDate() + days);
+    setScopeValidUntil(date.toISOString().slice(0, 10));
+  }
+
+  async function saveScopeValidity(event: FormEvent) {
+    event.preventDefault();
+    if (!editingScopeValidity || !projectId) return;
+    setBusy("scope-validity");
+    try {
+      await api(`/api/boq/scopes/${editingScopeValidity.id}?projectId=${encodeURIComponent(projectId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ issuedAt: scopeIssuedAt, validUntil: scopeValidUntil }),
+      });
+      setEditingScopeValidity(null);
+      notify(id ? "Masa berlaku Quotation diperbarui." : "Quotation validity updated.");
       await load();
     } catch (error) {
       notify(messageOf(error, language));
@@ -827,12 +887,13 @@ export function ProcurementViewV2({
               <article className="commercial-scope-card" key={scope.id}>
                 <div className="commercial-scope-main"><span className="eyebrow">{scope.kind} {scope.kind === "Addendum" ? `#${scope.sequence}` : ""}</span><strong>{scope.title}</strong><small>{scope.quotation?.number ?? (id ? "Quotation belum dibuat" : "Quotation not created")} · {scope.items.length} item</small></div>
                 <div className="commercial-scope-value"><span>{id ? "Nilai komersial" : "Commercial value"}</span><strong>{formatCurrency(scope.quotation?.total ?? 0, language)}</strong></div>
-                <span className={`status-badge ${statusTone(scope.quotation?.status ?? scope.status)}`}>{scope.quotation?.status ?? scope.status}</span>
+                <span className={`status-badge ${scope.quotation?.validUntil && scope.quotation.validUntil < serverToday && scope.quotation.status !== "Accepted" ? "danger" : statusTone(scope.quotation?.status ?? scope.status)}`}>{scope.quotation?.validUntil && scope.quotation.validUntil < serverToday && scope.quotation.status !== "Accepted" ? (id ? "Kedaluwarsa" : "Expired") : scope.quotation?.status ?? scope.status}</span>
                 <div className="table-row-actions">
                   {scope.quotation && <button className="button subtle small" type="button" onClick={() => downloadApiFile(`/api/quotations/${scope.quotation?.id}/pdf`, `${scope.quotation?.number.replaceAll("/", "-")}.pdf`)}><Download size={14} /> PDF</button>}
+                  {canManageValidity && scope.quotation && scope.quotation.status !== "Accepted" && <button className="button subtle small" type="button" onClick={() => openScopeValidity(scope)}><Pencil size={14} /> {id ? "Masa berlaku" : "Validity"}</button>}
                   {scope.quotation && ["Admin", "Finance"].includes(userRole) && ["Draft", "Sent"].includes(scope.quotation.status) && <DocumentTaxEditor language={language} notify={notify} documentType="Quotation" documentId={scope.quotation.id} canManage onSaved={load} />}
                   {canManageCommercial && scope.quotation?.status === "Draft" && <button className="button secondary small" type="button" onClick={() => scopeAction(scope, "send")}><Send size={14} /> {id ? "Kirim" : "Send"}</button>}
-                  {canManageCommercial && scope.quotation?.status === "Sent" && <button className="button primary small" type="button" onClick={() => { setAcceptingScope(scope); setAcceptanceDate(serverToday); setAcceptanceFile(null); }}><BadgeCheck size={14} /> Accept</button>}
+                  {canManageCommercial && scope.quotation?.status === "Sent" && <button className="button primary small" type="button" disabled={Boolean(scope.quotation.validUntil && scope.quotation.validUntil < serverToday)} onClick={() => { setAcceptingScope(scope); setAcceptanceDate(serverToday); setAcceptanceFile(null); }}><BadgeCheck size={14} /> Accept</button>}
                   {canManageCommercial && scope.quotation?.status === "Sent" && <button className="button danger small" type="button" onClick={() => scopeAction(scope, "reject")}><X size={14} /> {id ? "Tolak" : "Reject"}</button>}
                   {canManageCommercial && scope.quotation?.status !== "Void" && <button className="button subtle small" type="button" onClick={() => scopeAction(scope, "void")}>Void</button>}
                 </div>
@@ -883,7 +944,8 @@ export function ProcurementViewV2({
         <fieldset className="field full category-picker"><legend>{id ? "Subkategori" : "Subcategories"}</legend>{categories.filter((item) => item.status === "Aktif" && (vendorType === "Hybrid" || item.vendorType === vendorType || item.vendorType === "Hybrid")).map((item) => <label key={item.id}><input type="checkbox" checked={vendorCategories.includes(item.id)} onChange={() => setVendorCategories((current) => current.includes(item.id) ? current.filter((categoryId) => categoryId !== item.id) : [...current, item.id])} /><span>{language === "en" && item.nameEn ? item.nameEn : item.name}</span></label>)}</fieldset>
         <label className="field"><span>Email</span><input type="email" value={vendorEmail} onChange={(event) => setVendorEmail(event.target.value)} /></label>
         <label className="field"><span>{id ? "Alamat" : "Address"}</span><input value={vendorAddress} onChange={(event) => setVendorAddress(event.target.value)} /></label>
-        <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowVendor(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "vendor"}>{id ? "Simpan vendor" : "Save vendor"}</button></div>
+        <label className="field full"><span>Status</span><select value={vendorStatus} onChange={(event) => setVendorStatus(event.target.value as typeof vendorStatus)}><option value="Aktif">{id ? "Aktif — dapat dipilih untuk procurement" : "Active — available for procurement"}</option><option value="Nonaktif">{id ? "Nonaktif — hanya tampil di histori" : "Inactive — history only"}</option></select></label>
+        <div className="modal-actions full">{editingVendor && <button className="button danger" type="button" disabled={busy === "vendor-delete"} onClick={deleteVendor}><Trash2 size={15} /> {id ? "Hapus vendor" : "Delete vendor"}</button>}<button className="button secondary" type="button" onClick={() => setShowVendor(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "vendor"}>{id ? "Simpan vendor" : "Save vendor"}</button></div>
       </form></section></div>}
 
       {showCategory && <div className="modal-backdrop" onMouseDown={() => setShowCategory(false)}><section className="modal-card" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">{id ? "KATEGORI VENDOR" : "VENDOR CATEGORY"}</span><h2>{editingCategory ? (id ? "Edit kategori" : "Edit category") : (id ? "Kategori baru" : "New category")}</h2></div><button className="icon-button" type="button" onClick={() => setShowCategory(false)}><X size={18} /></button></div><form className="form-grid" onSubmit={saveCategory}>
@@ -909,6 +971,8 @@ export function ProcurementViewV2({
       {acceptingScope && <div className="modal-backdrop" onMouseDown={() => setAcceptingScope(null)}><section className="modal-card" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">CLIENT ACCEPTANCE</span><h2>{acceptingScope.quotation?.number}</h2></div><button className="icon-button" type="button" onClick={() => setAcceptingScope(null)}><X size={18} /></button></div><form className="form-grid" onSubmit={saveAcceptance}><label className="field full"><span>{id ? "Tanggal persetujuan" : "Acceptance date"}</span><input required type="date" max={serverToday} value={acceptanceDate} onChange={(event) => setAcceptanceDate(event.target.value)} /></label><label className="field full"><span>{id ? "Bukti persetujuan (PDF/gambar)" : "Acceptance proof (PDF/image)"}</span><input required type="file" accept=".pdf,image/png,image/jpeg,image/webp" onChange={(event) => setAcceptanceFile(event.target.files?.[0] ?? null)} /></label><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setAcceptingScope(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "acceptance"}>{id ? "Terima & kunci" : "Accept & lock"}</button></div></form></section></div>}
 
       {showAddendum && <div className="modal-backdrop" onMouseDown={() => setShowAddendum(false)}><section className="modal-card wide" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">BOQ ADDENDUM</span><h2>{id ? "Pekerjaan tambah" : "Additional work"}</h2></div><button className="icon-button" type="button" onClick={() => setShowAddendum(false)}><X size={18} /></button></div><form className="form-grid" onSubmit={saveAddendum}><label className="field full"><span>{id ? "Judul addendum" : "Addendum title"}</span><input required value={addendumTitle} onChange={(event) => setAddendumTitle(event.target.value)} /></label><label className="field"><span>{id ? "Kategori item" : "Item category"}</span><select value={addendumCategory} onChange={(event) => setAddendumCategory(event.target.value as typeof addendumCategory)}><option>Perangkat</option><option>Material</option><option>Jasa</option><option>Mobilitas</option></select></label><label className="field"><span>{id ? "Satuan" : "Unit"}</span><input required value={addendumUnit} onChange={(event) => setAddendumUnit(event.target.value)} /></label><label className="field full"><span>{id ? "Deskripsi pekerjaan tambah" : "Additional work description"}</span><input required value={addendumDescription} onChange={(event) => setAddendumDescription(event.target.value)} /></label><label className="field"><span>Qty</span><input required type="number" min="1" value={addendumQuantity} onChange={(event) => setAddendumQuantity(Number(event.target.value))} /></label><label className="field"><span>{id ? "Harga pokok" : "Cost price"}</span><input required type="number" min="0" value={addendumCost || ""} onChange={(event) => setAddendumCost(Number(event.target.value))} /></label><label className="field full"><span>{id ? "Harga jual" : "Selling price"}</span><input required type="number" min="0" value={addendumSelling || ""} onChange={(event) => setAddendumSelling(Number(event.target.value))} /></label><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowAddendum(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "addendum"}>{id ? "Buat Addendum" : "Create Addendum"}</button></div></form></section></div>}
+
+      {editingScopeValidity && <div className="modal-backdrop" onMouseDown={() => setEditingScopeValidity(null)}><section className="modal-card" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">QUOTATION VALIDITY</span><h2>{editingScopeValidity.quotation?.number}</h2></div><button className="icon-button" type="button" onClick={() => setEditingScopeValidity(null)}><X size={18} /></button></div><form className="form-grid" onSubmit={saveScopeValidity}><label className="field full"><span>{id ? "Tanggal terbit" : "Issue date"}</span><input required type="date" value={scopeIssuedAt} onChange={(event) => setScopeIssuedAt(event.target.value)} /></label><label className="field full"><span>{id ? "Berlaku sampai" : "Valid until"}</span><input required type="date" min={scopeIssuedAt} value={scopeValidUntil} onChange={(event) => setScopeValidUntil(event.target.value)} /></label><div className="field full"><span>{id ? "Pilihan cepat" : "Quick validity"}</span><div className="title-actions">{[7, 14, 30, 60].map((days) => <button className="button subtle small" type="button" key={days} onClick={() => setScopeValidityDays(days)}>{days} {id ? "hari" : "days"}</button>)}</div></div><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setEditingScopeValidity(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "scope-validity"}>{id ? "Simpan masa berlaku" : "Save validity"}</button></div></form></section></div>}
 
       {paymentOrder && <div className="modal-backdrop" onMouseDown={() => setPaymentOrder(null)}><section className="modal-card wide" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">{id ? "PEMBAYARAN AKTUAL" : "ACTUAL PAYMENT"}</span><h2>{paymentOrder.number}</h2></div><button className="icon-button" type="button" onClick={() => setPaymentOrder(null)}><X size={18} /></button></div><form className="form-grid" onSubmit={savePayment}><label className="field"><span>{id ? "Termin" : "Term"}</span><select value={paymentTermId} onChange={(event) => setPaymentTermId(event.target.value)}>{paymentOrder.terms.map((term) => <option value={term.id} key={term.id}>{term.label} · {formatCurrency(term.plannedAmount, language)}</option>)}</select></label><label className="field"><span>{id ? "Bruto diselesaikan" : "Gross settled"}</span><input required type="number" min="1" max={paymentOrder.availableToPay} value={paymentAmount || ""} onChange={(event) => { const gross = Number(event.target.value); setPaymentAmount(gross); setPaymentCashAmount(Math.max(0, gross - paymentWithholdingAmount)); }} /></label><label className="field"><span>{id ? "Pajak dipotong" : "Tax withheld"}</span><input required type="number" min="0" max={paymentOrder.taxWithholdings ?? 0} value={paymentWithholdingAmount} onChange={(event) => { const withholding = Number(event.target.value); setPaymentWithholdingAmount(withholding); setPaymentCashAmount(Math.max(0, paymentAmount - withholding)); }} /></label><label className="field"><span>{id ? "Kas aktual dibayar" : "Actual cash paid"}</span><input required type="number" min="0" value={paymentCashAmount} onChange={(event) => setPaymentCashAmount(Number(event.target.value))} /></label><label className="field"><span>{id ? "Tanggal bayar" : "Payment date"}</span><input required type="date" max={serverToday} value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} /></label><label className="field"><span>{id ? "Nomor tagihan vendor" : "Vendor invoice number"}</span><input required value={vendorInvoice} onChange={(event) => setVendorInvoice(event.target.value)} /></label><label className="field"><span>{id ? "Referensi pembayaran" : "Payment reference"}</span><input required value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} /></label><label className="field"><span>{id ? "Metode" : "Method"}</span><select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as typeof paymentMethod)}><option>Transfer Bank</option><option>Tunai</option><option>Kartu</option><option>Lainnya</option></select></label>{paymentMethod === "Transfer Bank" && <label className="field full"><span>{id ? "Rekening perusahaan" : "Company bank account"}</span><select required value={bankAccountId} onChange={(event) => setBankAccountId(event.target.value)}>{banks.filter((bank) => bank.status === "Aktif").map((bank) => <option value={bank.id} key={bank.id}>{bank.bankName} · {bank.accountNumberMasked}</option>)}</select></label>}<label className="field full"><span>{id ? "Bukti pembayaran" : "Payment proof"}</span><input required type="file" accept=".pdf,image/png,image/jpeg,image/webp" onChange={(event) => setPaymentFile(event.target.files?.[0] ?? null)} /></label><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setPaymentOrder(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "payment" || paymentAmount <= 0 || paymentAmount !== paymentCashAmount + paymentWithholdingAmount}>{id ? "Catat pembayaran" : "Post payment"}</button></div></form></section></div>}
 

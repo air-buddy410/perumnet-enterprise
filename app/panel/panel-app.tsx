@@ -9,6 +9,7 @@ import {
   Check,
   ChevronRight,
   CircleHelp,
+  Download,
   Eye,
   FileText,
   Globe2,
@@ -27,12 +28,14 @@ import {
   Phone,
   Plus,
   Save,
+  Search,
   Settings,
   ShieldCheck,
   Sparkles,
   TerminalSquare,
   Trash2,
   Upload,
+  UserRoundSearch,
   Wifi,
   X,
 } from "lucide-react";
@@ -45,6 +48,31 @@ type Testimonial = { id: string; clientName: string; companyName: string; review
 type Page = { id: string; title: string; titleEn: string; slug: string; excerpt: string; excerptEn: string; content: string; contentEn: string; isPublished: boolean; showInNavigation: boolean; sortOrder: number };
 type Faq = { id: string; question: string; questionEn: string; answer: string; answerEn: string; sortOrder: number; isVisible: boolean };
 type Partner = { id: string; name: string; organizationType: "partner" | "client"; category: string; websiteUrl: string; logoUrl: string; sortOrder: number; isVisible: boolean };
+type LeadStatus = "New" | "Contacted" | "Qualified" | "Proposal" | "Won" | "Lost" | "Spam";
+type Lead = {
+  id: string;
+  fullName: string;
+  whatsapp: string;
+  email: string | null;
+  companyName: string | null;
+  jobTitle: string | null;
+  location: string;
+  serviceInterest: string;
+  budgetRange: string | null;
+  targetStart: string | null;
+  message: string;
+  sourcePath: string;
+  status: LeadStatus;
+  assignedTo: string | null;
+  assignedName: string | null;
+  retentionUntil: string;
+  anonymizedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+type LeadNote = { id: string; type: string; body: string; fromStatus: string | null; toStatus: string | null; createdBy: string | null; createdAt: string };
+type LeadDetail = Lead & { notes: LeadNote[] };
+type LeadStaff = { id: string; name: string; role: string };
 type CmsText = { id: string; pageKey: string; contentKey: string; value: string; valueEn: string };
 type CmsContent = {
   texts: CmsText[];
@@ -60,7 +88,7 @@ type CmsContent = {
   partners: Partner[];
 };
 
-type Section = "overview" | "texts" | "services" | "portfolios" | "partners" | "testimonials" | "faqs" | "pages" | "settings";
+type Section = "overview" | "texts" | "services" | "portfolios" | "partners" | "testimonials" | "faqs" | "pages" | "leads" | "settings";
 type Mutate = (job: () => Promise<unknown>, success: string) => void;
 
 const navItems: Array<{ id: Section; label: string; icon: typeof Home }> = [
@@ -72,6 +100,7 @@ const navItems: Array<{ id: Section; label: string; icon: typeof Home }> = [
   { id: "testimonials", label: "Testimoni", icon: MessageSquareQuote },
   { id: "faqs", label: "FAQ", icon: CircleHelp },
   { id: "pages", label: "Halaman & Legal", icon: Globe2 },
+  { id: "leads", label: "Customer Leads", icon: UserRoundSearch },
   { id: "settings", label: "Pengaturan Situs", icon: Settings },
 ];
 
@@ -241,6 +270,7 @@ export function PanelApp() {
           {section === "testimonials" && <TestimonialEditor key={JSON.stringify(content.testimonials)} items={content.testimonials} busy={busy} mutate={mutate} />}
           {section === "faqs" && <FaqEditor key={JSON.stringify(content.faqs)} items={content.faqs} busy={busy} mutate={mutate} />}
           {section === "pages" && <PageEditor key={JSON.stringify(content.pages)} items={content.pages} busy={busy} mutate={mutate} />}
+          {section === "leads" && <LeadEditor />}
           {section === "settings" && <SettingsEditor key={JSON.stringify([content.settings, content.settingsEn])} settings={content.settings} settingsEn={content.settingsEn} busy={busy} mutate={mutate} />}
         </main>
       </div>
@@ -435,13 +465,155 @@ function PageEditor({ items, busy, mutate }: { items: Page[]; busy: boolean; mut
   </>;
 }
 
+const leadStatuses: LeadStatus[] = ["New", "Contacted", "Qualified", "Proposal", "Won", "Lost", "Spam"];
+
+function leadDate(value: string, withTime = false) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("id-ID", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+    ...(withTime ? { hour: "2-digit", minute: "2-digit", hourCycle: "h23" as const } : {}),
+    timeZone: "Asia/Makassar",
+  }).format(date).replace(":", ".");
+}
+
+function LeadEditor() {
+  const [items, setItems] = useState<Lead[]>([]);
+  const [staff, setStaff] = useState<LeadStaff[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [query, setQuery] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [status, setStatus] = useState("");
+  const [assignedTo, setAssignedTo] = useState("");
+  const [selected, setSelected] = useState<LeadDetail | null>(null);
+  const [note, setNote] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState("");
+  const pageSize = 25;
+
+  const filterParams = useMemo(() => {
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    if (query) params.set("q", query);
+    if (status) params.set("status", status);
+    if (assignedTo) params.set("assignedTo", assignedTo);
+    return params;
+  }, [assignedTo, page, query, status]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await request<{ items: Lead[]; total: number; staff: LeadStaff[] }>(`/api/cms/leads?${filterParams}`);
+      setItems(data.items);
+      setTotal(data.total);
+      setStaff(data.staff);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Customer leads gagal dimuat.");
+    } finally {
+      setLoading(false);
+    }
+  }, [filterParams]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  async function openLead(id: string) {
+    setSaving(true);
+    try {
+      setSelected(await request<LeadDetail>(`/api/cms/leads/${id}`));
+      setNote("");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Detail lead gagal dimuat.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function updateLead(input: { status?: LeadStatus; assignedTo?: string | null; note?: string; retentionUntil?: string }) {
+    if (!selected) return;
+    setSaving(true);
+    try {
+      const updated = await request<LeadDetail>(`/api/cms/leads/${selected.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      setSelected(updated);
+      setNote("");
+      setNotice("Customer lead berhasil diperbarui.");
+      await load();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Perubahan lead gagal disimpan.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteLead() {
+    if (!selected || !window.confirm(`Anonimkan dan hapus data pribadi ${selected.fullName}? Tindakan ini tidak dapat dibatalkan.`)) return;
+    setSaving(true);
+    try {
+      await request(`/api/cms/leads/${selected.id}`, { method: "DELETE" });
+      setSelected(null);
+      setNotice("Data pribadi lead telah dihapus.");
+      await load();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Data lead gagal dihapus.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function exportHref(format: "csv" | "xlsx" | "pdf") {
+    const params = new URLSearchParams(filterParams);
+    params.delete("page");
+    params.delete("pageSize");
+    return `/api/cms/leads/export.${format}?${params}`;
+  }
+
+  return <>
+    <SectionTitle eyebrow="CUSTOMER LEADS" title="Tindak lanjuti permintaan calon klien." description="Cari, klasifikasikan, tetapkan penanggung jawab, dan ekspor data sesuai filter aktif." action={<div className={styles.actionGroup}><a className={styles.secondaryAction} href={exportHref("csv")}><Download size={16} /> CSV</a><a className={styles.secondaryAction} href={exportHref("xlsx")}><Download size={16} /> Excel</a><a className={styles.primaryAction} href={exportHref("pdf")}><Download size={16} /> PDF</a></div>} />
+    {notice ? <div className={styles.inlineNotice}>{notice}<button type="button" onClick={() => setNotice("")}><X size={14} /></button></div> : null}
+    <section className={styles.leadToolbar}>
+      <form onSubmit={(event) => { event.preventDefault(); setPage(1); setQuery(searchInput.trim()); }}><Search size={17} /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Cari nama, WhatsApp, perusahaan, lokasi..." /><button type="submit">Cari</button></form>
+      <select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">Semua status</option>{leadStatuses.map((item) => <option key={item}>{item}</option>)}</select>
+      <select value={assignedTo} onChange={(event) => { setAssignedTo(event.target.value); setPage(1); }}><option value="">Semua penanggung jawab</option>{staff.map((person) => <option value={person.id} key={person.id}>{person.name} · {person.role}</option>)}</select>
+    </section>
+    <section className={styles.leadWorkspace}>
+      <div className={styles.leadTableCard}>
+        <div className={styles.cardHeading}><span>{total} customer lead</span><small>Urutan terbaru</small></div>
+        {loading ? <div className={styles.leadEmpty}><LoaderCircle className={styles.spin} size={23} /> Memuat lead...</div> : items.length ? <div className={styles.leadTableScroll}><table className={styles.leadTable}><thead><tr><th>Masuk</th><th>Calon klien</th><th>Layanan</th><th>Status</th><th>PIC</th></tr></thead><tbody>{items.map((lead) => <tr key={lead.id} role="button" tabIndex={0} onClick={() => void openLead(lead.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") void openLead(lead.id); }} className={selected?.id === lead.id ? styles.leadSelected : ""}><td>{leadDate(lead.createdAt)}</td><td><strong>{lead.fullName}</strong><small>{lead.companyName || lead.whatsapp}</small></td><td><strong>{lead.serviceInterest}</strong><small>{lead.location}</small></td><td><span className={`${styles.leadStatus} ${styles[`leadStatus${lead.status}`]}`}>{lead.status}</span></td><td>{lead.assignedName || "Belum ditetapkan"}</td></tr>)}</tbody></table></div> : <div className={styles.leadEmpty}><UserRoundSearch size={28} /><strong>Tidak ada lead pada filter ini.</strong></div>}
+        <div className={styles.leadPagination}><span>Halaman {page} dari {Math.max(1, Math.ceil(total / pageSize))}</span><div><button disabled={page <= 1} onClick={() => setPage((current) => current - 1)}>Sebelumnya</button><button disabled={page * pageSize >= total} onClick={() => setPage((current) => current + 1)}>Berikutnya</button></div></div>
+      </div>
+      <aside className={styles.leadDetail}>
+        {selected ? <>
+          <div className={styles.leadDetailHead}><div><span>{selected.serviceInterest}</span><h3>{selected.fullName}</h3><p>{selected.companyName || "Individu"}{selected.jobTitle ? ` · ${selected.jobTitle}` : ""}</p></div><button type="button" aria-label="Tutup detail lead" onClick={() => setSelected(null)}><X size={17} /></button></div>
+          <dl className={styles.leadFacts}><div><dt>WhatsApp</dt><dd><a href={`https://wa.me/${selected.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer">{selected.whatsapp}</a></dd></div><div><dt>Email</dt><dd>{selected.email ? <a href={`mailto:${selected.email}`}>{selected.email}</a> : "—"}</dd></div><div><dt>Lokasi</dt><dd>{selected.location}</dd></div><div><dt>Budget</dt><dd>{selected.budgetRange || "Belum ditentukan"}</dd></div><div><dt>Target</dt><dd>{selected.targetStart ? leadDate(`${selected.targetStart}T00:00:00+08:00`) : "Belum ditentukan"}</dd></div><div><dt>Sumber</dt><dd>{selected.sourcePath}</dd></div></dl>
+          <div className={styles.leadMessage}><span>Kebutuhan</span><p>{selected.message}</p></div>
+          <label className={styles.leadControl}><span>Status pipeline</span><select value={selected.status} disabled={saving} onChange={(event) => void updateLead({ status: event.target.value as LeadStatus })}>{leadStatuses.map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label className={styles.leadControl}><span>Penanggung jawab</span><select value={selected.assignedTo || ""} disabled={saving} onChange={(event) => void updateLead({ assignedTo: event.target.value || null })}><option value="">Belum ditetapkan</option>{staff.map((person) => <option value={person.id} key={person.id}>{person.name} · {person.role}</option>)}</select></label>
+          <div className={styles.leadRetention}><span>Retensi data sampai</span><strong>{leadDate(selected.retentionUntil)}</strong><button type="button" disabled={saving} onClick={() => { const next = new Date(selected.retentionUntil); next.setUTCFullYear(next.getUTCFullYear() + 1); void updateLead({ retentionUntil: next.toISOString() }); }}>Perpanjang 1 tahun</button></div>
+          <form className={styles.leadNoteForm} onSubmit={(event) => { event.preventDefault(); if (note.trim()) void updateLead({ note: note.trim() }); }}><label><span>Catatan follow-up</span><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Hasil telepon, jadwal survei, atau tindak lanjut..." /></label><button disabled={saving || !note.trim()}>{saving ? <LoaderCircle className={styles.spin} size={15} /> : <Save size={15} />} Simpan catatan</button></form>
+          <div className={styles.leadHistory}><span>Riwayat</span>{selected.notes.length ? selected.notes.map((item) => <div key={item.id}><i /><p>{item.body}<small>{item.createdBy || "Sistem"} · {leadDate(item.createdAt, true)} WITA</small></p></div>) : <small>Belum ada catatan follow-up.</small>}</div>
+          <button className={styles.leadPrivacyDelete} type="button" disabled={saving} onClick={() => void deleteLead()}><Trash2 size={15} /> Hapus data atas permintaan privasi</button>
+        </> : <div className={styles.leadEmpty}><UserRoundSearch size={31} /><strong>Pilih lead untuk melihat detail.</strong><span>Riwayat, PIC, status, dan retensi dikelola dari panel ini.</span></div>}
+      </aside>
+    </section>
+  </>;
+}
+
 function SettingsEditor({ settings, settingsEn, busy, mutate }: { settings: Record<string,string>; settingsEn: Record<string,string>; busy: boolean; mutate: Mutate }) {
   const [values, setValues] = useState(settings);
   const [valuesEn, setValuesEn] = useState(settingsEn);
   const set = (key: string, value: string) => setValues((current) => ({ ...current, [key]: value }));
   const setEn = (key: string, value: string) => setValuesEn((current) => ({ ...current, [key]: value }));
   const save = () => {
-    const translatedKeys = ["company_name", "company_tagline", "address", "cta_text", "business_hours"];
+    const translatedKeys = ["company_name", "company_tagline", "address", "cta_text", "business_hours", "seo_title", "seo_description", "og_title", "og_description", "business_legal_name", "business_area"];
     const safeSettingsEn = Object.fromEntries(
       translatedKeys
         .map((key) => [key, valuesEn[key] || ""] as const)
@@ -452,9 +624,10 @@ function SettingsEditor({ settings, settingsEn, busy, mutate }: { settings: Reco
   return <>
     <SectionTitle eyebrow="PENGATURAN SITUS" title="Identitas, kontak, dan tampilan dalam satu tempat." description="Kontak bersifat universal; tagline, jam layanan, dan CTA memiliki versi Inggris." action={<button className={styles.primaryAction} disabled={busy} onClick={save}><Save size={17} /> Simpan pengaturan</button>} />
     <div className={styles.formStack}>
-      <section className={styles.editorCard}><div className={styles.cardHeading}><span>Warna & tampilan publik</span><small>Kontras, animasi halaman, dan kecepatan carousel partner</small></div><div className={styles.appearanceGrid}><ColorField label="Warna teks utama di area gelap" value={values.dark_font_color || "#FFFFFF"} onChange={(value) => set("dark_font_color", value)} /><div className={styles.colorPreview} style={{ color: values.dark_font_color || "#FFFFFF" }}><span>Pratinjau kontras</span><strong>Infrastruktur IT yang bekerja tanpa hambatan.</strong><small>Warna ini digunakan untuk judul dan teks utama pada bidang teal atau gelap.</small></div></div><div className={styles.fieldGrid}><ToggleField label="Aktifkan animasi halaman" checked={values.motion_enabled !== "false"} onChange={(enabled) => set("motion_enabled", String(enabled))} /><NumberField label="Durasi carousel partner (detik)" value={Number(values.partner_carousel_speed || 28)} onChange={(value) => set("partner_carousel_speed", String(Math.min(60, Math.max(12, value))))} /></div></section>
+      <section className={styles.editorCard}><div className={styles.cardHeading}><span>Warna & tampilan publik</span><small>Kontras, animasi halaman, dan kecepatan carousel partner</small></div><div className={styles.appearanceGrid}><ColorField label="Warna teks utama di area gelap" value={values.dark_font_color || "#FFFFFF"} onChange={(value) => set("dark_font_color", value)} /><div className={styles.colorPreview} style={{ color: values.dark_font_color || "#FFFFFF" }}><span>Pratinjau kontras</span><strong>Sistem IT yang rapi, stabil, dan siap dipakai.</strong><small>Warna ini digunakan untuk judul dan teks utama pada bidang teal.</small></div></div><div className={styles.fieldGrid}><ToggleField label="Aktifkan animasi halaman" checked={values.motion_enabled !== "false"} onChange={(enabled) => set("motion_enabled", String(enabled))} /><NumberField label="Durasi carousel partner (detik)" value={Number(values.partner_carousel_speed || 28)} onChange={(value) => set("partner_carousel_speed", String(Math.min(60, Math.max(12, value))))} /></div></section>
       <section className={styles.editorCard}><div className={styles.cardHeading}><span>Identitas & kontak</span><small>Digunakan di header, footer, dan halaman kontak</small></div><div className={styles.fieldGrid}><Field label="Nama perusahaan" value={values.company_name || ""} onChange={(value) => set("company_name", value)} /><Field label="Nomor WhatsApp" value={values.whatsapp_number || ""} onChange={(value) => set("whatsapp_number", value)} placeholder="085155026889 atau 6285155026889" /><Field label="Nomor telepon tampilan" value={values.phone || ""} onChange={(value) => set("phone", value)} /><Field label="Email" value={values.email || ""} onChange={(value) => set("email", value)} type="email" /><TextArea label="Alamat" value={values.address || ""} rows={4} onChange={(value) => set("address", value)} /><Field label="Instagram URL" value={values.instagram_url || ""} onChange={(value) => set("instagram_url", value)} type="url" /><Field label="LinkedIn URL" value={values.linkedin_url || ""} onChange={(value) => set("linkedin_url", value)} type="url" /><Field label="Website utama" value={values.website_url || "https://www.perumnet.id/"} onChange={(value) => set("website_url", value)} type="url" /></div></section>
       <section className={styles.editorCard}><LanguageHeading label="Pesan bilingual" helper="Terjemahkan tagline, jam operasional, dan CTA." action={<TranslateButton busy={busy} values={[values.company_tagline || "", values.business_hours || "", values.cta_text || ""]} onTranslated={([companyTagline, businessHours, ctaText]) => setValuesEn((current) => ({ ...current, company_tagline: companyTagline, business_hours: businessHours, cta_text: ctaText }))} />} /><div className={styles.fieldGrid}><Field label="Tagline · ID" value={values.company_tagline || ""} onChange={(value) => set("company_tagline", value)} /><Field label="Tagline · EN" value={valuesEn.company_tagline || ""} onChange={(value) => setEn("company_tagline", value)} /><Field label="Jam operasional · ID" value={values.business_hours || ""} onChange={(value) => set("business_hours", value)} /><Field label="Business hours · EN" value={valuesEn.business_hours || ""} onChange={(value) => setEn("business_hours", value)} /><Field label="Teks CTA · ID" value={values.cta_text || ""} onChange={(value) => set("cta_text", value)} /><Field label="CTA text · EN" value={valuesEn.cta_text || ""} onChange={(value) => setEn("cta_text", value)} /></div></section>
+      <section className={styles.editorCard}><LanguageHeading label="SEO & identitas bisnis" helper="Title dan description dipakai oleh mesin pencari; versi Inggris tampil pada /en." action={<TranslateButton busy={busy} values={[values.seo_title || "", values.seo_description || "", values.og_title || "", values.og_description || "", values.business_area || ""]} onTranslated={([seoTitle, seoDescription, ogTitle, ogDescription, businessArea]) => setValuesEn((current) => ({ ...current, seo_title: seoTitle, seo_description: seoDescription, og_title: ogTitle, og_description: ogDescription, business_area: businessArea }))} />} /><div className={styles.fieldGrid}><Field label="SEO title · ID" value={values.seo_title || ""} onChange={(value) => set("seo_title", value)} /><Field label="SEO title · EN" value={valuesEn.seo_title || ""} onChange={(value) => setEn("seo_title", value)} /><TextArea label="Meta description · ID" value={values.seo_description || ""} rows={3} onChange={(value) => set("seo_description", value)} /><TextArea label="Meta description · EN" value={valuesEn.seo_description || ""} rows={3} onChange={(value) => setEn("seo_description", value)} /><Field label="Open Graph title · ID" value={values.og_title || ""} onChange={(value) => set("og_title", value)} /><Field label="Open Graph title · EN" value={valuesEn.og_title || ""} onChange={(value) => setEn("og_title", value)} /><TextArea label="Open Graph description · ID" value={values.og_description || ""} rows={3} onChange={(value) => set("og_description", value)} /><TextArea label="Open Graph description · EN" value={valuesEn.og_description || ""} rows={3} onChange={(value) => setEn("og_description", value)} /><Field label="Nama legal bisnis" value={values.business_legal_name || values.company_name || ""} onChange={(value) => set("business_legal_name", value)} /><Field label="Area layanan · ID" value={values.business_area || ""} onChange={(value) => set("business_area", value)} /><Field label="Service area · EN" value={valuesEn.business_area || ""} onChange={(value) => setEn("business_area", value)} /><Field label="Kode negara" value={values.business_country || "ID"} onChange={(value) => set("business_country", value.toUpperCase())} /><Field label="Kode pos" value={values.postal_code || ""} onChange={(value) => set("postal_code", value)} /></div></section>
     </div>
   </>;
 }

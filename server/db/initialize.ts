@@ -849,6 +849,64 @@ CREATE TABLE IF NOT EXISTS cms_partners (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS cms_leads (
+  id TEXT PRIMARY KEY,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  full_name TEXT NOT NULL,
+  whatsapp TEXT NOT NULL,
+  email TEXT,
+  company_name TEXT,
+  job_title TEXT,
+  location TEXT NOT NULL,
+  service_interest TEXT NOT NULL,
+  budget_range TEXT,
+  target_start TEXT,
+  message TEXT NOT NULL,
+  privacy_consent_at TEXT NOT NULL,
+  source_path TEXT NOT NULL DEFAULT '/',
+  language TEXT NOT NULL DEFAULT 'id' CHECK (language IN ('id', 'en')),
+  status TEXT NOT NULL DEFAULT 'New'
+    CHECK (status IN ('New', 'Contacted', 'Qualified', 'Proposal', 'Won', 'Lost', 'Spam')),
+  assigned_to TEXT REFERENCES users(id) ON DELETE SET NULL,
+  retention_until TEXT NOT NULL,
+  retention_extended_at TEXT,
+  retention_extended_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  anonymized_at TEXT,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cms_leads_status_created_idx
+  ON cms_leads(status, created_at);
+CREATE INDEX IF NOT EXISTS cms_leads_assigned_idx
+  ON cms_leads(assigned_to, status);
+CREATE INDEX IF NOT EXISTS cms_leads_retention_idx
+  ON cms_leads(retention_until, anonymized_at);
+
+CREATE TABLE IF NOT EXISTS cms_lead_notes (
+  id TEXT PRIMARY KEY,
+  lead_id TEXT NOT NULL REFERENCES cms_leads(id) ON DELETE CASCADE,
+  note_type TEXT NOT NULL DEFAULT 'note'
+    CHECK (note_type IN ('note', 'status', 'assignment', 'retention', 'privacy')),
+  body TEXT NOT NULL,
+  from_status TEXT,
+  to_status TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cms_lead_notes_lead_idx
+  ON cms_lead_notes(lead_id, created_at);
+
+CREATE TABLE IF NOT EXISTS public_form_rate_limits (
+  fingerprint_hash TEXT NOT NULL,
+  route_key TEXT NOT NULL,
+  window_started_at TEXT NOT NULL,
+  request_count INTEGER NOT NULL DEFAULT 0,
+  blocked_until TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (fingerprint_hash, route_key)
+);
 `;
 
 const now = "2026-07-18T06:00:00.000Z";
@@ -1066,6 +1124,42 @@ async function ensureCmsLandingFeatures(client: DatabaseClient) {
   const timestamp = new Date().toISOString();
   const statements: DatabaseStatement[] = [
     statement(
+      `UPDATE cms_site_texts SET
+        value_content='Sistem IT yang rapi, stabil, dan siap dipakai.',
+        value_content_en='Well-organized IT systems, stable and ready to use.',
+        updated_at=?
+       WHERE page_key='home' AND content_key='hero_title'
+         AND value_content='Infrastruktur IT yang bekerja tanpa hambatan.'`,
+      [timestamp],
+    ),
+    statement(
+      `UPDATE cms_site_texts SET
+        value_content='PerumNet Enterprise menangani jaringan, CCTV, Smart Home, IP PABX, dan software untuk hotel, villa, kantor, sekolah, serta area komersial di Bali.',
+        value_content_en='PerumNet Enterprise delivers networks, CCTV, Smart Home, IP PABX, and software for hotels, villas, offices, schools, and commercial sites across Bali.',
+        updated_at=?
+       WHERE page_key='home' AND content_key='hero_description'
+         AND value_content LIKE 'PerumNet Enterprise merancang,%'`,
+      [timestamp],
+    ),
+    statement(
+      `UPDATE cms_services SET
+        title='Smart Home & Building Automation',
+        title_en='Smart Home & Building Automation',
+        summary='Otomasi pencahayaan, sensor, akses, dan kontrol perangkat yang dirancang untuk rumah, villa, serta area komersial.',
+        summary_en='Lighting, sensors, access, and device control designed for homes, villas, and commercial spaces.',
+        description='Kami merancang, memasang, menguji, dan mendokumentasikan otomasi pencahayaan, sensor, akses, serta kontrol perangkat agar sistem mudah digunakan dan dirawat.',
+        description_en='We design, install, test, and document lighting automation, sensors, access, and device control so the system remains practical to use and maintain.',
+        features_json=?,
+        features_json_en=?,
+        updated_at=?
+       WHERE slug='smart-home-device' AND title='Smart Home Device'`,
+      [
+        JSON.stringify(["Otomasi pencahayaan", "Sensor & monitoring", "Kontrol akses & perangkat", "Instalasi, pengujian & dokumentasi"]),
+        JSON.stringify(["Lighting automation", "Sensors & monitoring", "Access & device control", "Installation, testing & documentation"]),
+        timestamp,
+      ],
+    ),
+    statement(
       `INSERT INTO cms_site_texts
         (id,page_key,content_key,value_content,value_content_en,updated_at)
        VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
@@ -1105,6 +1199,25 @@ async function ensureCmsLandingFeatures(client: DatabaseClient) {
       ],
     ),
   ];
+
+  const seoSettings: Array<[string, string, string]> = [
+    ["seo_title", "PerumNet Enterprise — Konsultan IT & Integrator Sistem Bali", "PerumNet Enterprise — IT Consultant & Systems Integrator in Bali"],
+    ["seo_description", "Konsultan IT Bali untuk Managed WiFi, CCTV, Smart Home, IP PABX, dan software bagi hotel, villa, kantor, sekolah, serta area komersial.", "Bali IT consulting for Managed WiFi, CCTV, Smart Home, IP PABX, and software for hotels, villas, offices, schools, and commercial sites."],
+    ["og_title", "Sistem IT yang rapi, stabil, dan siap dipakai.", "Well-organized IT systems, stable and ready to use."],
+    ["og_description", "Survei, desain, instalasi, pengujian, dokumentasi, dan dukungan sistem IT untuk bisnis di Bali.", "Survey, design, installation, testing, documentation, and IT support for businesses in Bali."],
+    ["business_legal_name", "PerumNet Enterprise", "PerumNet Enterprise"],
+    ["business_area", "Bali, Indonesia", "Bali, Indonesia"],
+    ["business_country", "ID", ""],
+    ["postal_code", "80813", ""],
+  ];
+  for (const [key, value, valueEn] of seoSettings) {
+    statements.push(statement(
+      `INSERT INTO cms_site_settings
+        (id,key_name,value_content,value_content_en,updated_at)
+       VALUES (?,?,?,?,?) ON CONFLICT (key_name) DO NOTHING`,
+      [`cms-setting-${key}`, key, value, valueEn, timestamp],
+    ));
+  }
 
   const englishTexts: Array<[string, string]> = [
     ["home.hero_eyebrow", "INTEGRATED IT SOLUTIONS · BALI"],

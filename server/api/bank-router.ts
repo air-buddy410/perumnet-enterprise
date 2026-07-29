@@ -155,6 +155,30 @@ async function listAccounts(client: DatabaseClient) {
   );
 }
 
+async function accountUsage(client: DatabaseClient, accountId: string) {
+  const result = await client.execute({
+    sql: `SELECT
+      (SELECT COUNT(*) FROM bank_statement_entries WHERE bank_account_id=?) AS statements,
+      (SELECT COUNT(*) FROM bank_statement_imports WHERE bank_account_id=?) AS imports,
+      (SELECT COUNT(*) FROM invoice_payments WHERE bank_account_id=?) AS invoice_payments,
+      (SELECT COUNT(*) FROM spk_payments WHERE bank_account_id=?) AS vendor_payments,
+      (SELECT COUNT(*) FROM tax_settlements WHERE bank_account_id=?) AS tax_settlements`,
+    args: [accountId, accountId, accountId, accountId, accountId],
+  });
+  const row = result.rows[0] ?? {};
+  return {
+    statements: asNumber(row.statements),
+    imports: asNumber(row.imports),
+    invoicePayments: asNumber(row.invoice_payments),
+    vendorPayments: asNumber(row.vendor_payments),
+    taxSettlements: asNumber(row.tax_settlements),
+  };
+}
+
+function totalAccountUsage(usage: Awaited<ReturnType<typeof accountUsage>>) {
+  return Object.values(usage).reduce((total, count) => total + count, 0);
+}
+
 async function refreshCalculatedBalance(
   client: DatabaseClient,
   accountId: string,
@@ -1019,6 +1043,19 @@ export async function handleBankAccounts(
     }
     const current = await findAccount(client, accountId);
     const input = accountSchema.partial().parse(await jsonBody(request));
+    const usage = await accountUsage(client, accountId);
+    if (
+      input.openingBalance !== undefined &&
+      input.openingBalance !== asNumber(current.opening_balance) &&
+      totalAccountUsage(usage) > 0
+    ) {
+      throw new ApiError(
+        409,
+        "OPENING_BALANCE_LOCKED",
+        "Saldo awal tidak dapat diubah karena rekening sudah memiliki mutasi atau pembayaran.",
+        usage,
+      );
+    }
     const syncMode = input.syncMode ?? String(current.sync_mode);
     const externalAccountId =
       input.externalAccountId === undefined
@@ -1063,6 +1100,36 @@ export async function handleBankAccounts(
     return ok(
       (await listAccounts(client)).find((account) => account.id === accountId),
     );
+  }
+
+  if (accountId && request.method === "DELETE" && !action) {
+    if (user.role !== "Admin") {
+      throw new ApiError(
+        403,
+        "FORBIDDEN",
+        "Hanya Admin yang dapat menghapus rekening perusahaan.",
+      );
+    }
+    const current = await findAccount(client, accountId);
+    const usage = await accountUsage(client, accountId);
+    if (totalAccountUsage(usage) > 0) {
+      throw new ApiError(
+        409,
+        "BANK_ACCOUNT_IN_USE",
+        "Rekening pernah digunakan dan tidak dapat dihapus. Nonaktifkan rekening agar histori tetap utuh.",
+        usage,
+      );
+    }
+    await client.execute({
+      sql: "DELETE FROM bank_accounts WHERE id=?",
+      args: [accountId],
+    });
+    await writeAuditLog(client, request, user, "delete", "bank_account", accountId, {
+      bankName: current.bank_name,
+      accountNumberMasked: current.account_number_masked,
+      usage,
+    });
+    return noContent();
   }
 
   throw new ApiError(404, "NOT_FOUND", "Endpoint rekening bank tidak ditemukan.");

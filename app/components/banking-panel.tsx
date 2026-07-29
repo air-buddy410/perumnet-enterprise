@@ -7,6 +7,7 @@ import {
   FileSpreadsheet,
   Landmark,
   Link2,
+  Pencil,
   Plus,
   RefreshCw,
   ShieldCheck,
@@ -92,11 +93,14 @@ export function BankingPanel({
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [showAccountForm, setShowAccountForm] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<BankAccount | null>(null);
   const [showImportForm, setShowImportForm] = useState(false);
   const [bankName, setBankName] = useState("BCA");
   const [accountName, setAccountName] = useState("PerumNet Enterprise");
   const [accountNumber, setAccountNumber] = useState("");
   const [openingBalance, setOpeningBalance] = useState(0);
+  const [currency, setCurrency] = useState("IDR");
+  const [accountStatus, setAccountStatus] = useState<BankAccount["status"]>("Aktif");
   const [syncMode, setSyncMode] = useState<BankAccount["syncMode"]>("Manual");
   const [externalAccountId, setExternalAccountId] = useState("");
   const [statementFile, setStatementFile] = useState<File | null>(null);
@@ -193,19 +197,38 @@ export function BankingPanel({
     };
   }, [language, notify, selectedAccountId]);
 
-  async function createAccount(event: FormEvent<HTMLFormElement>) {
+  function openAccountForm(account?: BankAccount) {
+    setEditingAccount(account ?? null);
+    setBankName(account?.bankName ?? "BCA");
+    setAccountName(account?.accountName ?? "PerumNet Enterprise");
+    setAccountNumber("");
+    setOpeningBalance(account?.openingBalance ?? 0);
+    setCurrency(account?.currency ?? "IDR");
+    setAccountStatus(account?.status ?? "Aktif");
+    setSyncMode(account?.syncMode ?? "Manual");
+    setExternalAccountId("");
+    setShowAccountForm(true);
+  }
+
+  async function saveAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitting(true);
     try {
-      const account = await api<BankAccount>("/api/bank-accounts", {
-        method: "POST",
+      const account = await api<BankAccount>(
+        editingAccount ? `/api/bank-accounts/${editingAccount.id}` : "/api/bank-accounts",
+        {
+        method: editingAccount ? "PATCH" : "POST",
         body: JSON.stringify({
           bankName,
           accountName,
-          accountNumber,
+          ...(!editingAccount || accountNumber ? { accountNumber } : {}),
           openingBalance,
+          currency,
+          status: accountStatus,
           syncMode,
-          ...(syncMode === "API" ? { externalAccountId } : {}),
+          ...(syncMode === "API" && (externalAccountId || !editingAccount?.hasExternalAccountId)
+            ? { externalAccountId }
+            : {}),
         }),
       });
       await loadAccounts();
@@ -216,9 +239,33 @@ export function BankingPanel({
       setShowAccountForm(false);
       notify(
         id
-          ? "Rekening perusahaan berhasil ditambahkan."
-          : "Company bank account added.",
+          ? editingAccount
+            ? "Konfigurasi rekening berhasil diperbarui."
+            : "Rekening perusahaan berhasil ditambahkan."
+          : editingAccount
+            ? "Bank account configuration updated."
+            : "Company bank account added.",
       );
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function deleteAccount() {
+    if (!selectedAccount) return;
+    const confirmed = window.confirm(
+      id
+        ? `Hapus rekening ${selectedAccount.bankName} ${selectedAccount.accountNumberMasked}? Rekening yang pernah digunakan akan ditolak dan harus dinonaktifkan.`
+        : `Delete ${selectedAccount.bankName} ${selectedAccount.accountNumberMasked}? Used accounts will be blocked and must be disabled instead.`,
+    );
+    if (!confirmed) return;
+    setSubmitting(true);
+    try {
+      await api(`/api/bank-accounts/${selectedAccount.id}`, { method: "DELETE" });
+      await loadAccounts();
+      notify(id ? "Rekening kosong berhasil dihapus." : "Unused bank account deleted.");
     } catch (error) {
       notify(messageOf(error, language));
     } finally {
@@ -411,7 +458,7 @@ export function BankingPanel({
               <button
                 className="button primary"
                 type="button"
-                onClick={() => setShowAccountForm(true)}
+                onClick={() => openAccountForm()}
               >
                 <Plus size={16} /> {id ? "Tambah rekening" : "Add account"}
               </button>
@@ -455,11 +502,11 @@ export function BankingPanel({
                             id ? "id-ID" : "en-US",
                             account.syncMode === "Manual"
                               ? {
-                                  dateStyle: "medium",
+                                  dateStyle: "long",
                                   timeZone: "Asia/Makassar",
                                 }
                               : {
-                                  dateStyle: "medium",
+                                  dateStyle: "long",
                                   timeStyle: "short",
                                   timeZone: "Asia/Makassar",
                                 },
@@ -489,6 +536,17 @@ export function BankingPanel({
                       {id ? "impor baru" : "new imports"}
                     </span>
                   </div>
+                  <div className="title-actions">
+                  {canConfigure ? (
+                    <>
+                      <button className="button subtle small" type="button" onClick={() => openAccountForm(selectedAccount)}>
+                        <Pencil size={15} /> {id ? "Edit rekening" : "Edit account"}
+                      </button>
+                      <button className="button danger small" type="button" disabled={submitting} onClick={deleteAccount}>
+                        <Trash2 size={15} /> {id ? "Hapus" : "Delete"}
+                      </button>
+                    </>
+                  ) : null}
                   {canManage && selectedAccount.syncMode === "API" ? (
                     <button
                       className="button subtle small"
@@ -513,6 +571,7 @@ export function BankingPanel({
                           : "Sync API"}
                     </button>
                   ) : null}
+                  </div>
                 </div>
                 <div className="table-scroll bank-entry-scroll">
                   <table className="data-table bank-entry-table">
@@ -681,10 +740,12 @@ export function BankingPanel({
             <div className="modal-head">
               <div>
                 <span className="eyebrow">
-                  {id ? "REKENING BARU" : "NEW ACCOUNT"}
+                  {editingAccount ? (id ? "EDIT REKENING" : "EDIT ACCOUNT") : (id ? "REKENING BARU" : "NEW ACCOUNT")}
                 </span>
                 <h2 id="bank-account-title">
-                  {id ? "Tambahkan rekening perusahaan" : "Add a company account"}
+                  {editingAccount
+                    ? id ? "Perbarui rekening perusahaan" : "Update company account"
+                    : id ? "Tambahkan rekening perusahaan" : "Add a company account"}
                 </h2>
               </div>
               <button
@@ -696,11 +757,11 @@ export function BankingPanel({
                 <X size={18} />
               </button>
             </div>
-            <form className="form-grid" onSubmit={createAccount}>
+            <form className="form-grid" onSubmit={saveAccount}>
               <label className="field">
                 <span>{id ? "Nama bank" : "Bank name"}</span>
                 <input
-                  required
+                  required={!editingAccount}
                   value={bankName}
                   onChange={(event) => setBankName(event.target.value)}
                   placeholder="BCA"
@@ -725,10 +786,21 @@ export function BankingPanel({
                   autoComplete="off"
                 />
                 <small>
-                  {id
-                    ? "Hanya empat digit terakhir yang ditampilkan kembali."
-                    : "Only the last four digits are shown again."}
+                  {editingAccount
+                    ? id ? `Kosongkan untuk mempertahankan ${editingAccount.accountNumberMasked}.` : `Leave blank to keep ${editingAccount.accountNumberMasked}.`
+                    : id ? "Hanya empat digit terakhir yang ditampilkan kembali." : "Only the last four digits are shown again."}
                 </small>
+              </label>
+              <label className="field">
+                <span>{id ? "Mata uang" : "Currency"}</span>
+                <input required maxLength={3} value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} />
+              </label>
+              <label className="field">
+                <span>Status</span>
+                <select value={accountStatus} onChange={(event) => setAccountStatus(event.target.value as BankAccount["status"])}>
+                  <option value="Aktif">{id ? "Aktif" : "Active"}</option>
+                  <option value="Nonaktif">{id ? "Nonaktif" : "Inactive"}</option>
+                </select>
               </label>
               <label className="field">
                 <span>{id ? "Saldo awal" : "Opening balance"}</span>
@@ -762,7 +834,7 @@ export function BankingPanel({
                 <label className="field full">
                   <span>Provider Account ID</span>
                   <input
-                    required
+                    required={!editingAccount?.hasExternalAccountId}
                     value={externalAccountId}
                     onChange={(event) => setExternalAccountId(event.target.value)}
                     autoComplete="off"
@@ -783,14 +855,14 @@ export function BankingPanel({
                   {id ? "Batal" : "Cancel"}
                 </button>
                 <button className="button primary" type="submit" disabled={submitting}>
-                  <Plus size={16} />{" "}
+                  {editingAccount ? <Pencil size={16} /> : <Plus size={16} />}{" "}
                   {submitting
                     ? id
                       ? "Menyimpan..."
                       : "Saving..."
                     : id
-                      ? "Simpan rekening"
-                      : "Save account"}
+                      ? editingAccount ? "Simpan perubahan" : "Simpan rekening"
+                      : editingAccount ? "Save changes" : "Save account"}
                 </button>
               </div>
             </form>

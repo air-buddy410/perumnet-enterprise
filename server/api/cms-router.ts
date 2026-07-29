@@ -16,6 +16,7 @@ import {
   noContent,
   ok,
 } from "./errors";
+import { dispatchLeadApi } from "./lead-router";
 
 const shortText = z.string().trim().min(1).max(180);
 const longText = z.string().trim().min(1).max(8_000);
@@ -44,6 +45,14 @@ const siteSettingsSchema = z.object({
   partner_carousel_speed: z.string().trim().regex(/^(1[2-9]|[2-5]\d|60)$/, "Durasi carousel harus antara 12 dan 60 detik."),
   cta_text: z.string().trim().min(1).max(180),
   business_hours: z.string().trim().min(1).max(180),
+  seo_title: z.string().trim().min(10).max(70),
+  seo_description: z.string().trim().min(30).max(180),
+  og_title: z.string().trim().min(10).max(100),
+  og_description: z.string().trim().min(30).max(240),
+  business_legal_name: z.string().trim().min(2).max(180),
+  business_area: z.string().trim().min(2).max(300),
+  business_country: z.string().trim().length(2),
+  postal_code: z.string().trim().max(12),
 }).partial().strict();
 
 const serviceSchema = z.object({
@@ -202,6 +211,8 @@ async function updateSettings(request: Request, user: AuthUser) {
       dark_font_color: true,
       motion_enabled: true,
       partner_carousel_speed: true,
+      business_country: true,
+      postal_code: true,
     }).partial().optional().default({}),
   }).parse(await jsonBody(request));
   const { client } = await getDatabase();
@@ -518,6 +529,7 @@ export async function dispatchCmsApi(request: Request, path: string[]) {
 
   if (resource === "media" && id && request.method === "GET") return mediaResponse(request, id);
   if (resource === "partner-media" && id && request.method === "GET") return partnerMediaResponse(request, id);
+  if (resource === "leads") return dispatchLeadApi(request, path);
 
   const user = await admin(request);
   if (resource === "bootstrap" && request.method === "GET") {

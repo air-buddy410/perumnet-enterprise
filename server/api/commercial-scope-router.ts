@@ -40,6 +40,23 @@ function now() {
   return new Date().toISOString();
 }
 
+function todayInMakassar() {
+  return new Date(Date.now() + 8 * 60 * 60_000).toISOString().slice(0, 10);
+}
+
+function assertValidityManager(user: AuthUser, input: { issuedAt?: string; validUntil?: string }) {
+  if (
+    (input.issuedAt !== undefined || input.validUntil !== undefined) &&
+    !["Admin", "Finance"].includes(user.role)
+  ) {
+    throw new ApiError(
+      403,
+      "QUOTATION_VALIDITY_FORBIDDEN",
+      "Hanya Admin dan Finance yang dapat mengubah tanggal dan masa berlaku Quotation.",
+    );
+  }
+}
+
 function numberValue(value: unknown) {
   const result = Number(value ?? 0);
   return Number.isFinite(result) ? result : 0;
@@ -194,6 +211,7 @@ export async function handleBoqScopes(
     }
     await assertProjectAccess(client, user, projectId);
     const input = scopeSchema.parse(await jsonBody(request));
+    assertValidityManager(user, input);
     if (input.issuedAt && input.validUntil && input.validUntil < input.issuedAt) {
       throw new ApiError(422, "INVALID_DATE_RANGE", "Masa berlaku tidak boleh lebih awal dari tanggal terbit.");
     }
@@ -310,6 +328,7 @@ export async function handleBoqScopes(
       .pick({ title: true, issuedAt: true, validUntil: true, items: true })
       .partial()
       .parse(await jsonBody(request));
+    assertValidityManager(user, input);
     if (current.status === "Accepted" || current.quotation?.status === "Accepted") {
       throw new ApiError(
         409,
@@ -437,6 +456,13 @@ export async function handleQuotationLifecycle(
         attachment: attachmentSchema,
       })
       .parse(await jsonBody(request));
+    if (quotation.valid_until && String(quotation.valid_until) < todayInMakassar()) {
+      throw new ApiError(
+        409,
+        "QUOTATION_EXPIRED",
+        "Quotation sudah kedaluwarsa. Admin atau Finance harus memperpanjang masa berlaku sebelum dapat diterima.",
+      );
+    }
     const timestamp = now();
     await client.transaction(async (tx) => {
       await tx.execute({

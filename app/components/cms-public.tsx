@@ -30,7 +30,9 @@ import type {
   CmsTestimonial,
 } from "@/server/cms";
 import type { PublicLanguage } from "@/server/public-language";
+import { businessStructuredData } from "@/server/public-seo";
 import { PublicLanguageSwitcher } from "./public-language-switcher";
+import { PublicLeadForm } from "./public-lead-form";
 import { PublicMobileMenu } from "./public-mobile-menu";
 import { PublicMotionController } from "./public-motion-controller";
 import { PublicPortfolioImage } from "./public-portfolio-image";
@@ -73,9 +75,15 @@ function mapsLink(content: CmsContent) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(content.settings.address || "Karangasem, Bali")}`;
 }
 
+function publicHref(language: PublicLanguage, path: string) {
+  if (language === "id") return path;
+  if (path === "/") return "/en";
+  return `/en${path}`;
+}
+
 function Brand({ language }: { language: PublicLanguage }) {
   return (
-    <Link href="/" className={styles.brand} aria-label={`PerumNet Enterprise — ${language === "id" ? "Beranda" : "Home"}`}>
+    <Link href={publicHref(language, "/")} className={styles.brand} aria-label={`PerumNet Enterprise — ${language === "id" ? "Beranda" : "Home"}`}>
       <img src="/perumnet-mark.png" alt="" width="54" height="54" />
       <span><strong>PERUMNET ENTERPRISE</strong><small>{language === "id" ? "KONSULTAN IT" : "IT CONSULTING"}</small></span>
     </Link>
@@ -95,13 +103,13 @@ export function PublicShell({
 }) {
   const pageNavigation = content.pages
     .filter((page) => page.showInNavigation)
-    .map((page) => ({ href: `/${page.slug}`, label: localized(page.title, page.titleEn, language), key: page.slug }));
+    .map((page) => ({ href: publicHref(language, `/${page.slug}`), label: localized(page.title, page.titleEn, language), key: page.slug }));
   const nav = [
-    { href: "/", label: language === "id" ? "Beranda" : "Home", key: "home" },
-    { href: "/services", label: language === "id" ? "Layanan" : "Services", key: "services" },
-    { href: "/portfolio", label: language === "id" ? "Portofolio" : "Portfolio", key: "portfolio" },
+    { href: publicHref(language, "/"), label: language === "id" ? "Beranda" : "Home", key: "home" },
+    { href: publicHref(language, "/services"), label: language === "id" ? "Layanan" : "Services", key: "services" },
+    { href: publicHref(language, "/portfolio"), label: language === "id" ? "Portofolio" : "Portfolio", key: "portfolio" },
     ...pageNavigation,
-    { href: "/contact", label: language === "id" ? "Kontak" : "Contact", key: "contact" },
+    { href: publicHref(language, "/contact"), label: language === "id" ? "Kontak" : "Contact", key: "contact" },
   ];
   const configuredSurfaceColor = content.settings.dark_font_color || "#FFFFFF";
   const surfaceColor = /^#[0-9a-f]{6}$/i.test(configuredSurfaceColor) ? configuredSurfaceColor : "#FFFFFF";
@@ -116,6 +124,10 @@ export function PublicShell({
       style={{ "--surface-text": surfaceColor } as CSSProperties}
     >
       <PublicMotionController enabled={motionEnabled} />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(businessStructuredData(content, language)).replaceAll("<", "\\u003c") }}
+      />
       <header className={styles.header}>
         <div className={styles.navWrap}>
           <Brand language={language} />
@@ -153,7 +165,7 @@ export function PublicShell({
           </div>
           <div>
             <h3>{language === "id" ? "Layanan" : "Services"}</h3>
-            <ul>{content.services.map((service) => <li key={service.id}><Link href={`/services#${service.slug}`}>{localized(service.title, service.titleEn, language)}</Link></li>)}</ul>
+            <ul>{content.services.map((service) => <li key={service.id}><Link href={publicHref(language, `/services#${service.slug}`)}>{localized(service.title, service.titleEn, language)}</Link></li>)}</ul>
           </div>
           <div>
             <h3>{language === "id" ? "Kontak" : "Contact"}</h3>
@@ -167,9 +179,9 @@ export function PublicShell({
         <div className={styles.footerBottom}>
           <span>© {new Date().getFullYear()} PerumNet Enterprise. {language === "id" ? "Hak cipta dilindungi." : "All rights reserved."}</span>
           <nav aria-label={language === "id" ? "Informasi hukum" : "Legal information"}>
-            <Link href="/syarat-ketentuan">{language === "id" ? "Syarat dan Ketentuan" : "Terms and Conditions"}</Link>
-            <Link href="/kebijakan-privasi">{language === "id" ? "Kebijakan Privasi" : "Privacy Policy"}</Link>
-            <Link href="/#faq">FAQ</Link>
+            <Link href={publicHref(language, "/syarat-ketentuan")}>{language === "id" ? "Syarat dan Ketentuan" : "Terms and Conditions"}</Link>
+            <Link href={publicHref(language, "/kebijakan-privasi")}>{language === "id" ? "Kebijakan Privasi" : "Privacy Policy"}</Link>
+            <Link href={publicHref(language, "/#faq")}>FAQ</Link>
           </nav>
         </div>
       </footer>
@@ -184,7 +196,7 @@ export function ServiceCard({ service, index = 0, language }: { service: CmsServ
   const Icon = serviceIcons[service.icon as keyof typeof serviceIcons] || Network;
   const title = localized(service.title, service.titleEn, language);
   return (
-    <Link className={styles.serviceCard} href={`/services#${service.slug}`} aria-label={`${language === "id" ? "Pelajari layanan" : "Explore service"} ${title}`}>
+    <Link className={styles.serviceCard} href={publicHref(language, `/services#${service.slug}`)} aria-label={`${language === "id" ? "Pelajari layanan" : "Explore service"} ${title}`}>
       <div className={styles.cardTopline}><span>{String(index + 1).padStart(2, "0")}</span><Icon size={26} /></div>
       <h3>{title}</h3>
       <p>{localized(service.summary, service.summaryEn, language)}</p>
@@ -229,7 +241,7 @@ function LabsSection({ service, language }: { service: CmsService; language: Pub
         <span className={styles.eyebrowDark}><TerminalSquare size={15} /> PERUMNET LABS</span>
         <h2>{language === "id" ? "Software yang dibangun mengikuti alur bisnis Anda." : "Software built around the way your business works."}</h2>
         <p>{localized(service.description, service.descriptionEn, language)}</p>
-        <Link className={styles.inlineButton} href={`/services#${service.slug}`}>{language === "id" ? "Jelajahi PerumNet Labs" : "Explore PerumNet Labs"} <ArrowRight size={17} /></Link>
+        <Link className={styles.inlineButton} href={publicHref(language, `/services#${service.slug}`)}>{language === "id" ? "Jelajahi PerumNet Labs" : "Explore PerumNet Labs"} <ArrowRight size={17} /></Link>
       </div>
       <div className={styles.codeWindow} aria-label={language === "id" ? "Ilustrasi pengembangan perangkat lunak" : "Software development illustration"}>
         <div><span /><span /><span /><small>perumnet-labs.ts</small></div>
@@ -294,7 +306,7 @@ function FaqSection({ content, language }: { content: CmsContent; language: Publ
         <span className={styles.eyebrowDark}>FAQ</span>
         <h2>{language === "id" ? "Pertanyaan yang sering diajukan." : "Frequently asked questions."}</h2>
         <p>{language === "id" ? "Jawaban singkat untuk membantu Anda memahami proses, dukungan, dan cara memulai proyek." : "Clear answers about our process, support, and how to start a project."}</p>
-        <Link className={styles.inlineButton} href="/contact">{language === "id" ? "Punya pertanyaan lain?" : "Have another question?"} <ArrowRight size={17} /></Link>
+        <Link className={styles.inlineButton} href={publicHref(language, "/contact")}>{language === "id" ? "Punya pertanyaan lain?" : "Have another question?"} <ArrowRight size={17} /></Link>
       </div>
       <div className={styles.faqList}>
         {content.faqs.map((faq, index) => (
@@ -310,6 +322,10 @@ function FaqSection({ content, language }: { content: CmsContent; language: Publ
 
 export function HomePage({ content, language }: { content: CmsContent; language: PublicLanguage }) {
   const labs = content.services.find((service) => service.slug === "perumnet-labs");
+  const wifi = content.services.find((service) => service.slug === "managed-wifi");
+  const smartHome = content.services.find((service) => service.slug === "smart-home-device");
+  const cctv = content.services.find((service) => service.slug === "cctv");
+  const pabx = content.services.find((service) => service.slug === "ip-pabx");
   const coreServices = content.services.filter((service) => service.slug !== "perumnet-labs").slice(0, 4);
   return (
     <PublicShell content={content} language={language} active="home">
@@ -317,21 +333,22 @@ export function HomePage({ content, language }: { content: CmsContent; language:
         <div className={styles.heroGrid}>
           <div className={styles.heroCopy} data-reveal>
             <span className={styles.eyebrow}><Sparkles size={14} /> {text(content, language, "home", "hero_eyebrow", "SOLUSI IT TERINTEGRASI · BALI", "INTEGRATED IT SOLUTIONS · BALI")}</span>
-            <h1>{text(content, language, "home", "hero_title", "Infrastruktur IT yang bekerja tanpa hambatan.", "IT infrastructure that works without interruption.")}</h1>
-            <p>{text(content, language, "home", "hero_description", "Solusi jaringan, keamanan, komunikasi, dan software untuk operasional bisnis modern.", "Network, security, communications, and software solutions for modern business operations.")}</p>
+            <h1>{text(content, language, "home", "hero_title", "Sistem IT yang rapi, stabil, dan siap dipakai.", "Well-organized IT systems, stable and ready to use.")}</h1>
+            <p>{text(content, language, "home", "hero_description", "PerumNet Enterprise menangani jaringan, CCTV, Smart Home, IP PABX, dan software untuk hotel, villa, kantor, sekolah, serta area komersial di Bali.", "PerumNet Enterprise delivers networks, CCTV, Smart Home, IP PABX, and software for hotels, villas, offices, schools, and commercial sites across Bali.")}</p>
             <div className={styles.heroActions}>
               <a className={styles.primaryButton} href={waLink(content, language)} target="_blank" rel="noreferrer">{setting(content, language, "cta_text", "Konsultasikan Kebutuhan Anda", "Discuss Your Requirements")} <ArrowRight size={18} /></a>
-              <Link className={styles.secondaryButton} href="/portfolio">{language === "id" ? "Lihat hasil pekerjaan" : "View our work"}</Link>
+              <Link className={styles.secondaryButton} href={publicHref(language, "/portfolio")}>{language === "id" ? "Lihat hasil pekerjaan" : "View our work"}</Link>
             </div>
             <div className={styles.heroTrust}><span><ShieldCheck size={17} /> {language === "id" ? "Instalasi terdokumentasi" : "Documented delivery"}</span><span><Clock3 size={17} /> {language === "id" ? "Respons dukungan cepat" : "Responsive support"}</span></div>
           </div>
           <div className={styles.heroVisual} data-reveal data-reveal-delay="120" aria-label={language === "id" ? "Ilustrasi sistem terintegrasi" : "Integrated systems illustration"}>
             <div className={styles.visualGlow} /><div className={`${styles.orbit} ${styles.orbitOne}`} /><div className={`${styles.orbit} ${styles.orbitTwo}`} />
             <div className={styles.visualCenter}><img src="/perumnet-mark.png" alt="PerumNet Enterprise" /></div>
-            <div className={`${styles.visualNode} ${styles.nodeWifi}`}><Wifi size={24} /><span>Managed WiFi</span><small>Online</small></div>
-            <div className={`${styles.visualNode} ${styles.nodeCamera}`}><Camera size={24} /><span>CCTV</span><small>Protected</small></div>
-            <div className={`${styles.visualNode} ${styles.nodePhone}`}><Phone size={24} /><span>IP PABX</span><small>Connected</small></div>
-            <div className={`${styles.visualNode} ${styles.nodeHome}`}><Code2 size={24} /><span>PerumNet Labs</span><small>Building</small></div>
+            <div className={`${styles.visualNode} ${styles.nodeWifi}`}><Wifi size={24} /><span>{wifi ? localized(wifi.title, wifi.titleEn, language) : "Managed WiFi"}</span><small>{language === "id" ? "Terpantau" : "Monitored"}</small></div>
+            <div className={`${styles.visualNode} ${styles.nodeSmartHome}`}><Home size={24} /><span>{smartHome ? localized(smartHome.title, smartHome.titleEn, language) : "Smart Home"}</span><small>{language === "id" ? "Terintegrasi" : "Integrated"}</small></div>
+            <div className={`${styles.visualNode} ${styles.nodeCamera}`}><Camera size={24} /><span>{cctv ? localized(cctv.title, cctv.titleEn, language) : "CCTV"}</span><small>{language === "id" ? "Terlindungi" : "Protected"}</small></div>
+            <div className={`${styles.visualNode} ${styles.nodePhone}`}><Phone size={24} /><span>{pabx ? localized(pabx.title, pabx.titleEn, language) : "IP PABX"}</span><small>{language === "id" ? "Terhubung" : "Connected"}</small></div>
+            <div className={`${styles.visualNode} ${styles.nodeLabs}`}><Code2 size={24} /><span>{labs ? localized(labs.title, labs.titleEn, language) : "PerumNet Labs"}</span><small>{language === "id" ? "Dikembangkan" : "Building"}</small></div>
             <div className={styles.signalCard}><span className={styles.liveDot} /> {language === "id" ? "Sistem terpantau" : "Monitored systems"} <strong>24/7</strong></div>
           </div>
         </div>
@@ -345,13 +362,13 @@ export function HomePage({ content, language }: { content: CmsContent; language:
 
       <section className={styles.aboutSection} data-reveal>
         <div className={styles.sectionIntro}><span className={styles.eyebrowDark}>{text(content, language, "home", "about_eyebrow", "PARTNER TEKNOLOGI ANDA", "YOUR TECHNOLOGY PARTNER")}</span><h2>{text(content, language, "home", "about_title", "Satu tim untuk seluruh kebutuhan infrastruktur.", "One team for every infrastructure need.")}</h2></div>
-        <div className={styles.aboutCopy}><p>{text(content, language, "home", "about_description", "Kami menggabungkan konsultasi, instalasi, dokumentasi, dan dukungan berkelanjutan dalam satu layanan.", "We combine consulting, installation, documentation, and ongoing support in one transparent service.")}</p><Link href="/tentang-kami">{language === "id" ? "Kenali cara kami bekerja" : "How we work"} <ArrowRight size={17} /></Link></div>
+        <div className={styles.aboutCopy}><p>{text(content, language, "home", "about_description", "Kami menggabungkan konsultasi, instalasi, dokumentasi, dan dukungan berkelanjutan dalam satu layanan.", "We combine consulting, installation, documentation, and ongoing support in one transparent service.")}</p><Link href={publicHref(language, "/tentang-kami")}>{language === "id" ? "Kenali cara kami bekerja" : "How we work"} <ArrowRight size={17} /></Link></div>
       </section>
 
       <section className={styles.servicesSection} data-reveal>
         <div className={styles.sectionHeader}><div><span className={styles.eyebrowDark}>{language === "id" ? "LAYANAN UTAMA" : "CORE SERVICES"}</span><h2>{text(content, language, "home", "services_title", "Solusi yang dibangun untuk kebutuhan nyata.", "Solutions built for real operational needs.")}</h2></div><p>{text(content, language, "home", "services_description", "Setiap sistem dirancang untuk stabil sejak hari pertama.", "Every system is designed to remain dependable from day one.")}</p></div>
         <div className={styles.serviceGrid}>{coreServices.map((service, index) => <ServiceCard key={service.id} service={service} index={index} language={language} />)}</div>
-        <Link className={styles.inlineButton} href="/services">{language === "id" ? "Lihat seluruh layanan" : "View all services"} <ArrowRight size={17} /></Link>
+        <Link className={styles.inlineButton} href={publicHref(language, "/services")}>{language === "id" ? "Lihat seluruh layanan" : "View all services"} <ArrowRight size={17} /></Link>
       </section>
 
       {labs && <div data-reveal><LabsSection service={labs} language={language} /></div>}
@@ -366,7 +383,7 @@ export function HomePage({ content, language }: { content: CmsContent; language:
       </section>
 
       <section className={styles.portfolioSection} data-reveal>
-        <div className={styles.sectionHeader}><div><span className={styles.eyebrowDark}>{language === "id" ? "PORTOFOLIO PILIHAN" : "SELECTED WORK"}</span><h2>{text(content, language, "home", "portfolio_title", "Pekerjaan rapi. Hasil yang terukur.", "Structured delivery. Measurable outcomes.")}</h2></div><Link href="/portfolio">{language === "id" ? "Lihat semua proyek" : "View all projects"} <ArrowRight size={17} /></Link></div>
+        <div className={styles.sectionHeader}><div><span className={styles.eyebrowDark}>{language === "id" ? "PORTOFOLIO PILIHAN" : "SELECTED WORK"}</span><h2>{text(content, language, "home", "portfolio_title", "Pekerjaan rapi. Hasil yang terukur.", "Structured delivery. Measurable outcomes.")}</h2></div><Link href={publicHref(language, "/portfolio")}>{language === "id" ? "Lihat semua proyek" : "View all projects"} <ArrowRight size={17} /></Link></div>
         <div className={styles.portfolioGrid}>{content.portfolios.slice(0, 3).map((item) => <PortfolioCard key={item.id} item={item} language={language} />)}</div>
       </section>
 
@@ -381,7 +398,7 @@ export function HomePage({ content, language }: { content: CmsContent; language:
 
       <section className={styles.closingCta} data-reveal>
         <div className={styles.closingCtaCopy}><span>{language === "id" ? "KONSULTASI AWAL" : "INITIAL CONSULTATION"}</span><h2>{text(content, language, "home", "closing_title", "Mulai dari survei lokasi, kami bantu sampai sistem siap digunakan.", "From the first site survey to a system ready for daily use.")}</h2><p>{language === "id" ? "Ceritakan kebutuhan dan lokasi Anda. Tim kami akan membantu menentukan langkah pertama yang paling tepat." : "Tell us about your needs and location. Our team will recommend the most practical first step."}</p></div>
-        <a href={waLink(content, language)} target="_blank" rel="noreferrer">{setting(content, language, "cta_text", "Konsultasikan Kebutuhan Anda", "Discuss Your Requirements")} <ArrowRight size={18} /></a>
+        <PublicLeadForm language={language} services={content.services} sourcePath={language === "en" ? "/en" : "/"} compact />
       </section>
     </PublicShell>
   );
@@ -429,7 +446,7 @@ export function ContactPage({ content, language }: { content: CmsContent; langua
         <a href={`mailto:${content.settings.email}`}><Mail size={24} /><div><span>Email</span><strong>{content.settings.email}</strong><small>{language === "id" ? "Untuk proposal dan dokumen" : "For proposals and documents"}</small></div><ArrowRight size={18} /></a>
         <a href={mapsLink(content)} target="_blank" rel="noreferrer"><MapPin size={24} /><div><span>{language === "id" ? "Lokasi" : "Location"}</span><strong>Karangasem, Bali</strong><small>{content.settings.address}</small></div><ArrowRight size={18} /></a>
       </div>
-      <div className={styles.contactPanel}><span className={styles.eyebrowLight}>{language === "id" ? "MULAI DISKUSI" : "START A CONVERSATION"}</span><h2>{language === "id" ? "Dapatkan arahan teknis yang jelas sejak awal." : "Get clear technical direction from the start."}</h2><p>{language === "id" ? "Kirimkan kebutuhan singkat, lokasi, dan waktu terbaik untuk dihubungi." : "Share a short brief, your location, and the best time to contact you."}</p><a href={waLink(content, language)} target="_blank" rel="noreferrer">{language === "id" ? "Mulai via WhatsApp" : "Start on WhatsApp"} <ArrowRight size={18} /></a><div className={styles.contactAssurance}><ShieldCheck size={18} /> {language === "id" ? "Informasi Anda digunakan hanya untuk kebutuhan konsultasi dan layanan." : "Your information is used only for consultation and service delivery."}</div></div>
+      <div className={styles.contactPanel}><PublicLeadForm language={language} services={content.services} sourcePath={language === "en" ? "/en/contact" : "/contact"} /></div>
     </section>
   </PublicShell>;
 }

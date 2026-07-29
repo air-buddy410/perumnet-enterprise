@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { after, before, test } from "node:test";
+import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 
 let server;
@@ -123,6 +124,68 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   assert.equal(login.user.role, "Admin");
   assert.match(cookie, /^perumnet_session=/);
   assert.match(lastSetCookie, /Max-Age=2592000/);
+
+  const leadKey = `lead-integration-${Date.now()}`;
+  const leadPayload = {
+    fullName: "Made Customer Lead",
+    whatsapp: "+628123456789",
+    email: "made.lead@example.com",
+    companyName: "Villa Integrasi",
+    jobTitle: "Manager",
+    location: "Ubud, Gianyar",
+    serviceInterest: "Smart Home & Building Automation",
+    budgetRange: "Rp75–250 juta",
+    targetStart: "2026-09-01",
+    message: "Perlu kontrol pencahayaan, akses, dan sensor untuk villa.",
+    privacyConsent: true,
+    sourcePath: "/contact",
+    language: "id",
+    turnstileToken: "",
+    website: "",
+  };
+  const createdLead = await json("/api/cms/leads", {
+    method: "POST",
+    headers: { "Idempotency-Key": leadKey },
+    body: JSON.stringify(leadPayload),
+  }, 201);
+  assert.ok(createdLead.id);
+  const duplicateLead = await json("/api/cms/leads", {
+    method: "POST",
+    headers: { "Idempotency-Key": leadKey },
+    body: JSON.stringify(leadPayload),
+  });
+  assert.equal(duplicateLead.duplicate, true);
+  const honeypotLead = await json("/api/cms/leads", {
+    method: "POST",
+    headers: { "Idempotency-Key": `${leadKey}-honeypot` },
+    body: JSON.stringify({ ...leadPayload, website: "bot-filled" }),
+  }, 201);
+  assert.equal(honeypotLead.received, true);
+  const leadList = await json("/api/cms/leads?q=Made%20Customer");
+  assert.equal(leadList.total, 1);
+  const qualifiedLead = await json(`/api/cms/leads/${createdLead.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status: "Qualified",
+      note: "Kebutuhan awal sudah dikonfirmasi melalui WhatsApp.",
+    }),
+  });
+  assert.equal(qualifiedLead.status, "Qualified");
+  assert.equal(qualifiedLead.notes.length, 2);
+  const leadCsv = await request("/api/cms/leads/export.csv?status=Qualified");
+  assert.equal(leadCsv.status, 200);
+  const leadCsvBody = await leadCsv.text();
+  assert.match(leadCsvBody, /Made Customer Lead/);
+  assert.doesNotMatch(leadCsvBody, /fingerprint/i);
+  const leadXlsx = await request("/api/cms/leads/export.xlsx?status=Qualified");
+  assert.equal(leadXlsx.status, 200);
+  const leadWorkbook = new ExcelJS.Workbook();
+  await leadWorkbook.xlsx.load(Buffer.from(await leadXlsx.arrayBuffer()));
+  assert.equal(leadWorkbook.worksheets[0].getCell("B2").value, "Made Customer Lead");
+  assert.ok(leadWorkbook.worksheets[0].getCell("A2").value instanceof Date);
+  const leadPdf = await request("/api/cms/leads/export.pdf?status=Qualified");
+  assert.equal(leadPdf.status, 200);
+  assert.equal(Buffer.from(await leadPdf.arrayBuffer()).subarray(0, 4).toString(), "%PDF");
 
   const projects = await json("/api/projects");
   assert.ok(projects.length >= 5);
@@ -660,6 +723,31 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   assert.equal(bankAccount.accountNumberMasked, "•••• 7890");
   assert.equal(bankAccount.currentBalance, 1_000_000);
   assert.equal(bankAccount.apiConfigured, false);
+  const disposableBankAccount = await json("/api/bank-accounts", {
+    method: "POST",
+    body: JSON.stringify({
+      bankName: "Bank Uji",
+      accountName: "Rekening Belum Dipakai",
+      accountNumber: "9988776655",
+      openingBalance: 250_000,
+      syncMode: "Manual",
+    }),
+  }, 201);
+  const editedBankAccount = await json(`/api/bank-accounts/${disposableBankAccount.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      bankName: "Bank Uji Diperbarui",
+      accountName: "Rekening Kosong",
+      accountNumber: "9988776600",
+      openingBalance: 300_000,
+      syncMode: "Manual",
+      currency: "IDR",
+      status: "Aktif",
+    }),
+  });
+  assert.equal(editedBankAccount.bankName, "Bank Uji Diperbarui");
+  assert.equal(editedBankAccount.openingBalance, 300_000);
+  await json(`/api/bank-accounts/${disposableBankAccount.id}`, { method: "DELETE" }, 204);
 
   const initialTaxSettings = await json("/api/tax/settings");
   assert.equal(initialTaxSettings.enabled, false);
@@ -925,6 +1013,17 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   assert.deepEqual(
     bankEntries.map((entry) => entry.type).sort(),
     ["Pemasukan", "Pengeluaran"].sort(),
+  );
+  assert.equal(
+    (await request(`/api/bank-accounts/${bankAccount.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ openingBalance: 9_999_999 }),
+    })).status,
+    409,
+  );
+  assert.equal(
+    (await request(`/api/bank-accounts/${bankAccount.id}`, { method: "DELETE" })).status,
+    409,
   );
 
   const pdfBankAccount = await json(
@@ -1392,6 +1491,21 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     mimeType: "image/png",
     contentBase64: Buffer.from("client-approval").toString("base64"),
   };
+  await json(`/api/quotations?projectId=${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Sent", issuedAt: "2019-12-01", validUntil: "2020-01-01" }),
+  });
+  assert.equal(
+    (await request(`/api/quotations/${quotationForProcurement.id}/accept`, {
+      method: "POST",
+      body: JSON.stringify({ acceptedAt: "2026-07-29", attachment: acceptanceAttachment }),
+    })).status,
+    409,
+  );
+  await json(`/api/quotations?projectId=${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Sent", issuedAt: "2026-07-19", validUntil: "2099-12-31" }),
+  });
   const acceptedOriginal = await json(
     `/api/quotations/${quotationForProcurement.id}/accept`,
     {
@@ -1404,6 +1518,21 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   );
   assert.equal(acceptedOriginal.status, "Accepted");
   assert.equal(acceptedOriginal.quotation.status, "Accepted");
+  assert.equal(
+    (await request(`/api/vendors/${vendor.id}`, { method: "DELETE" })).status,
+    409,
+  );
+  const disposableVendor = await json("/api/vendors", {
+    method: "POST",
+    body: JSON.stringify({
+      name: "Vendor Tanpa Histori",
+      category: "Teknisi Jaringan",
+      contact: "081234567899",
+      rate: 0,
+      status: "Aktif",
+    }),
+  }, 201);
+  await json(`/api/vendors/${disposableVendor.id}`, { method: "DELETE" }, 204);
   assert.equal(
     (
       await request(`/api/boq/items/${boqItem.id}?projectId=${project.id}`, {

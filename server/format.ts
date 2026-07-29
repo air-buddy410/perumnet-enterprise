@@ -1,6 +1,6 @@
 const indonesiaDate = new Intl.DateTimeFormat("id-ID", {
   day: "2-digit",
-  month: "short",
+  month: "long",
   year: "numeric",
   timeZone: "Asia/Makassar",
 });
