@@ -188,13 +188,7 @@ body:has(#login_user) .card-body > legend {
   float: none;
   width: 100%;
   margin: 0 0 8px;
-  color: transparent;
-  font-size: 0;
-}
-
-body:has(#login_user) .card-body > legend::after {
   color: var(--perumnet-muted);
-  content: "Akses email bisnis PerumNet";
   font-size: 14px;
   font-weight: 650;
 }
