@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { createServer } from "node:net";
 import { after, before, test } from "node:test";
 import ExcelJS from "exceljs";
@@ -52,6 +53,24 @@ async function request(path, options = {}) {
     cookie = setCookie.split(";")[0];
   }
   return response;
+}
+
+async function requestWithHost(path, host) {
+  const target = new URL(path, baseUrl);
+  return await new Promise((resolve, reject) => {
+    const outgoing = httpRequest({
+      hostname: target.hostname,
+      port: target.port,
+      path: `${target.pathname}${target.search}`,
+      method: "GET",
+      headers: { Host: host },
+    }, (response) => {
+      response.resume();
+      response.once("end", () => resolve(response));
+    });
+    outgoing.once("error", reject);
+    outgoing.end();
+  });
 }
 
 async function json(path, options = {}, expectedStatus = 200) {
@@ -107,6 +126,25 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   const health = await json("/api/health");
   assert.equal(health.status, "ok");
 
+  const dotComEnglish = await requestWithHost(
+    "/services?source=integration",
+    "enterprise.perumnet.com",
+  );
+  assert.equal(dotComEnglish.statusCode, 301);
+  assert.equal(
+    dotComEnglish.headers.location,
+    "https://enterprise.perumnet.id/en/services?source=integration",
+  );
+  const dotComPanel = await requestWithHost(
+    "/panel?source=integration",
+    "enterprise.perumnet.com",
+  );
+  assert.equal(dotComPanel.statusCode, 301);
+  assert.equal(
+    dotComPanel.headers.location,
+    "https://enterprise.perumnet.id/panel?source=integration",
+  );
+
   const unauthorized = await request("/api/projects");
   assert.equal(unauthorized.status, 401);
 
@@ -124,6 +162,19 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   assert.equal(login.user.role, "Admin");
   assert.match(cookie, /^perumnet_session=/);
   assert.match(lastSetCookie, /Max-Age=2592000/);
+
+  const panelRecovery = await json("/api/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "admin@perumnet.id",
+      surface: "panel",
+    }),
+  });
+  assert.ok(panelRecovery.resetToken);
+  const recoveryDelivery = (await json("/api/notifications/email")).find(
+    (delivery) => delivery.eventType === "password_reset",
+  );
+  assert.equal(recoveryDelivery.senderProfile, "security");
 
   const leadKey = `lead-integration-${Date.now()}`;
   const leadPayload = {

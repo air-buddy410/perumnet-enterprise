@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db/client";
 
 export type EmailDeliveryStatus = "pending" | "sent" | "failed" | "skipped";
+export type EmailSenderProfile = "operational" | "security";
 
 interface EmailDeliveryInput {
   userId?: string;
@@ -11,6 +12,7 @@ interface EmailDeliveryInput {
   eventType: string;
   subject: string;
   html: string;
+  senderProfile?: EmailSenderProfile;
   respectPreference?: boolean;
 }
 
@@ -96,8 +98,8 @@ async function recordDelivery(
   await client.execute({
     sql: `
       INSERT INTO email_deliveries
-        (id,user_id,event_type,recipient,subject,status,provider_id,error_message,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?)
+        (id,user_id,event_type,sender_profile,recipient,subject,status,provider_id,error_message,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT (id) DO UPDATE SET
         status=excluded.status,
         provider_id=excluded.provider_id,
@@ -108,6 +110,7 @@ async function recordDelivery(
       result.id,
       input.userId ?? null,
       input.eventType,
+      input.senderProfile ?? "operational",
       input.recipient,
       input.subject,
       result.status,
@@ -118,10 +121,12 @@ async function recordDelivery(
   });
 }
 
-export function emailDeliveryConfigured() {
+export function emailDeliveryConfigured(
+  profile: EmailSenderProfile = "operational",
+) {
   return (
     emailMode() === "live" &&
-    (smtpConfigured() || Boolean(process.env.RESEND_API_KEY))
+    (smtpConfigured(profile) || Boolean(process.env.RESEND_API_KEY))
   );
 }
 
@@ -132,18 +137,30 @@ export function emailMode() {
   return "live" as const;
 }
 
-function smtpConfigured() {
+function securitySmtpConfigured() {
   return Boolean(
-    process.env.SMTP_HOST &&
-      process.env.SMTP_PORT &&
-      process.env.SMTP_USER &&
-      process.env.SMTP_PASS,
+    process.env.SECURITY_SMTP_USER &&
+      process.env.SECURITY_SMTP_PASS,
   );
 }
 
-export function emailProviderName() {
+function smtpConfigured(profile: EmailSenderProfile = "operational") {
+  const securityCredentials =
+    profile === "security" && securitySmtpConfigured();
+  return Boolean(
+    (process.env.SECURITY_SMTP_HOST ?? process.env.SMTP_HOST) &&
+      process.env.SMTP_PORT &&
+      (securityCredentials
+        ? process.env.SECURITY_SMTP_USER && process.env.SECURITY_SMTP_PASS
+        : process.env.SMTP_USER && process.env.SMTP_PASS),
+  );
+}
+
+export function emailProviderName(
+  profile: EmailSenderProfile = "operational",
+) {
   if (emailMode() === "capture") return "capture";
-  if (smtpConfigured()) return "smtp";
+  if (smtpConfigured(profile)) return "smtp";
   if (process.env.RESEND_API_KEY) return "resend";
   return "disabled";
 }
@@ -158,18 +175,19 @@ async function enqueueOutbox(
   const timestamp = new Date().toISOString();
   await client.execute({
     sql: `INSERT INTO email_outbox
-      (id,user_id,event_type,recipient,subject,body_html,status,provider,
+      (id,user_id,event_type,sender_profile,recipient,subject,body_html,status,provider,
        attempt_count,next_attempt_at,last_error,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?)`,
+      VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,?)`,
     args: [
       id,
       input.userId ?? null,
       input.eventType,
+      input.senderProfile ?? "operational",
       input.recipient,
       input.subject,
       input.html,
       status,
-      emailProviderName(),
+      emailProviderName(input.senderProfile),
       timestamp,
       error ?? null,
       timestamp,
@@ -183,7 +201,7 @@ export async function sendEmailDelivery(
   client: DatabaseClient,
   input: EmailDeliveryInput,
 ): Promise<EmailDeliveryResult> {
-  const configured = emailDeliveryConfigured();
+  const configured = emailDeliveryConfigured(input.senderProfile);
   if (
     input.respectPreference !== false &&
     !(await preferenceAllowsEmail(client, input.userId))
@@ -241,22 +259,47 @@ export async function sendEmailDelivery(
 
 const retryMinutes = [1, 5, 15, 60] as const;
 
+function senderProfile(row: Record<string, unknown>): EmailSenderProfile {
+  return row.sender_profile === "security" ? "security" : "operational";
+}
+
 async function sendWithSmtp(row: Record<string, unknown>) {
   const nodemailer = (await import("nodemailer")).default;
-  const port = Number(process.env.SMTP_PORT ?? 465);
+  const profile = senderProfile(row);
+  const dedicatedSecurity =
+    profile === "security" && securitySmtpConfigured();
+  const host =
+    (dedicatedSecurity ? process.env.SECURITY_SMTP_HOST : undefined) ??
+    process.env.SMTP_HOST;
+  const port = Number(
+    (dedicatedSecurity ? process.env.SECURITY_SMTP_PORT : undefined) ??
+      process.env.SMTP_PORT ??
+      465,
+  );
+  const secureValue =
+    (dedicatedSecurity ? process.env.SECURITY_SMTP_SECURE : undefined) ??
+    process.env.SMTP_SECURE;
   const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
+    host,
     port,
     secure:
-      process.env.SMTP_SECURE === "true" ||
-      (process.env.SMTP_SECURE !== "false" && port === 465),
+      secureValue === "true" ||
+      (secureValue !== "false" && port === 465),
     auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
+      user: dedicatedSecurity
+        ? process.env.SECURITY_SMTP_USER
+        : process.env.SMTP_USER,
+      pass: dedicatedSecurity
+        ? process.env.SECURITY_SMTP_PASS
+        : process.env.SMTP_PASS,
     },
     tls: {
       servername:
-        process.env.SMTP_TLS_SERVERNAME ?? process.env.SMTP_HOST,
+        (dedicatedSecurity
+          ? process.env.SECURITY_SMTP_TLS_SERVERNAME
+          : undefined) ??
+        process.env.SMTP_TLS_SERVERNAME ??
+        host,
       rejectUnauthorized: true,
     },
     connectionTimeout: 15_000,
@@ -265,9 +308,15 @@ async function sendWithSmtp(row: Record<string, unknown>) {
   });
   const info = await transporter.sendMail({
     from:
-      process.env.EMAIL_FROM ??
+      (dedicatedSecurity
+        ? process.env.SECURITY_EMAIL_FROM ??
+          "PerumNet <no-reply@perumnet.id>"
+        : process.env.EMAIL_FROM) ??
       "PerumNet Enterprise <it@perumnet.id>",
     replyTo:
+      (profile === "security"
+        ? process.env.SECURITY_EMAIL_REPLY_TO
+        : undefined) ??
       process.env.EMAIL_REPLY_TO ??
       "PerumNet Enterprise <it@perumnet.id>",
     to: String(row.recipient),
@@ -279,6 +328,7 @@ async function sendWithSmtp(row: Record<string, unknown>) {
 }
 
 async function sendWithResend(row: Record<string, unknown>) {
+  const profile = senderProfile(row);
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -287,10 +337,17 @@ async function sendWithResend(row: Record<string, unknown>) {
     },
     body: JSON.stringify({
       from:
+        (profile === "security"
+          ? process.env.SECURITY_EMAIL_FROM
+          : undefined) ??
         process.env.EMAIL_FROM ??
         "PerumNet Enterprise <it@perumnet.id>",
       reply_to:
-        process.env.EMAIL_REPLY_TO ?? "it@perumnet.id",
+        (profile === "security"
+          ? process.env.SECURITY_EMAIL_REPLY_TO
+          : undefined) ??
+        process.env.EMAIL_REPLY_TO ??
+        "it@perumnet.id",
       to: [String(row.recipient)],
       subject: String(row.subject),
       html: String(row.body_html),
@@ -312,13 +369,15 @@ async function deliverOutboxRow(
   client: DatabaseClient,
   row: Record<string, unknown>,
 ) {
-  const provider = emailProviderName();
+  const profile = senderProfile(row);
+  const provider = emailProviderName(profile);
   const attempt = Number(row.attempt_count ?? 0) + 1;
   const timestamp = new Date().toISOString();
   const input: EmailDeliveryInput = {
     userId: row.user_id ? String(row.user_id) : undefined,
     recipient: String(row.recipient),
     eventType: String(row.event_type),
+    senderProfile: profile,
     subject: String(row.subject),
     html: String(row.body_html),
   };
@@ -464,6 +523,7 @@ export async function sendAccountCreatedEmail(
     userId: user.id,
     recipient: user.email,
     eventType: "account_created",
+    senderProfile: "security",
     subject: en
       ? "Your PerumNet Enterprise account is ready"
       : "Akun PerumNet Enterprise Anda sudah siap",
@@ -578,15 +638,17 @@ export async function sendPasswordResetEmail(
     preferredLanguage?: EmailLanguage;
   },
   token: string,
+  surface: "admin" | "panel" = "admin",
 ) {
   const en = user.preferredLanguage === "en";
   const resetUrl = applicationUrl(
-    `/admin?resetToken=${encodeURIComponent(token)}`,
+    `/${surface}?resetToken=${encodeURIComponent(token)}`,
   );
   return sendEmailDelivery(client, {
     userId: user.id,
     recipient: user.email,
     eventType: "password_reset",
+    senderProfile: "security",
     subject: en
       ? "Reset your PerumNet Enterprise password"
       : "Pemulihan kata sandi PerumNet Enterprise",

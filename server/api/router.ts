@@ -767,11 +767,15 @@ async function handleAuth(request: Request, path: string[]) {
   }
 
   if (request.method === "POST" && action === "forgot-password") {
-    const input = z.object({ email: emailSchema }).parse(await jsonBody(request));
+    const input = z.object({
+      email: emailSchema,
+      surface: z.enum(["admin", "panel"]).optional().default("admin"),
+    }).parse(await jsonBody(request));
     const { client } = await getDatabase();
     const result = await client.execute({
       sql: `
-        SELECT u.id,u.email,COALESCE(up.preferred_language,'id') AS preferred_language
+        SELECT u.id,u.email,u.role,
+          COALESCE(up.preferred_language,'id') AS preferred_language
         FROM users u
         LEFT JOIN user_profiles up ON up.user_id=u.id
         WHERE lower(u.email) = lower(?) AND u.status = 'Aktif'
@@ -781,17 +785,23 @@ async function handleAuth(request: Request, path: string[]) {
     });
 
     let developmentToken: string | undefined;
-    if (result.rows[0]) {
-      const token = await createPasswordResetToken(client, String(result.rows[0].id));
+    const eligibleUser =
+      result.rows[0] &&
+      (input.surface !== "panel" || String(result.rows[0].role) === "Admin")
+        ? result.rows[0]
+        : undefined;
+    if (eligibleUser) {
+      const token = await createPasswordResetToken(client, String(eligibleUser.id));
       await sendPasswordResetEmail(
         client,
         {
-          id: String(result.rows[0].id),
-          email: String(result.rows[0].email),
+          id: String(eligibleUser.id),
+          email: String(eligibleUser.email),
           preferredLanguage:
-            String(result.rows[0].preferred_language) === "en" ? "en" : "id",
+            String(eligibleUser.preferred_language) === "en" ? "en" : "id",
         },
         token,
+        input.surface,
       );
       if (process.env.NODE_ENV !== "production" && !process.env.RESEND_API_KEY) {
         developmentToken = token;
@@ -4506,12 +4516,12 @@ async function handleNotifications(
       sql: `
         SELECT * FROM (
           SELECT id,user_id,event_type,recipient,subject,lower(status) AS status,
-            last_error AS error_message,provider,provider_id,attempt_count,
+            sender_profile,last_error AS error_message,provider,provider_id,attempt_count,
             next_attempt_at,created_at
           FROM email_outbox
           UNION ALL
           SELECT d.id,d.user_id,d.event_type,d.recipient,d.subject,d.status,
-            d.error_message,NULL AS provider,d.provider_id,0 AS attempt_count,
+            d.sender_profile,d.error_message,NULL AS provider,d.provider_id,0 AS attempt_count,
             d.created_at AS next_attempt_at,d.created_at
           FROM email_deliveries d
           WHERE NOT EXISTS (SELECT 1 FROM email_outbox o WHERE o.id=d.id)
@@ -4527,6 +4537,7 @@ async function handleNotifications(
         id: String(row.id),
         userId: row.user_id ? String(row.user_id) : undefined,
         eventType: String(row.event_type),
+        senderProfile: String(row.sender_profile ?? "operational"),
         recipient: String(row.recipient),
         subject: String(row.subject),
         status: String(row.status),

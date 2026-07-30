@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS email_deliveries (
   id TEXT PRIMARY KEY,
   user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   event_type TEXT NOT NULL,
+  sender_profile TEXT NOT NULL DEFAULT 'operational',
   recipient TEXT NOT NULL,
   subject TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('sent', 'failed', 'skipped')),
@@ -69,6 +70,7 @@ CREATE TABLE IF NOT EXISTS email_outbox (
   id TEXT PRIMARY KEY,
   user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   event_type TEXT NOT NULL,
+  sender_profile TEXT NOT NULL DEFAULT 'operational',
   recipient TEXT NOT NULL,
   subject TEXT NOT NULL,
   body_html TEXT NOT NULL,
@@ -1748,6 +1750,19 @@ async function ensureProcurementSchema(client: DatabaseClient) {
 
 async function ensureTaxAndEmailSchema(client: DatabaseClient) {
   const timestamp = new Date().toISOString();
+
+  await ensureColumn(
+    client,
+    "email_deliveries",
+    "sender_profile",
+    "TEXT NOT NULL DEFAULT 'operational'",
+  );
+  await ensureColumn(
+    client,
+    "email_outbox",
+    "sender_profile",
+    "TEXT NOT NULL DEFAULT 'operational'",
+  );
 
   await ensureColumn(
     client,

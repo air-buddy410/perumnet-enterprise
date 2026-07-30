@@ -34,8 +34,9 @@ Enterprise.
 
 ## 4. App password Enterprise
 
-Buat app password baru khusus aplikasi Enterprise untuk mailbox
-`it@perumnet.id`. Konfigurasi pada secret environment production:
+Buat app password terpisah untuk notifikasi operasional `it@perumnet.id` dan
+email keamanan `no-reply@perumnet.id`. Konfigurasi pada secret environment
+production:
 
 ```bash
 SMTP_HOST=100.65.248.6
@@ -46,6 +47,10 @@ SMTP_USER=it@perumnet.id
 SMTP_PASS=<app-password-khusus-enterprise>
 EMAIL_FROM="PerumNet Enterprise <it@perumnet.id>"
 EMAIL_REPLY_TO="PerumNet Enterprise <it@perumnet.id>"
+SECURITY_SMTP_USER=no-reply@perumnet.id
+SECURITY_SMTP_PASS=<app-password-khusus-security-enterprise>
+SECURITY_EMAIL_FROM="PerumNet <no-reply@perumnet.id>"
+SECURITY_EMAIL_REPLY_TO="PerumNet IT <it@perumnet.id>"
 ```
 
 Uji sertifikat TLS menggunakan nama `mail.perumnet.id`; jangan menonaktifkan

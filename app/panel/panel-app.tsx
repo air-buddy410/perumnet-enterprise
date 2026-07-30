@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
+  ArrowLeft,
   ArrowRight,
   BriefcaseBusiness,
   Camera,
@@ -18,9 +19,11 @@ import {
   Image as ImageIcon,
   Languages,
   LayoutDashboard,
+  KeyRound,
   LoaderCircle,
   LockKeyhole,
   LogOut,
+  Mail,
   Menu,
   MessageSquareQuote,
   MonitorUp,
@@ -284,10 +287,24 @@ function LoadingScreen() {
 }
 
 function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
+  const [mode, setMode] = useState<"login" | "forgot" | "reset">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [resetToken, setResetToken] = useState("");
+  const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get("resetToken");
+    if (token) {
+      const update = window.setTimeout(() => {
+        setResetToken(token);
+        setMode("reset");
+      }, 0);
+      return () => window.clearTimeout(update);
+    }
+  }, []);
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError("");
     try {
@@ -297,6 +314,40 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
     } catch (error) { setError(error instanceof Error ? error.message : "Email atau kata sandi salah."); }
     finally { setBusy(false); }
   };
+  const submitForgot = async (event: FormEvent) => {
+    event.preventDefault(); setBusy(true); setError("");
+    try {
+      const result = await request<{ message: string; resetToken?: string }>("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, surface: "panel" }),
+      });
+      setResetToken(result.resetToken ?? "");
+      setSent(true);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Email pemulihan belum dapat dikirim.");
+    } finally { setBusy(false); }
+  };
+  const submitReset = async (event: FormEvent) => {
+    event.preventDefault(); setBusy(true); setError("");
+    if (password.length < 8) {
+      setBusy(false); setError("Kata sandi baru minimal 8 karakter."); return;
+    }
+    if (password !== confirmPassword) {
+      setBusy(false); setError("Konfirmasi kata sandi belum sama."); return;
+    }
+    try {
+      await request("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: resetToken, password }),
+      });
+      window.history.replaceState({}, "", window.location.pathname);
+      setMode("login"); setSent(false); setResetToken(""); setConfirmPassword("");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Kata sandi belum dapat diperbarui.");
+    } finally { setBusy(false); }
+  };
   return <main className={styles.loginRoot}>
     <section className={styles.loginVisual}>
       <div className={styles.loginBrand}><img src="/perumnet-mark.png" alt="" /><strong>PERUMNET ENTERPRISE</strong></div>
@@ -304,16 +355,36 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
       <div className={styles.loginStatus}><span /> Sistem pengelolaan konten siap digunakan</div>
     </section>
     <section className={styles.loginFormWrap}>
-      <form onSubmit={submit} className={styles.loginForm}>
+      {mode === "login" && <form onSubmit={submit} className={styles.loginForm}>
         <div className={styles.portalLabel}><span /> Portal pengelolaan PerumNet</div>
         <span className={styles.formEyebrow}>AKSES ADMIN</span><h2>Selamat datang kembali.</h2><p>Masuk dengan akun Administrator PerumNet Enterprise.</p>
         <label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@perumnet.id" required autoComplete="email" /></label>
         <label>Kata sandi<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Masukkan kata sandi" required minLength={8} autoComplete="current-password" /></label>
+        <button className={styles.loginFormSwitch} type="button" onClick={() => { setMode("forgot"); setError(""); }}>Lupa kata sandi?</button>
         {error && <div className={styles.formError}>{error}</div>}
         <button type="submit" disabled={busy}>{busy ? <LoaderCircle className={styles.spin} size={19} /> : <>Masuk ke Panel <ArrowRight size={18} /></>}</button>
         <div className={styles.loginLegal}><Link href="/syarat-ketentuan">Syarat dan Ketentuan</Link><Link href="/kebijakan-privasi">Kebijakan Privasi</Link><Link href="/#faq">FAQ</Link></div>
         <small>© {new Date().getFullYear()} PerumNet Enterprise</small>
-      </form>
+      </form>}
+      {mode === "forgot" && <form onSubmit={submitForgot} className={styles.loginForm}>
+        <button className={styles.loginBack} type="button" onClick={() => { setMode("login"); setSent(false); setError(""); }}><ArrowLeft size={16} /> Kembali ke login</button>
+        <Mail className={styles.loginModeIcon} size={25} />
+        <span className={styles.formEyebrow}>PEMULIHAN AKSES</span><h2>Lupa kata sandi?</h2><p>Kami akan mengirim tautan pemulihan ke email Administrator yang terdaftar.</p>
+        {!sent ? <>
+          <label>Email terdaftar<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required autoComplete="email" /></label>
+          {error && <div className={styles.formError}>{error}</div>}
+          <button type="submit" disabled={busy}>{busy ? <LoaderCircle className={styles.spin} size={19} /> : <>Kirim tautan pemulihan <ArrowRight size={18} /></>}</button>
+        </> : <div className={styles.loginSuccess}><strong>Email pemulihan diproses.</strong><span>Jika akun Administrator terdaftar, tautan reset akan dikirim ke {email}.</span>{resetToken && <button type="button" onClick={() => setMode("reset")}>Buka halaman reset</button>}</div>}
+      </form>}
+      {mode === "reset" && <form onSubmit={submitReset} className={styles.loginForm}>
+        <button className={styles.loginBack} type="button" onClick={() => { setMode("forgot"); setError(""); }}><ArrowLeft size={16} /> Kembali</button>
+        <KeyRound className={styles.loginModeIcon} size={25} />
+        <span className={styles.formEyebrow}>KATA SANDI BARU</span><h2>Amankan akun Anda.</h2><p>Gunakan minimal delapan karakter dan jangan memakai ulang kata sandi lama.</p>
+        <label>Kata sandi baru<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} autoComplete="new-password" /></label>
+        <label>Konfirmasi kata sandi<input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required minLength={8} autoComplete="new-password" /></label>
+        {error && <div className={styles.formError}>{error}</div>}
+        <button type="submit" disabled={busy}>{busy ? <LoaderCircle className={styles.spin} size={19} /> : <>Simpan kata sandi <ArrowRight size={18} /></>}</button>
+      </form>}
     </section>
   </main>;
 }

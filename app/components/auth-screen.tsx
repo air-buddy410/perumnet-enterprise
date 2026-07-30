@@ -74,7 +74,7 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
     try {
       const result = await api<{ message: string; resetToken?: string }>("/api/auth/forgot-password", {
         method: "POST",
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, surface: "admin" }),
       });
       setResetToken(result.resetToken ?? "");
       setSent(true);

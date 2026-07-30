@@ -177,6 +177,10 @@ SMTP_USER=it@perumnet.id
 SMTP_PASS=app-password-khusus-enterprise
 EMAIL_FROM="PerumNet Enterprise <it@perumnet.id>"
 EMAIL_REPLY_TO="PerumNet Enterprise <it@perumnet.id>"
+SECURITY_SMTP_USER=no-reply@perumnet.id
+SECURITY_SMTP_PASS=app-password-khusus-security-enterprise
+SECURITY_EMAIL_FROM="PerumNet <no-reply@perumnet.id>"
+SECURITY_EMAIL_REPLY_TO="PerumNet IT <it@perumnet.id>"
 EMAIL_WORKER_SECRET=secret-random-internal
 EMAIL_WORKER_APP_URL=http://127.0.0.1:3100
 ```
