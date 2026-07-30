@@ -184,6 +184,25 @@ body:has(#login_user) .mailcow-logo .main-logo-dark {
   display: none !important;
 }
 
+body:has(#login_user) .card-body > legend {
+  float: none;
+  width: 100%;
+  margin: 0 0 8px;
+  color: transparent;
+  font-size: 0;
+}
+
+body:has(#login_user) .card-body > legend::after {
+  color: var(--perumnet-muted);
+  content: "Akses email bisnis PerumNet";
+  font-size: 14px;
+  font-weight: 650;
+}
+
+body:has(#login_user) .card-body > legend + hr {
+  display: none;
+}
+
 body:has(#login_user) .input-group {
   align-items: stretch;
 }
@@ -231,6 +250,16 @@ body:has(#login_user) a:hover {
   color: #006a65;
 }
 
+body:has(#login_user) a[href="/reset-password"] {
+  font-size: 0;
+}
+
+body:has(#login_user) a[href="/reset-password"]::after {
+  content: "Lupa kata sandi?";
+  font-size: 13px;
+  font-weight: 650;
+}
+
 body:has(#login_user) .btn-success {
   min-height: 51px;
   max-width: none !important;
@@ -265,6 +294,15 @@ body:has(#login_user) input:focus-visible {
 body:has(#login_user) .hr-title {
   margin: 30px 0 18px;
   color: #91a09f;
+}
+
+body:has(#login_user) .hr-title strong {
+  font-size: 0;
+}
+
+body:has(#login_user) .hr-title strong::after {
+  content: "atau masuk dengan";
+  font-size: 13px;
 }
 
 body:has(#login_user) .btn-secondary {
