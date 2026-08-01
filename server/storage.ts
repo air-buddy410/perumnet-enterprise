@@ -14,14 +14,15 @@ function localStoragePath(id: string) {
   return `${uploadDirectory.replace(/\/+$/, "")}/${id}`;
 }
 
-export async function storeProjectFile(
+export async function storeUploadedFile(
+  namespace: "project-documents" | "project-expenses",
   id: string,
   mimeType: string,
   content: ArrayBuffer,
 ) {
   const environment = await getCloudflareEnvironment();
   if (environment?.FILES) {
-    const key = `project-documents/${id}`;
+    const key = `${namespace}/${id}`;
     await environment.FILES.put(key, content, {
       httpMetadata: { contentType: mimeType },
     });
@@ -40,6 +41,14 @@ export async function storeProjectFile(
     storageUrl: null,
     contentBase64: Buffer.from(content).toString("base64"),
   };
+}
+
+export async function storeProjectFile(
+  id: string,
+  mimeType: string,
+  content: ArrayBuffer,
+) {
+  return storeUploadedFile("project-documents", id, mimeType, content);
 }
 
 export async function readProjectFile(storageUrl: string | null) {
@@ -78,3 +87,6 @@ export async function deleteProjectFile(storageUrl: string | null) {
     await environment?.FILES?.delete(storageUrl.slice("r2://".length));
   }
 }
+
+export const readStoredFile = readProjectFile;
+export const deleteStoredFile = deleteProjectFile;

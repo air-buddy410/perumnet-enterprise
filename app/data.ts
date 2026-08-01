@@ -3,6 +3,7 @@ export type ViewKey =
   | "boq"
   | "billing"
   | "project"
+  | "expenses"
   | "procurement"
   | "validation"
   | "bast"
@@ -129,6 +130,8 @@ export interface CommercialScope {
     issuedAt: string;
     validUntil?: string | null;
     total: number;
+    taxEnabled?: boolean;
+    taxRevision?: number;
     acceptedAt?: string | null;
     attachmentName?: string | null;
   } | null;
@@ -262,6 +265,95 @@ export interface Transaction {
   category: string;
   categoryKey?: string;
   editable?: boolean;
+}
+
+export interface ProjectExpenseAttachment {
+  id: string;
+  kind: "Receipt" | "Invoice" | "PaymentProof" | "Other";
+  name: string;
+  mimeType: string;
+  size: number;
+  sha256: string;
+  createdAt: string;
+  url: string;
+}
+
+export interface ProjectExpenseSettlement {
+  id: string;
+  type: "CompanyPayment" | "AdvanceAllocation" | "Reimbursement" | "AdvanceReturn" | "Reversal";
+  amount: number;
+  settlementDate: string;
+  paymentReference: string;
+  status: "Posted" | "Void";
+  bankAccountId?: string;
+  bankAccount?: string;
+  transactionId?: string;
+}
+
+export interface ProjectExpense {
+  id: string;
+  number: string;
+  projectId: string;
+  projectCode: string;
+  projectName: string;
+  purchaseDate: string;
+  merchant: string;
+  categoryId: string;
+  category: string;
+  categoryEn: string;
+  totalAmount: number;
+  currency: "IDR";
+  fundingSource: "CompanyAccount" | "ProjectAdvance" | "EmployeePaid";
+  bankAccountId?: string;
+  bankAccount?: string;
+  advanceId?: string;
+  advanceNumber?: string;
+  notes: string;
+  itemDetails: Array<{ description: string; quantity: number; unit: string; unitPrice: number }>;
+  workflowStatus: "Draft" | "Submitted" | "Approved" | "Rejected" | "Void";
+  settlementStatus: "Unposted" | "Posted" | "AwaitingReimbursement" | "PartiallyReimbursed" | "Reimbursed" | "AdvanceSettled" | "Void";
+  duplicateAcknowledged: boolean;
+  reviewReason: string;
+  selfApprovalReason: string;
+  createdBy: string;
+  creatorName: string;
+  approvedBy?: string;
+  approverName?: string;
+  reimbursedAmount: number;
+  advanceAllocatedAmount: number;
+  reimbursementOutstanding: number;
+  createdAt: string;
+  updatedAt: string;
+  attachments?: ProjectExpenseAttachment[];
+  settlements?: ProjectExpenseSettlement[];
+  events?: Array<{ id: string; type: string; note: string; actor: string; createdAt: string }>;
+}
+
+export interface ProjectExpenseCategory {
+  id: string;
+  name: string;
+  nameEn: string;
+  status: "Aktif" | "Nonaktif";
+  sortOrder: number;
+  usageCount: number;
+}
+
+export interface ProjectAdvance {
+  id: string;
+  number: string;
+  projectId: string;
+  project: string;
+  recipientUserId: string;
+  recipient: string;
+  amount: number;
+  allocated: number;
+  returned: number;
+  outstanding: number;
+  disbursedDate: string;
+  bankAccountId?: string;
+  paymentReference: string;
+  notes: string;
+  status: "Open" | "Settled" | "Void";
 }
 
 export interface BankAccount {

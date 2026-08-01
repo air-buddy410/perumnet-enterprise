@@ -35,6 +35,7 @@ import { BillingView } from "./billing-view";
 import { BoqView } from "./boq-view";
 import { DashboardView } from "./dashboard-view";
 import { FinanceView } from "./finance-view";
+import { ProjectExpenseView } from "./project-expense-view";
 import { HelpView } from "./help-view";
 import { ProcurementViewV2 as ProcurementView } from "./procurement-v2-view";
 import { ProfileView } from "./profile-view";
@@ -48,7 +49,7 @@ import { WorkspaceSwitcher } from "./workspace-switcher";
 
 interface NavigationItem {
   id: ViewKey;
-  labelKey: "dashboard" | "projects" | "boq" | "billing" | "procurement" | "validation" | "bast" | "finance" | "users";
+  labelKey: "dashboard" | "projects" | "expenses" | "boq" | "billing" | "procurement" | "validation" | "bast" | "finance" | "users";
   module: AccessModule;
   icon: typeof LayoutDashboard;
   badge?: string;
@@ -69,6 +70,7 @@ const mainNavigation: NavigationItem[] = [
 ];
 
 const operationsNavigation: NavigationItem[] = [
+  { id: "expenses", labelKey: "expenses", module: "projects", icon: ReceiptText },
   { id: "procurement", labelKey: "procurement", module: "procurement", icon: PackageSearch },
   { id: "validation", labelKey: "validation", module: "bast", icon: ClipboardCheck },
   { id: "bast", labelKey: "bast", module: "bast", icon: ClipboardSignature },
@@ -84,6 +86,7 @@ function viewMeta(language: AppLanguage, view: ViewKey) {
   const meta: Record<ViewKey, { title: string; subtitle: string }> = {
     dashboard: { title: "Dashboard", subtitle: id ? "Pusat kendali operasional" : "Operations control center" },
     project: { title: translate(language, "projects"), subtitle: id ? "Jadwal, tugas, dan dokumentasi" : "Schedules, tasks, and documentation" },
+    expenses: { title: translate(language, "expenses"), subtitle: id ? "Nota, uang muka, dan reimbursement proyek" : "Project receipts, advances, and reimbursements" },
     boq: { title: "BoQ Generator", subtitle: id ? "Kalkulasi kebutuhan dan margin" : "Requirements and margin calculation" },
     billing: { title: translate(language, "billing"), subtitle: id ? "Penawaran dan penagihan proyek" : "Project quotations and billing" },
     procurement: { title: translate(language, "procurement"), subtitle: id ? "Mitra kerja dan Surat Perintah Kerja" : "Vendors and work orders" },
@@ -461,6 +464,7 @@ export function EnterpriseApp() {
           ) : null}
           {currentView === "dashboard" && canUse("dashboard") && <DashboardView language={language} navigate={navigate} notify={notify} selectedProjectId={selectedProjectId} userName={user.name} canManage={canManage("projects")} canUseBoq={canUse("boq")} canUseBilling={canUse("billing")} onSelectProject={selectProject} onProjectCreated={projectCreated} />}
           {currentView === "project" && canUse("projects") && (activeProjectId ? <ProjectView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} project={projects.find((item) => item.id === activeProjectId)} canManage={canManage("projects")} canDelete={user.role === "Admin"} canManageAccess={user.role === "Admin"} onProjectDeleted={projectDeleted} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "expenses" && canUse("projects") && (activeProjectId || ["Admin", "Finance"].includes(user.role) ? <ProjectExpenseView language={language} notify={notify} projectId={activeProjectId || undefined} projects={projects} userId={user.id} userRole={user.role} canCreate={canManage("projects") || canManage("finance")} canReview={["Admin", "Finance"].includes(user.role) && canManage("finance")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "boq" && canUse("boq") && (activeProjectId ? <BoqView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} canManage={canManage("boq")} /> : ["Admin", "Finance"].includes(user.role) && canManage("boq") ? <StandaloneBoqView language={language} notify={notify} projects={projects} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "billing" && canUse("billing") && (activeProjectId ? <BillingView language={language} notify={notify} projectId={activeProjectId} canManage={canManage("billing")} canManagePayments={canManage("billing") && canManage("finance")} canManageTaxes={["Admin", "Finance"].includes(user.role) && canManage("billing") && canManage("finance")} canManageValidity={["Admin", "Finance"].includes(user.role) && canManage("billing")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "procurement" && canUse("procurement") && (activeProjectId || ["Admin", "Finance"].includes(user.role) ? <ProcurementView language={language} notify={notify} projectId={activeProjectId || undefined} canManage={canManage("procurement")} canManageCommercial={canManage("boq") && canManage("billing")} canManageVendors={["Admin", "Finance"].includes(user.role) && canManage("procurement")} canManagePayments={canManage("procurement") && canManage("finance")} userRole={user.role} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}

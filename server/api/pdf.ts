@@ -65,6 +65,7 @@ export type FinancialReportProfitRow = {
   allocatedAmount: number;
   paidAmount: number;
   retainedProfit: number;
+  outstandingReimbursement?: number;
 };
 
 export type FinancialReportProcurementRow = {
@@ -84,6 +85,20 @@ export type FinancialReportTaxRow = {
   settled: number;
   outstanding: number;
   status: string;
+};
+
+export type FinancialReportExpenseRow = {
+  number: string;
+  date: string;
+  project: string;
+  category: string;
+  submitter: string;
+  merchant: string;
+  fundingSource: string;
+  workflowStatus: string;
+  settlementStatus: string;
+  amount: number;
+  reimbursementOutstanding: number;
 };
 
 const PAGE_WIDTH = 210;
@@ -1558,6 +1573,7 @@ export async function renderFinancialReportPdf(
   profitRows: FinancialReportProfitRow[] = [],
   procurementRows: FinancialReportProcurementRow[] = [],
   taxRows: FinancialReportTaxRow[] = [],
+  projectExpenseRows: FinancialReportExpenseRow[] = [],
 ) {
   const sortedDates = entries
     .map((entry) => entry.dateIso)
@@ -1642,14 +1658,16 @@ export async function renderFinancialReportPdf(
       context,
       y,
       [
-        { title: tr(language, "Proyek", "Project"), width: 68 },
-        { title: tr(language, "Laba Dasar", "Base Profit"), width: 38, align: "right" },
-        { title: tr(language, "Dialokasikan", "Allocated"), width: 38, align: "right" },
-        { title: tr(language, "Dibayar", "Paid"), width: 38, align: "right" },
+        { title: tr(language, "Proyek", "Project"), width: 58 },
+        { title: tr(language, "Laba Dasar", "Base Profit"), width: 34, align: "right" },
+        { title: tr(language, "Reimbursement", "Reimbursement"), width: 34, align: "right" },
+        { title: tr(language, "Dialokasikan", "Allocated"), width: 28, align: "right" },
+        { title: tr(language, "Dibayar", "Paid"), width: 28, align: "right" },
       ],
       profitRows.map((row) => [
         row.project,
         rupiah(row.netProfit, language),
+        rupiah(row.outstandingReimbursement ?? 0, language),
         `${rupiah(row.allocatedAmount, language)}\n${tr(language, "Sisa", "Retained")}: ${rupiah(row.retainedProfit, language)}`,
         rupiah(row.paidAmount, language),
       ]),
@@ -1718,6 +1736,37 @@ export async function renderFinancialReportPdf(
         rupiah(row.amount, language),
         rupiah(row.settled, language),
         rupiah(row.outstanding, language),
+      ]),
+    );
+  }
+
+  if (projectExpenseRows.length) {
+    y = drawSectionTitle(
+      context,
+      y,
+      tr(language, "Belanja Proyek", "Project Expenses"),
+      tr(
+        language,
+        "Nota lapangan, sumber dana, status verifikasi, dan kewajiban reimbursement",
+        "Field receipts, funding sources, verification status, and reimbursement liabilities",
+      ),
+    );
+    y = drawTable(
+      context,
+      y,
+      [
+        { title: tr(language, "Nota / Tanggal", "Receipt / Date"), width: 34 },
+        { title: tr(language, "Proyek / Toko", "Project / Merchant"), width: 48 },
+        { title: tr(language, "Kategori / Pengaju", "Category / Submitter"), width: 38 },
+        { title: tr(language, "Sumber / Status", "Funding / Status"), width: 36 },
+        { title: tr(language, "Nominal", "Amount"), width: 26, align: "right" },
+      ],
+      projectExpenseRows.map((row) => [
+        `${row.number}\n${displayDate(row.date, language)}`,
+        `${row.project}\n${row.merchant}`,
+        `${row.category}\n${row.submitter}`,
+        `${localizeValue(row.fundingSource, language)}\n${localizeValue(row.workflowStatus, language)} / ${localizeValue(row.settlementStatus, language)}`,
+        `${rupiah(row.amount, language)}${row.reimbursementOutstanding > 0 ? `\n${tr(language, "Utang", "Payable")}: ${rupiah(row.reimbursementOutstanding, language)}` : ""}`,
       ]),
     );
   }

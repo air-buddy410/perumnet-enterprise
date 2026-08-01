@@ -220,6 +220,34 @@ setiap pajak, bruto, potongan, kas bersih, posisi, dan outstanding. Utang pajak
 aktif mengurangi laba yang boleh dibagikan; pajak recoverable tidak dianggap
 sebagai laba.
 
+## Belanja proyek
+
+PM dan Engineer mencatat nota lapangan dari proyek yang dapat mereka akses,
+kemudian Finance memverifikasi pengajuan sebelum pembukuan berubah. Bukti dapat
+berupa JPG, PNG, WebP, atau PDF hingga 10 MB per file dan maksimal lima file.
+Hash file, kesamaan proyek/tanggal/toko/nominal, serta pembayaran procurement
+terkait diperiksa untuk mengurangi pencatatan ganda.
+
+Sumber dana menentukan perlakuan keuangan:
+
+- Rekening perusahaan membuat satu kas keluar aktual ketika disetujui.
+- Uang muka proyek mengurangi saldo pertanggungjawaban tanpa membuat kas keluar
+  kedua; sisa dikembalikan sebagai kas masuk dan kelebihan menjadi utang
+  reimbursement.
+- Uang pribadi pegawai menjadi kewajiban reimbursement dan baru membuat kas
+  keluar saat dibayar, termasuk pembayaran sebagian.
+
+Pengajuan yang sudah disetujui dikunci. Admin melakukan void melalui reversal,
+sedangkan transaksi yang telah direkonsiliasi harus dilepas terlebih dahulu.
+Outstanding reimbursement ikut mengurangi laba yang boleh dibagikan. Laporan
+proyek dan Finance dapat diekspor dalam PDF atau CSV berbahasa Indonesia maupun
+Inggris.
+
+Quotation Draft memiliki switch **Gunakan Pajak** per dokumen. Admin/Finance
+memilih aturan dari master pajak tanpa tarif legal yang di-hardcode. Saat
+Quotation Original atau Addendum diterima, tarif dan nominal menjadi snapshot
+terkunci dan diwariskan ke Invoice.
+
 ## Verifikasi
 
 ```bash

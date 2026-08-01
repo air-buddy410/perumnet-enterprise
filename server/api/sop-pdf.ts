@@ -135,14 +135,32 @@ const sopSections: SopSection[] = [
     ],
   },
   {
-    title: ["9. Pajak opsional dan email", "9. Optional tax and email"],
+    title: ["9. Belanja proyek, uang muka, dan reimbursement", "9. Project expenses, advances, and reimbursements"],
+    intro: [
+      "Setiap nota melewati verifikasi Finance tanpa mencatat pergerakan kas dua kali.",
+      "Every receipt passes Finance verification without posting the same cash movement twice.",
+    ],
+    steps: [
+      ["PM/Engineer memilih proyek, tanggal, toko, kategori, nominal, sumber dana, lalu mengunggah bukti.", "A PM/Engineer selects the project, date, merchant, category, amount, funding source, and uploads evidence."],
+      ["Finance memeriksa hash file, kemiripan nota, serta pembayaran vendor sebelum menyetujui.", "Finance checks file hashes, similar receipts, and vendor payments before approval."],
+      ["Rekening perusahaan membuat kas keluar; uang muka hanya mengurangi saldo; uang pribadi membuat utang reimbursement.", "Company funds post cash out; an advance only reduces its balance; employee funds create a reimbursement payable."],
+      ["Bayar reimbursement secara parsial bila perlu dan catat pengembalian sisa uang muka sebagai kas masuk.", "Pay reimbursements partially when needed and record unused advance returns as cash inflow."],
+      ["Admin melakukan Void melalui reversal setelah rekonsiliasi dilepas.", "An Admin voids through reversal after detaching any reconciliation."],
+    ],
+    control: [
+      "Nota Approved dikunci; bukti transaksi tidak pernah dihapus secara fisik.",
+      "Approved receipts are locked; posted evidence is never physically deleted.",
+    ],
+  },
+  {
+    title: ["10. Pajak opsional dan email", "10. Optional tax and email"],
     intro: [
       "Pajak nonaktif secara default; email bisnis diproses melalui transactional outbox.",
       "Tax is disabled by default; business email is processed through a transactional outbox.",
     ],
     steps: [
       ["Admin mengaktifkan pajak dan mengisi tarif aturan tanpa nilai legal hardcoded.", "An Admin enables tax and enters rule rates without hardcoded legal values."],
-      ["Admin/Finance menerapkan pajak per dokumen sebelum snapshot terkunci.", "Admin/Finance applies tax per document before its snapshot locks."],
+      ["Admin/Finance menyalakan Gunakan Pajak pada Quotation Draft dan memilih aturan; snapshot terkunci saat Accepted lalu diwariskan ke Invoice.", "Admin/Finance enables Use Tax on a Draft Quotation and selects rules; the snapshot locks at Accepted and passes to the Invoice."],
       ["Finance menyelesaikan utang/piutang pajak dengan referensi, rekening, dan bukti.", "Finance settles tax payables/receivables with a reference, account, and evidence."],
       ["Produksi mengirim melalui Mailcow-Brevo; demo hanya menyimpan capture.", "Production sends through Mailcow-Brevo; demo stores captures only."],
       ["Admin meninjau Pending/Failed dan menjalankan retry bila diperlukan.", "An Admin reviews Pending/Failed messages and retries when needed."],
@@ -153,19 +171,19 @@ const sopSections: SopSection[] = [
     ],
   },
   {
-    title: ["10. Laporan keuangan", "10. Financial reports"],
+    title: ["11. Laporan keuangan", "11. Financial reports"],
     intro: [
       "PDF dan CSV mengikuti periode, proyek, bahasa, kategori, posisi rekening, dan otoritas akun.",
       "PDF and CSV follow the period, project, language, category, bank position, and account authority.",
     ],
     steps: [
       ["Pilih proyek atau Semua Proyek.", "Select a project or All Projects."],
-      ["Periksa saldo, transaksi belum direkonsiliasi, dan pembagian laba.", "Review balances, unreconciled entries, and profit sharing."],
+      ["Periksa saldo, transaksi belum direkonsiliasi, belanja proyek, uang muka, reimbursement, dan pembagian laba.", "Review balances, unreconciled entries, project expenses, advances, reimbursements, and profit sharing."],
       ["Arsipkan PDF sebagai laporan baca dan CSV untuk pemeriksaan data.", "Archive the PDF as the reader report and CSV for data inspection."],
     ],
   },
   {
-    title: ["11. Penutupan proyek", "11. Project closeout"],
+    title: ["12. Penutupan proyek", "12. Project closeout"],
     intro: [
       "Tutup proyek hanya setelah dokumen, pekerjaan lapangan, dan arus kas konsisten.",
       "Close a project only after documents, field work, and cash flow are consistent.",

@@ -257,6 +257,8 @@ CREATE TABLE IF NOT EXISTS quotations (
   acceptance_attachment_name TEXT,
   acceptance_attachment_mime_type TEXT,
   acceptance_attachment_content_base64 TEXT,
+  tax_enabled INTEGER NOT NULL DEFAULT 0 CHECK (tax_enabled IN (0,1)),
+  tax_revision INTEGER NOT NULL DEFAULT 0 CHECK (tax_revision >= 0),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -523,6 +525,134 @@ CREATE INDEX IF NOT EXISTS transactions_date_idx ON transactions(date);
 CREATE UNIQUE INDEX IF NOT EXISTS transactions_source_reference_unique
   ON transactions(source, reference_id)
   WHERE reference_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS project_expense_categories (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  name_en TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'Aktif' CHECK (status IN ('Aktif','Nonaktif')),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS project_expense_categories_status_idx
+  ON project_expense_categories(status,sort_order,name);
+
+CREATE TABLE IF NOT EXISTS project_advances (
+  id TEXT PRIMARY KEY,
+  number TEXT NOT NULL UNIQUE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+  recipient_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  disbursed_date TEXT NOT NULL,
+  bank_account_id TEXT REFERENCES bank_accounts(id) ON DELETE RESTRICT,
+  payment_reference TEXT NOT NULL,
+  notes TEXT,
+  status TEXT NOT NULL DEFAULT 'Open' CHECK (status IN ('Open','Settled','Void')),
+  transaction_id TEXT UNIQUE REFERENCES transactions(id) ON DELETE SET NULL,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  voided_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  voided_at TEXT,
+  void_reason TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS project_advances_project_status_idx
+  ON project_advances(project_id,status,disbursed_date);
+CREATE INDEX IF NOT EXISTS project_advances_recipient_idx
+  ON project_advances(recipient_user_id,status);
+
+CREATE TABLE IF NOT EXISTS project_expenses (
+  id TEXT PRIMARY KEY,
+  number TEXT NOT NULL UNIQUE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+  purchase_date TEXT NOT NULL,
+  merchant TEXT NOT NULL,
+  category_id TEXT NOT NULL REFERENCES project_expense_categories(id) ON DELETE RESTRICT,
+  total_amount INTEGER NOT NULL CHECK (total_amount > 0),
+  currency TEXT NOT NULL DEFAULT 'IDR',
+  funding_source TEXT NOT NULL CHECK (funding_source IN ('CompanyAccount','ProjectAdvance','EmployeePaid')),
+  bank_account_id TEXT REFERENCES bank_accounts(id) ON DELETE RESTRICT,
+  advance_id TEXT REFERENCES project_advances(id) ON DELETE RESTRICT,
+  notes TEXT,
+  item_details_json TEXT NOT NULL DEFAULT '[]',
+  workflow_status TEXT NOT NULL DEFAULT 'Draft'
+    CHECK (workflow_status IN ('Draft','Submitted','Approved','Rejected','Void')),
+  settlement_status TEXT NOT NULL DEFAULT 'Unposted'
+    CHECK (settlement_status IN ('Unposted','Posted','AwaitingReimbursement','PartiallyReimbursed','Reimbursed','AdvanceSettled','Void')),
+  duplicate_acknowledged INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_acknowledged IN (0,1)),
+  review_reason TEXT,
+  self_approval_reason TEXT,
+  created_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  submitted_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  submitted_at TEXT,
+  approved_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  approved_at TEXT,
+  rejected_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  rejected_at TEXT,
+  voided_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  voided_at TEXT,
+  void_reason TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS project_expenses_project_status_idx
+  ON project_expenses(project_id,workflow_status,purchase_date);
+CREATE INDEX IF NOT EXISTS project_expenses_creator_status_idx
+  ON project_expenses(created_by,workflow_status,created_at);
+CREATE INDEX IF NOT EXISTS project_expenses_settlement_idx
+  ON project_expenses(settlement_status,updated_at);
+
+CREATE TABLE IF NOT EXISTS project_expense_attachments (
+  id TEXT PRIMARY KEY,
+  expense_id TEXT NOT NULL REFERENCES project_expenses(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'Receipt' CHECK (kind IN ('Receipt','Invoice','PaymentProof','Other')),
+  name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  size INTEGER NOT NULL CHECK (size > 0 AND size <= 10485760),
+  sha256 TEXT NOT NULL,
+  storage_url TEXT,
+  content_base64 TEXT,
+  uploaded_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS project_expense_attachments_expense_idx
+  ON project_expense_attachments(expense_id,created_at);
+CREATE INDEX IF NOT EXISTS project_expense_attachments_hash_idx
+  ON project_expense_attachments(sha256);
+
+CREATE TABLE IF NOT EXISTS project_expense_settlements (
+  id TEXT PRIMARY KEY,
+  expense_id TEXT REFERENCES project_expenses(id) ON DELETE RESTRICT,
+  advance_id TEXT REFERENCES project_advances(id) ON DELETE RESTRICT,
+  settlement_type TEXT NOT NULL CHECK (settlement_type IN ('CompanyPayment','AdvanceAllocation','Reimbursement','AdvanceReturn','Reversal')),
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  settlement_date TEXT NOT NULL,
+  bank_account_id TEXT REFERENCES bank_accounts(id) ON DELETE RESTRICT,
+  payment_reference TEXT NOT NULL,
+  transaction_id TEXT UNIQUE REFERENCES transactions(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'Posted' CHECK (status IN ('Posted','Void')),
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS project_expense_settlements_expense_idx
+  ON project_expense_settlements(expense_id,status,settlement_date);
+CREATE INDEX IF NOT EXISTS project_expense_settlements_advance_idx
+  ON project_expense_settlements(advance_id,status,settlement_date);
+
+CREATE TABLE IF NOT EXISTS project_expense_events (
+  id TEXT PRIMARY KEY,
+  expense_id TEXT NOT NULL REFERENCES project_expenses(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL,
+  note TEXT,
+  metadata_json TEXT,
+  actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS project_expense_events_expense_idx
+  ON project_expense_events(expense_id,created_at);
 
 CREATE TABLE IF NOT EXISTS spk_payments (
   id TEXT PRIMARY KEY,
@@ -2022,6 +2152,47 @@ async function ensureTaxAndEmailSchema(client: DatabaseClient) {
   }
 }
 
+async function ensureProjectExpenseSchema(client: DatabaseClient) {
+  const timestamp = new Date().toISOString();
+  await ensureColumn(
+    client,
+    "quotations",
+    "tax_enabled",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
+  await ensureColumn(
+    client,
+    "quotations",
+    "tax_revision",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
+  await client.execute(`
+    UPDATE quotations
+    SET tax_enabled=1
+    WHERE EXISTS (
+      SELECT 1 FROM document_taxes dt
+      WHERE dt.document_type='Quotation' AND dt.document_id=quotations.id
+    )
+  `);
+  const categories = [
+    ["expense-category-material", "Material", "Material", 10],
+    ["expense-category-device", "Perangkat", "Equipment", 20],
+    ["expense-category-transport", "Transportasi", "Transportation", 30],
+    ["expense-category-meal", "Konsumsi", "Meals", 40],
+    ["expense-category-accommodation", "Akomodasi", "Accommodation", 50],
+    ["expense-category-field-service", "Jasa Lapangan", "Field Services", 60],
+    ["expense-category-other", "Operasional Lain", "Other Operations", 70],
+  ] as const;
+  for (const [id, name, nameEn, sortOrder] of categories) {
+    await client.execute({
+      sql: `INSERT INTO project_expense_categories
+        (id,name,name_en,status,sort_order,created_at,updated_at)
+        VALUES (?,?,?,'Aktif',?,?,?) ON CONFLICT (id) DO NOTHING`,
+      args: [id, name, nameEn, sortOrder, timestamp, timestamp],
+    });
+  }
+}
+
 export async function initializeDatabase(client: DatabaseClient) {
   await client.executeMultiple(schemaSql);
   await ensureCmsBilingualSchema(client);
@@ -2030,6 +2201,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureSpkPaymentColumns(client);
   await ensureProcurementSchema(client);
   await ensureTaxAndEmailSchema(client);
+  await ensureProjectExpenseSchema(client);
   await ensureCmsSeed(client);
   await ensureCmsEnhancements(client);
   await ensureCmsLandingFeatures(client);
@@ -2199,4 +2371,5 @@ export async function initializeDatabase(client: DatabaseClient) {
   // Original scope, vendor classification, procurement lines, and payments.
   await ensureProcurementSchema(client);
   await ensureTaxAndEmailSchema(client);
+  await ensureProjectExpenseSchema(client);
 }

@@ -239,6 +239,8 @@ export const boqScopes = sqliteTable(
     acceptanceAttachmentContentBase64: text(
       "acceptance_attachment_content_base64",
     ),
+    taxEnabled: integer("tax_enabled").notNull().default(0),
+    taxRevision: integer("tax_revision").notNull().default(0),
     createdBy: text("created_by").references(() => users.id, {
       onDelete: "set null",
     }),
@@ -764,6 +766,240 @@ export const transactions = sqliteTable(
     uniqueIndex("transactions_source_reference_unique").on(
       table.source,
       table.referenceId,
+    ),
+  ],
+);
+
+export const projectExpenseCategories = sqliteTable(
+  "project_expense_categories",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    nameEn: text("name_en").notNull(),
+    status: text("status").notNull().default("Aktif"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("project_expense_categories_name_unique").on(table.name),
+    index("project_expense_categories_status_idx").on(
+      table.status,
+      table.sortOrder,
+      table.name,
+    ),
+  ],
+);
+
+export const projectAdvances = sqliteTable(
+  "project_advances",
+  {
+    id: text("id").primaryKey(),
+    number: text("number").notNull(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "restrict" }),
+    recipientUserId: text("recipient_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    amount: integer("amount").notNull(),
+    disbursedDate: text("disbursed_date").notNull(),
+    bankAccountId: text("bank_account_id").references(() => bankAccounts.id, {
+      onDelete: "restrict",
+    }),
+    paymentReference: text("payment_reference").notNull(),
+    notes: text("notes"),
+    status: text("status").notNull().default("Open"),
+    transactionId: text("transaction_id").references(() => transactions.id, {
+      onDelete: "set null",
+    }),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    voidedBy: text("voided_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    voidedAt: text("voided_at"),
+    voidReason: text("void_reason"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("project_advances_number_unique").on(table.number),
+    uniqueIndex("project_advances_transaction_unique").on(table.transactionId),
+    index("project_advances_project_status_idx").on(
+      table.projectId,
+      table.status,
+      table.disbursedDate,
+    ),
+    index("project_advances_recipient_idx").on(
+      table.recipientUserId,
+      table.status,
+    ),
+  ],
+);
+
+export const projectExpenses = sqliteTable(
+  "project_expenses",
+  {
+    id: text("id").primaryKey(),
+    number: text("number").notNull(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "restrict" }),
+    purchaseDate: text("purchase_date").notNull(),
+    merchant: text("merchant").notNull(),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => projectExpenseCategories.id, { onDelete: "restrict" }),
+    totalAmount: integer("total_amount").notNull(),
+    currency: text("currency").notNull().default("IDR"),
+    fundingSource: text("funding_source").notNull(),
+    bankAccountId: text("bank_account_id").references(() => bankAccounts.id, {
+      onDelete: "restrict",
+    }),
+    advanceId: text("advance_id").references(() => projectAdvances.id, {
+      onDelete: "restrict",
+    }),
+    notes: text("notes"),
+    itemDetailsJson: text("item_details_json").notNull().default("[]"),
+    workflowStatus: text("workflow_status").notNull().default("Draft"),
+    settlementStatus: text("settlement_status").notNull().default("Unposted"),
+    duplicateAcknowledged: integer("duplicate_acknowledged").notNull().default(0),
+    reviewReason: text("review_reason"),
+    selfApprovalReason: text("self_approval_reason"),
+    createdBy: text("created_by")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    submittedBy: text("submitted_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    submittedAt: text("submitted_at"),
+    approvedBy: text("approved_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    approvedAt: text("approved_at"),
+    rejectedBy: text("rejected_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    rejectedAt: text("rejected_at"),
+    voidedBy: text("voided_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    voidedAt: text("voided_at"),
+    voidReason: text("void_reason"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("project_expenses_number_unique").on(table.number),
+    index("project_expenses_project_status_idx").on(
+      table.projectId,
+      table.workflowStatus,
+      table.purchaseDate,
+    ),
+    index("project_expenses_creator_status_idx").on(
+      table.createdBy,
+      table.workflowStatus,
+      table.createdAt,
+    ),
+    index("project_expenses_settlement_idx").on(
+      table.settlementStatus,
+      table.updatedAt,
+    ),
+  ],
+);
+
+export const projectExpenseAttachments = sqliteTable(
+  "project_expense_attachments",
+  {
+    id: text("id").primaryKey(),
+    expenseId: text("expense_id")
+      .notNull()
+      .references(() => projectExpenses.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull().default("Receipt"),
+    name: text("name").notNull(),
+    mimeType: text("mime_type").notNull(),
+    size: integer("size").notNull(),
+    sha256: text("sha256").notNull(),
+    storageUrl: text("storage_url"),
+    contentBase64: text("content_base64"),
+    uploadedBy: text("uploaded_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("project_expense_attachments_expense_idx").on(
+      table.expenseId,
+      table.createdAt,
+    ),
+    index("project_expense_attachments_hash_idx").on(table.sha256),
+  ],
+);
+
+export const projectExpenseSettlements = sqliteTable(
+  "project_expense_settlements",
+  {
+    id: text("id").primaryKey(),
+    expenseId: text("expense_id").references(() => projectExpenses.id, {
+      onDelete: "restrict",
+    }),
+    advanceId: text("advance_id").references(() => projectAdvances.id, {
+      onDelete: "restrict",
+    }),
+    settlementType: text("settlement_type").notNull(),
+    amount: integer("amount").notNull(),
+    settlementDate: text("settlement_date").notNull(),
+    bankAccountId: text("bank_account_id").references(() => bankAccounts.id, {
+      onDelete: "restrict",
+    }),
+    paymentReference: text("payment_reference").notNull(),
+    transactionId: text("transaction_id").references(() => transactions.id, {
+      onDelete: "set null",
+    }),
+    status: text("status").notNull().default("Posted"),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("project_expense_settlements_transaction_unique").on(
+      table.transactionId,
+    ),
+    index("project_expense_settlements_expense_idx").on(
+      table.expenseId,
+      table.status,
+      table.settlementDate,
+    ),
+    index("project_expense_settlements_advance_idx").on(
+      table.advanceId,
+      table.status,
+      table.settlementDate,
+    ),
+  ],
+);
+
+export const projectExpenseEvents = sqliteTable(
+  "project_expense_events",
+  {
+    id: text("id").primaryKey(),
+    expenseId: text("expense_id")
+      .notNull()
+      .references(() => projectExpenses.id, { onDelete: "cascade" }),
+    eventType: text("event_type").notNull(),
+    note: text("note"),
+    metadataJson: text("metadata_json"),
+    actorId: text("actor_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("project_expense_events_expense_idx").on(
+      table.expenseId,
+      table.createdAt,
     ),
   ],
 );

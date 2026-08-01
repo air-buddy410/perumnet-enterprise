@@ -973,6 +973,82 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     ).enabled,
     true,
   );
+  const taxableQuotation = await json(
+    `/api/quotations?projectId=${taxProject.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: "Draft",
+        issuedAt: "2026-08-01",
+        validUntil: "2026-08-31",
+      }),
+    },
+  );
+  const quotationTaxMode = await json(
+    `/api/quotations/${taxableQuotation.id}/tax-mode`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ enabled: true }),
+    },
+  );
+  assert.equal(quotationTaxMode.taxEnabled, true);
+  const taxableQuotationSummary = await json(
+    `/api/quotations/${taxableQuotation.id}/taxes`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ ruleIds: [ppnRule.id] }),
+    },
+  );
+  assert.equal(taxableQuotationSummary.baseAmount, 500_000);
+  assert.equal(taxableQuotationSummary.taxAdditions, 55_000);
+  assert.equal(taxableQuotationSummary.grossTotal, 555_000);
+  await json(`/api/quotations/${taxableQuotation.id}/send`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  const acceptedTaxQuotation = await json(
+    `/api/quotations/${taxableQuotation.id}/accept`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        acceptedAt: "2026-08-01",
+        attachment: {
+          name: "persetujuan-pajak.png",
+          mimeType: "image/png",
+          contentBase64: Buffer.from("tax-quotation-approval").toString("base64"),
+        },
+      }),
+    },
+  );
+  assert.equal(acceptedTaxQuotation.status, "Accepted");
+  assert.equal(
+    (
+      await request(`/api/quotations/${taxableQuotation.id}/tax-mode`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: false }),
+      })
+    ).status,
+    409,
+  );
+  const inheritedTaxInvoice = await json(
+    "/api/invoices",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: taxProject.id,
+        type: "Termin Pewarisan Pajak",
+        issueDate: "2026-07-30",
+        dueDate: "2026-08-15",
+        amount: 200_000,
+      }),
+    },
+    201,
+  );
+  const inheritedTaxSummary = await json(
+    `/api/invoices/${inheritedTaxInvoice.id}/taxes`,
+  );
+  assert.equal(inheritedTaxSummary.taxAdditions, 22_000);
+  assert.equal(inheritedTaxSummary.grossTotal, 222_000);
   const taxableSummary = await json(
     `/api/invoices/${taxableInvoice.id}/taxes`,
     {
@@ -1984,6 +2060,402 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     "%PDF",
   );
 
+  const expenseCategories = await json("/api/project-expense-categories");
+  const materialExpenseCategory = expenseCategories.find(
+    (category) => category.name === "Material",
+  );
+  assert.ok(materialExpenseCategory);
+  const employeeExpense = await json(
+    "/api/project-expenses",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        purchaseDate: "2026-07-30",
+        merchant: "Toko Material Integrasi",
+        categoryId: materialExpenseCategory.id,
+        totalAmount: 150_000,
+        fundingSource: "EmployeePaid",
+        notes: "Talangan pembelian konektor lapangan.",
+        itemDetails: [],
+      }),
+    },
+    201,
+  );
+  assert.equal(employeeExpense.workflowStatus, "Draft");
+  const invalidReceiptForm = new FormData();
+  invalidReceiptForm.set(
+    "file",
+    new File([Buffer.from("not-a-real-pdf")], "nota-rusak.pdf", {
+      type: "application/pdf",
+    }),
+  );
+  assert.equal(
+    (
+      await request(
+        `/api/project-expenses/${employeeExpense.id}/attachments`,
+        { method: "POST", body: invalidReceiptForm },
+      )
+    ).status,
+    415,
+  );
+  const receiptBytes = Buffer.from(
+    "%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF",
+  );
+  const receiptForm = new FormData();
+  receiptForm.set(
+    "file",
+    new File([receiptBytes], "nota-material.pdf", {
+      type: "application/pdf",
+    }),
+  );
+  const receiptAttachment = await json(
+    `/api/project-expenses/${employeeExpense.id}/attachments`,
+    { method: "POST", body: receiptForm },
+    201,
+  );
+  assert.equal(receiptAttachment.mimeType, "application/pdf");
+  const submittedEmployeeExpense = await json(
+    `/api/project-expenses/${employeeExpense.id}/submit`,
+    { method: "POST", body: JSON.stringify({ duplicateAcknowledged: false }) },
+  );
+  assert.equal(submittedEmployeeExpense.workflowStatus, "Submitted");
+  const profitBeforeEmployeeExpense = await json(
+    `/api/profit-shares?projectId=${project.id}`,
+  );
+  const approvedEmployeeExpense = await json(
+    `/api/project-expenses/${employeeExpense.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        settlementDate: "2026-07-30",
+        duplicateAcknowledged: false,
+        paymentReference: "",
+      }),
+    },
+  );
+  assert.equal(approvedEmployeeExpense.settlementStatus, "AwaitingReimbursement");
+  assert.equal(approvedEmployeeExpense.reimbursementOutstanding, 150_000);
+  const profitAfterEmployeeExpense = await json(
+    `/api/profit-shares?projectId=${project.id}`,
+  );
+  assert.equal(profitAfterEmployeeExpense.outstandingReimbursement, 150_000);
+  assert.equal(
+    profitAfterEmployeeExpense.distributableProfit,
+    profitBeforeEmployeeExpense.distributableProfit - 150_000,
+  );
+  assert.equal(
+    (await json(`/api/transactions?projectId=${project.id}`)).filter(
+      (entry) => entry.source === "Project Expense Reimbursement",
+    ).length,
+    0,
+  );
+  const partiallyReimbursed = await json(
+    `/api/project-expenses/${employeeExpense.id}/reimburse`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        amount: 60_000,
+        settlementDate: "2026-07-31",
+        bankAccountId: bankAccount.id,
+        paymentReference: "BCA-REIMB-001",
+      }),
+    },
+  );
+  assert.equal(partiallyReimbursed.settlementStatus, "PartiallyReimbursed");
+  assert.equal(partiallyReimbursed.reimbursementOutstanding, 90_000);
+  assert.equal(
+    (
+      await request(`/api/project-expenses/${employeeExpense.id}/reimburse`, {
+        method: "POST",
+        body: JSON.stringify({
+          amount: 100_000,
+          settlementDate: "2026-07-31",
+          bankAccountId: bankAccount.id,
+          paymentReference: "BCA-REIMB-OVER",
+        }),
+      })
+    ).status,
+    409,
+  );
+  const reimbursementTransactions = (
+    await json(`/api/transactions?projectId=${project.id}`)
+  ).filter(
+    (entry) =>
+      entry.source === "Project Expense Reimbursement" &&
+      entry.amount === 60_000,
+  );
+  assert.equal(reimbursementTransactions.length, 1);
+  assert.equal(
+    (
+      await request(`/api/transactions/${reimbursementTransactions[0].id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ amount: 55_000 }),
+      })
+    ).status,
+    409,
+  );
+
+  const duplicateExpense = await json(
+    "/api/project-expenses",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        purchaseDate: "2026-07-30",
+        merchant: "Toko Material Integrasi",
+        categoryId: materialExpenseCategory.id,
+        totalAmount: 150_000,
+        fundingSource: "CompanyAccount",
+        notes: "Uji nota ganda.",
+        itemDetails: [],
+      }),
+    },
+    201,
+  );
+  const duplicateReceiptForm = new FormData();
+  duplicateReceiptForm.set(
+    "file",
+    new File([receiptBytes], "nota-sama.pdf", { type: "application/pdf" }),
+  );
+  assert.equal(
+    (
+      await request(
+        `/api/project-expenses/${duplicateExpense.id}/attachments`,
+        { method: "POST", body: duplicateReceiptForm },
+      )
+    ).status,
+    409,
+  );
+  await json(
+    `/api/project-expenses/${duplicateExpense.id}`,
+    { method: "DELETE" },
+    204,
+  );
+
+  const companyExpense = await json(
+    "/api/project-expenses",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        purchaseDate: "2026-08-01",
+        merchant: "Toko Perangkat Bali",
+        categoryId: materialExpenseCategory.id,
+        totalAmount: 75_000,
+        fundingSource: "CompanyAccount",
+        notes: "Pembelian konektor tambahan.",
+        itemDetails: [],
+      }),
+    },
+    201,
+  );
+  const companyReceiptForm = new FormData();
+  companyReceiptForm.set(
+    "file",
+    new File(
+      [
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+          "base64",
+        ),
+      ],
+      "nota-perangkat.png",
+      { type: "image/png" },
+    ),
+  );
+  await json(
+    `/api/project-expenses/${companyExpense.id}/attachments`,
+    { method: "POST", body: companyReceiptForm },
+    201,
+  );
+  await json(`/api/project-expenses/${companyExpense.id}/submit`, {
+    method: "POST",
+    body: JSON.stringify({ duplicateAcknowledged: false }),
+  });
+  const approvedCompanyExpense = await json(
+    `/api/project-expenses/${companyExpense.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        settlementDate: "2026-08-01",
+        bankAccountId: bankAccount.id,
+        paymentReference: "BCA-BLJ-001",
+        duplicateAcknowledged: false,
+      }),
+    },
+  );
+  assert.equal(approvedCompanyExpense.settlementStatus, "Posted");
+  assert.equal(
+    (await json(`/api/transactions?projectId=${project.id}`)).filter(
+      (entry) => entry.source === "Project Expense" && entry.amount === 75_000,
+    ).length,
+    1,
+  );
+
+  const projectAdvance = await json(
+    "/api/project-advances",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        recipientUserId: receivingEngineer.id,
+        amount: 200_000,
+        disbursedDate: "2026-08-01",
+        bankAccountId: bankAccount.id,
+        paymentReference: "BCA-UM-001",
+        notes: "Uang muka material lapangan.",
+      }),
+    },
+    201,
+  );
+  assert.equal(projectAdvance.outstanding, 200_000);
+  const advanceExpense = await json(
+    "/api/project-expenses",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        purchaseDate: "2026-08-01",
+        merchant: "Toko Kabel Nusantara",
+        categoryId: materialExpenseCategory.id,
+        totalAmount: 50_000,
+        fundingSource: "ProjectAdvance",
+        advanceId: projectAdvance.id,
+        notes: "Pertanggungjawaban uang muka.",
+        itemDetails: [],
+      }),
+    },
+    201,
+  );
+  const advanceReceiptForm = new FormData();
+  advanceReceiptForm.set(
+    "file",
+    new File(
+      [Buffer.from("%PDF-1.5\n2 0 obj<</Type/Catalog>>endobj\n%%EOF")],
+      "nota-kabel.pdf",
+      { type: "application/pdf" },
+    ),
+  );
+  await json(
+    `/api/project-expenses/${advanceExpense.id}/attachments`,
+    { method: "POST", body: advanceReceiptForm },
+    201,
+  );
+  await json(`/api/project-expenses/${advanceExpense.id}/submit`, {
+    method: "POST",
+    body: JSON.stringify({ duplicateAcknowledged: false }),
+  });
+  const advanceSettledExpense = await json(
+    `/api/project-expenses/${advanceExpense.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        settlementDate: "2026-08-01",
+        advanceId: projectAdvance.id,
+        paymentReference: projectAdvance.number,
+        duplicateAcknowledged: false,
+      }),
+    },
+  );
+  assert.equal(advanceSettledExpense.settlementStatus, "AdvanceSettled");
+  assert.equal(
+    (await json(`/api/transactions?projectId=${project.id}`)).filter(
+      (entry) => entry.source === "Project Advance" && entry.amount === 200_000,
+    ).length,
+    1,
+  );
+  const advanceAfterReceipt = (
+    await json(`/api/project-advances?projectId=${project.id}`)
+  ).find((advance) => advance.id === projectAdvance.id);
+  assert.equal(advanceAfterReceipt.outstanding, 150_000);
+  const returnedAdvance = await json(
+    `/api/project-advances/${projectAdvance.id}/return`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        amount: 25_000,
+        returnDate: "2026-08-01",
+        bankAccountId: bankAccount.id,
+        paymentReference: "BCA-RET-UM-001",
+      }),
+    },
+  );
+  assert.equal(returnedAdvance.outstanding, 125_000);
+  const excessAdvanceExpense = await json(
+    "/api/project-expenses",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        purchaseDate: "2026-08-02",
+        merchant: "Toko Material Kelebihan",
+        categoryId: materialExpenseCategory.id,
+        totalAmount: 175_000,
+        fundingSource: "ProjectAdvance",
+        advanceId: projectAdvance.id,
+        notes: "Nilai belanja melebihi sisa uang muka.",
+        itemDetails: [],
+      }),
+    },
+    201,
+  );
+  const excessReceiptForm = new FormData();
+  excessReceiptForm.set(
+    "file",
+    new File(
+      [Buffer.from("RIFF0000WEBPexpense-evidence")],
+      "nota-kelebihan.webp",
+      { type: "image/webp" },
+    ),
+  );
+  await json(
+    `/api/project-expenses/${excessAdvanceExpense.id}/attachments`,
+    { method: "POST", body: excessReceiptForm },
+    201,
+  );
+  await json(`/api/project-expenses/${excessAdvanceExpense.id}/submit`, {
+    method: "POST",
+    body: JSON.stringify({ duplicateAcknowledged: false }),
+  });
+  const approvedExcessExpense = await json(
+    `/api/project-expenses/${excessAdvanceExpense.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        settlementDate: "2026-08-02",
+        advanceId: projectAdvance.id,
+        paymentReference: projectAdvance.number,
+        duplicateAcknowledged: false,
+      }),
+    },
+  );
+  assert.equal(approvedExcessExpense.advanceAllocatedAmount, 125_000);
+  assert.equal(approvedExcessExpense.reimbursementOutstanding, 50_000);
+  assert.equal(approvedExcessExpense.settlementStatus, "AwaitingReimbursement");
+  const closedAdvance = (
+    await json(`/api/project-advances?projectId=${project.id}`)
+  ).find((advance) => advance.id === projectAdvance.id);
+  assert.equal(closedAdvance.status, "Settled");
+  assert.equal(closedAdvance.outstanding, 0);
+  const protectedProfitWithReimbursements = await json(
+    `/api/profit-shares?projectId=${project.id}`,
+  );
+  assert.equal(protectedProfitWithReimbursements.outstandingReimbursement, 140_000);
+  const expenseCsv = await request(
+    `/api/project-expenses/report.csv?projectId=${project.id}`,
+  );
+  assert.equal(expenseCsv.status, 200);
+  assert.match(await expenseCsv.text(), /Toko Material Integrasi/);
+  const expensePdf = await request(
+    `/api/project-expenses/report.pdf?projectId=${project.id}`,
+  );
+  assert.equal(expensePdf.status, 200);
+  assert.equal(
+    Buffer.from(await expensePdf.arrayBuffer()).subarray(0, 4).toString(),
+    "%PDF",
+  );
+
   const addendum = await json(
     `/api/boq/scopes?projectId=${project.id}`,
     {
@@ -2370,6 +2842,28 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   );
   assert.ok(viewerProjects.every((item) => item.payment === "Tidak Diizinkan"));
   assert.equal((await request(`/api/projects/${project.id}`)).status, 200);
+  const viewerExpenses = await json(
+    `/api/project-expenses?projectId=${project.id}`,
+  );
+  assert.ok(viewerExpenses.some((entry) => entry.merchant === "Toko Material Integrasi"));
+  assert.equal(
+    (
+      await request("/api/project-expenses", {
+        method: "POST",
+        body: JSON.stringify({
+          projectId: project.id,
+          purchaseDate: "2026-08-01",
+          merchant: "Tidak Boleh Dicatat",
+          categoryId: materialExpenseCategory.id,
+          totalAmount: 10_000,
+          fundingSource: "EmployeePaid",
+          notes: "",
+          itemDetails: [],
+        }),
+      })
+    ).status,
+    403,
+  );
   assert.equal((await request(`/api/projects/${project.id}/access`)).status, 403);
   assert.equal((await request("/api/projects", {
     method: "POST",
@@ -2412,6 +2906,10 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   );
   assert.equal(engineerProjects[0].value, 0);
   assert.equal(engineerProjects[0].payment, "Tidak Diizinkan");
+  assert.equal(
+    (await request(`/api/project-expenses/${employeeExpense.id}`)).status,
+    404,
+  );
   assert.equal(
     (await request("/api/projects/project-1/quotation.pdf")).status,
     403,

@@ -128,6 +128,26 @@ async function operatingProfit(client: DatabaseClient, projectId: string) {
   const outstandingTaxPayable = asNumber(
     taxPosition.rows[0]?.outstanding_payable,
   );
+  const reimbursementPosition = await client.execute({
+    sql: `SELECT COALESCE(SUM(CASE
+      WHEN e.total_amount-COALESCE(s.allocated,0)-COALESCE(s.reimbursed,0)>0
+      THEN e.total_amount-COALESCE(s.allocated,0)-COALESCE(s.reimbursed,0)
+      ELSE 0 END),0) AS outstanding
+    FROM project_expenses e
+    LEFT JOIN (
+      SELECT expense_id,
+        SUM(CASE WHEN settlement_type='AdvanceAllocation' AND status='Posted' THEN amount ELSE 0 END) AS allocated,
+        SUM(CASE WHEN settlement_type='Reimbursement' AND status='Posted' THEN amount ELSE 0 END) AS reimbursed
+      FROM project_expense_settlements GROUP BY expense_id
+    ) s ON s.expense_id=e.id
+    WHERE e.project_id=? AND e.workflow_status='Approved'
+      AND e.funding_source IN ('EmployeePaid','ProjectAdvance')`,
+    args: [projectId],
+  });
+  const outstandingReimbursement = Math.max(
+    0,
+    asNumber(reimbursementPosition.rows[0]?.outstanding),
+  );
   const recoverableTax = recoverableRows.rows.reduce((sum, row) => {
     const gross = asNumber(row.cost) + asNumber(row.additions);
     const ratio = gross > 0 ? Math.min(1, asNumber(row.paid) / gross) : 0;
@@ -142,9 +162,11 @@ async function operatingProfit(client: DatabaseClient, projectId: string) {
     paidVendorCost,
     outstandingVendorCommitment,
     outstandingTaxPayable,
+    outstandingReimbursement,
     recoverableTax,
     distributableProfit:
-      netProfit - outstandingVendorCommitment - outstandingTaxPayable,
+      netProfit - outstandingVendorCommitment - outstandingTaxPayable -
+      outstandingReimbursement,
   };
 }
 

@@ -15,6 +15,7 @@ import {
   MapPin,
   Paperclip,
   Plus,
+  ReceiptText,
   Trash2,
   UploadCloud,
   UsersRound,
@@ -295,6 +296,9 @@ export function ProjectView({
           </div>
         </div>
         <div className="title-actions">
+          <button className="button secondary" type="button" onClick={() => navigate("expenses")}>
+            <ReceiptText size={16} /> {id ? "Catat belanja" : "Record expense"}
+          </button>
           <button className="button secondary" type="button" onClick={() => navigate("boq")}>
             <FileText size={16} /> {id ? "Lihat BoQ" : "View BoQ"}
           </button>

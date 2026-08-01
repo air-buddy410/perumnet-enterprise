@@ -125,6 +125,7 @@ async function scopeDetail(client: DatabaseClient, scopeId: string) {
   const scopeResult = await client.execute({
     sql: `SELECT s.*,b.project_id,q.id AS quotation_id,q.number AS quotation_number,
       q.status AS quotation_status,q.issued_at,q.valid_until,q.total,
+      q.tax_enabled,q.tax_revision,
       q.accepted_at AS quotation_accepted_at,
       q.acceptance_attachment_name AS quotation_attachment_name
       FROM boq_scopes s
@@ -158,6 +159,8 @@ async function scopeDetail(client: DatabaseClient, scopeId: string) {
           issuedAt: String(scope.issued_at),
           validUntil: scope.valid_until ? String(scope.valid_until) : null,
           total: numberValue(scope.total),
+          taxEnabled: Number(scope.tax_enabled) === 1,
+          taxRevision: numberValue(scope.tax_revision),
           acceptedAt: scope.quotation_accepted_at
             ? String(scope.quotation_accepted_at)
             : null,
@@ -463,6 +466,15 @@ export async function handleQuotationLifecycle(
         "Quotation sudah kedaluwarsa. Admin atau Finance harus memperpanjang masa berlaku sebelum dapat diterima.",
       );
     }
+    if (Number(quotation.tax_enabled) === 1) {
+      const tax = await client.execute({
+        sql: "SELECT id FROM document_taxes WHERE document_type='Quotation' AND document_id=? LIMIT 1",
+        args: [quotationId],
+      });
+      if (!tax.rows.length) {
+        throw new ApiError(409, "TAX_RULE_REQUIRED", "Pilih minimal satu aturan pajak sebelum menerima Quotation.");
+      }
+    }
     const timestamp = now();
     await client.transaction(async (tx) => {
       await tx.execute({
@@ -470,7 +482,7 @@ export async function handleQuotationLifecycle(
         args: [quotationId],
       });
       const locked = await tx.execute({
-        sql: "SELECT status FROM quotations WHERE id=? LIMIT 1",
+        sql: "SELECT status,tax_enabled FROM quotations WHERE id=? LIMIT 1",
         args: [quotationId],
       });
       if (String(locked.rows[0]?.status) !== "Sent") {
@@ -539,6 +551,15 @@ export async function handleQuotationLifecycle(
         args: [quotationId],
       });
       const currentStatus = String(locked.rows[0]?.status);
+      if (nextStatus === "Sent" && Number(locked.rows[0]?.tax_enabled) === 1) {
+        const tax = await tx.execute({
+          sql: "SELECT id FROM document_taxes WHERE document_type='Quotation' AND document_id=? LIMIT 1",
+          args: [quotationId],
+        });
+        if (!tax.rows.length) {
+          throw new ApiError(409, "TAX_RULE_REQUIRED", "Pilih minimal satu aturan pajak sebelum mengirim Quotation.");
+        }
+      }
       if (
         (nextStatus === "Sent" && currentStatus !== "Draft") ||
         (nextStatus === "Rejected" && currentStatus !== "Sent") ||

@@ -33,6 +33,7 @@ interface ProfitSummary {
   committedVendorCost: number;
   paidVendorCost: number;
   outstandingVendorCommitment: number;
+  outstandingReimbursement: number;
   distributableProfit: number;
   allocatedPercentage: number;
   allocatedAmount: number;
@@ -276,6 +277,10 @@ export function ProfitSharingPanel({
                 <strong>
                   {formatCurrency(summary.outstandingVendorCommitment, language)}
                 </strong>
+              </div>
+              <div>
+                <span>{id ? "Reimbursement belum dibayar" : "Unpaid reimbursements"}</span>
+                <strong>{formatCurrency(summary.outstandingReimbursement, language)}</strong>
               </div>
               <div
                 className={

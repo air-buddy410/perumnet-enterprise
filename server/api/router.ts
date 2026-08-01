@@ -37,7 +37,11 @@ import {
   sendTestEmail,
 } from "../email";
 import { asNumber, formatDate, initials, parseJson } from "../format";
-import { documentTaxSummary, lockDocumentTaxes } from "../tax";
+import {
+  calculateTaxAmount,
+  documentTaxSummary,
+  lockDocumentTaxes,
+} from "../tax";
 import { deleteProjectFile, readProjectFile, storeProjectFile } from "../storage";
 import {
   ApiError,
@@ -62,9 +66,18 @@ import {
   handleVendorCategories,
 } from "./procurement-router";
 import { handleProfitShares } from "./profit-share-router";
+import {
+  handleProjectAdvances,
+  handleProjectExpenseCategories,
+  handleProjectExpenses,
+} from "./project-expense-router";
 import { handleStandaloneBoqs } from "./standalone-boq-router";
 import { renderSopPdf } from "./sop-pdf";
-import { handleDocumentTaxes, handleTax } from "./tax-router";
+import {
+  handleDocumentTaxes,
+  handleQuotationTaxMode,
+  handleTax,
+} from "./tax-router";
 
 const emailSchema = z.string().trim().email().max(254).transform((value) => value.toLowerCase());
 const idSchema = z.string().trim().min(1).max(100);
@@ -1264,6 +1277,11 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
       sql: "SELECT storage_url FROM project_documents WHERE project_id=?",
       args: [projectId],
     });
+    const expenseAttachments = await client.execute({
+      sql: `SELECT a.storage_url FROM project_expense_attachments a
+        JOIN project_expenses e ON e.id=a.expense_id WHERE e.project_id=?`,
+      args: [projectId],
+    });
     await client.batch(
       [
         {
@@ -1306,6 +1324,14 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
           sql: "DELETE FROM spk_verifications WHERE spk_id IN (SELECT id FROM spks WHERE project_id=?)",
           args: [projectId],
         },
+        {
+          sql: `DELETE FROM project_expense_settlements
+            WHERE expense_id IN (SELECT id FROM project_expenses WHERE project_id=?)
+              OR advance_id IN (SELECT id FROM project_advances WHERE project_id=?)`,
+          args: [projectId, projectId],
+        },
+        { sql: "DELETE FROM project_expenses WHERE project_id=?", args: [projectId] },
+        { sql: "DELETE FROM project_advances WHERE project_id=?", args: [projectId] },
         { sql: "DELETE FROM transactions WHERE project_id=?", args: [projectId] },
         {
           sql: "DELETE FROM spk_payments WHERE spk_id IN (SELECT id FROM spks WHERE project_id=?)",
@@ -1328,7 +1354,7 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
       "write",
     );
     await Promise.allSettled(
-      documents.rows.map((document) =>
+      [...documents.rows, ...expenseAttachments.rows].map((document) =>
         deleteProjectFile(document.storage_url ? String(document.storage_url) : null),
       ),
     );
@@ -1711,6 +1737,7 @@ async function handleQuotations(request: Request, user: AuthUser) {
   if (request.method === "GET") {
     const result = await client.execute({
       sql: `SELECT q.id,q.number,q.status,q.issued_at,q.valid_until,q.total,
+        q.tax_enabled,q.tax_revision,
         q.accepted_at,q.acceptance_attachment_name
         FROM quotations q
         LEFT JOIN boq_scopes s ON s.id=q.scope_id
@@ -1726,6 +1753,8 @@ async function handleQuotations(request: Request, user: AuthUser) {
       issuedAt: String(row.issued_at),
       validUntil: row.valid_until ? String(row.valid_until) : null,
       total: asNumber(row.total),
+      taxEnabled: Number(row.tax_enabled) === 1,
+      taxRevision: asNumber(row.tax_revision),
       acceptedAt: row.accepted_at ? String(row.accepted_at) : null,
       acceptanceAttachmentName: row.acceptance_attachment_name
         ? String(row.acceptance_attachment_name)
@@ -1737,6 +1766,8 @@ async function handleQuotations(request: Request, user: AuthUser) {
       issuedAt: new Date().toISOString().slice(0, 10),
       validUntil: null,
       total: (await getBoq(projectId)).totals.selling,
+      taxEnabled: false,
+      taxRevision: 0,
     });
   }
 
@@ -1791,6 +1822,19 @@ async function handleQuotations(request: Request, user: AuthUser) {
     let quotationId = current.rows[0] ? String(current.rows[0].id) : "";
     if (quotationId) {
       const quotation = current.rows[0];
+      if (input.status === "Sent" && Number(quotation.tax_enabled) === 1) {
+        const appliedTax = await client.execute({
+          sql: "SELECT id FROM document_taxes WHERE document_type='Quotation' AND document_id=? LIMIT 1",
+          args: [quotationId],
+        });
+        if (!appliedTax.rows.length) {
+          throw new ApiError(
+            409,
+            "TAX_RULE_REQUIRED",
+            "Pilih minimal satu aturan pajak sebelum mengirim Quotation yang memakai pajak.",
+          );
+        }
+      }
       assertDateOrder(
         input.issuedAt ?? quotation.issued_at,
         input.validUntil === undefined ? quotation.valid_until : input.validUntil,
@@ -1850,7 +1894,7 @@ async function handleQuotations(request: Request, user: AuthUser) {
       await writeAuditLog(client, request, user, "create", "quotation", quotationId, { projectId, status: input.status });
     }
     const result = await client.execute({
-      sql: "SELECT id,number,status,issued_at,valid_until,total FROM quotations WHERE id=?",
+      sql: "SELECT id,number,status,issued_at,valid_until,total,tax_enabled,tax_revision FROM quotations WHERE id=?",
       args: [quotationId],
     });
     const row = result.rows[0];
@@ -1872,6 +1916,8 @@ async function handleQuotations(request: Request, user: AuthUser) {
       issuedAt: String(row.issued_at),
       validUntil: row.valid_until ? String(row.valid_until) : null,
       total: asNumber(row.total),
+      taxEnabled: Number(row.tax_enabled) === 1,
+      taxRevision: asNumber(row.tax_revision),
     });
   }
 
@@ -2079,9 +2125,48 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
     const id = randomUUID();
     const timestamp = now();
     const number = makeSequence("INV", asNumber(count.rows[0]?.count));
-    await client.execute({
-      sql: "INSERT INTO invoices (id,project_id,number,type,issue_date,due_date,amount,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-      args: [id, input.projectId, number, input.type, input.issueDate, input.dueDate, input.amount, "Belum Lunas", timestamp, timestamp],
+    await client.transaction(async (tx) => {
+      await tx.execute({
+        sql: "INSERT INTO invoices (id,project_id,number,type,issue_date,due_date,amount,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        args: [id, input.projectId, number, input.type, input.issueDate, input.dueDate, input.amount, "Belum Lunas", timestamp, timestamp],
+      });
+      const quotationTaxes = await tx.execute({
+        sql: `SELECT dt.* FROM document_taxes dt
+          JOIN quotations q ON q.id=dt.document_id
+          LEFT JOIN boq_scopes s ON s.id=q.scope_id
+          WHERE dt.document_type='Quotation' AND q.project_id=?
+            AND q.status='Accepted' AND (s.sequence=0 OR q.scope_id IS NULL)
+          ORDER BY q.accepted_at DESC,dt.created_at`,
+        args: [input.projectId],
+      });
+      for (const tax of quotationTaxes.rows) {
+        const rateBps = asNumber(tax.rate_bps);
+        await tx.execute({
+          sql: `INSERT INTO document_taxes
+            (id,document_type,document_id,project_id,rule_id,rule_code,rule_name,
+             rule_name_en,scope,effect,accounting_treatment,rate_bps,taxable_base,
+             amount,locked,created_by,created_at,updated_at)
+            VALUES (?,'Invoice',?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)`,
+          args: [
+            `document-tax-${randomUUID()}`,
+            id,
+            input.projectId,
+            tax.rule_id,
+            tax.rule_code,
+            tax.rule_name,
+            tax.rule_name_en,
+            tax.scope,
+            tax.effect,
+            tax.accounting_treatment,
+            rateBps,
+            input.amount,
+            calculateTaxAmount(input.amount, rateBps),
+            user.id,
+            timestamp,
+            timestamp,
+          ],
+        });
+      }
     });
     await writeAuditLog(client, request, user, "create", "invoice", id, input);
     await notifyProjectStakeholders(client, {
@@ -3685,7 +3770,22 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
             JOIN boqs b ON b.id=scope.boq_id
             WHERE b.project_id=p.id AND scope.kind='Addendum'
               AND scope.status='Accepted'
-          ),0) AS accepted_addenda
+          ),0) AS accepted_addenda,
+          COALESCE((
+            SELECT SUM(CASE
+              WHEN e.total_amount-COALESCE(es.allocated,0)-COALESCE(es.reimbursed,0)>0
+              THEN e.total_amount-COALESCE(es.allocated,0)-COALESCE(es.reimbursed,0)
+              ELSE 0 END)
+            FROM project_expenses e
+            LEFT JOIN (
+              SELECT expense_id,
+                SUM(CASE WHEN settlement_type='AdvanceAllocation' AND status='Posted' THEN amount ELSE 0 END) AS allocated,
+                SUM(CASE WHEN settlement_type='Reimbursement' AND status='Posted' THEN amount ELSE 0 END) AS reimbursed
+              FROM project_expense_settlements GROUP BY expense_id
+            ) es ON es.expense_id=e.id
+            WHERE e.project_id=p.id AND e.workflow_status='Approved'
+              AND e.funding_source IN ('EmployeePaid','ProjectAdvance')
+          ),0) AS outstanding_reimbursement
         FROM projects p
         ${profitConditions.length ? `WHERE ${profitConditions.join(" AND ")}` : ""}
         ORDER BY p.code
@@ -3708,6 +3808,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
               asNumber(row.committed_vendor_cost) -
                 asNumber(row.procurement_paid),
             ) -
+            asNumber(row.outstanding_reimbursement) -
             allocatedAmount,
           budgetBoq: asNumber(row.budget_boq),
           committedVendorCost: asNumber(row.committed_vendor_cost),
@@ -3717,6 +3818,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
             asNumber(row.committed_vendor_cost) -
               asNumber(row.procurement_paid),
           ),
+          outstandingReimbursement: Math.max(0, asNumber(row.outstanding_reimbursement)),
           acceptedAddenda: asNumber(row.accepted_addenda),
         };
       })
@@ -3726,6 +3828,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           row.allocatedAmount !== 0 ||
           row.paidAmount !== 0 ||
           row.committedVendorCost !== 0 ||
+          row.outstandingReimbursement !== 0 ||
           row.acceptedAddenda !== 0,
       );
     const taxResult = await client.execute({
@@ -3756,6 +3859,44 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         asNumber(row.amount) - asNumber(row.settled_amount),
       ),
       status: String(row.status),
+    }));
+    const expenseReportResult = await client.execute({
+      sql: `SELECT e.number,e.purchase_date,p.code,p.name,c.name AS category_name,
+        c.name_en AS category_name_en,u.name AS submitter,e.merchant,e.funding_source,
+        e.workflow_status,e.settlement_status,e.total_amount,
+        CASE WHEN e.workflow_status='Approved'
+          AND e.funding_source IN ('EmployeePaid','ProjectAdvance')
+          AND e.total_amount-COALESCE(es.allocated,0)-COALESCE(es.reimbursed,0)>0
+          THEN e.total_amount-COALESCE(es.allocated,0)-COALESCE(es.reimbursed,0)
+          ELSE 0 END AS reimbursement_outstanding
+        FROM project_expenses e
+        JOIN projects p ON p.id=e.project_id
+        JOIN project_expense_categories c ON c.id=e.category_id
+        JOIN users u ON u.id=e.created_by
+        LEFT JOIN (
+          SELECT expense_id,
+            SUM(CASE WHEN settlement_type='AdvanceAllocation' AND status='Posted' THEN amount ELSE 0 END) AS allocated,
+            SUM(CASE WHEN settlement_type='Reimbursement' AND status='Posted' THEN amount ELSE 0 END) AS reimbursed
+          FROM project_expense_settlements GROUP BY expense_id
+        ) es ON es.expense_id=e.id
+        ${profitConditions.length ? `WHERE ${profitConditions.join(" AND ")}` : ""}
+        ORDER BY e.purchase_date DESC,e.created_at DESC`,
+      args: profitArgs as never[],
+    });
+    const expenseReportRows = expenseReportResult.rows.map((row) => ({
+      number: String(row.number),
+      date: String(row.purchase_date),
+      project: `${String(row.code)} - ${String(row.name)}`,
+      category: user.preferredLanguage === "en"
+        ? String(row.category_name_en)
+        : String(row.category_name),
+      submitter: String(row.submitter),
+      merchant: String(row.merchant),
+      fundingSource: String(row.funding_source),
+      workflowStatus: String(row.workflow_status),
+      settlementStatus: String(row.settlement_status),
+      amount: asNumber(row.total_amount),
+      reimbursementOutstanding: asNumber(row.reimbursement_outstanding),
     }));
     if (transactionId === "report.csv") {
       const en = user.preferredLanguage === "en";
@@ -3824,6 +3965,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           [
             en ? "Project" : "Proyek",
             en ? "Base Net Profit (IDR)" : "Laba Bersih Dasar (IDR)",
+            en ? "Reimbursement Payable (IDR)" : "Utang Reimbursement (IDR)",
             en ? "Allocated (IDR)" : "Dialokasikan (IDR)",
             en ? "Paid (IDR)" : "Dibayar (IDR)",
             en ? "Retained Profit (IDR)" : "Laba Ditahan (IDR)",
@@ -3831,6 +3973,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           ...profitRows.map((row) => [
             row.project,
             row.netProfit,
+            row.outstandingReimbursement,
             row.allocatedAmount,
             row.paidAmount,
             row.retainedProfit,
@@ -3860,6 +4003,38 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
             row.settled,
             row.outstanding,
             row.status,
+          ].map(csvCell).join(",")),
+        );
+      }
+      if (expenseReportRows.length) {
+        lines.push(
+          "",
+          [en ? "PROJECT EXPENSES" : "BELANJA PROYEK"].map(csvCell).join(","),
+          [
+            en ? "Receipt number" : "Nomor nota",
+            en ? "Purchase date" : "Tanggal belanja",
+            en ? "Project" : "Proyek",
+            en ? "Submitter" : "Pengaju",
+            en ? "Merchant" : "Toko",
+            en ? "Category" : "Kategori",
+            en ? "Funding source" : "Sumber dana",
+            en ? "Workflow status" : "Status pengajuan",
+            en ? "Settlement status" : "Status keuangan",
+            "Amount (IDR)",
+            en ? "Reimbursement payable (IDR)" : "Utang reimbursement (IDR)",
+          ].map(csvCell).join(","),
+          ...expenseReportRows.map((row) => [
+            row.number,
+            row.date,
+            row.project,
+            row.submitter,
+            row.merchant,
+            row.category,
+            row.fundingSource,
+            row.workflowStatus,
+            row.settlementStatus,
+            row.amount,
+            row.reimbursementOutstanding,
           ].map(csvCell).join(",")),
         );
       }
@@ -3913,6 +4088,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           acceptedAddenda: row.acceptedAddenda,
         })),
         taxRows,
+        expenseReportRows,
       );
     }
     return ok(transactions);
@@ -3927,6 +4103,8 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       input.source.toLowerCase().startsWith("procurement ") ||
       input.source.toLowerCase().startsWith("invoice payment") ||
       input.source.toLowerCase().startsWith("tax settlement") ||
+      input.source.toLowerCase().startsWith("project expense") ||
+      input.source.toLowerCase().startsWith("project advance") ||
       input.category === "Bagi Hasil"
     ) {
       throw new ApiError(
@@ -3968,7 +4146,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           input.source.toLowerCase().startsWith("profit share") ||
           input.source.toLowerCase().startsWith("procurement ") ||
           input.source.toLowerCase().startsWith("invoice payment") ||
-          input.source.toLowerCase().startsWith("tax settlement"))) ||
+          input.source.toLowerCase().startsWith("tax settlement") ||
+          input.source.toLowerCase().startsWith("project expense") ||
+          input.source.toLowerCase().startsWith("project advance"))) ||
       input.category === "Bagi Hasil"
     ) {
       throw new ApiError(
@@ -3984,7 +4164,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       String(current.source).startsWith("Profit Share") ||
       String(current.source).startsWith("Procurement ") ||
       String(current.source).startsWith("Invoice Payment") ||
-      String(current.source).startsWith("Tax Settlement")
+      String(current.source).startsWith("Tax Settlement") ||
+      String(current.source).startsWith("Project Expense") ||
+      String(current.source).startsWith("Project Advance")
     ) {
       throw new ApiError(
         409,
@@ -4025,7 +4207,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       String(current.source).startsWith("Profit Share") ||
       String(current.source).startsWith("Procurement ") ||
       String(current.source).startsWith("Invoice Payment") ||
-      String(current.source).startsWith("Tax Settlement")
+      String(current.source).startsWith("Tax Settlement") ||
+      String(current.source).startsWith("Project Expense") ||
+      String(current.source).startsWith("Project Advance")
     ) {
       throw new ApiError(
         409,
@@ -4729,6 +4913,9 @@ export async function dispatchApi(request: Request, path: string[]) {
         user,
       );
     }
+    if (path[2] === "tax-mode") {
+      return handleQuotationTaxMode(request, path[1], user);
+    }
     return handleQuotationLifecycle(request, path, user);
   }
   if (resource === "quotations") return handleQuotations(request, user);
@@ -4764,6 +4951,11 @@ export async function dispatchApi(request: Request, path: string[]) {
   if (resource === "bast") return handleBast(request, path, user);
   if (resource === "validations") return handleValidations(request, path, user);
   if (resource === "transactions") return handleTransactions(request, path, user);
+  if (resource === "project-expenses") return handleProjectExpenses(request, path, user);
+  if (resource === "project-expense-categories") {
+    return handleProjectExpenseCategories(request, path, user);
+  }
+  if (resource === "project-advances") return handleProjectAdvances(request, path, user);
   if (resource === "finance" && path[1] === "summary") return handleFinance(request, user);
   if (resource === "bank-accounts") return handleBankAccounts(request, path, user);
   if (resource === "profit-shares") return handleProfitShares(request, path, user);

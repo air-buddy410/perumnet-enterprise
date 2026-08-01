@@ -46,6 +46,7 @@ const rulePatchSchema = ruleSchema.partial();
 const documentTaxSchema = z.object({
   ruleIds: z.array(idSchema).max(20),
 });
+const quotationTaxModeSchema = z.object({ enabled: z.boolean() });
 const settlementSchema = z.object({
   obligationId: idSchema,
   amount: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
@@ -124,7 +125,7 @@ async function documentDescriptor(
 ) {
   if (documentType === "Quotation") {
     const result = await client.execute({
-      sql: "SELECT id,project_id,total AS base_amount,status FROM quotations WHERE id=? LIMIT 1",
+      sql: "SELECT id,project_id,total AS base_amount,status,tax_enabled,tax_revision FROM quotations WHERE id=? LIMIT 1",
       args: [documentId],
     });
     if (!result.rows[0]) throw new ApiError(404, "NOT_FOUND", "Quotation tidak ditemukan.");
@@ -133,6 +134,9 @@ async function documentDescriptor(
       baseAmount: numberValue(result.rows[0].base_amount),
       locked: String(result.rows[0].status) === "Accepted",
       scope: "Client" as const,
+      taxEnabled: boolValue(result.rows[0].tax_enabled),
+      taxRevision: numberValue(result.rows[0].tax_revision),
+      status: String(result.rows[0].status),
     };
   }
   if (documentType === "Invoice") {
@@ -149,6 +153,9 @@ async function documentDescriptor(
       baseAmount: numberValue(result.rows[0].base_amount),
       locked: boolValue(result.rows[0].has_payment),
       scope: "Client" as const,
+      taxEnabled: true,
+      taxRevision: 0,
+      status: boolValue(result.rows[0].has_payment) ? "Locked" : "Draft",
     };
   }
   const result = await client.execute({
@@ -168,6 +175,9 @@ async function documentDescriptor(
     baseAmount: numberValue(result.rows[0].base_amount),
     locked: String(result.rows[0].approval_status) === "Approved",
     scope: "Vendor" as const,
+    taxEnabled: true,
+    taxRevision: 0,
+    status: String(result.rows[0].approval_status),
   };
 }
 
@@ -328,13 +338,14 @@ export async function handleDocumentTaxes(
   const document = await documentDescriptor(client, documentType, documentId);
   await assertProjectAccess(client, user, document.projectId);
   if (request.method === "GET") {
-    assertFinanceView(user);
     return ok({
       enabled: await globalTaxEnabled(client),
       documentType,
       documentId,
       baseAmount: document.baseAmount,
       locked: document.locked,
+      taxEnabled: documentType === "Quotation" ? document.taxEnabled : undefined,
+      taxRevision: documentType === "Quotation" ? document.taxRevision : undefined,
       ...(await documentTaxSummary(
         client,
         documentType,
@@ -356,6 +367,13 @@ export async function handleDocumentTaxes(
       409,
       "TAX_SNAPSHOT_LOCKED",
       "Snapshot pajak dokumen sudah dikunci dan tidak dapat dihitung ulang.",
+    );
+  }
+  if (documentType === "Quotation" && document.status !== "Draft") {
+    throw new ApiError(
+      409,
+      "QUOTATION_NOT_DRAFT",
+      "Pajak hanya dapat diubah saat Quotation masih Draft.",
     );
   }
   if (request.method === "PUT") {
@@ -426,6 +444,12 @@ export async function handleDocumentTaxes(
           ],
         });
       }
+      if (documentType === "Quotation") {
+        await tx.execute({
+          sql: "UPDATE quotations SET tax_enabled=?,tax_revision=tax_revision+1,updated_at=? WHERE id=?",
+          args: [input.ruleIds.length ? 1 : 0, timestamp, documentId],
+        });
+      }
     });
     await writeAuditLog(
       client,
@@ -442,6 +466,7 @@ export async function handleDocumentTaxes(
       documentId,
       baseAmount: document.baseAmount,
       locked: false,
+      taxEnabled: documentType === "Quotation" ? input.ruleIds.length > 0 : undefined,
       ...(await documentTaxSummary(
         client,
         documentType,
@@ -451,6 +476,62 @@ export async function handleDocumentTaxes(
     });
   }
   throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
+}
+
+export async function handleQuotationTaxMode(
+  request: Request,
+  quotationId: string,
+  user: AuthUser,
+) {
+  if (request.method !== "PATCH") {
+    throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
+  }
+  assertFinanceManage(user);
+  const { client } = await getDatabase();
+  const quotation = await client.execute({
+    sql: "SELECT id,project_id,total,status,tax_enabled,tax_revision FROM quotations WHERE id=? LIMIT 1",
+    args: [quotationId],
+  });
+  const row = quotation.rows[0];
+  if (!row) throw new ApiError(404, "NOT_FOUND", "Quotation tidak ditemukan.");
+  await assertProjectAccess(client, user, String(row.project_id));
+  if (String(row.status) !== "Draft") {
+    throw new ApiError(409, "QUOTATION_NOT_DRAFT", "Switch pajak hanya dapat diubah saat Quotation masih Draft.");
+  }
+  const input = quotationTaxModeSchema.parse(await jsonBody(request));
+  if (input.enabled && !(await globalTaxEnabled(client))) {
+    throw new ApiError(409, "TAX_DISABLED", "Aktifkan modul pajak global terlebih dahulu.");
+  }
+  await client.transaction(async (tx) => {
+    if (!input.enabled) {
+      const locked = await tx.execute({
+        sql: "SELECT id FROM document_taxes WHERE document_type='Quotation' AND document_id=? AND locked=1 LIMIT 1",
+        args: [quotationId],
+      });
+      if (locked.rows.length) {
+        throw new ApiError(409, "TAX_SNAPSHOT_LOCKED", "Snapshot pajak sudah dikunci.");
+      }
+      await tx.execute({
+        sql: "DELETE FROM document_taxes WHERE document_type='Quotation' AND document_id=? AND locked=0",
+        args: [quotationId],
+      });
+    }
+    await tx.execute({
+      sql: `UPDATE quotations SET tax_enabled=?,tax_revision=tax_revision+1,
+        updated_at=? WHERE id=?`,
+      args: [input.enabled ? 1 : 0, now(), quotationId],
+    });
+  });
+  await writeAuditLog(client, request, user, "tax_mode", "quotation", quotationId, {
+    enabled: input.enabled,
+    previousRevision: numberValue(row.tax_revision),
+  });
+  return ok({
+    enabled: input.enabled,
+    taxEnabled: input.enabled,
+    revision: numberValue(row.tax_revision) + 1,
+    ...(await documentTaxSummary(client, "Quotation", quotationId, numberValue(row.total))),
+  });
 }
 
 function obligationStatus(amount: number, settled: number) {

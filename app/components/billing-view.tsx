@@ -472,13 +472,13 @@ export function BillingView({
                 <span>{quotation?.number ?? (id ? "Nomor dibuat saat Quotation disimpan" : "Number created when the Quotation is saved")}</span>
               </div>
               <div className="title-actions">
-                {canManageTaxes && quotation?.id ? (
+                {quotation?.id ? (
                   <DocumentTaxEditor
                     language={language}
                     notify={notify}
                     documentType="Quotation"
                     documentId={quotation.id}
-                    canManage
+                    canManage={canManageTaxes && quotation.status === "Draft"}
                   />
                 ) : null}
                 {canManageValidity && quotation?.status !== "Accepted" && (
@@ -580,7 +580,7 @@ export function BillingView({
                   <span className={`status-badge ${invoice.status === "Lunas" ? "success" : "warning"}`}>{localizedLabel(language, invoice.status)}</span>
                   <div className="invoice-actions">
                     <button className="button subtle small" type="button" onClick={() => downloadInvoice(invoice)}><Download size={15} /> PDF</button>
-                    {canManageTaxes && !(invoice.payments?.length) && <DocumentTaxEditor language={language} notify={notify} documentType="Invoice" documentId={invoice.id} canManage onSaved={async () => {
+                    {!(invoice.payments?.length) && <DocumentTaxEditor language={language} notify={notify} documentType="Invoice" documentId={invoice.id} canManage={canManageTaxes} onSaved={async () => {
                       const updated = await api<Invoice>(`/api/invoices/${invoice.id}`);
                       setInvoices((current) => current.map((item) => item.id === updated.id ? updated : item));
                     }} />}
