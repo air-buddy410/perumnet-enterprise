@@ -92,7 +92,18 @@ def decode_files(payload: dict) -> dict[str, bytes]:
 
 def redis(*arguments: str) -> str:
     result = subprocess.run(
-        ["docker", "compose", "exec", "-T", "redis-mailcow", "redis-cli", *arguments],
+        [
+            "docker",
+            "compose",
+            "exec",
+            "-T",
+            "redis-mailcow",
+            "sh",
+            "-c",
+            'REDISCLI_AUTH="$REDISPASS" exec redis-cli "$@"',
+            "redis-cli",
+            *arguments,
+        ],
         cwd=MAILCOW_ROOT,
         check=True,
         capture_output=True,
