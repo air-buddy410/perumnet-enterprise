@@ -151,6 +151,59 @@ CREATE TABLE IF NOT EXISTS project_documents (
 );
 CREATE INDEX IF NOT EXISTS project_documents_project_idx ON project_documents(project_id);
 
+CREATE TABLE IF NOT EXISTS item_catalog_categories (
+  id TEXT PRIMARY KEY,
+  boq_role TEXT NOT NULL CHECK (boq_role IN ('Perangkat', 'Material', 'Jasa', 'Mobilitas')),
+  name TEXT NOT NULL,
+  name_en TEXT NOT NULL DEFAULT '',
+  default_margin_1_bps INTEGER NOT NULL DEFAULT 2000 CHECK (default_margin_1_bps >= 0),
+  default_margin_2_bps INTEGER NOT NULL DEFAULT 3000 CHECK (default_margin_2_bps >= 0),
+  status TEXT NOT NULL DEFAULT 'Aktif' CHECK (status IN ('Aktif', 'Nonaktif')),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (boq_role, name)
+);
+CREATE INDEX IF NOT EXISTS item_catalog_categories_sort_idx
+  ON item_catalog_categories(boq_role,status,sort_order,name);
+
+CREATE TABLE IF NOT EXISTS item_catalog_brands (
+  id TEXT PRIMARY KEY,
+  category_id TEXT NOT NULL REFERENCES item_catalog_categories(id) ON DELETE RESTRICT,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'Aktif' CHECK (status IN ('Aktif', 'Nonaktif')),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (category_id, name)
+);
+CREATE INDEX IF NOT EXISTS item_catalog_brands_category_idx
+  ON item_catalog_brands(category_id,status,sort_order,name);
+
+CREATE TABLE IF NOT EXISTS item_catalog_items (
+  id TEXT PRIMARY KEY,
+  category_id TEXT NOT NULL REFERENCES item_catalog_categories(id) ON DELETE RESTRICT,
+  brand_id TEXT REFERENCES item_catalog_brands(id) ON DELETE RESTRICT,
+  sku TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  name_en TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  specifications TEXT NOT NULL DEFAULT '',
+  unit TEXT NOT NULL DEFAULT 'unit',
+  cost_price INTEGER NOT NULL DEFAULT 0 CHECK (cost_price >= 0),
+  margin_1_bps INTEGER NOT NULL DEFAULT 2000 CHECK (margin_1_bps >= 0),
+  margin_2_bps INTEGER NOT NULL DEFAULT 3000 CHECK (margin_2_bps >= 0),
+  status TEXT NOT NULL DEFAULT 'Aktif' CHECK (status IN ('Aktif', 'Nonaktif')),
+  revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS item_catalog_items_filter_idx
+  ON item_catalog_items(category_id,brand_id,status,name);
+
 CREATE TABLE IF NOT EXISTS boqs (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,
@@ -188,6 +241,11 @@ CREATE TABLE IF NOT EXISTS boq_items (
   unit TEXT NOT NULL,
   cost_price INTEGER NOT NULL DEFAULT 0 CHECK (cost_price >= 0),
   selling_price INTEGER NOT NULL CHECK (selling_price >= 0),
+  catalog_item_id TEXT REFERENCES item_catalog_items(id) ON DELETE RESTRICT,
+  catalog_price_tier INTEGER CHECK (catalog_price_tier IN (1,2)),
+  catalog_revision INTEGER,
+  manual_price_override INTEGER NOT NULL DEFAULT 0 CHECK (manual_price_override IN (0,1)),
+  price_override_reason TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -211,6 +269,11 @@ CREATE TABLE IF NOT EXISTS boq_template_items (
   unit TEXT NOT NULL,
   cost_price INTEGER NOT NULL DEFAULT 0,
   selling_price INTEGER NOT NULL,
+  catalog_item_id TEXT REFERENCES item_catalog_items(id) ON DELETE RESTRICT,
+  catalog_price_tier INTEGER CHECK (catalog_price_tier IN (1,2)),
+  catalog_revision INTEGER,
+  manual_price_override INTEGER NOT NULL DEFAULT 0 CHECK (manual_price_override IN (0,1)),
+  price_override_reason TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS boq_template_items_template_idx ON boq_template_items(template_id);
@@ -237,6 +300,11 @@ CREATE TABLE IF NOT EXISTS standalone_boq_items (
   unit TEXT NOT NULL,
   cost_price INTEGER NOT NULL DEFAULT 0 CHECK (cost_price >= 0),
   selling_price INTEGER NOT NULL CHECK (selling_price >= 0),
+  catalog_item_id TEXT REFERENCES item_catalog_items(id) ON DELETE RESTRICT,
+  catalog_price_tier INTEGER CHECK (catalog_price_tier IN (1,2)),
+  catalog_revision INTEGER,
+  manual_price_override INTEGER NOT NULL DEFAULT 0 CHECK (manual_price_override IN (0,1)),
+  price_override_reason TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -2193,6 +2261,68 @@ async function ensureProjectExpenseSchema(client: DatabaseClient) {
   }
 }
 
+async function ensureItemCatalogSchema(client: DatabaseClient) {
+  const columns: Array<[string, string, string]> = [
+    ["boq_items", "catalog_item_id", "TEXT REFERENCES item_catalog_items(id) ON DELETE RESTRICT"],
+    ["boq_items", "catalog_price_tier", "INTEGER"],
+    ["boq_items", "catalog_revision", "INTEGER"],
+    ["boq_items", "manual_price_override", "INTEGER NOT NULL DEFAULT 0"],
+    ["boq_items", "price_override_reason", "TEXT"],
+    ["boq_template_items", "catalog_item_id", "TEXT REFERENCES item_catalog_items(id) ON DELETE RESTRICT"],
+    ["boq_template_items", "catalog_price_tier", "INTEGER"],
+    ["boq_template_items", "catalog_revision", "INTEGER"],
+    ["boq_template_items", "manual_price_override", "INTEGER NOT NULL DEFAULT 0"],
+    ["boq_template_items", "price_override_reason", "TEXT"],
+    ["standalone_boq_items", "catalog_item_id", "TEXT REFERENCES item_catalog_items(id) ON DELETE RESTRICT"],
+    ["standalone_boq_items", "catalog_price_tier", "INTEGER"],
+    ["standalone_boq_items", "catalog_revision", "INTEGER"],
+    ["standalone_boq_items", "manual_price_override", "INTEGER NOT NULL DEFAULT 0"],
+    ["standalone_boq_items", "price_override_reason", "TEXT"],
+  ];
+  for (const [table, column, definition] of columns) {
+    await ensureColumn(client, table, column, definition);
+  }
+  await client.execute(
+    "CREATE INDEX IF NOT EXISTS boq_items_catalog_idx ON boq_items(catalog_item_id)",
+  );
+  await client.execute(
+    "CREATE INDEX IF NOT EXISTS boq_template_items_catalog_idx ON boq_template_items(catalog_item_id)",
+  );
+  await client.execute(
+    "CREATE INDEX IF NOT EXISTS standalone_boq_items_catalog_idx ON standalone_boq_items(catalog_item_id)",
+  );
+
+  const timestamp = new Date().toISOString();
+  const categories = [
+    ["catalog-category-networking", "Perangkat", "Networking", "Networking", 10],
+    ["catalog-category-cctv", "Perangkat", "CCTV", "CCTV", 20],
+    ["catalog-category-ip-pabx", "Perangkat", "IP PABX", "IP PABX", 30],
+    ["catalog-category-smart-home", "Perangkat", "Smart Home Device", "Smart Home Device", 40],
+    ["catalog-category-lan", "Material", "Kabel LAN", "LAN Cabling", 110],
+    ["catalog-category-fiber", "Material", "Fiber Optic", "Fiber Optic", 120],
+    ["catalog-category-connector", "Material", "Konektor & Terminasi", "Connectors & Termination", 130],
+    ["catalog-category-rack-power", "Material", "Rack & Power", "Rack & Power", 140],
+    ["catalog-category-accessory", "Material", "Mounting & Aksesori", "Mounting & Accessories", 150],
+    ["catalog-category-installation", "Jasa", "Instalasi", "Installation", 210],
+    ["catalog-category-setting", "Jasa", "Konfigurasi & Setting", "Configuration & Setup", 220],
+    ["catalog-category-fiber-service", "Jasa", "Splicing & Terminasi Fiber", "Fiber Splicing & Termination", 230],
+    ["catalog-category-testing", "Jasa", "Testing & Commissioning", "Testing & Commissioning", 240],
+    ["catalog-category-documentation", "Jasa", "Dokumentasi", "Documentation", 250],
+    ["catalog-category-mobilization", "Mobilitas", "Mobilisasi Tim", "Team Mobilization", 310],
+    ["catalog-category-delivery", "Mobilitas", "Pengiriman Perangkat", "Equipment Delivery", 320],
+    ["catalog-category-accommodation", "Mobilitas", "Akomodasi Lapangan", "Field Accommodation", 330],
+  ] as const;
+  for (const [id, role, name, nameEn, sortOrder] of categories) {
+    await client.execute({
+      sql: `INSERT INTO item_catalog_categories
+        (id,boq_role,name,name_en,default_margin_1_bps,default_margin_2_bps,
+         status,sort_order,created_at,updated_at)
+        VALUES (?,?,?,?,2000,3000,'Aktif',?,?,?) ON CONFLICT (id) DO NOTHING`,
+      args: [id, role, name, nameEn, sortOrder, timestamp, timestamp],
+    });
+  }
+}
+
 export async function initializeDatabase(client: DatabaseClient) {
   await client.executeMultiple(schemaSql);
   await ensureCmsBilingualSchema(client);
@@ -2202,6 +2332,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureProcurementSchema(client);
   await ensureTaxAndEmailSchema(client);
   await ensureProjectExpenseSchema(client);
+  await ensureItemCatalogSchema(client);
   await ensureCmsSeed(client);
   await ensureCmsEnhancements(client);
   await ensureCmsLandingFeatures(client);
@@ -2372,4 +2503,5 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureProcurementSchema(client);
   await ensureTaxAndEmailSchema(client);
   await ensureProjectExpenseSchema(client);
+  await ensureItemCatalogSchema(client);
 }

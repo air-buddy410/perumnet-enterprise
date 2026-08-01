@@ -8,6 +8,7 @@ import {
   FileInput,
   FileSpreadsheet,
   Layers3,
+  LibraryBig,
   Pencil,
   Plus,
   Save,
@@ -17,8 +18,9 @@ import {
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api, messageOf } from "../api-client";
-import { BoqItem, formatCurrency, Project } from "../data";
+import { BoqItem, type CatalogItem, formatCurrency, Project } from "../data";
 import { type AppLanguage, localizedLabel } from "../i18n";
+import { CatalogPicker } from "./catalog-picker";
 
 interface StandaloneBoqSummary {
   id: string;
@@ -72,6 +74,9 @@ export function StandaloneBoqView({
   const [sellingPrice, setSellingPrice] = useState(0);
   const [editingItemId, setEditingItemId] = useState("");
   const [saving, setSaving] = useState(false);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [catalogItemId, setCatalogItemId] = useState<string | null>(null);
+  const [catalogPriceTier, setCatalogPriceTier] = useState<1 | 2 | null>(null);
 
   const loadList = useCallback(async () => {
     const next = await api<StandaloneBoqSummary[]>("/api/boq/standalone");
@@ -122,6 +127,8 @@ export function StandaloneBoqView({
     setUnit("unit");
     setCostPrice(0);
     setSellingPrice(0);
+    setCatalogItemId(null);
+    setCatalogPriceTier(null);
   }
 
   async function persist(next: StandaloneBoq) {
@@ -143,6 +150,10 @@ export function StandaloneBoqView({
               unit: item.unit,
               costPrice: item.costPrice,
               sellingPrice: item.sellingPrice,
+              catalogItemId: item.catalogItemId ?? null,
+              catalogPriceTier: item.catalogPriceTier ?? null,
+              manualPriceOverride: Boolean(item.manualPriceOverride),
+              priceOverrideReason: item.priceOverrideReason ?? null,
             })),
           }),
         },
@@ -193,6 +204,8 @@ export function StandaloneBoqView({
       unit,
       costPrice,
       sellingPrice,
+      catalogItemId,
+      catalogPriceTier,
     };
     const nextItems = editingItemId
       ? selected.items.map((current) =>
@@ -221,6 +234,19 @@ export function StandaloneBoqView({
     setUnit(item.unit);
     setCostPrice(item.costPrice);
     setSellingPrice(item.sellingPrice);
+    setCatalogItemId(item.catalogItemId ?? null);
+    setCatalogPriceTier(item.catalogPriceTier ?? null);
+  }
+
+  function useCatalogItem(item: CatalogItem, tier: 1 | 2) {
+    setCatalogItemId(item.id);
+    setCatalogPriceTier(tier);
+    setCategory(item.boqRole);
+    setDescription([item.name, item.model].filter(Boolean).join(" — "));
+    setUnit(item.unit);
+    setCostPrice(item.costPrice);
+    setSellingPrice(tier === 2 ? item.price2 : item.price1);
+    setCatalogOpen(false);
   }
 
   async function deleteItem(item: BoqItem) {
@@ -444,6 +470,46 @@ export function StandaloneBoqView({
                 </div>
               </div>
               <form className="boq-entry-form" onSubmit={addOrUpdateItem}>
+                <div className="boq-catalog-callout">
+                  <span className="metric-icon teal">
+                    <LibraryBig size={18} />
+                  </span>
+                  <span>
+                    <strong>
+                      {id ? "Ambil dari Database Item" : "Select from Item Database"}
+                    </strong>
+                    <small>
+                      {id
+                        ? "Pilih kategori produk, merek, model, lalu gunakan Harga 1 atau Harga 2."
+                        : "Choose a product category, brand, model, then use Price 1 or Price 2."}
+                    </small>
+                  </span>
+                  <button
+                    className="button secondary small"
+                    type="button"
+                    onClick={() => setCatalogOpen(true)}
+                  >
+                    <LibraryBig size={15} /> {id ? "Buka katalog" : "Open catalog"}
+                  </button>
+                </div>
+                {catalogItemId ? (
+                  <div className="boq-catalog-selection">
+                    <span>
+                      <strong>{description}</strong>
+                      <small>
+                        {id ? "Tertaut ke katalog" : "Linked to catalog"} · H
+                        {catalogPriceTier}
+                      </small>
+                    </span>
+                    <button
+                      className="button ghost small"
+                      type="button"
+                      onClick={resetItemForm}
+                    >
+                      <X size={14} /> {id ? "Gunakan item manual" : "Use manual item"}
+                    </button>
+                  </div>
+                ) : null}
                 <div className="category-selector">
                   {(Object.keys(categoryIcons) as BoqItem["category"][]).map(
                     (itemCategory) => {
@@ -454,6 +520,7 @@ export function StandaloneBoqView({
                           type="button"
                           key={itemCategory}
                           onClick={() => setCategory(itemCategory)}
+                          disabled={Boolean(catalogItemId)}
                         >
                           <Icon size={16} />
                           {localizedLabel(language, itemCategory)}
@@ -469,6 +536,7 @@ export function StandaloneBoqView({
                       required
                       value={description}
                       onChange={(event) => setDescription(event.target.value)}
+                      readOnly={Boolean(catalogItemId)}
                     />
                   </label>
                   <label className="field">
@@ -482,7 +550,11 @@ export function StandaloneBoqView({
                   </label>
                   <label className="field select-field">
                     <span>{id ? "Satuan" : "Unit"}</span>
-                    <select value={unit} onChange={(event) => setUnit(event.target.value)}>
+                    <select
+                      value={unit}
+                      disabled={Boolean(catalogItemId)}
+                      onChange={(event) => setUnit(event.target.value)}
+                    >
                       <option value="unit">unit</option>
                       <option value="box">box</option>
                       <option value="meter">meter</option>
@@ -498,6 +570,7 @@ export function StandaloneBoqView({
                       min="0"
                       value={costPrice || ""}
                       onChange={(event) => setCostPrice(Number(event.target.value))}
+                      readOnly={Boolean(catalogItemId)}
                     />
                   </label>
                   <label className="field">
@@ -509,6 +582,7 @@ export function StandaloneBoqView({
                       onChange={(event) =>
                         setSellingPrice(Number(event.target.value))
                       }
+                      readOnly={Boolean(catalogItemId)}
                     />
                   </label>
                   <div className="boq-form-actions">
@@ -619,6 +693,15 @@ export function StandaloneBoqView({
             </form>
           </section>
         </div>
+      ) : null}
+
+      {catalogOpen ? (
+        <CatalogPicker
+          language={language}
+          notify={notify}
+          onClose={() => setCatalogOpen(false)}
+          onSelect={useCatalogItem}
+        />
       ) : null}
     </div>
   );

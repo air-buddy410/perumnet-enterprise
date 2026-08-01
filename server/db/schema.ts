@@ -208,6 +208,69 @@ export const projectDocuments = sqliteTable(
   (table) => [index("project_documents_project_idx").on(table.projectId)],
 );
 
+export const itemCatalogCategories = sqliteTable(
+  "item_catalog_categories",
+  {
+    id: text("id").primaryKey(),
+    boqRole: text("boq_role").notNull(),
+    name: text("name").notNull(),
+    nameEn: text("name_en").notNull().default(""),
+    defaultMargin1Bps: integer("default_margin_1_bps").notNull().default(2000),
+    defaultMargin2Bps: integer("default_margin_2_bps").notNull().default(3000),
+    status: text("status").notNull().default("Aktif"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("item_catalog_categories_role_name_unique").on(table.boqRole, table.name),
+    index("item_catalog_categories_sort_idx").on(table.boqRole, table.status, table.sortOrder, table.name),
+  ],
+);
+
+export const itemCatalogBrands = sqliteTable(
+  "item_catalog_brands",
+  {
+    id: text("id").primaryKey(),
+    categoryId: text("category_id").notNull().references(() => itemCatalogCategories.id, { onDelete: "restrict" }),
+    name: text("name").notNull(),
+    status: text("status").notNull().default("Aktif"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("item_catalog_brands_category_name_unique").on(table.categoryId, table.name),
+    index("item_catalog_brands_category_idx").on(table.categoryId, table.status, table.sortOrder, table.name),
+  ],
+);
+
+export const itemCatalogItems = sqliteTable(
+  "item_catalog_items",
+  {
+    id: text("id").primaryKey(),
+    categoryId: text("category_id").notNull().references(() => itemCatalogCategories.id, { onDelete: "restrict" }),
+    brandId: text("brand_id").references(() => itemCatalogBrands.id, { onDelete: "restrict" }),
+    sku: text("sku").notNull(),
+    name: text("name").notNull(),
+    nameEn: text("name_en").notNull().default(""),
+    model: text("model").notNull().default(""),
+    specifications: text("specifications").notNull().default(""),
+    unit: text("unit").notNull().default("unit"),
+    costPrice: integer("cost_price").notNull().default(0),
+    margin1Bps: integer("margin_1_bps").notNull().default(2000),
+    margin2Bps: integer("margin_2_bps").notNull().default(3000),
+    status: text("status").notNull().default("Aktif"),
+    revision: integer("revision").notNull().default(1),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("item_catalog_items_sku_unique").on(table.sku),
+    index("item_catalog_items_filter_idx").on(table.categoryId, table.brandId, table.status, table.name),
+  ],
+);
+
 export const boqs = sqliteTable(
   "boqs",
   {
@@ -271,6 +334,11 @@ export const boqItems = sqliteTable(
     unit: text("unit").notNull(),
     costPrice: integer("cost_price").notNull().default(0),
     sellingPrice: integer("selling_price").notNull(),
+    catalogItemId: text("catalog_item_id").references(() => itemCatalogItems.id, { onDelete: "restrict" }),
+    catalogPriceTier: integer("catalog_price_tier"),
+    catalogRevision: integer("catalog_revision"),
+    manualPriceOverride: integer("manual_price_override").notNull().default(0),
+    priceOverrideReason: text("price_override_reason"),
     sortOrder: integer("sort_order").notNull().default(0),
     ...timestamps,
   },
@@ -300,6 +368,11 @@ export const boqTemplateItems = sqliteTable(
     unit: text("unit").notNull(),
     costPrice: integer("cost_price").notNull().default(0),
     sellingPrice: integer("selling_price").notNull(),
+    catalogItemId: text("catalog_item_id").references(() => itemCatalogItems.id, { onDelete: "restrict" }),
+    catalogPriceTier: integer("catalog_price_tier"),
+    catalogRevision: integer("catalog_revision"),
+    manualPriceOverride: integer("manual_price_override").notNull().default(0),
+    priceOverrideReason: text("price_override_reason"),
     sortOrder: integer("sort_order").notNull().default(0),
   },
   (table) => [index("boq_template_items_template_idx").on(table.templateId)],
@@ -339,6 +412,11 @@ export const standaloneBoqItems = sqliteTable(
     unit: text("unit").notNull(),
     costPrice: integer("cost_price").notNull().default(0),
     sellingPrice: integer("selling_price").notNull(),
+    catalogItemId: text("catalog_item_id").references(() => itemCatalogItems.id, { onDelete: "restrict" }),
+    catalogPriceTier: integer("catalog_price_tier"),
+    catalogRevision: integer("catalog_revision"),
+    manualPriceOverride: integer("manual_price_override").notNull().default(0),
+    priceOverrideReason: text("price_override_reason"),
     sortOrder: integer("sort_order").notNull().default(0),
     ...timestamps,
   },

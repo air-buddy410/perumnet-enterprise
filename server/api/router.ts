@@ -25,7 +25,7 @@ import {
   type AuthUser,
   type UserRole,
 } from "../auth";
-import { getDatabase } from "../db/client";
+import { getDatabase, type DatabaseClient } from "../db/client";
 import {
   emailDeliveryConfigured,
   emailMode,
@@ -57,6 +57,7 @@ import {
   renderValidationPdf,
 } from "./pdf";
 import { handleBankAccounts } from "./bank-router";
+import { handleCatalog } from "./catalog-router";
 import {
   handleBoqScopes,
   handleQuotationLifecycle,
@@ -118,7 +119,66 @@ const boqItemSchema = z.object({
   unit: z.string().trim().min(1).max(40),
   costPrice: nonNegativeMoney,
   sellingPrice: nonNegativeMoney,
+  catalogItemId: idSchema.nullable().optional(),
+  catalogPriceTier: z.union([z.literal(1), z.literal(2)]).nullable().optional(),
+  manualPriceOverride: z.boolean().optional().default(false),
+  priceOverrideReason: z.string().trim().max(500).nullable().optional(),
 });
+
+type BoqItemInput = z.infer<typeof boqItemSchema>;
+
+async function resolveBoqItemInput(
+  client: DatabaseClient,
+  user: AuthUser,
+  input: BoqItemInput,
+) {
+  if (!input.catalogItemId) {
+    return {
+      ...input,
+      catalogItemId: null,
+      catalogPriceTier: null,
+      catalogRevision: null,
+      manualPriceOverride: false,
+      priceOverrideReason: null,
+    };
+  }
+  const result = await client.execute({
+    sql: `SELECT i.*,c.boq_role,c.name AS category_name,b.name AS brand_name
+      FROM item_catalog_items i
+      JOIN item_catalog_categories c ON c.id=i.category_id
+      LEFT JOIN item_catalog_brands b ON b.id=i.brand_id
+      WHERE i.id=? AND i.status='Aktif' AND c.status='Aktif'
+        AND (b.id IS NULL OR b.status='Aktif') LIMIT 1`,
+    args: [input.catalogItemId],
+  });
+  const catalog = result.rows[0];
+  if (!catalog) throw new ApiError(422, "CATALOG_ITEM_UNAVAILABLE", "Item katalog tidak tersedia atau sudah dinonaktifkan.");
+  const tier = input.catalogPriceTier === 2 ? 2 : 1;
+  const costPrice = asNumber(catalog.cost_price);
+  const marginBps = asNumber(tier === 2 ? catalog.margin_2_bps : catalog.margin_1_bps);
+  const calculatedSellingPrice = Math.round((costPrice * (10_000 + marginBps)) / 10_000);
+  const canOverride = ["Admin", "Finance"].includes(user.role);
+  if (input.manualPriceOverride && !canOverride) {
+    throw new ApiError(403, "PRICE_OVERRIDE_FORBIDDEN", "Hanya Admin dan Finance yang dapat mengganti harga katalog secara manual.");
+  }
+  if (input.manualPriceOverride && !input.priceOverrideReason?.trim()) {
+    throw new ApiError(422, "PRICE_OVERRIDE_REASON_REQUIRED", "Alasan perubahan harga wajib diisi.");
+  }
+  const description = [catalog.name, catalog.model].filter(Boolean).join(" — ");
+  return {
+    ...input,
+    category: String(catalog.boq_role) as BoqItemInput["category"],
+    description,
+    unit: String(catalog.unit),
+    costPrice,
+    sellingPrice: input.manualPriceOverride ? input.sellingPrice : calculatedSellingPrice,
+    catalogItemId: String(catalog.id),
+    catalogPriceTier: tier,
+    catalogRevision: asNumber(catalog.revision),
+    manualPriceOverride: Boolean(input.manualPriceOverride),
+    priceOverrideReason: input.manualPriceOverride ? input.priceOverrideReason?.trim() ?? null : null,
+  };
+}
 
 const invoiceSchema = z.object({
   projectId: idSchema,
@@ -404,6 +464,7 @@ function mutationRoles(resource: string): UserRole[] {
 const resourceModules: Record<string, AccessModule> = {
   projects: "projects",
   boq: "boq",
+  catalog: "boq",
   invoices: "billing",
   quotations: "billing",
   vendors: "procurement",
@@ -1403,6 +1464,11 @@ async function getBoq(projectId: string) {
     unit: String(row.unit),
     costPrice: asNumber(row.cost_price),
     sellingPrice: asNumber(row.selling_price),
+    catalogItemId: row.catalog_item_id ? String(row.catalog_item_id) : null,
+    catalogPriceTier: row.catalog_price_tier ? asNumber(row.catalog_price_tier) as 1 | 2 : null,
+    catalogRevision: row.catalog_revision ? asNumber(row.catalog_revision) : null,
+    manualPriceOverride: Number(row.manual_price_override) === 1,
+    priceOverrideReason: row.price_override_reason ? String(row.price_override_reason) : null,
   }));
   const cost = items.reduce((sum, item) => sum + item.quantity * item.costPrice, 0);
   const selling = items.reduce((sum, item) => sum + item.quantity * item.sellingPrice, 0);
@@ -1488,6 +1554,9 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
           items: z.array(boqItemSchema).min(1).max(500),
         })
         .parse(await jsonBody(request));
+      const resolvedItems = await Promise.all(
+        input.items.map((item) => resolveBoqItemInput(client, user, item)),
+      );
       const id = randomUUID();
       const timestamp = now();
       const statements = [
@@ -1495,14 +1564,21 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
           sql: "INSERT INTO boq_templates (id,name,created_by,created_at,updated_at) VALUES (?,?,?,?,?)",
           args: [id, input.name, user.id, timestamp, timestamp],
         },
-        ...input.items.map((item, index) => ({
-          sql: "INSERT INTO boq_template_items (id,template_id,category,description,quantity,unit,cost_price,selling_price,sort_order) VALUES (?,?,?,?,?,?,?,?,?)",
-          args: [randomUUID(), id, item.category, item.description, item.quantity, item.unit, item.costPrice, item.sellingPrice, index],
+        ...resolvedItems.map((item, index) => ({
+          sql: `INSERT INTO boq_template_items
+            (id,template_id,category,description,quantity,unit,cost_price,selling_price,
+             catalog_item_id,catalog_price_tier,catalog_revision,manual_price_override,
+             price_override_reason,sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          args: [randomUUID(), id, item.category, item.description, item.quantity, item.unit,
+            item.costPrice, item.sellingPrice, item.catalogItemId ?? null,
+            item.catalogPriceTier ?? null, item.catalogRevision,
+            item.manualPriceOverride ? 1 : 0,
+            item.priceOverrideReason ?? null, index],
         })),
       ];
       await client.batch(statements, "write");
-      await writeAuditLog(client, request, user, "create", "boq_template", id, { name: input.name, itemCount: input.items.length });
-      return created({ id, name: input.name, items: input.items.length, lastUsed: "Baru saja" });
+      await writeAuditLog(client, request, user, "create", "boq_template", id, { name: input.name, itemCount: resolvedItems.length });
+      return created({ id, name: input.name, items: resolvedItems.length, lastUsed: "Baru saja" });
     }
 
     if (childId && request.method === "GET") {
@@ -1526,6 +1602,11 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
           unit: String(row.unit),
           costPrice: asNumber(row.cost_price),
           sellingPrice: asNumber(row.selling_price),
+          catalogItemId: row.catalog_item_id ? String(row.catalog_item_id) : null,
+          catalogPriceTier: row.catalog_price_tier ? asNumber(row.catalog_price_tier) as 1 | 2 : null,
+          catalogRevision: row.catalog_revision ? asNumber(row.catalog_revision) : null,
+          manualPriceOverride: Number(row.manual_price_override) === 1,
+          priceOverrideReason: row.price_override_reason ? String(row.price_override_reason) : null,
         })),
       });
     }
@@ -1563,7 +1644,10 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
         items: z.array(boqItemSchema.extend({ id: idSchema.optional() })).max(500),
       })
       .parse(await jsonBody(request));
-    const proposedTotal = input.items.reduce(
+    const resolvedItems = await Promise.all(
+      input.items.map((item) => resolveBoqItemInput(client, user, item)),
+    );
+    const proposedTotal = resolvedItems.reduce(
       (sum, item) => sum + item.quantity * item.sellingPrice,
       0,
     );
@@ -1588,21 +1672,33 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
         args: [input.status, input.notes ?? "", timestamp, boqId],
       },
       { sql: "DELETE FROM boq_items WHERE scope_id = ?", args: [originalScope.id] },
-      ...input.items.map((item, index) => ({
-        sql: "INSERT INTO boq_items (id,boq_id,scope_id,category,description,quantity,unit,cost_price,selling_price,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        args: [item.id ?? randomUUID(), boqId, originalScope.id, item.category, item.description, item.quantity, item.unit, item.costPrice, item.sellingPrice, index, timestamp, timestamp],
+      ...resolvedItems.map((item, index) => ({
+        sql: `INSERT INTO boq_items
+          (id,boq_id,scope_id,category,description,quantity,unit,cost_price,selling_price,
+           catalog_item_id,catalog_price_tier,catalog_revision,manual_price_override,
+           price_override_reason,sort_order,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        args: [input.items[index]?.id ?? randomUUID(), boqId, originalScope.id,
+          item.category, item.description, item.quantity, item.unit, item.costPrice,
+          item.sellingPrice, item.catalogItemId, item.catalogPriceTier,
+          item.catalogRevision, item.manualPriceOverride ? 1 : 0,
+          item.priceOverrideReason, index, timestamp, timestamp],
       })),
     ];
     await client.batch(statements, "write");
     await syncCommercialValues(client, projectId);
     await resetProjectValidation(client, projectId);
-    await writeAuditLog(client, request, user, "replace", "boq", boqId, { projectId, itemCount: input.items.length });
+    await writeAuditLog(client, request, user, "replace", "boq", boqId, { projectId, itemCount: resolvedItems.length });
     return ok(await getBoq(projectId));
   }
 
   if (request.method === "POST" && child === "items") {
     if (!mutationRoles("boq").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menambah item BoQ.");
-    const input = boqItemSchema.parse(await jsonBody(request));
+    const input = await resolveBoqItemInput(
+      client,
+      user,
+      boqItemSchema.parse(await jsonBody(request)),
+    );
     const boqId = await ensureBoq(projectId);
     const originalScope = await ensureExists(
       "SELECT id,status FROM boq_scopes WHERE boq_id=? AND sequence=0 LIMIT 1",
@@ -1623,8 +1719,16 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
     const id = randomUUID();
     const timestamp = now();
     await client.execute({
-      sql: "INSERT INTO boq_items (id,boq_id,scope_id,category,description,quantity,unit,cost_price,selling_price,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-      args: [id, boqId, originalScope.id, input.category, input.description, input.quantity, input.unit, input.costPrice, input.sellingPrice, asNumber(count.rows[0]?.count), timestamp, timestamp],
+      sql: `INSERT INTO boq_items
+        (id,boq_id,scope_id,category,description,quantity,unit,cost_price,selling_price,
+         catalog_item_id,catalog_price_tier,catalog_revision,manual_price_override,
+         price_override_reason,sort_order,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      args: [id, boqId, originalScope.id, input.category, input.description,
+        input.quantity, input.unit, input.costPrice, input.sellingPrice,
+        input.catalogItemId, input.catalogPriceTier, input.catalogRevision,
+        input.manualPriceOverride ? 1 : 0, input.priceOverrideReason,
+        asNumber(count.rows[0]?.count), timestamp, timestamp],
     });
     await syncCommercialValues(client, projectId);
     await resetProjectValidation(client, projectId);
@@ -1650,22 +1754,46 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
         "Item yang sudah diterima klien tidak dapat diedit. Buat Addendum baru.",
       );
     }
+    const resolved = await resolveBoqItemInput(client, user, {
+      category: (input.category ?? current.category) as BoqItemInput["category"],
+      description: String(input.description ?? current.description),
+      quantity: asNumber(input.quantity ?? current.quantity),
+      unit: String(input.unit ?? current.unit),
+      costPrice: asNumber(input.costPrice ?? current.cost_price),
+      sellingPrice: asNumber(input.sellingPrice ?? current.selling_price),
+      catalogItemId: input.catalogItemId === undefined
+        ? (current.catalog_item_id ? String(current.catalog_item_id) : null)
+        : input.catalogItemId,
+      catalogPriceTier: input.catalogPriceTier === undefined
+        ? (current.catalog_price_tier ? asNumber(current.catalog_price_tier) as 1 | 2 : null)
+        : input.catalogPriceTier,
+      manualPriceOverride: input.manualPriceOverride ?? Number(current.manual_price_override) === 1,
+      priceOverrideReason: input.priceOverrideReason === undefined
+        ? (current.price_override_reason ? String(current.price_override_reason) : null)
+        : input.priceOverrideReason,
+    });
     const currentBoq = await getBoq(projectId);
     const proposedTotal =
       currentBoq.totals.selling -
       asNumber(current.quantity) * asNumber(current.selling_price) +
-      (input.quantity ?? asNumber(current.quantity)) *
-        (input.sellingPrice ?? asNumber(current.selling_price));
+      resolved.quantity * resolved.sellingPrice;
     await assertBoqTotalCoversInvoices(client, projectId, proposedTotal);
     await client.execute({
-      sql: "UPDATE boq_items SET category=?,description=?,quantity=?,unit=?,cost_price=?,selling_price=?,updated_at=? WHERE id=?",
+      sql: `UPDATE boq_items SET category=?,description=?,quantity=?,unit=?,cost_price=?,selling_price=?,
+        catalog_item_id=?,catalog_price_tier=?,catalog_revision=?,manual_price_override=?,
+        price_override_reason=?,updated_at=? WHERE id=?`,
       args: [
-        input.category ?? current.category,
-        input.description ?? current.description,
-        input.quantity ?? current.quantity,
-        input.unit ?? current.unit,
-        input.costPrice ?? current.cost_price,
-        input.sellingPrice ?? current.selling_price,
+        resolved.category,
+        resolved.description,
+        resolved.quantity,
+        resolved.unit,
+        resolved.costPrice,
+        resolved.sellingPrice,
+        resolved.catalogItemId,
+        resolved.catalogPriceTier,
+        resolved.catalogRevision,
+        resolved.manualPriceOverride ? 1 : 0,
+        resolved.priceOverrideReason,
         now(),
         childId,
       ],
@@ -1686,6 +1814,11 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
       unit: String(updated.unit),
       costPrice: asNumber(updated.cost_price),
       sellingPrice: asNumber(updated.selling_price),
+      catalogItemId: updated.catalog_item_id ? String(updated.catalog_item_id) : null,
+      catalogPriceTier: updated.catalog_price_tier ? asNumber(updated.catalog_price_tier) as 1 | 2 : null,
+      catalogRevision: updated.catalog_revision ? asNumber(updated.catalog_revision) : null,
+      manualPriceOverride: Number(updated.manual_price_override) === 1,
+      priceOverrideReason: updated.price_override_reason ? String(updated.price_override_reason) : null,
     });
   }
 
@@ -1746,7 +1879,7 @@ async function handleQuotations(request: Request, user: AuthUser) {
       args: [projectId],
     });
     const row = result.rows[0];
-    return ok(row ? {
+    const base = row ? {
       id: String(row.id),
       number: String(row.number),
       status: String(row.status),
@@ -1768,7 +1901,11 @@ async function handleQuotations(request: Request, user: AuthUser) {
       total: (await getBoq(projectId)).totals.selling,
       taxEnabled: false,
       taxRevision: 0,
-    });
+    };
+    const tax = row
+      ? await documentTaxSummary(client, "Quotation", String(row.id), asNumber(row.total))
+      : { taxes: [], taxAdditions: 0, taxWithholdings: 0, grossTotal: base.total, netCashDue: base.total };
+    return ok({ ...base, ...tax });
   }
 
   if (request.method === "PATCH") {
@@ -1918,6 +2055,7 @@ async function handleQuotations(request: Request, user: AuthUser) {
       total: asNumber(row.total),
       taxEnabled: Number(row.tax_enabled) === 1,
       taxRevision: asNumber(row.tax_revision),
+      ...(await documentTaxSummary(client, "Quotation", String(row.id), asNumber(row.total))),
     });
   }
 
@@ -4898,6 +5036,7 @@ export async function dispatchApi(request: Request, path: string[]) {
   }
 
   if (resource === "projects") return handleProjects(request, path, user);
+  if (resource === "catalog") return handleCatalog(request, path, user);
   if (resource === "boq" && path[1] === "standalone") {
     return handleStandaloneBoqs(request, path, user);
   }

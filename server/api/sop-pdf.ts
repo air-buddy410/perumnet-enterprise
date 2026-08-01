@@ -50,7 +50,9 @@ const sopSections: SopSection[] = [
       "A project BoQ drives the Quotation and project value. Admin/Finance may create a BoQ before a project exists.",
     ],
     steps: [
-      ["Isi kategori, deskripsi, qty, satuan, harga pokok, dan harga jual.", "Enter category, description, quantity, unit, cost, and selling price."],
+      ["Admin/Finance mengelola Database Item berdasarkan peran BoQ, kategori, merek, dan model.", "Admin/Finance manages the Item Database by BoQ role, category, brand, and model."],
+      ["Gunakan kategori perangkat Networking, CCTV, IP PABX, atau Smart Home Device; pilih merek dan model yang sesuai.", "Use the Networking, CCTV, IP PABX, or Smart Home Device category; then choose the matching brand and model."],
+      ["Pilih Harga 1 atau Harga 2; sistem mengambil harga pokok dan menghitung harga jual dari margin tersimpan.", "Choose Price 1 or Price 2; the system reads cost and calculates selling price from the saved margin."],
       ["Periksa margin sebelum menyimpan atau memfinalkan BoQ.", "Review margin before saving or finalizing the BoQ."],
       ["Salin BoQ mandiri ke proyek; gunakan Ganti hanya bila BoQ lama boleh ditimpa.", "Copy the standalone BoQ to a project; use Replace only when the old BoQ may be overwritten."],
     ],
@@ -161,6 +163,7 @@ const sopSections: SopSection[] = [
     steps: [
       ["Admin mengaktifkan pajak dan mengisi tarif aturan tanpa nilai legal hardcoded.", "An Admin enables tax and enters rule rates without hardcoded legal values."],
       ["Admin/Finance menyalakan Gunakan Pajak pada Quotation Draft dan memilih aturan; snapshot terkunci saat Accepted lalu diwariskan ke Invoice.", "Admin/Finance enables Use Tax on a Draft Quotation and selects rules; the snapshot locks at Accepted and passes to the Invoice."],
+      ["Pajak tambah klien seperti PPN ditambahkan di atas nilai dasar, bukan menjadi biaya proyek PerumNet, dan dicatat sebagai utang pajak.", "Added client tax such as VAT is charged above the taxable base, is not a PerumNet project cost, and is recorded as tax payable."],
       ["Finance menyelesaikan utang/piutang pajak dengan referensi, rekening, dan bukti.", "Finance settles tax payables/receivables with a reference, account, and evidence."],
       ["Produksi mengirim melalui Mailcow-Brevo; demo hanya menyimpan capture.", "Production sends through Mailcow-Brevo; demo stores captures only."],
       ["Admin meninjau Pending/Failed dan menjalankan retry bila diperlukan.", "An Admin reviews Pending/Failed messages and retries when needed."],

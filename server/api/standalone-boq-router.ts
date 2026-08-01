@@ -25,6 +25,10 @@ const itemSchema = z.object({
   unit: z.string().trim().min(1).max(40),
   costPrice: moneySchema,
   sellingPrice: moneySchema,
+  catalogItemId: idSchema.nullable().optional(),
+  catalogPriceTier: z.union([z.literal(1), z.literal(2)]).nullable().optional(),
+  manualPriceOverride: z.boolean().optional().default(false),
+  priceOverrideReason: z.string().trim().max(500).nullable().optional(),
 });
 
 const standaloneBoqSchema = z.object({
@@ -66,6 +70,44 @@ function mapItem(row: Record<string, unknown>) {
     unit: String(row.unit),
     costPrice: asNumber(row.cost_price),
     sellingPrice: asNumber(row.selling_price),
+    catalogItemId: row.catalog_item_id ? String(row.catalog_item_id) : null,
+    catalogPriceTier: row.catalog_price_tier ? asNumber(row.catalog_price_tier) : null,
+    catalogRevision: row.catalog_revision ? asNumber(row.catalog_revision) : null,
+    manualPriceOverride: Number(row.manual_price_override) === 1,
+    priceOverrideReason: row.price_override_reason ? String(row.price_override_reason) : null,
+  };
+}
+
+async function resolveItem(client: DatabaseClient, input: z.infer<typeof itemSchema>) {
+  if (!input.catalogItemId) return { ...input, catalogItemId: null, catalogPriceTier: null, catalogRevision: null, manualPriceOverride: false, priceOverrideReason: null };
+  const result = await client.execute({
+    sql: `SELECT i.*,c.boq_role FROM item_catalog_items i
+      JOIN item_catalog_categories c ON c.id=i.category_id
+      LEFT JOIN item_catalog_brands b ON b.id=i.brand_id
+      WHERE i.id=? AND i.status='Aktif' AND c.status='Aktif'
+        AND (b.id IS NULL OR b.status='Aktif') LIMIT 1`,
+    args: [input.catalogItemId],
+  });
+  const item = result.rows[0];
+  if (!item) throw new ApiError(422, "CATALOG_ITEM_UNAVAILABLE", "Item katalog tidak tersedia.");
+  if (input.manualPriceOverride && !input.priceOverrideReason?.trim()) {
+    throw new ApiError(422, "PRICE_OVERRIDE_REASON_REQUIRED", "Alasan perubahan harga wajib diisi.");
+  }
+  const tier = input.catalogPriceTier === 2 ? 2 : 1;
+  const cost = asNumber(item.cost_price);
+  const margin = asNumber(tier === 2 ? item.margin_2_bps : item.margin_1_bps);
+  return {
+    ...input,
+    category: String(item.boq_role) as z.infer<typeof itemSchema>["category"],
+    description: [item.name, item.model].filter(Boolean).join(" — "),
+    unit: String(item.unit),
+    costPrice: cost,
+    sellingPrice: input.manualPriceOverride ? input.sellingPrice : Math.round(cost * (10_000 + margin) / 10_000),
+    catalogItemId: String(item.id),
+    catalogPriceTier: tier,
+    catalogRevision: asNumber(item.revision),
+    manualPriceOverride: Boolean(input.manualPriceOverride),
+    priceOverrideReason: input.manualPriceOverride ? input.priceOverrideReason?.trim() ?? null : null,
   };
 }
 
@@ -116,17 +158,20 @@ async function replaceItems(
   items: z.infer<typeof itemSchema>[],
   timestamp: string,
 ) {
+  const resolvedItems = await Promise.all(items.map((item) => resolveItem(client, item)));
   await client.batch(
     [
       {
         sql: "DELETE FROM standalone_boq_items WHERE standalone_boq_id=?",
         args: [boqId],
       },
-      ...items.map((item, index) => ({
+      ...resolvedItems.map((item, index) => ({
         sql: `
           INSERT INTO standalone_boq_items
-            (id,standalone_boq_id,category,description,quantity,unit,cost_price,selling_price,sort_order,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            (id,standalone_boq_id,category,description,quantity,unit,cost_price,selling_price,
+             catalog_item_id,catalog_price_tier,catalog_revision,manual_price_override,
+             price_override_reason,sort_order,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         `,
         args: [
           randomUUID(),
@@ -137,6 +182,11 @@ async function replaceItems(
           item.unit,
           item.costPrice,
           item.sellingPrice,
+          item.catalogItemId,
+          item.catalogPriceTier,
+          item.catalogRevision,
+          item.manualPriceOverride ? 1 : 0,
+          item.priceOverrideReason,
           index,
           timestamp,
           timestamp,
@@ -298,8 +348,10 @@ export async function handleStandaloneBoqs(
         ...source.items.map((item, index) => ({
           sql: `
             INSERT INTO boq_items
-              (id,boq_id,category,description,quantity,unit,cost_price,selling_price,sort_order,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+              (id,boq_id,category,description,quantity,unit,cost_price,selling_price,
+               catalog_item_id,catalog_price_tier,catalog_revision,manual_price_override,
+               price_override_reason,sort_order,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           `,
           args: [
             randomUUID(),
@@ -310,6 +362,11 @@ export async function handleStandaloneBoqs(
             item.unit,
             item.costPrice,
             item.sellingPrice,
+            item.catalogItemId ?? null,
+            item.catalogPriceTier ?? null,
+            item.catalogRevision ?? null,
+            item.manualPriceOverride ? 1 : 0,
+            item.priceOverrideReason ?? null,
             index,
             timestamp,
             timestamp,

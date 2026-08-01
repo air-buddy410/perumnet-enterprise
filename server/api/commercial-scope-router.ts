@@ -28,6 +28,10 @@ const itemSchema = z.object({
   unit: z.string().trim().min(1).max(40),
   costPrice: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   sellingPrice: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  catalogItemId: idSchema.nullable().optional(),
+  catalogPriceTier: z.union([z.literal(1), z.literal(2)]).nullable().optional(),
+  manualPriceOverride: z.boolean().optional().default(false),
+  priceOverrideReason: z.string().trim().max(500).nullable().optional(),
 });
 const scopeSchema = z.object({
   title: z.string().trim().min(3).max(160),
@@ -60,6 +64,85 @@ function assertValidityManager(user: AuthUser, input: { issuedAt?: string; valid
 function numberValue(value: unknown) {
   const result = Number(value ?? 0);
   return Number.isFinite(result) ? result : 0;
+}
+
+type ScopeItemInput = z.infer<typeof itemSchema>;
+
+async function resolveScopeItems(
+  client: DatabaseClient,
+  user: AuthUser,
+  items: ScopeItemInput[],
+) {
+  return Promise.all(
+    items.map(async (item) => {
+      if (!item.catalogItemId) {
+        return {
+          ...item,
+          catalogItemId: null,
+          catalogPriceTier: null,
+          catalogRevision: null,
+          manualPriceOverride: false,
+          priceOverrideReason: null,
+        };
+      }
+      const result = await client.execute({
+        sql: `SELECT i.*,c.boq_role,b.id AS active_brand_id
+          FROM item_catalog_items i
+          JOIN item_catalog_categories c ON c.id=i.category_id
+          LEFT JOIN item_catalog_brands b ON b.id=i.brand_id AND b.status='Aktif'
+          WHERE i.id=? AND i.status='Aktif' AND c.status='Aktif' LIMIT 1`,
+        args: [item.catalogItemId],
+      });
+      const catalog = result.rows[0];
+      if (
+        !catalog ||
+        (catalog.brand_id && !catalog.active_brand_id)
+      ) {
+        throw new ApiError(
+          422,
+          "CATALOG_ITEM_UNAVAILABLE",
+          "Item katalog tidak tersedia atau sudah dinonaktifkan.",
+        );
+      }
+      const tier = item.catalogPriceTier === 2 ? 2 : 1;
+      const costPrice = numberValue(catalog.cost_price);
+      const marginBps = numberValue(
+        tier === 2 ? catalog.margin_2_bps : catalog.margin_1_bps,
+      );
+      const sellingPrice = Math.round(
+        (costPrice * (10_000 + marginBps)) / 10_000,
+      );
+      if (item.manualPriceOverride && !["Admin", "Finance"].includes(user.role)) {
+        throw new ApiError(
+          403,
+          "PRICE_OVERRIDE_FORBIDDEN",
+          "Hanya Admin dan Finance yang dapat mengganti harga katalog secara manual.",
+        );
+      }
+      if (item.manualPriceOverride && !item.priceOverrideReason?.trim()) {
+        throw new ApiError(
+          422,
+          "PRICE_OVERRIDE_REASON_REQUIRED",
+          "Alasan perubahan harga wajib diisi.",
+        );
+      }
+      return {
+        ...item,
+        category: String(catalog.boq_role) as ScopeItemInput["category"],
+        description: [catalog.name, catalog.model].filter(Boolean).join(" — "),
+        unit: String(catalog.unit),
+        costPrice,
+        sellingPrice: item.manualPriceOverride ? item.sellingPrice : sellingPrice,
+        catalogItemId: String(catalog.id),
+        catalogPriceTier: tier,
+        catalogRevision: numberValue(catalog.revision),
+        manualPriceOverride: Boolean(item.manualPriceOverride),
+        priceOverrideReason: item.manualPriceOverride
+          ? item.priceOverrideReason?.trim() ?? null
+          : null,
+      };
+    }),
+  );
 }
 
 function assertManage(user: AuthUser, module: "boq" | "billing") {
@@ -177,6 +260,17 @@ async function scopeDetail(client: DatabaseClient, scopeId: string) {
       unit: String(item.unit),
       costPrice: numberValue(item.cost_price),
       sellingPrice: numberValue(item.selling_price),
+      catalogItemId: item.catalog_item_id ? String(item.catalog_item_id) : null,
+      catalogPriceTier: item.catalog_price_tier
+        ? numberValue(item.catalog_price_tier)
+        : null,
+      catalogRevision: item.catalog_revision
+        ? numberValue(item.catalog_revision)
+        : null,
+      manualPriceOverride: Number(item.manual_price_override) === 1,
+      priceOverrideReason: item.price_override_reason
+        ? String(item.price_override_reason)
+        : null,
     })),
   };
 }
@@ -214,6 +308,7 @@ export async function handleBoqScopes(
     }
     await assertProjectAccess(client, user, projectId);
     const input = scopeSchema.parse(await jsonBody(request));
+    const resolvedItems = await resolveScopeItems(client, user, input.items);
     assertValidityManager(user, input);
     if (input.issuedAt && input.validUntil && input.validUntil < input.issuedAt) {
       throw new ApiError(422, "INVALID_DATE_RANGE", "Masa berlaku tidak boleh lebih awal dari tanggal terbit.");
@@ -243,7 +338,7 @@ export async function handleBoqScopes(
       new Date(new Date(`${issuedAt}T00:00:00.000Z`).getTime() + 14 * 86_400_000)
         .toISOString()
         .slice(0, 10);
-    const total = input.items.reduce(
+    const total = resolvedItems.reduce(
       (sum, item) => sum + item.quantity * item.sellingPrice,
       0,
     );
@@ -265,11 +360,12 @@ export async function handleBoqScopes(
         ],
       });
       await tx.batch(
-        input.items.map((item, index) => ({
+        resolvedItems.map((item, index) => ({
           sql: `INSERT INTO boq_items
             (id,boq_id,scope_id,category,description,quantity,unit,cost_price,
-             selling_price,sort_order,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+             selling_price,catalog_item_id,catalog_price_tier,catalog_revision,
+             manual_price_override,price_override_reason,sort_order,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           args: [
             item.id ?? randomUUID(),
             boq.rows[0].id,
@@ -280,6 +376,11 @@ export async function handleBoqScopes(
             item.unit,
             item.costPrice,
             item.sellingPrice,
+            item.catalogItemId,
+            item.catalogPriceTier,
+            item.catalogRevision,
+            item.manualPriceOverride ? 1 : 0,
+            item.priceOverrideReason,
             index,
             timestamp,
             timestamp,
@@ -309,7 +410,7 @@ export async function handleBoqScopes(
     await writeAuditLog(client, request, user, "create", "boq_addendum", scopeIdValue, {
       title: input.title,
       quotationId,
-      itemCount: input.items.length,
+      itemCount: resolvedItems.length,
       total,
     });
     return created(await scopeDetail(client, scopeIdValue));
@@ -331,6 +432,9 @@ export async function handleBoqScopes(
       .pick({ title: true, issuedAt: true, validUntil: true, items: true })
       .partial()
       .parse(await jsonBody(request));
+    const resolvedItems = input.items
+      ? await resolveScopeItems(client, user, input.items)
+      : undefined;
     assertValidityManager(user, input);
     if (current.status === "Accepted" || current.quotation?.status === "Accepted") {
       throw new ApiError(
@@ -353,14 +457,15 @@ export async function handleBoqScopes(
         sql: "UPDATE boq_scopes SET title=?,status='Draft',updated_at=? WHERE id=?",
         args: [input.title ?? current.title, timestamp, scopeId],
       });
-      if (input.items) {
+      if (resolvedItems) {
         await tx.execute({ sql: "DELETE FROM boq_items WHERE scope_id=?", args: [scopeId] });
         await tx.batch(
-          input.items.map((item, index) => ({
+          resolvedItems.map((item, index) => ({
             sql: `INSERT INTO boq_items
               (id,boq_id,scope_id,category,description,quantity,unit,cost_price,
-               selling_price,sort_order,created_at,updated_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+               selling_price,catalog_item_id,catalog_price_tier,catalog_revision,
+               manual_price_override,price_override_reason,sort_order,created_at,updated_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
             args: [
               item.id ?? randomUUID(),
               current.boqId,
@@ -371,6 +476,11 @@ export async function handleBoqScopes(
               item.unit,
               item.costPrice,
               item.sellingPrice,
+              item.catalogItemId,
+              item.catalogPriceTier,
+              item.catalogRevision,
+              item.manualPriceOverride ? 1 : 0,
+              item.priceOverrideReason,
               index,
               timestamp,
               timestamp,
@@ -397,7 +507,7 @@ export async function handleBoqScopes(
     await syncProjectCommercialValue(client, current.projectId);
     await writeAuditLog(client, request, user, "update", "boq_scope", scopeId, {
       ...input,
-      itemCount: input.items?.length,
+      itemCount: resolvedItems?.length,
     });
     return ok(await scopeDetail(client, scopeId));
   }
@@ -547,7 +657,7 @@ export async function handleQuotationLifecycle(
         args: [quotationId],
       });
       const locked = await tx.execute({
-        sql: "SELECT status FROM quotations WHERE id=? LIMIT 1",
+        sql: "SELECT status,tax_enabled FROM quotations WHERE id=? LIMIT 1",
         args: [quotationId],
       });
       const currentStatus = String(locked.rows[0]?.status);

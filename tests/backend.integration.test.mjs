@@ -460,6 +460,154 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     1,
   );
 
+  const catalogInitial = await json("/api/catalog?includeInactive=true");
+  const networkingCategory = catalogInitial.categories.find(
+    (entry) => entry.boqRole === "Perangkat" && entry.name === "Networking",
+  );
+  assert.ok(networkingCategory);
+  assert.ok(catalogInitial.categories.some((entry) => entry.name === "CCTV"));
+  assert.ok(catalogInitial.categories.some((entry) => entry.name === "IP PABX"));
+  assert.ok(catalogInitial.categories.some((entry) => entry.name === "Smart Home Device"));
+  const catalogBrand = await json(
+    "/api/catalog/brands",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        categoryId: networkingCategory.id,
+        name: "Ruijie",
+        status: "Aktif",
+        sortOrder: 10,
+      }),
+    },
+    201,
+  );
+  const catalogItem = await json(
+    "/api/catalog/items",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        categoryId: networkingCategory.id,
+        brandId: catalogBrand.id,
+        sku: "RG-AP-TEST",
+        name: "Access Point WiFi 6",
+        nameEn: "WiFi 6 Access Point",
+        model: "RG-AP-Test",
+        specifications: "Dual-band managed access point",
+        unit: "unit",
+        costPrice: 1_000_000,
+        margin1Percent: 20,
+        margin2Percent: 35,
+        status: "Aktif",
+      }),
+    },
+    201,
+  );
+  const catalogAfterCreate = await json("/api/catalog?role=Perangkat&q=ruijie");
+  const pricedCatalogItem = catalogAfterCreate.items.find((entry) => entry.id === catalogItem.id);
+  assert.equal(pricedCatalogItem.brand, "Ruijie");
+  assert.equal(pricedCatalogItem.price1, 1_200_000);
+  assert.equal(pricedCatalogItem.price2, 1_350_000);
+
+  const catalogProject = await json(
+    "/api/projects",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Proyek Katalog Bertingkat",
+        client: "Klien Katalog",
+        location: "Badung",
+        status: "Draft",
+        value: 0,
+      }),
+    },
+    201,
+  );
+  const linkedBoqItem = await json(
+    `/api/boq/items?projectId=${catalogProject.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        category: "Perangkat",
+        description: "Nilai dari browser tidak dipercaya",
+        quantity: 2,
+        unit: "paket",
+        costPrice: 1,
+        sellingPrice: 1,
+        catalogItemId: catalogItem.id,
+        catalogPriceTier: 2,
+      }),
+    },
+    201,
+  );
+  assert.equal(linkedBoqItem.description, "Access Point WiFi 6 — RG-AP-Test");
+  assert.equal(linkedBoqItem.costPrice, 1_000_000);
+  assert.equal(linkedBoqItem.sellingPrice, 1_350_000);
+  const catalogQuotation = await json(`/api/quotations?projectId=${catalogProject.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Sent" }),
+  });
+  assert.equal(catalogQuotation.total, 2_700_000);
+  const catalogUpdate = await json(`/api/catalog/items/${catalogItem.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ costPrice: 1_200_000 }),
+  });
+  assert.equal(catalogUpdate.quotationsReset, 1);
+  const synchronizedCatalogBoq = await json(`/api/boq?projectId=${catalogProject.id}`);
+  assert.equal(synchronizedCatalogBoq.items[0].sellingPrice, 1_620_000);
+  assert.equal((await json(`/api/quotations?projectId=${catalogProject.id}`)).status, "Draft");
+  const catalogAddendum = await json(
+    `/api/boq/scopes?projectId=${catalogProject.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Tambahan Access Point dari katalog",
+        items: [
+          {
+            category: "Jasa",
+            description: "Harga browser tidak digunakan",
+            quantity: 1,
+            unit: "paket",
+            costPrice: 1,
+            sellingPrice: 1,
+            catalogItemId: catalogItem.id,
+            catalogPriceTier: 2,
+          },
+        ],
+      }),
+    },
+    201,
+  );
+  assert.equal(catalogAddendum.items[0].category, "Perangkat");
+  assert.equal(catalogAddendum.items[0].catalogItemId, catalogItem.id);
+  assert.equal(catalogAddendum.items[0].sellingPrice, 1_620_000);
+  assert.equal(
+    (
+      await request(`/api/boq/items/${linkedBoqItem.id}?projectId=${catalogProject.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ manualPriceOverride: true, sellingPrice: 1_700_000 }),
+      })
+    ).status,
+    422,
+  );
+  const overriddenCatalogItem = await json(
+    `/api/boq/items/${linkedBoqItem.id}?projectId=${catalogProject.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        manualPriceOverride: true,
+        sellingPrice: 1_700_000,
+        priceOverrideReason: "Harga khusus sesuai negosiasi klien.",
+      }),
+    },
+  );
+  assert.equal(overriddenCatalogItem.sellingPrice, 1_700_000);
+  assert.equal(overriddenCatalogItem.manualPriceOverride, true);
+  const catalogExport = await request("/api/catalog/export.xlsx");
+  assert.equal(catalogExport.status, 200);
+  const catalogWorkbook = new ExcelJS.Workbook();
+  await catalogWorkbook.xlsx.load(Buffer.from(await catalogExport.arrayBuffer()));
+  assert.equal(catalogWorkbook.worksheets[0].getCell("C2").value, "Ruijie");
+
   const invoice = await json(
     "/api/invoices",
     {
@@ -1002,6 +1150,10 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   assert.equal(taxableQuotationSummary.baseAmount, 500_000);
   assert.equal(taxableQuotationSummary.taxAdditions, 55_000);
   assert.equal(taxableQuotationSummary.grossTotal, 555_000);
+  const quotationWithClientTax = await json(`/api/quotations?projectId=${taxProject.id}`);
+  assert.equal(quotationWithClientTax.total, 500_000);
+  assert.equal(quotationWithClientTax.taxAdditions, 55_000);
+  assert.equal(quotationWithClientTax.grossTotal, 555_000);
   await json(`/api/quotations/${taxableQuotation.id}/send`, {
     method: "POST",
     body: JSON.stringify({}),

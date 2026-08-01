@@ -844,11 +844,11 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
   y = drawTotals(context, y, [
     { label: "Subtotal", value: rupiah(total, language) },
     ...quotationTax.taxes.map((tax) => ({
-      label: `${language === "en" ? tax.nameEn : tax.name} (${tax.effect === "Add" ? "+" : "-"})`,
+      label: `${language === "en" ? tax.nameEn : tax.name} (${tax.effect === "Add" ? tr(language, "ditagihkan ke klien", "charged to client") : tr(language, "dipotong klien", "withheld by client")})`,
       value: rupiah(tax.amount, language),
     })),
     {
-      label: tr(language, "Nilai bruto", "Gross total"),
+      label: tr(language, "Total tagihan klien", "Total billed to client"),
       value: rupiah(quotationTax.grossTotal, language),
     },
     {
@@ -860,8 +860,8 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
   y = drawCallout(
     context,
     y,
-    tr(language, "Ketentuan penawaran", "Quotation terms"),
-    tr(language, "Harga berlaku untuk ruang lingkup yang tercantum. Perubahan spesifikasi, volume, lokasi, atau jadwal pekerjaan akan dikonfirmasi melalui revisi penawaran. Jadwal pelaksanaan disepakati setelah penawaran diterima.", "Prices apply to the stated scope. Changes to specifications, quantities, location, or schedule will be confirmed through a revised quotation. The implementation schedule will be agreed after acceptance."),
+    tr(language, "Ketentuan penawaran dan pajak", "Quotation and tax terms"),
+    tr(language, "Harga berlaku untuk ruang lingkup yang tercantum. Pajak tambah pada dokumen ini dibebankan kepada klien, bukan menjadi biaya proyek PerumNet. Perubahan spesifikasi, volume, lokasi, atau jadwal pekerjaan dikonfirmasi melalui revisi penawaran.", "Prices apply to the stated scope. Added tax in this document is charged to the client and is not a PerumNet project cost. Changes to specifications, quantities, location, or schedule are confirmed through a revised quotation."),
     "teal",
   );
   y = drawSectionTitle(context, y, tr(language, "Persetujuan", "Approval"));
@@ -965,11 +965,11 @@ async function invoicePdf(invoiceId: string, language: PdfLanguage) {
   y = drawTotals(context, y, [
     { label: "Subtotal", value: rupiah(invoice.amount, language) },
     ...invoiceTax.taxes.map((tax) => ({
-      label: `${language === "en" ? tax.nameEn : tax.name} (${tax.effect === "Add" ? "+" : "-"})`,
+      label: `${language === "en" ? tax.nameEn : tax.name} (${tax.effect === "Add" ? tr(language, "ditagihkan ke klien", "charged to client") : tr(language, "dipotong klien", "withheld by client")})`,
       value: rupiah(tax.amount, language),
     })),
     {
-      label: tr(language, "Nilai bruto", "Gross total"),
+      label: tr(language, "Total tagihan klien", "Total billed to client"),
       value: rupiah(invoiceTax.grossTotal, language),
     },
     {

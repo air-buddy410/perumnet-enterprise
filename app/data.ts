@@ -1,6 +1,7 @@
 export type ViewKey =
   | "dashboard"
   | "boq"
+  | "catalog"
   | "billing"
   | "project"
   | "expenses"
@@ -50,6 +51,63 @@ export interface BoqItem {
   unit: string;
   costPrice: number;
   sellingPrice: number;
+  catalogItemId?: string | null;
+  catalogPriceTier?: 1 | 2 | null;
+  catalogRevision?: number | null;
+  manualPriceOverride?: boolean;
+  priceOverrideReason?: string | null;
+}
+
+export interface CatalogCategory {
+  id: string;
+  boqRole: BoqItem["category"];
+  name: string;
+  nameEn: string;
+  defaultMargin1Percent: number;
+  defaultMargin2Percent: number;
+  status: "Aktif" | "Nonaktif";
+  sortOrder: number;
+  itemCount: number;
+}
+
+export interface CatalogBrand {
+  id: string;
+  categoryId: string;
+  category: string;
+  name: string;
+  status: "Aktif" | "Nonaktif";
+  sortOrder: number;
+  itemCount: number;
+}
+
+export interface CatalogItem {
+  id: string;
+  categoryId: string;
+  category: string;
+  categoryEn: string;
+  boqRole: BoqItem["category"];
+  brandId: string | null;
+  brand: string | null;
+  sku: string;
+  name: string;
+  nameEn: string;
+  model: string;
+  specifications: string;
+  unit: string;
+  costPrice: number;
+  margin1Percent: number;
+  margin2Percent: number;
+  price1: number;
+  price2: number;
+  status: "Aktif" | "Nonaktif";
+  revision: number;
+  usageCount: number;
+}
+
+export interface CatalogPayload {
+  categories: CatalogCategory[];
+  brands: CatalogBrand[];
+  items: CatalogItem[];
 }
 
 export interface Invoice {

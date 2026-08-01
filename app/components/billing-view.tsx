@@ -42,6 +42,12 @@ interface Quotation {
   issuedAt: string;
   validUntil: string | null;
   total: number;
+  taxEnabled?: boolean;
+  taxAdditions?: number;
+  taxWithholdings?: number;
+  grossTotal?: number;
+  netCashDue?: number;
+  taxes?: Array<{ code: string; name?: string; nameEn?: string; amount: number; effect?: "Add" | "Withhold" }>;
 }
 
 async function attachmentFromFile(file: File) {
@@ -155,6 +161,7 @@ export function BillingView({
     [quotationItems],
   );
   const quotationTotal = quotation?.total ?? boqTotal;
+  const quotationGrossTotal = quotation?.grossTotal ?? quotationTotal;
   const paidTotal = invoices.reduce(
     (sum, invoice) => sum + (invoice.paidGross ?? (invoice.status === "Lunas" ? invoice.amount : 0)),
     0,
@@ -164,6 +171,9 @@ export function BillingView({
     0,
   );
   const invoicedTotal = invoices.reduce((sum, invoice) => sum + invoice.amount, 0);
+  const invoiceEstimatedTax = quotationTotal > 0
+    ? Math.round(((quotation?.taxAdditions ?? 0) * invoiceAmount) / quotationTotal)
+    : 0;
   const quotationExpired = Boolean(
     quotation?.validUntil &&
     serverToday &&
@@ -189,6 +199,11 @@ export function BillingView({
     setQuotationIssuedAt(updated.issuedAt);
     setQuotationValidUntil(updated.validUntil ?? "");
     return updated;
+  }
+
+  async function refreshQuotation() {
+    const updated = await api<Quotation>(`/api/quotations?projectId=${encodeURIComponent(projectId)}`);
+    setQuotation(updated);
   }
 
   async function downloadQuotation() {
@@ -479,6 +494,7 @@ export function BillingView({
                     documentType="Quotation"
                     documentId={quotation.id}
                     canManage={canManageTaxes && quotation.status === "Draft"}
+                    onSaved={refreshQuotation}
                   />
                 ) : null}
                 {canManageValidity && quotation?.status !== "Accepted" && (
@@ -532,7 +548,13 @@ export function BillingView({
                   <p>{id ? "BoQ proyek ini masih kosong. Tambahkan item sebelum membuat Quotation." : "This project BoQ is empty. Add items before creating a Quotation."}</p>
                 </div>
               )}
-              <div className="document-total"><span>{id ? "Total penawaran" : "Quotation total"}</span><strong>{formatCurrency(quotationTotal, language)}</strong></div>
+              <div className="document-commercial-totals">
+                <div><span>{id ? "Subtotal pekerjaan" : "Work subtotal"}</span><strong>{formatCurrency(quotationTotal, language)}</strong></div>
+                {(quotation?.taxes ?? []).filter((tax) => tax.effect !== "Withhold").map((tax) => <div key={`${tax.code}-${tax.amount}`}><span>{tax.code} · {id ? (tax.name ?? "Pajak klien") : (tax.nameEn ?? "Client tax")} <small>{id ? "dibebankan ke klien" : "charged to client"}</small></span><strong>+{formatCurrency(tax.amount, language)}</strong></div>)}
+                {(quotation?.taxes ?? []).filter((tax) => tax.effect === "Withhold").map((tax) => <div key={`${tax.code}-${tax.amount}`}><span>{tax.code} · {id ? (tax.name ?? "Pajak potong") : (tax.nameEn ?? "Withholding tax")}</span><strong>−{formatCurrency(tax.amount, language)}</strong></div>)}
+                <div className="grand"><span>{id ? "Total tagihan klien" : "Total billed to client"}</span><strong>{formatCurrency(quotationGrossTotal, language)}</strong></div>
+              </div>
+              {(quotation?.taxAdditions ?? 0) > 0 && <div className="client-tax-note"><ReceiptText size={16} /><span><strong>{id ? "Pajak ditagihkan kepada klien" : "Tax is charged to the client"}</strong><small>{id ? "Pajak tambah bukan biaya proyek PerumNet dan dicatat sebagai utang pajak." : "Added tax is not a PerumNet project cost and is recorded as a tax payable."}</small></span></div>}
               <div className="document-notes">
                 <strong>{id ? "Ketentuan penawaran" : "Quotation terms"}</strong>
                 <p>{id ? "Berlaku sampai" : "Valid until"} {localizedDate(language, quotation?.validUntil)}. {id ? "Nilai akan kembali menjadi Draft bila BoQ diubah." : "The value returns to Draft when the BoQ changes."}</p>
@@ -561,7 +583,7 @@ export function BillingView({
       {activeTab === "invoice" && (
         <div className="page-stack">
           <section className="metric-grid invoice-metrics">
-            <article className="metric-card"><span className="metric-icon green"><CircleCheck size={20} /></span><div className="metric-main"><span>{id ? "Sudah diterima" : "Received"}</span><strong>{formatCurrency(paidTotal, language)}</strong></div><span className="metric-change positive">{quotationTotal ? Math.round((paidTotal / quotationTotal) * 100) : 0}% {id ? "proyek" : "of project"}</span></article>
+            <article className="metric-card"><span className="metric-icon green"><CircleCheck size={20} /></span><div className="metric-main"><span>{id ? "Sudah diterima" : "Received"}</span><strong>{formatCurrency(paidTotal, language)}</strong></div><span className="metric-change positive">{quotationGrossTotal ? Math.round((paidTotal / quotationGrossTotal) * 100) : 0}% {id ? "dari tagihan bruto" : "of gross billing"}</span></article>
             <article className="metric-card"><span className="metric-icon orange"><Clock3 size={20} /></span><div className="metric-main"><span>{id ? "Belum dibayar" : "Outstanding"}</span><strong>{formatCurrency(outstanding, language)}</strong></div><span className="metric-change warning-text">{invoices.filter((invoice) => invoice.status !== "Lunas").length} {id ? "invoice aktif" : "active invoices"}</span></article>
             <article className="metric-card"><span className="metric-icon blue"><FileCheck2 size={20} /></span><div className="metric-main"><span>{id ? "Sisa dapat ditagihkan" : "Remaining billable"}</span><strong>{formatCurrency(Math.max(0, quotationTotal - invoicedTotal), language)}</strong></div><span className="metric-change">{id ? "Dari" : "Of"} {formatCurrency(quotationTotal, language)}</span></article>
           </section>
@@ -631,8 +653,8 @@ export function BillingView({
               <label className="field full select-field"><span>{id ? "Jenis tagihan" : "Invoice type"}</span><select value={invoiceType} onChange={(event) => setInvoiceType(event.target.value)}><option value="DP 30%">DP 30%</option><option value="DP 50%">DP 50%</option><option value="Termin 2">{id ? "Termin 2" : "Milestone 2"}</option><option value="Pelunasan">{id ? "Pelunasan" : "Final Payment"}</option></select><ChevronDown size={15} /></label>
               <label className="field"><span>{id ? "Tanggal terbit" : "Issue date"}</span><input required type="date" value={issueDate} onChange={(event) => setIssueDate(event.target.value)} /></label>
               <label className="field"><span>{id ? "Jatuh tempo" : "Due date"}</span><input required type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label>
-              <label className="field full"><span>{id ? "Nominal tagihan" : "Invoice amount"}</span><input type="number" min="1" required value={invoiceAmount || ""} onChange={(event) => setInvoiceAmount(Number(event.target.value))} /></label>
-              <div className="invoice-form-summary full"><span>{id ? "Nilai Invoice" : "Invoice Value"}</span><strong>{formatCurrency(invoiceAmount, language)}</strong><small>{id ? "Sisa setelah disimpan" : "Remaining after save"}: {formatCurrency(Math.max(0, quotationTotal - (invoicedTotal - (invoices.find((item) => item.id === editingInvoiceId)?.amount ?? 0)) - invoiceAmount), language)}</small></div>
+              <label className="field full"><span>{id ? "Nilai dasar termin (sebelum pajak)" : "Installment base (before tax)"}</span><input type="number" min="1" required value={invoiceAmount || ""} onChange={(event) => setInvoiceAmount(Number(event.target.value))} /></label>
+              <div className="invoice-form-summary full"><span>{id ? "Total tagihan klien" : "Total billed to client"}</span><strong>{formatCurrency(invoiceAmount + invoiceEstimatedTax, language)}</strong><small>{id ? `Dasar ${formatCurrency(invoiceAmount, language)} + estimasi pajak klien ${formatCurrency(invoiceEstimatedTax, language)}. Sisa dasar setelah disimpan` : `Base ${formatCurrency(invoiceAmount, language)} + estimated client tax ${formatCurrency(invoiceEstimatedTax, language)}. Remaining base after save`}: {formatCurrency(Math.max(0, quotationTotal - (invoicedTotal - (invoices.find((item) => item.id === editingInvoiceId)?.amount ?? 0)) - invoiceAmount), language)}</small></div>
               <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowInvoiceForm(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit"><FileCheck2 size={16} /> {editingInvoiceId ? (id ? "Simpan perubahan" : "Save changes") : (id ? "Terbitkan invoice" : "Issue invoice")}</button></div>
             </form>
           </section>

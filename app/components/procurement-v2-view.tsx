@@ -12,6 +12,7 @@ import {
   FilePlus2,
   FileText,
   Filter,
+  LibraryBig,
   PackageCheck,
   Pencil,
   Plus,
@@ -26,6 +27,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api, downloadApiFile, messageOf } from "../api-client";
 import {
   BankAccount,
+  CatalogItem,
   CommercialScope,
   formatCurrency,
   ProcurementOrder,
@@ -35,6 +37,7 @@ import {
 } from "../data";
 import { type AppLanguage, localizedLabel } from "../i18n";
 import { DocumentTaxEditor } from "./document-tax-editor";
+import { CatalogPicker } from "./catalog-picker";
 
 interface ProcurementViewProps {
   language: AppLanguage;
@@ -139,6 +142,9 @@ export function ProcurementViewV2({
   const [addendumUnit, setAddendumUnit] = useState("paket");
   const [addendumCost, setAddendumCost] = useState(0);
   const [addendumSelling, setAddendumSelling] = useState(0);
+  const [addendumCatalogOpen, setAddendumCatalogOpen] = useState(false);
+  const [addendumCatalogItemId, setAddendumCatalogItemId] = useState<string | null>(null);
+  const [addendumCatalogPriceTier, setAddendumCatalogPriceTier] = useState<1 | 2 | null>(null);
 
   const [paymentOrder, setPaymentOrder] = useState<ProcurementOrder | null>(null);
   const [paymentTermId, setPaymentTermId] = useState("");
@@ -582,11 +588,15 @@ export function ProcurementViewV2({
               unit: addendumUnit,
               costPrice: addendumCost,
               sellingPrice: addendumSelling,
+              catalogItemId: addendumCatalogItemId,
+              catalogPriceTier: addendumCatalogPriceTier,
             },
           ],
         }),
       });
       setShowAddendum(false);
+      setAddendumCatalogItemId(null);
+      setAddendumCatalogPriceTier(null);
       notify(id ? "Addendum draft dan Quotation baru dibuat." : "Addendum draft and new Quotation created.");
       await load();
     } catch (error) {
@@ -594,6 +604,17 @@ export function ProcurementViewV2({
     } finally {
       setBusy("");
     }
+  }
+
+  function useCatalogForAddendum(item: CatalogItem, tier: 1 | 2) {
+    setAddendumCatalogItemId(item.id);
+    setAddendumCatalogPriceTier(tier);
+    setAddendumCategory(item.boqRole);
+    setAddendumDescription([item.name, item.model].filter(Boolean).join(" — "));
+    setAddendumUnit(item.unit);
+    setAddendumCost(item.costPrice);
+    setAddendumSelling(tier === 2 ? item.price2 : item.price1);
+    setAddendumCatalogOpen(false);
   }
 
   function openScopeValidity(scope: CommercialScope) {
@@ -970,7 +991,77 @@ export function ProcurementViewV2({
 
       {acceptingScope && <div className="modal-backdrop" onMouseDown={() => setAcceptingScope(null)}><section className="modal-card" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">CLIENT ACCEPTANCE</span><h2>{acceptingScope.quotation?.number}</h2></div><button className="icon-button" type="button" onClick={() => setAcceptingScope(null)}><X size={18} /></button></div><form className="form-grid" onSubmit={saveAcceptance}><label className="field full"><span>{id ? "Tanggal persetujuan" : "Acceptance date"}</span><input required type="date" max={serverToday} value={acceptanceDate} onChange={(event) => setAcceptanceDate(event.target.value)} /></label><label className="field full"><span>{id ? "Bukti persetujuan (PDF/gambar)" : "Acceptance proof (PDF/image)"}</span><input required type="file" accept=".pdf,image/png,image/jpeg,image/webp" onChange={(event) => setAcceptanceFile(event.target.files?.[0] ?? null)} /></label><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setAcceptingScope(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "acceptance"}>{id ? "Terima & kunci" : "Accept & lock"}</button></div></form></section></div>}
 
-      {showAddendum && <div className="modal-backdrop" onMouseDown={() => setShowAddendum(false)}><section className="modal-card wide" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">BOQ ADDENDUM</span><h2>{id ? "Pekerjaan tambah" : "Additional work"}</h2></div><button className="icon-button" type="button" onClick={() => setShowAddendum(false)}><X size={18} /></button></div><form className="form-grid" onSubmit={saveAddendum}><label className="field full"><span>{id ? "Judul addendum" : "Addendum title"}</span><input required value={addendumTitle} onChange={(event) => setAddendumTitle(event.target.value)} /></label><label className="field"><span>{id ? "Kategori item" : "Item category"}</span><select value={addendumCategory} onChange={(event) => setAddendumCategory(event.target.value as typeof addendumCategory)}><option>Perangkat</option><option>Material</option><option>Jasa</option><option>Mobilitas</option></select></label><label className="field"><span>{id ? "Satuan" : "Unit"}</span><input required value={addendumUnit} onChange={(event) => setAddendumUnit(event.target.value)} /></label><label className="field full"><span>{id ? "Deskripsi pekerjaan tambah" : "Additional work description"}</span><input required value={addendumDescription} onChange={(event) => setAddendumDescription(event.target.value)} /></label><label className="field"><span>Qty</span><input required type="number" min="1" value={addendumQuantity} onChange={(event) => setAddendumQuantity(Number(event.target.value))} /></label><label className="field"><span>{id ? "Harga pokok" : "Cost price"}</span><input required type="number" min="0" value={addendumCost || ""} onChange={(event) => setAddendumCost(Number(event.target.value))} /></label><label className="field full"><span>{id ? "Harga jual" : "Selling price"}</span><input required type="number" min="0" value={addendumSelling || ""} onChange={(event) => setAddendumSelling(Number(event.target.value))} /></label><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowAddendum(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "addendum"}>{id ? "Buat Addendum" : "Create Addendum"}</button></div></form></section></div>}
+      {showAddendum && (
+        <div className="modal-backdrop" onMouseDown={() => setShowAddendum(false)}>
+          <section
+            className="modal-card wide"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <div>
+                <span className="eyebrow">BOQ ADDENDUM</span>
+                <h2>{id ? "Pekerjaan tambah" : "Additional work"}</h2>
+              </div>
+              <button className="icon-button" type="button" onClick={() => setShowAddendum(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            <form className="form-grid" onSubmit={saveAddendum}>
+              <label className="field full">
+                <span>{id ? "Judul addendum" : "Addendum title"}</span>
+                <input required value={addendumTitle} onChange={(event) => setAddendumTitle(event.target.value)} />
+              </label>
+              <div className="boq-catalog-callout full">
+                <span className="metric-icon teal"><LibraryBig size={18} /></span>
+                <span>
+                  <strong>{id ? "Ambil item dari Database Item" : "Select from Item Database"}</strong>
+                  <small>
+                    {addendumCatalogItemId
+                      ? `${addendumDescription} · H${addendumCatalogPriceTier}`
+                      : id
+                        ? "Kategori, merek, model, dan harga akan terisi otomatis."
+                        : "Category, brand, model, and price are filled automatically."}
+                  </small>
+                </span>
+                <button className="button secondary small" type="button" onClick={() => setAddendumCatalogOpen(true)}>
+                  <LibraryBig size={15} /> {id ? "Buka katalog" : "Open catalog"}
+                </button>
+              </div>
+              <label className="field">
+                <span>{id ? "Kategori item" : "Item category"}</span>
+                <select disabled={Boolean(addendumCatalogItemId)} value={addendumCategory} onChange={(event) => setAddendumCategory(event.target.value as typeof addendumCategory)}>
+                  <option>Perangkat</option><option>Material</option><option>Jasa</option><option>Mobilitas</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>{id ? "Satuan" : "Unit"}</span>
+                <input required readOnly={Boolean(addendumCatalogItemId)} value={addendumUnit} onChange={(event) => setAddendumUnit(event.target.value)} />
+              </label>
+              <label className="field full">
+                <span>{id ? "Deskripsi pekerjaan tambah" : "Additional work description"}</span>
+                <input required readOnly={Boolean(addendumCatalogItemId)} value={addendumDescription} onChange={(event) => setAddendumDescription(event.target.value)} />
+              </label>
+              <label className="field"><span>Qty</span><input required type="number" min="1" value={addendumQuantity} onChange={(event) => setAddendumQuantity(Number(event.target.value))} /></label>
+              <label className="field"><span>{id ? "Harga pokok" : "Cost price"}</span><input required readOnly={Boolean(addendumCatalogItemId)} type="number" min="0" value={addendumCost || ""} onChange={(event) => setAddendumCost(Number(event.target.value))} /></label>
+              <label className="field full"><span>{id ? "Harga jual" : "Selling price"}</span><input required readOnly={Boolean(addendumCatalogItemId)} type="number" min="0" value={addendumSelling || ""} onChange={(event) => setAddendumSelling(Number(event.target.value))} /></label>
+              <div className="modal-actions full">
+                {addendumCatalogItemId && <button className="button ghost" type="button" onClick={() => { setAddendumCatalogItemId(null); setAddendumCatalogPriceTier(null); }}>{id ? "Gunakan item manual" : "Use manual item"}</button>}
+                <button className="button secondary" type="button" onClick={() => setShowAddendum(false)}>{id ? "Batal" : "Cancel"}</button>
+                <button className="button primary" disabled={busy === "addendum"}>{id ? "Buat Addendum" : "Create Addendum"}</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {addendumCatalogOpen ? (
+        <CatalogPicker
+          language={language}
+          notify={notify}
+          onClose={() => setAddendumCatalogOpen(false)}
+          onSelect={useCatalogForAddendum}
+        />
+      ) : null}
 
       {editingScopeValidity && <div className="modal-backdrop" onMouseDown={() => setEditingScopeValidity(null)}><section className="modal-card" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">QUOTATION VALIDITY</span><h2>{editingScopeValidity.quotation?.number}</h2></div><button className="icon-button" type="button" onClick={() => setEditingScopeValidity(null)}><X size={18} /></button></div><form className="form-grid" onSubmit={saveScopeValidity}><label className="field full"><span>{id ? "Tanggal terbit" : "Issue date"}</span><input required type="date" value={scopeIssuedAt} onChange={(event) => setScopeIssuedAt(event.target.value)} /></label><label className="field full"><span>{id ? "Berlaku sampai" : "Valid until"}</span><input required type="date" min={scopeIssuedAt} value={scopeValidUntil} onChange={(event) => setScopeValidUntil(event.target.value)} /></label><div className="field full"><span>{id ? "Pilihan cepat" : "Quick validity"}</span><div className="title-actions">{[7, 14, 30, 60].map((days) => <button className="button subtle small" type="button" key={days} onClick={() => setScopeValidityDays(days)}>{days} {id ? "hari" : "days"}</button>)}</div></div><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setEditingScopeValidity(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "scope-validity"}>{id ? "Simpan masa berlaku" : "Save validity"}</button></div></form></section></div>}
 
