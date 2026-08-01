@@ -1,6 +1,6 @@
 import "server-only";
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { hash } from "bcryptjs";
 import type { DatabaseClient, DatabaseStatement } from "./client";
 
@@ -852,6 +852,44 @@ CREATE TABLE IF NOT EXISTS cms_partners (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS cms_mail_login_configs (
+  theme_key TEXT PRIMARY KEY CHECK (theme_key IN ('enterprise', 'perumnet')),
+  browser_title TEXT NOT NULL,
+  eyebrow TEXT NOT NULL,
+  headline TEXT NOT NULL,
+  description TEXT NOT NULL,
+  card_title TEXT NOT NULL,
+  logo_url TEXT NOT NULL DEFAULT '',
+  logo_source_storage_url TEXT,
+  logo_storage_url TEXT,
+  logo_mime_type TEXT,
+  favicon_url TEXT NOT NULL DEFAULT '',
+  favicon_storage_url TEXT,
+  favicon_mime_type TEXT,
+  revision INTEGER NOT NULL DEFAULT 1,
+  is_active INTEGER NOT NULL DEFAULT 0 CHECK (is_active IN (0, 1)),
+  updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cms_mail_login_configs_active_idx
+  ON cms_mail_login_configs(is_active);
+
+CREATE TABLE IF NOT EXISTS cms_mail_login_versions (
+  id TEXT PRIMARY KEY,
+  active_theme TEXT NOT NULL CHECK (active_theme IN ('enterprise', 'perumnet')),
+  snapshot_json TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  deployment_mode TEXT NOT NULL CHECK (deployment_mode IN ('capture', 'ssh')),
+  status TEXT NOT NULL CHECK (status IN ('Publishing', 'Deployed', 'Failed', 'Rolled Back')),
+  error_message TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  deployed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS cms_mail_login_versions_created_idx
+  ON cms_mail_login_versions(created_at);
+
 CREATE TABLE IF NOT EXISTS cms_leads (
   id TEXT PRIMARY KEY,
   idempotency_key TEXT NOT NULL UNIQUE,
@@ -1405,6 +1443,80 @@ async function ensureCmsLandingFeatures(client: DatabaseClient) {
   await client.batch(statements, "write");
 }
 
+async function ensureCmsMailLoginSeed(client: DatabaseClient) {
+  const timestamp = new Date().toISOString();
+  const enterprise = {
+    themeKey: "enterprise",
+    browserTitle: "PerumNet Enterprise Mail",
+    eyebrow: "PERUMNET ENTERPRISE",
+    headline: "Mail & Collaboration",
+    description: "Email bisnis yang aman, terpusat, dan siap bekerja.",
+    cardTitle: "Masuk ke PerumNet Mail",
+    logoUrl: "/mailcow/enterprise-logo.png",
+    faviconUrl: "/mailcow/enterprise-favicon.png",
+    revision: 1,
+    isActive: true,
+  };
+  const perumnet = {
+    themeKey: "perumnet",
+    browserTitle: "PerumNet Mail",
+    eyebrow: "PERUMNET MAIL",
+    headline: "Email kerja yang rapi dan selalu terhubung.",
+    description: "Akses email, kalender, dan kolaborasi PerumNet dari satu tempat.",
+    cardTitle: "Masuk ke PerumNet Mail",
+    logoUrl: "/mailcow/perumnet-logo.png",
+    faviconUrl: "/mailcow/perumnet-favicon.png",
+    revision: 1,
+    isActive: false,
+  };
+
+  await client.batch([
+    statement(
+      `INSERT INTO cms_mail_login_configs
+        (theme_key,browser_title,eyebrow,headline,description,card_title,
+         logo_url,favicon_url,revision,is_active,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (theme_key) DO NOTHING`,
+      [enterprise.themeKey, enterprise.browserTitle, enterprise.eyebrow,
+        enterprise.headline, enterprise.description, enterprise.cardTitle,
+        enterprise.logoUrl, enterprise.faviconUrl, enterprise.revision, 1,
+        timestamp, timestamp],
+    ),
+    statement(
+      `INSERT INTO cms_mail_login_configs
+        (theme_key,browser_title,eyebrow,headline,description,card_title,
+         logo_url,favicon_url,revision,is_active,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (theme_key) DO NOTHING`,
+      [perumnet.themeKey, perumnet.browserTitle, perumnet.eyebrow,
+        perumnet.headline, perumnet.description, perumnet.cardTitle,
+        perumnet.logoUrl, perumnet.faviconUrl, perumnet.revision, 0,
+        timestamp, timestamp],
+    ),
+  ], "write");
+
+  const existingVersion = await client.execute(
+    "SELECT id FROM cms_mail_login_versions LIMIT 1",
+  );
+  if (existingVersion.rows.length) return;
+  const snapshot = JSON.stringify({
+    activeTheme: "enterprise",
+    themes: { enterprise, perumnet },
+  });
+  const contentHash = createHash("sha256").update(snapshot).digest("hex");
+  const deploymentMode = process.env.APP_MODE === "demo"
+    || process.env.MAIL_BRANDING_MODE === "capture"
+    || process.env.NODE_ENV !== "production"
+    ? "capture"
+    : "ssh";
+  await client.execute({
+    sql: `INSERT INTO cms_mail_login_versions
+      (id,active_theme,snapshot_json,content_hash,deployment_mode,status,
+       error_message,created_by,created_at,deployed_at)
+      VALUES (?,?,?,?,?,'Deployed',NULL,NULL,?,?)`,
+    args: ["cms-mail-login-initial", "enterprise", snapshot, contentHash,
+      deploymentMode, timestamp, timestamp],
+  });
+}
+
 async function ensureBastEngineerRoleColumn(client: DatabaseClient) {
   try {
     await client.execute("SELECT engineer_role FROM basts LIMIT 1");
@@ -1921,6 +2033,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureCmsSeed(client);
   await ensureCmsEnhancements(client);
   await ensureCmsLandingFeatures(client);
+  await ensureCmsMailLoginSeed(client);
 
   const existing = await client.execute("SELECT id FROM users LIMIT 1");
   if (existing.rows.length) return;

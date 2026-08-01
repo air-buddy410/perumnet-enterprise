@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { createServer } from "node:net";
 import { after, before, test } from "node:test";
@@ -10,6 +10,7 @@ import { jsPDF } from "jspdf";
 let server;
 let baseUrl;
 let databasePath;
+let uploadDirectory;
 let cookie = "";
 let lastSetCookie = "";
 
@@ -88,6 +89,7 @@ before(async () => {
   const port = await freePort();
   baseUrl = `http://127.0.0.1:${port}`;
   databasePath = `/tmp/perumnet-enterprise-${process.pid}-${Date.now()}.db`;
+  uploadDirectory = `/tmp/perumnet-enterprise-uploads-${process.pid}-${Date.now()}`;
   server = spawn(
     process.execPath,
     ["node_modules/next/dist/bin/next", "dev", "-H", "127.0.0.1", "-p", String(port)],
@@ -98,6 +100,8 @@ before(async () => {
         NEXT_TELEMETRY_DISABLED: "1",
         TURSO_DATABASE_URL: `file:${databasePath}`,
         APP_URL: baseUrl,
+        UPLOAD_DIR: uploadDirectory,
+        MAIL_BRANDING_MODE: "capture",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -120,6 +124,7 @@ after(async () => {
     const path = `${databasePath}${suffix}`;
     if (existsSync(path)) unlinkSync(path);
   }
+  if (uploadDirectory) rmSync(uploadDirectory, { recursive: true, force: true });
 });
 
 test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async () => {
@@ -147,6 +152,8 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
 
   const unauthorized = await request("/api/projects");
   assert.equal(unauthorized.status, 401);
+  const unauthorizedMailLogin = await request("/api/cms/mail-login");
+  assert.equal(unauthorizedMailLogin.status, 401);
 
   const login = await json(
     "/api/auth/login",
@@ -162,6 +169,85 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   assert.equal(login.user.role, "Admin");
   assert.match(cookie, /^perumnet_session=/);
   assert.match(lastSetCookie, /Max-Age=2592000/);
+
+  const initialMailLogin = await json("/api/cms/mail-login");
+  assert.equal(initialMailLogin.activeTheme, "enterprise");
+  assert.equal(initialMailLogin.deployment.mode, "capture");
+  assert.equal(initialMailLogin.themes.enterprise.revision, 1);
+  assert.match(initialMailLogin.themes.perumnet.logoUrl, /\/mailcow\/perumnet-logo\.png$/);
+
+  const invalidOriginMailLogin = await request("/api/cms/mail-login", {
+    method: "PUT",
+    headers: { Origin: "https://attacker.invalid" },
+    body: new FormData(),
+  });
+  assert.equal(invalidOriginMailLogin.status, 403);
+
+  const invalidImageForm = new FormData();
+  invalidImageForm.set("payload", JSON.stringify({
+    theme: "perumnet",
+    activeTheme: "perumnet",
+    revision: initialMailLogin.themes.perumnet.revision,
+    browserTitle: "PerumNet Mail",
+    eyebrow: "PERUMNET MAIL",
+    headline: "Email kerja yang rapi dan selalu terhubung.",
+    description: "Akses email, kalender, dan kolaborasi PerumNet dari satu tempat.",
+    cardTitle: "Masuk ke PerumNet Mail",
+  }));
+  invalidImageForm.set("logo", new Blob(["bukan-png"], { type: "image/png" }), "logo-palsu.png");
+  const invalidImageMailLogin = await request("/api/cms/mail-login", {
+    method: "PUT",
+    body: invalidImageForm,
+  });
+  assert.equal(invalidImageMailLogin.status, 415);
+
+  const perumnetPayload = {
+    theme: "perumnet",
+    activeTheme: "perumnet",
+    revision: initialMailLogin.themes.perumnet.revision,
+    browserTitle: "PerumNet Mail",
+    eyebrow: "PERUMNET MAIL",
+    headline: "Email kerja yang rapi dan selalu terhubung.",
+    description: "Akses email, kalender, dan kolaborasi PerumNet dari satu tempat.",
+    cardTitle: "Masuk ke PerumNet Mail",
+  };
+  const perumnetForm = new FormData();
+  perumnetForm.set("payload", JSON.stringify(perumnetPayload));
+  const perumnetLogo = readFileSync(new URL("../public/mailcow/perumnet-logo.png", import.meta.url));
+  perumnetForm.set("logo", new Blob([perumnetLogo], { type: "image/png" }), "perumnet-logo.png");
+  const publishedMailLogin = await json("/api/cms/mail-login", {
+    method: "PUT",
+    body: perumnetForm,
+  });
+  assert.equal(publishedMailLogin.activeTheme, "perumnet");
+  assert.equal(publishedMailLogin.themes.perumnet.revision, 2);
+  assert.match(publishedMailLogin.themes.perumnet.logoUrl, /\/api\/cms\/mail-login\/media\/perumnet\/logo/);
+  assert.equal(publishedMailLogin.deployment.last.status, "Deployed");
+  assert.equal(publishedMailLogin.deployment.last.deploymentMode, "capture");
+
+  const uploadedMailLogo = await request("/api/cms/mail-login/media/perumnet/logo");
+  assert.equal(uploadedMailLogo.status, 200);
+  assert.equal(uploadedMailLogo.headers.get("content-type"), "image/png");
+  assert.equal(
+    Buffer.from(await uploadedMailLogo.arrayBuffer()).subarray(0, 8).toString("hex"),
+    "89504e470d0a1a0a",
+  );
+
+  const staleMailLoginForm = new FormData();
+  staleMailLoginForm.set("payload", JSON.stringify(perumnetPayload));
+  const staleMailLogin = await request("/api/cms/mail-login", {
+    method: "PUT",
+    body: staleMailLoginForm,
+  });
+  assert.equal(staleMailLogin.status, 409);
+
+  const initialMailVersion = initialMailLogin.versions.find((version) => version.id === "cms-mail-login-initial");
+  assert.ok(initialMailVersion);
+  const rolledBackMailLogin = await json(`/api/cms/mail-login/rollback/${initialMailVersion.id}`, {
+    method: "POST",
+  });
+  assert.equal(rolledBackMailLogin.activeTheme, "enterprise");
+  assert.equal(rolledBackMailLogin.themes.enterprise.revision, 2);
 
   const panelRecovery = await json("/api/auth/forgot-password", {
     method: "POST",

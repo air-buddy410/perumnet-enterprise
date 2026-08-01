@@ -1227,6 +1227,47 @@ export const cmsPartners = sqliteTable("cms_partners", {
   ...timestamps,
 });
 
+export const cmsMailLoginConfigs = sqliteTable(
+  "cms_mail_login_configs",
+  {
+    themeKey: text("theme_key").primaryKey(),
+    browserTitle: text("browser_title").notNull(),
+    eyebrow: text("eyebrow").notNull(),
+    headline: text("headline").notNull(),
+    description: text("description").notNull(),
+    cardTitle: text("card_title").notNull(),
+    logoUrl: text("logo_url").notNull().default(""),
+    logoSourceStorageUrl: text("logo_source_storage_url"),
+    logoStorageUrl: text("logo_storage_url"),
+    logoMimeType: text("logo_mime_type"),
+    faviconUrl: text("favicon_url").notNull().default(""),
+    faviconStorageUrl: text("favicon_storage_url"),
+    faviconMimeType: text("favicon_mime_type"),
+    revision: integer("revision").notNull().default(1),
+    isActive: integer("is_active").notNull().default(0),
+    updatedBy: text("updated_by").references(() => users.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (table) => [index("cms_mail_login_configs_active_idx").on(table.isActive)],
+);
+
+export const cmsMailLoginVersions = sqliteTable(
+  "cms_mail_login_versions",
+  {
+    id: text("id").primaryKey(),
+    activeTheme: text("active_theme").notNull(),
+    snapshotJson: text("snapshot_json").notNull(),
+    contentHash: text("content_hash").notNull(),
+    deploymentMode: text("deployment_mode").notNull(),
+    status: text("status").notNull(),
+    errorMessage: text("error_message"),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: text("created_at").notNull(),
+    deployedAt: text("deployed_at"),
+  },
+  (table) => [index("cms_mail_login_versions_created_idx").on(table.createdAt)],
+);
+
 export const cmsLeads = sqliteTable(
   "cms_leads",
   {

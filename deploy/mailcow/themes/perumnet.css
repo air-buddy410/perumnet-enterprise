@@ -1,0 +1,321 @@
+/*
+ * PerumNet Mail theme inspired by the PerumNet captive portal.
+ * Authentication markup and behavior remain owned by Mailcow.
+ */
+
+body:has(#login_user) {
+  --pn-teal: #04a99f;
+  --pn-teal-dark: #008d85;
+  --pn-ink: #263d46;
+  --pn-muted: #718085;
+  --pn-line: #dce7e4;
+  min-height: 100vh;
+  overflow-x: hidden;
+  background: #fff;
+  color: var(--pn-ink);
+  font-family: "DM Sans", "Inter", system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+}
+
+body:has(#login_user) .overlay {
+  position: fixed;
+  z-index: 0;
+  inset: 0 54% 0 0;
+  display: block !important;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 86% 18%, rgba(196, 255, 246, 0.28), transparent 29%),
+    linear-gradient(135deg, #05aaa0 0%, #00988f 58%, #087f79 100%);
+  opacity: 1;
+  pointer-events: none;
+}
+
+body:has(#login_user) .overlay::before {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 112% 55%, transparent 0 150px, rgba(255,255,255,.19) 151px 152px, transparent 153px 238px, rgba(255,255,255,.13) 239px 240px, transparent 241px),
+    linear-gradient(rgba(255,255,255,.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.07) 1px, transparent 1px);
+  background-size: auto, 50px 50px, 50px 50px;
+  content: "";
+}
+
+body:has(#login_user) .overlay::after {
+  position: absolute;
+  top: 29%;
+  left: 11%;
+  z-index: 1;
+  width: min(76%, 480px);
+  color: #fff;
+  content: "PERUMNET MAIL\A\A Email kerja yang rapi dan selalu terhubung.\A\A Akses email, kalender, dan kolaborasi PerumNet dari satu tempat.";
+  font-family: "Plus Jakarta Sans", "DM Sans", "Inter", system-ui, sans-serif;
+  font-size: clamp(17px, 1.6vw, 24px);
+  font-weight: 700;
+  line-height: 1.48;
+  letter-spacing: -0.03em;
+  white-space: pre-line;
+  animation: pn-copy-in 680ms cubic-bezier(.2,.7,.2,1) both;
+}
+
+body:has(#login_user) > .container.flex-grow-1 {
+  position: relative;
+  z-index: 2;
+  width: min(100%, 1380px);
+  max-width: none;
+  min-height: 100vh;
+  margin: 0 auto !important;
+  padding: 56px clamp(32px, 6vw, 88px);
+  display: flex;
+  align-items: center;
+}
+
+body:has(#login_user) > .container.flex-grow-1 > .row {
+  width: 100%;
+  margin: 0 !important;
+  justify-content: flex-end;
+}
+
+body:has(#login_user) > .container.flex-grow-1 > .row > [class*="col-"] {
+  width: min(50%, 610px);
+  max-width: 610px;
+  margin-right: 0 !important;
+  margin-left: auto !important;
+  padding: 0;
+}
+
+body:has(#login_user) .card {
+  overflow: visible;
+  border: 1px solid rgba(38,61,70,.1);
+  border-radius: 20px;
+  background: rgba(255,255,255,.985);
+  box-shadow: 0 28px 80px rgba(31,67,70,.14);
+  animation: pn-card-in 560ms cubic-bezier(.2,.7,.2,1) both;
+}
+
+body:has(#login_user) .card-header {
+  min-height: 76px;
+  padding: 0 30px;
+  border-bottom: 1px solid #e7efed;
+  border-radius: 20px 20px 0 0 !important;
+  background: transparent;
+  color: transparent;
+  font-size: 0;
+}
+
+body:has(#login_user) .card-header > .bi-person-fill { display: none; }
+
+body:has(#login_user) .card-header::before {
+  color: var(--pn-ink);
+  content: "Masuk ke PerumNet Mail";
+  font-family: "Plus Jakarta Sans", "DM Sans", sans-serif;
+  font-size: 16px;
+  font-weight: 750;
+  letter-spacing: -.025em;
+}
+
+body:has(#login_user) .card-header .form-check,
+body:has(#login_user) .card-header .d-grid,
+body:has(#login_user) .card-header button,
+body:has(#login_user) .card-header label { font-size: 15px; }
+body:has(#login_user) .card-header .form-switch { margin-left: auto !important; }
+body:has(#login_user) .card-header .dropdown-toggle { color: #708187 !important; }
+
+body:has(#login_user) .card-body { padding: 32px clamp(28px, 4vw, 48px) 38px; }
+
+body:has(#login_user) .mailcow-logo {
+  position: relative;
+  width: 100%;
+  height: 88px;
+  margin: 0 0 22px !important;
+  display: flex;
+  align-items: center;
+  border: 0;
+  background: url("/img/perumnet-mail-brand.png") left center / 78px 78px no-repeat;
+  text-align: left !important;
+}
+
+body:has(#login_user) .mailcow-logo::after {
+  margin-left: 94px;
+  color: var(--pn-ink);
+  content: "PERUMNET\A MAIL";
+  font-family: "Plus Jakarta Sans", "DM Sans", sans-serif;
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1.35;
+  letter-spacing: .13em;
+  white-space: pre-line;
+}
+
+body:has(#login_user) .mailcow-logo .main-logo,
+body:has(#login_user) .mailcow-logo .main-logo-dark { display: none !important; }
+
+body:has(#login_user) .card-body > legend {
+  float: none;
+  width: 100%;
+  margin: 0 0 8px;
+  color: var(--pn-muted);
+  font-size: 14px;
+  font-weight: 650;
+}
+body:has(#login_user) .card-body > legend + hr { display: none; }
+body:has(#login_user) .input-group { align-items: stretch; }
+
+body:has(#login_user) .input-group-text {
+  min-width: 52px;
+  justify-content: center;
+  border: 1px solid var(--pn-line);
+  border-right: 0;
+  border-radius: 9px 0 0 9px;
+  background: #eff9f7;
+  color: var(--pn-teal-dark);
+}
+
+body:has(#login_user) .form-control {
+  min-height: 52px;
+  border-color: var(--pn-line);
+  border-radius: 0 9px 9px 0;
+  background: #fff;
+  color: var(--pn-ink);
+  font-size: 15px;
+  box-shadow: none;
+}
+body:has(#login_user) .form-control::placeholder { color: #8b999d; }
+body:has(#login_user) .form-control:focus {
+  border-color: var(--pn-teal);
+  box-shadow: 0 0 0 3px rgba(4,169,159,.12);
+}
+body:has(#login_user) .input-group:focus-within .input-group-text { border-color: var(--pn-teal); }
+
+body:has(#login_user) a { color: var(--pn-teal-dark); text-underline-offset: 3px; }
+body:has(#login_user) a:hover { color: #006b65; }
+body:has(#login_user) a[href="/reset-password"] { font-size: 0; }
+body:has(#login_user) a[href="/reset-password"]::after {
+  content: "Lupa kata sandi?";
+  font-size: 13px;
+  font-weight: 650;
+}
+
+body:has(#login_user) .btn-success {
+  min-height: 51px;
+  max-width: none !important;
+  border: 0;
+  border-radius: 9px;
+  background: var(--pn-teal);
+  color: #fff;
+  font-weight: 750;
+  box-shadow: 0 12px 25px rgba(2,152,143,.22);
+  transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+body:has(#login_user) .btn-success:hover,
+body:has(#login_user) .btn-success:focus-visible {
+  background: var(--pn-teal-dark);
+  box-shadow: 0 15px 30px rgba(2,139,132,.28);
+  transform: translateY(-1px);
+}
+body:has(#login_user) .btn-success:focus-visible,
+body:has(#login_user) a:focus-visible,
+body:has(#login_user) button:focus-visible,
+body:has(#login_user) input:focus-visible {
+  outline: 3px solid rgba(4,169,159,.3);
+  outline-offset: 2px;
+}
+
+body:has(#login_user) .hr-title { margin: 29px 0 18px; color: #91a09f; }
+body:has(#login_user) .hr-title strong { font-size: 0; }
+body:has(#login_user) .hr-title strong::after { content: "atau masuk dengan"; font-size: 13px; }
+body:has(#login_user) .btn-secondary {
+  min-height: 49px;
+  max-width: none !important;
+  border: 1px solid #d4e0de;
+  border-radius: 9px;
+  background: #f7faf9;
+  color: #52676d;
+  font-weight: 700;
+}
+body:has(#login_user) .btn-secondary:hover { border-color: #bad8d3; background: #edf8f6; }
+body:has(#login_user) .alert { border: 0; border-radius: 9px; }
+body:has(#login_user) .container.footer { display: none; }
+
+html:has(#dark-mode-theme) body:has(#login_user) { background: #13272d; color: #e8f1f0; }
+html:has(#dark-mode-theme) body:has(#login_user) .card { border-color: rgba(255,255,255,.08); background: rgba(26,49,56,.98); box-shadow: 0 30px 90px rgba(0,0,0,.35); }
+html:has(#dark-mode-theme) body:has(#login_user) .card-header { border-bottom-color: rgba(255,255,255,.08); }
+html:has(#dark-mode-theme) body:has(#login_user) .card-header::before,
+html:has(#dark-mode-theme) body:has(#login_user) .mailcow-logo::after { color: #edf6f5; }
+html:has(#dark-mode-theme) body:has(#login_user) .input-group-text { border-color: #385159; background: #203b42; color: #73d8d0; }
+html:has(#dark-mode-theme) body:has(#login_user) .form-control { border-color: #385159; background: #172e35; color: #f1f6f5; }
+html:has(#dark-mode-theme) body:has(#login_user) .btn-secondary { border-color: #3b545b; background: #20383f; color: #d7e5e3; }
+
+@keyframes pn-copy-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pn-card-in {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 1024px) {
+  body:has(#login_user) .overlay { inset: 0 58% 0 0; }
+  body:has(#login_user) > .container.flex-grow-1 > .row > [class*="col-"] { width: min(56%, 570px); }
+  body:has(#login_user) .overlay::after { left: 9%; width: 77%; font-size: 17px; }
+}
+
+@media (max-width: 760px) {
+  body:has(#login_user) { background: #f4faf9; }
+  body:has(#login_user) .overlay {
+    position: absolute;
+    inset: 0 0 auto;
+    height: 276px;
+    border-radius: 0 0 28px 28px;
+  }
+  body:has(#login_user) .overlay::before { background-size: auto, 42px 42px, 42px 42px; }
+  body:has(#login_user) .overlay::after {
+    top: 54px;
+    left: 50%;
+    width: calc(100% - 52px);
+    content: "PERUMNET MAIL\A\A Email kerja yang rapi dan selalu terhubung.";
+    font-size: 16px;
+    line-height: 1.45;
+    text-align: center;
+    transform: translateX(-50%);
+    animation-name: pn-mobile-copy-in;
+  }
+  body:has(#login_user) > .container.flex-grow-1 {
+    min-height: 100vh;
+    padding: 216px 16px 30px;
+    align-items: flex-start;
+  }
+  body:has(#login_user) > .container.flex-grow-1 > .row > [class*="col-"] {
+    width: 100%;
+    max-width: 560px;
+    margin: 0 auto !important;
+  }
+  body:has(#login_user) .card { border-radius: 17px; box-shadow: 0 22px 60px rgba(25,57,63,.16); }
+  body:has(#login_user) .card-header { min-height: 68px; padding: 0 20px; border-radius: 17px 17px 0 0 !important; }
+  body:has(#login_user) .card-header::before { font-size: 14px; }
+  body:has(#login_user) .card-header .d-grid { margin-left: 18px !important; }
+  body:has(#login_user) .card-body { padding: 27px 22px 30px; }
+  body:has(#login_user) .mailcow-logo { height: 68px; margin-bottom: 18px !important; background-size: 60px 60px; }
+  body:has(#login_user) .mailcow-logo::after { margin-left: 72px; font-size: 13px; }
+}
+
+@keyframes pn-mobile-copy-in {
+  from { opacity: 0; transform: translate(-50%, 16px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@media (max-width: 390px) {
+  body:has(#login_user) .card-header { padding: 0 16px; }
+  body:has(#login_user) .card-header::before { max-width: 118px; line-height: 1.18; }
+  body:has(#login_user) .card-header .d-grid { margin-left: 12px !important; }
+  body:has(#login_user) .card-body { padding-inline: 18px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body:has(#login_user) .overlay::after,
+  body:has(#login_user) .card { animation: none; }
+  body:has(#login_user) *,
+  body:has(#login_user) *::before,
+  body:has(#login_user) *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
+}

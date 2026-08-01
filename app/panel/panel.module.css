@@ -2,7 +2,7 @@
   --teal: #04a99f;
   --teal-dark: #007f78;
   --ink: #263d46;
-  --muted: #738187;
+  --muted: #52666c;
   --line: #dce6e4;
   --green-surface: linear-gradient(127deg,#03aaa0 0%,#008e86 52%,#006c68 100%);
   --green-grid: linear-gradient(rgba(255,255,255,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.07) 1px,transparent 1px);
@@ -24,7 +24,7 @@
 .sideBrand strong { color: #fff; font-family: "Plus Jakarta Sans",sans-serif; font-size: 12px; letter-spacing: .12em; }
 .sideBrand small { margin-top: 5px; color: #63d6ce; font-size: 9px; font-weight: 800; letter-spacing: .18em; }
 .sideBrand > button { display: none; margin-left: auto; border: 0; color: #fff; background: transparent; }
-.sideLabel { margin: 27px 12px 10px; color: #82969a; font-size: 10px; font-weight: 800; letter-spacing: .16em; }
+.sideLabel { margin: 27px 12px 10px; color: #a2b3b5; font-size: 10px; font-weight: 800; letter-spacing: .16em; }
 .sidebar > nav { min-height: 0; display: grid; gap: 4px; overflow-y: auto; scrollbar-width: thin; }
 .sidebar nav button { width: 100%; min-height: 45px; padding: 0 12px; display: grid; grid-template-columns: 22px 1fr 16px; align-items: center; gap: 9px; border: 0; border-radius: 8px; color: #a9b9bb; background: transparent; text-align: left; cursor: pointer; }
 .sidebar nav button:hover { color: #fff; background: rgba(255,255,255,.05); }
@@ -32,12 +32,12 @@
 .sidebar nav span { font-size: 13px; font-weight: 700; }
 .sideFooter { margin-top: auto; display: grid; gap: 6px; }
 .legalLinks { padding: 11px 10px 7px; display: flex; flex-wrap: wrap; gap: 5px 10px; border-top: 1px solid rgba(255,255,255,.08); }
-.legalLinks a { color: #7f9699; font-size: 9px; line-height: 1.4; text-decoration: none; }
+.legalLinks a { color: #a4b5b7; font-size: 9px; line-height: 1.4; text-decoration: none; }
 .legalLinks a:hover { color: #d7e6e5; }
 .sideFooter > a { min-height: 42px; padding: 0 11px; display: grid; grid-template-columns: 20px 1fr 14px; align-items: center; gap: 8px; border-radius: 7px; color: #9eb0b3; font-size: 12px; text-decoration: none; }
 .sideFooter > a:hover { color: #fff; background: rgba(255,255,255,.05); }
 .userChip { margin-top: 9px; padding: 12px 9px 4px; display: grid; grid-template-columns: 34px 1fr 28px; align-items: center; gap: 8px; border-top: 1px solid rgba(255,255,255,.08); }
-.userChip > span, .avatar { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; color: #fff; background: var(--teal); font-size: 10px; font-weight: 800; }
+.userChip > span, .avatar { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; color: #fff; background: #08766f; font-size: 10px; font-weight: 800; }
 .userChip > div { display: grid; min-width: 0; }
 .userChip strong { overflow: hidden; color: #fff; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .userChip small { color: #8aa0a4; font-size: 10px; }
@@ -46,7 +46,7 @@
 .workspace { width: calc(100% - 254px); min-height: 100vh; margin-left: 254px; }
 .topbar { position: sticky; top: 0; z-index: 25; min-height: 76px; padding: 0 34px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #e3ebe9; background: rgba(255,255,255,.92); backdrop-filter: blur(12px); }
 .topbar > div { display: grid; gap: 2px; }
-.topbar span { color: #7e8e92; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.topbar span { color: #5d7075; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
 .topbar h1 { margin: 0; font-family: "Plus Jakarta Sans",sans-serif; font-size: 20px; letter-spacing: -.025em; }
 .topbar > a { min-height: 40px; margin-left: auto; padding: 0 13px; display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: #fff; font-size: 12px; font-weight: 700; text-decoration: none; }
 .previewLink span { color: inherit; font-size: 12px; font-weight: 700; letter-spacing: 0; text-transform: none; }

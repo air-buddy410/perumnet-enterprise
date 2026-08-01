@@ -43,6 +43,7 @@ import {
   X,
 } from "lucide-react";
 import styles from "./panel.module.css";
+import { MailLoginEditor } from "./mail-login-editor";
 
 type User = { id: string; name: string; email: string; role: string };
 type Service = { id: string; slug: string; title: string; titleEn: string; summary: string; summaryEn: string; description: string; descriptionEn: string; features: string[]; featuresEn: string[]; icon: string; sortOrder: number; isPublished: boolean };
@@ -91,7 +92,7 @@ type CmsContent = {
   partners: Partner[];
 };
 
-type Section = "overview" | "texts" | "services" | "portfolios" | "partners" | "testimonials" | "faqs" | "pages" | "leads" | "settings";
+type Section = "overview" | "texts" | "services" | "portfolios" | "partners" | "testimonials" | "faqs" | "pages" | "leads" | "settings" | "mail-login";
 type Mutate = (job: () => Promise<unknown>, success: string) => void;
 
 const navItems: Array<{ id: Section; label: string; icon: typeof Home }> = [
@@ -105,6 +106,7 @@ const navItems: Array<{ id: Section; label: string; icon: typeof Home }> = [
   { id: "pages", label: "Halaman & Legal", icon: Globe2 },
   { id: "leads", label: "Customer Leads", icon: UserRoundSearch },
   { id: "settings", label: "Pengaturan Situs", icon: Settings },
+  { id: "mail-login", label: "Login PerumNet Mail", icon: Mail },
 ];
 
 const cmsServiceIcons: Record<string, typeof Home> = {
@@ -275,6 +277,7 @@ export function PanelApp() {
           {section === "pages" && <PageEditor key={JSON.stringify(content.pages)} items={content.pages} busy={busy} mutate={mutate} />}
           {section === "leads" && <LeadEditor />}
           {section === "settings" && <SettingsEditor key={JSON.stringify([content.settings, content.settingsEn])} settings={content.settings} settingsEn={content.settingsEn} busy={busy} mutate={mutate} />}
+          {section === "mail-login" && <MailLoginEditor />}
         </main>
       </div>
       {notice && <div className={styles.toast}><Check size={17} /> {notice}</div>}

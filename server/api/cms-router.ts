@@ -17,6 +17,7 @@ import {
   ok,
 } from "./errors";
 import { dispatchLeadApi } from "./lead-router";
+import { dispatchMailLoginApi } from "./mail-login-router";
 
 const shortText = z.string().trim().min(1).max(180);
 const longText = z.string().trim().min(1).max(8_000);
@@ -532,6 +533,7 @@ export async function dispatchCmsApi(request: Request, path: string[]) {
   if (resource === "leads") return dispatchLeadApi(request, path);
 
   const user = await admin(request);
+  if (resource === "mail-login") return dispatchMailLoginApi(request, path, user);
   if (resource === "bootstrap" && request.method === "GET") {
     return ok({ content: await getCmsContent(true), user }, 200, { "Cache-Control": "no-store" });
   }
