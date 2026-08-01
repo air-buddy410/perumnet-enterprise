@@ -36,34 +36,37 @@ body:has(#login_user) .overlay {
 
 body:has(#login_user) .overlay::before {
   position: absolute;
-  top: 8%;
-  left: 11%;
+  top: 10%;
+  left: 50%;
   z-index: 1;
-  width: clamp(104px, 8vw, 132px);
-  aspect-ratio: 372 / 520;
-  padding: 12px;
+  width: clamp(124px, 9vw, 148px);
+  aspect-ratio: 1 / 1;
+  padding: 14px;
   border: 1px solid rgba(255,255,255,.48);
-  border-radius: 24px;
-  background: rgba(255,255,255,.97) url("/img/perumnet-mail-brand.png") center / calc(100% - 24px) auto no-repeat;
+  border-radius: 26px;
+  background: rgba(255,255,255,.98) url("/img/perumnet-mail-brand.png") center / auto 76% no-repeat;
   box-shadow: 0 24px 58px rgba(0,68,65,.24), 0 0 0 14px rgba(255,255,255,.06);
   content: "";
+  transform: translateX(-50%);
   animation: pn-mark-in 620ms cubic-bezier(.2,.7,.2,1) both;
 }
 
 body:has(#login_user) .overlay::after {
   position: absolute;
-  top: 29%;
-  left: 11%;
+  top: 34%;
+  left: 50%;
   z-index: 1;
-  width: min(76%, 480px);
+  width: min(78%, 500px);
   color: #fff;
-  content: "PERUMNET MAIL\A\A Email kerja yang rapi dan selalu terhubung.\A\A Akses email, kalender, dan kolaborasi PerumNet dari satu tempat.";
+  content: "PERUMNET MAIL\A\A Email perusahaan untuk komunikasi kerja.\A\A Masuk untuk membuka email, kalender, dan kontak kerja PerumNet.";
   font-family: "Plus Jakarta Sans", "DM Sans", "Inter", system-ui, sans-serif;
-  font-size: clamp(17px, 1.6vw, 24px);
-  font-weight: 700;
-  line-height: 1.48;
-  letter-spacing: -0.03em;
+  font-size: clamp(16px, 1.35vw, 20px);
+  font-weight: 650;
+  line-height: 1.58;
+  letter-spacing: -0.015em;
+  text-align: center;
   white-space: pre-line;
+  transform: translateX(-50%);
   animation: pn-copy-in 680ms cubic-bezier(.2,.7,.2,1) both;
 }
 
@@ -116,7 +119,7 @@ body:has(#login_user) .card-header > .bi-person-fill { display: none; }
 
 body:has(#login_user) .card-header::before {
   color: var(--pn-ink);
-  content: "Masuk ke PerumNet Mail";
+  content: "Masuk ke akun email";
   font-family: "Plus Jakarta Sans", "DM Sans", sans-serif;
   font-size: 16px;
   font-weight: 750;
@@ -135,25 +138,28 @@ body:has(#login_user) .card-body { padding: 32px clamp(28px, 4vw, 48px) 38px; }
 body:has(#login_user) .mailcow-logo {
   position: relative;
   width: 100%;
-  height: 104px;
-  margin: 0 0 22px !important;
+  height: 150px;
+  margin: 0 0 20px !important;
+  padding-top: 112px;
   display: flex;
+  justify-content: center;
   align-items: center;
+  box-sizing: border-box;
   border: 0;
-  background: url("/img/perumnet-mail-brand.png") left center / auto 98px no-repeat;
-  text-align: left !important;
+  background: url("/img/perumnet-mail-brand.png") center top / auto 102px no-repeat;
+  text-align: center !important;
 }
 
 body:has(#login_user) .mailcow-logo::after {
-  margin-left: 92px;
+  margin: 0;
   color: var(--pn-ink);
-  content: "PERUMNET\A MAIL";
+  content: "PERUMNET MAIL";
   font-family: "Plus Jakarta Sans", "DM Sans", sans-serif;
   font-size: 17px;
   font-weight: 800;
-  line-height: 1.35;
+  line-height: 1.3;
   letter-spacing: .13em;
-  white-space: pre-line;
+  white-space: normal;
 }
 
 body:has(#login_user) .mailcow-logo .main-logo,
@@ -164,8 +170,12 @@ body:has(#login_user) .card-body > legend {
   width: 100%;
   margin: 0 0 8px;
   color: var(--pn-muted);
-  font-size: 14px;
+  font-size: 0;
   font-weight: 650;
+}
+body:has(#login_user) .card-body > legend::after {
+  content: "Alamat email";
+  font-size: 14px;
 }
 body:has(#login_user) .card-body > legend + hr { display: none; }
 body:has(#login_user) .input-group { align-items: stretch; }
@@ -256,12 +266,12 @@ html:has(#dark-mode-theme) body:has(#login_user) .form-control { border-color: #
 html:has(#dark-mode-theme) body:has(#login_user) .btn-secondary { border-color: #3b545b; background: #20383f; color: #d7e5e3; }
 
 @keyframes pn-copy-in {
-  from { opacity: 0; transform: translateY(16px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translate(-50%, 16px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
 }
 @keyframes pn-mark-in {
-  from { opacity: 0; transform: translateY(14px) scale(.96); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; transform: translate(-50%, 14px) scale(.96); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
 }
 @keyframes pn-card-in {
   from { opacity: 0; transform: translateY(18px); }
@@ -271,7 +281,8 @@ html:has(#dark-mode-theme) body:has(#login_user) .btn-secondary { border-color: 
 @media (max-width: 1024px) {
   body:has(#login_user) .overlay { inset: 0 58% 0 0; }
   body:has(#login_user) > .container.flex-grow-1 > .row > [class*="col-"] { width: min(56%, 570px); }
-  body:has(#login_user) .overlay::after { left: 9%; width: 77%; font-size: 17px; }
+  body:has(#login_user) .overlay::before { top: 11%; width: 118px; }
+  body:has(#login_user) .overlay::after { top: 34%; width: 78%; font-size: 16px; }
 }
 
 @media (max-width: 760px) {
@@ -285,21 +296,21 @@ html:has(#dark-mode-theme) body:has(#login_user) .btn-secondary { border-color: 
   body:has(#login_user) .overlay::before {
     top: 18px;
     left: 50%;
-    width: 64px;
-    padding: 7px;
+    width: 76px;
+    padding: 8px;
     border-radius: 16px;
-    background-size: calc(100% - 14px) auto;
+    background-size: auto 76%;
     box-shadow: 0 18px 42px rgba(0,68,65,.2), 0 0 0 9px rgba(255,255,255,.06);
     transform: translateX(-50%);
     animation-name: pn-mobile-mark-in;
   }
   body:has(#login_user) .overlay::after {
-    top: 120px;
+    top: 126px;
     left: 50%;
     width: calc(100% - 52px);
-    content: "PERUMNET MAIL\A\A Email kerja yang rapi dan selalu terhubung.";
-    font-size: 16px;
-    line-height: 1.45;
+    content: "PERUMNET MAIL\A\A Email perusahaan untuk komunikasi kerja.";
+    font-size: 15px;
+    line-height: 1.5;
     text-align: center;
     transform: translateX(-50%);
     animation-name: pn-mobile-copy-in;
@@ -319,8 +330,13 @@ html:has(#dark-mode-theme) body:has(#login_user) .btn-secondary { border-color: 
   body:has(#login_user) .card-header::before { font-size: 14px; }
   body:has(#login_user) .card-header .d-grid { margin-left: 18px !important; }
   body:has(#login_user) .card-body { padding: 27px 22px 30px; }
-  body:has(#login_user) .mailcow-logo { height: 82px; margin-bottom: 18px !important; background-size: auto 78px; }
-  body:has(#login_user) .mailcow-logo::after { margin-left: 68px; font-size: 13px; }
+  body:has(#login_user) .mailcow-logo {
+    height: 126px;
+    margin-bottom: 18px !important;
+    padding-top: 94px;
+    background-size: auto 86px;
+  }
+  body:has(#login_user) .mailcow-logo::after { margin: 0; font-size: 13px; }
 }
 
 @keyframes pn-mobile-copy-in {

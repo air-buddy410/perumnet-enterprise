@@ -190,9 +190,9 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     revision: initialMailLogin.themes.perumnet.revision,
     browserTitle: "PerumNet Mail",
     eyebrow: "PERUMNET MAIL",
-    headline: "Email kerja yang rapi dan selalu terhubung.",
-    description: "Akses email, kalender, dan kolaborasi PerumNet dari satu tempat.",
-    cardTitle: "Masuk ke PerumNet Mail",
+    headline: "Email perusahaan untuk komunikasi kerja.",
+    description: "Masuk untuk membuka email, kalender, dan kontak kerja PerumNet.",
+    cardTitle: "Masuk ke akun email",
   }));
   invalidImageForm.set("logo", new Blob(["bukan-png"], { type: "image/png" }), "logo-palsu.png");
   const invalidImageMailLogin = await request("/api/cms/mail-login", {
@@ -207,9 +207,9 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     revision: initialMailLogin.themes.perumnet.revision,
     browserTitle: "PerumNet Mail",
     eyebrow: "PERUMNET MAIL",
-    headline: "Email kerja yang rapi dan selalu terhubung.",
-    description: "Akses email, kalender, dan kolaborasi PerumNet dari satu tempat.",
-    cardTitle: "Masuk ke PerumNet Mail",
+    headline: "Email perusahaan untuk komunikasi kerja.",
+    description: "Masuk untuk membuka email, kalender, dan kontak kerja PerumNet.",
+    cardTitle: "Masuk ke akun email",
   };
   const perumnetForm = new FormData();
   perumnetForm.set("payload", JSON.stringify(perumnetPayload));
