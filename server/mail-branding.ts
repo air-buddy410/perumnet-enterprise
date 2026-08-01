@@ -298,6 +298,18 @@ export async function renderMailBrandingCss(config: MailLoginConfig) {
     "/img/perumnet-enterprise-brand.png",
     "/img/perumnet-mail-brand.png",
   );
+  if (config.themeKey === "perumnet") {
+    return [
+      base,
+      "\n/* CMS-managed copy. Values are escaped; raw CSS is never accepted. */",
+      contentRule("body:has(#login_user)::before", config.eyebrow),
+      contentRule("body:has(#login_user) .overlay::after", config.headline),
+      contentRule("body:has(#login_user)::after", config.description),
+      contentRule("body:has(#login_user) .card-header::before", config.cardTitle),
+      contentRule("body:has(#login_user) .mailcow-logo::after", config.eyebrow),
+      "",
+    ].join("\n");
+  }
   const visualCopy = `${config.eyebrow}\n\n${config.headline}\n\n${config.description}`;
   const compactCopy = `${config.eyebrow}\n\n${config.headline}`;
   return [

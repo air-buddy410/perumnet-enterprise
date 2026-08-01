@@ -10,6 +10,8 @@ test("PerumNet Mail keeps the primary logo centered in a square badge", async ()
   assert.match(css, /\.overlay::before\s*\{[\s\S]*?left:\s*50%;[\s\S]*?aspect-ratio:\s*1\s*\/\s*1;/);
   assert.match(css, /\.overlay::before\s*\{[\s\S]*?transform:\s*translateX\(-50%\);/);
   assert.match(css, /\.overlay::after\s*\{[\s\S]*?text-align:\s*center;/);
+  assert.match(css, /body:has\(#login_user\)::before\s*\{[\s\S]*?content:\s*"PERUMNET MAIL";/);
+  assert.match(css, /body:has\(#login_user\)::after\s*\{[\s\S]*?font-weight:\s*500;/);
   assert.match(css, /\.mailcow-logo\s*\{[\s\S]*?justify-content:\s*center;[\s\S]*?text-align:\s*center\s*!important;/);
 });
 

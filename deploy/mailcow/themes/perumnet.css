@@ -53,21 +53,53 @@ body:has(#login_user) .overlay::before {
 
 body:has(#login_user) .overlay::after {
   position: absolute;
-  top: 34%;
+  top: 39%;
   left: 50%;
   z-index: 1;
   width: min(78%, 500px);
   color: #fff;
-  content: "PERUMNET MAIL\A\A Email perusahaan untuk komunikasi kerja.\A\A Masuk untuk membuka email, kalender, dan kontak kerja PerumNet.";
+  content: "Email perusahaan untuk komunikasi kerja.";
   font-family: "Plus Jakarta Sans", "DM Sans", "Inter", system-ui, sans-serif;
-  font-size: clamp(16px, 1.35vw, 20px);
-  font-weight: 650;
-  line-height: 1.58;
-  letter-spacing: -0.015em;
+  font-size: clamp(19px, 1.65vw, 25px);
+  font-weight: 750;
+  line-height: 1.35;
+  letter-spacing: -0.03em;
   text-align: center;
   white-space: pre-line;
   transform: translateX(-50%);
   animation: pn-copy-in 680ms cubic-bezier(.2,.7,.2,1) both;
+}
+
+body:has(#login_user)::before,
+body:has(#login_user)::after {
+  position: fixed;
+  left: 23%;
+  z-index: 1;
+  width: min(36%, 500px);
+  color: #fff;
+  font-family: "Plus Jakarta Sans", "DM Sans", "Inter", system-ui, sans-serif;
+  text-align: center;
+  pointer-events: none;
+  transform: translateX(-50%);
+  animation: pn-copy-in 680ms cubic-bezier(.2,.7,.2,1) both;
+}
+
+body:has(#login_user)::before {
+  top: 32%;
+  content: "PERUMNET MAIL";
+  font-size: clamp(13px, 1.05vw, 16px);
+  font-weight: 850;
+  letter-spacing: .11em;
+}
+
+body:has(#login_user)::after {
+  top: 49%;
+  content: "Masuk untuk membuka email, kalender, dan kontak kerja PerumNet.";
+  color: rgba(255,255,255,.88);
+  font-size: clamp(14px, 1.15vw, 17px);
+  font-weight: 500;
+  line-height: 1.6;
+  letter-spacing: -.01em;
 }
 
 body:has(#login_user) > .container.flex-grow-1 {
@@ -282,7 +314,9 @@ html:has(#dark-mode-theme) body:has(#login_user) .btn-secondary { border-color: 
   body:has(#login_user) .overlay { inset: 0 58% 0 0; }
   body:has(#login_user) > .container.flex-grow-1 > .row > [class*="col-"] { width: min(56%, 570px); }
   body:has(#login_user) .overlay::before { top: 11%; width: 118px; }
-  body:has(#login_user) .overlay::after { top: 34%; width: 78%; font-size: 16px; }
+  body:has(#login_user) .overlay::after { top: 39%; width: 78%; font-size: 19px; }
+  body:has(#login_user)::before,
+  body:has(#login_user)::after { left: 21%; width: 34%; }
 }
 
 @media (max-width: 760px) {
@@ -305,16 +339,26 @@ html:has(#dark-mode-theme) body:has(#login_user) .btn-secondary { border-color: 
     animation-name: pn-mobile-mark-in;
   }
   body:has(#login_user) .overlay::after {
-    top: 126px;
+    top: 172px;
     left: 50%;
     width: calc(100% - 52px);
-    content: "PERUMNET MAIL\A\A Email perusahaan untuk komunikasi kerja.";
-    font-size: 15px;
-    line-height: 1.5;
+    content: "Email perusahaan untuk komunikasi kerja.";
+    font-size: 17px;
+    line-height: 1.4;
     text-align: center;
     transform: translateX(-50%);
     animation-name: pn-mobile-copy-in;
   }
+  body:has(#login_user)::before {
+    position: absolute;
+    top: 128px;
+    left: 50%;
+    width: calc(100% - 52px);
+    font-size: 12px;
+    transform: translateX(-50%);
+    animation-name: pn-mobile-copy-in;
+  }
+  body:has(#login_user)::after { display: none; }
   body:has(#login_user) > .container.flex-grow-1 {
     min-height: 100vh;
     padding: 238px 16px 30px;
@@ -358,6 +402,8 @@ html:has(#dark-mode-theme) body:has(#login_user) .btn-secondary { border-color: 
 @media (prefers-reduced-motion: reduce) {
   body:has(#login_user) .overlay::before,
   body:has(#login_user) .overlay::after,
+  body:has(#login_user)::before,
+  body:has(#login_user)::after,
   body:has(#login_user) .card { animation: none; }
   body:has(#login_user) *,
   body:has(#login_user) *::before,
