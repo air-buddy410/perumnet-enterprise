@@ -255,7 +255,7 @@ export async function renderSopPdf(request: Request, user: AuthUser) {
     doc.line(margin, height - 12, width - margin, height - 12);
     doc.setFontSize(7.5);
     doc.setTextColor(102, 120, 127);
-    doc.text("it@perumnet.id", margin, height - 7);
+    doc.text("enterprise@perumnet.id", margin, height - 7);
     doc.text(
       `${language === "en" ? "Page" : "Halaman"} ${page}`,
       width - margin,

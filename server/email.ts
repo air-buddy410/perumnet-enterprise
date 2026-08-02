@@ -68,7 +68,7 @@ function emailFrame(
           <p style="margin:0;color:#5d737c;font-size:15px;line-height:1.7">${safeMessage}</p>
           ${actionHtml}
           <p style="margin:28px 0 0;padding-top:20px;border-top:1px solid #e8efef;color:#809097;font-size:12px;line-height:1.6">
-            ${language === "en" ? "Support" : "Bantuan"}: <a href="mailto:it@perumnet.id" style="color:#0b817b">it@perumnet.id</a>
+            ${language === "en" ? "Support" : "Bantuan"}: <a href="mailto:enterprise@perumnet.id" style="color:#0b817b">enterprise@perumnet.id</a>
           </p>
         </div>
       </div>
@@ -312,13 +312,13 @@ async function sendWithSmtp(row: Record<string, unknown>) {
         ? process.env.SECURITY_EMAIL_FROM ??
           "PerumNet <no-reply@perumnet.id>"
         : process.env.EMAIL_FROM) ??
-      "PerumNet Enterprise <it@perumnet.id>",
+      "PerumNet Enterprise <enterprise@perumnet.id>",
     replyTo:
       (profile === "security"
         ? process.env.SECURITY_EMAIL_REPLY_TO
         : undefined) ??
       process.env.EMAIL_REPLY_TO ??
-      "PerumNet Enterprise <it@perumnet.id>",
+      "PerumNet Enterprise <enterprise@perumnet.id>",
     to: String(row.recipient),
     subject: String(row.subject),
     html: String(row.body_html),
@@ -341,13 +341,13 @@ async function sendWithResend(row: Record<string, unknown>) {
           ? process.env.SECURITY_EMAIL_FROM
           : undefined) ??
         process.env.EMAIL_FROM ??
-        "PerumNet Enterprise <it@perumnet.id>",
+        "PerumNet Enterprise <enterprise@perumnet.id>",
       reply_to:
         (profile === "security"
           ? process.env.SECURITY_EMAIL_REPLY_TO
           : undefined) ??
         process.env.EMAIL_REPLY_TO ??
-        "it@perumnet.id",
+        "enterprise@perumnet.id",
       to: [String(row.recipient)],
       subject: String(row.subject),
       html: String(row.body_html),

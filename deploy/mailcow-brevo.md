@@ -18,7 +18,7 @@ Di Mailcow UI, buat sender-dependent transport untuk domain `perumnet.id`:
 - Sender/domain: `perumnet.id`
 
 Assign transport tersebut ke domain `perumnet.id`, lalu kirim pesan uji langsung
-dari mailbox `it@perumnet.id`. SMTP key hanya dimasukkan melalui Mailcow UI atau
+dari mailbox `enterprise@perumnet.id`. SMTP key hanya dimasukkan melalui Mailcow UI atau
 secret file dengan izin ketat; jangan menyimpannya di repository atau database
 Enterprise.
 
@@ -34,7 +34,7 @@ Enterprise.
 
 ## 4. App password Enterprise
 
-Buat app password terpisah untuk notifikasi operasional `it@perumnet.id` dan
+Buat app password terpisah untuk notifikasi operasional `enterprise@perumnet.id` dan
 email keamanan `no-reply@perumnet.id`. Konfigurasi pada secret environment
 production:
 
@@ -43,14 +43,14 @@ SMTP_HOST=100.65.248.6
 SMTP_PORT=465
 SMTP_SECURE=true
 SMTP_TLS_SERVERNAME=mail.perumnet.id
-SMTP_USER=it@perumnet.id
+SMTP_USER=enterprise@perumnet.id
 SMTP_PASS=<app-password-khusus-enterprise>
-EMAIL_FROM="PerumNet Enterprise <it@perumnet.id>"
-EMAIL_REPLY_TO="PerumNet Enterprise <it@perumnet.id>"
+EMAIL_FROM="PerumNet Enterprise <enterprise@perumnet.id>"
+EMAIL_REPLY_TO="PerumNet Enterprise <enterprise@perumnet.id>"
 SECURITY_SMTP_USER=no-reply@perumnet.id
 SECURITY_SMTP_PASS=<app-password-khusus-security-enterprise>
 SECURITY_EMAIL_FROM="PerumNet <no-reply@perumnet.id>"
-SECURITY_EMAIL_REPLY_TO="PerumNet IT <it@perumnet.id>"
+SECURITY_EMAIL_REPLY_TO="PerumNet Enterprise <enterprise@perumnet.id>"
 ```
 
 Uji sertifikat TLS menggunakan nama `mail.perumnet.id`; jangan menonaktifkan

@@ -1,7 +1,8 @@
 import "server-only";
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { compare, hash } from "bcryptjs";
+import sharp from "sharp";
 import { z } from "zod";
 import {
   canAccess,
@@ -11,6 +12,11 @@ import {
   type AccessPermissions,
 } from "@/shared/access";
 import { writeAuditLog } from "../audit";
+import {
+  calculateInvoiceAllocation,
+  calculateQuotationCommercialTotals,
+} from "../commercial";
+import { snapshotQuotationItems } from "../quotation-snapshot";
 import {
   avatarUrlForUser,
   createPasswordResetToken,
@@ -58,6 +64,8 @@ import {
 } from "./pdf";
 import { handleBankAccounts } from "./bank-router";
 import { handleCatalog } from "./catalog-router";
+import { handleCatalogAi } from "./catalog-ai-router";
+import { handleCommercialPackages, ensureDefaultCommercialPackage } from "./commercial-package-router";
 import {
   handleBoqScopes,
   handleQuotationLifecycle,
@@ -180,15 +188,30 @@ async function resolveBoqItemInput(
   };
 }
 
-const invoiceSchema = z.object({
+const invoiceBaseSchema = z.object({
   projectId: idSchema,
+  packageId: idSchema.optional(),
+  quotationId: idSchema.optional(),
   type: z.string().trim().min(2).max(80),
   issueDate: isoDateSchema.default(() => new Date().toISOString().slice(0, 10)),
   dueDate: isoDateSchema,
-  amount: positiveMoney,
+  calculationMode: z.enum(["Percent", "Nominal"]).optional(),
+  installmentPercent: z.number().positive().max(100).optional(),
+  installmentBps: z.number().int().min(1).max(10_000).optional(),
+  amount: positiveMoney.optional(),
 });
-const invoicePatchSchema = invoiceSchema
-  .omit({ projectId: true, issueDate: true })
+const invoiceSchema = invoiceBaseSchema.superRefine((input, context) => {
+  const percentMode = input.calculationMode === "Percent" ||
+    input.installmentPercent !== undefined || input.installmentBps !== undefined;
+  if (percentMode && input.installmentPercent === undefined && input.installmentBps === undefined) {
+    context.addIssue({ code: "custom", message: "Persentase termin wajib diisi." });
+  }
+  if (!percentMode && input.amount === undefined) {
+    context.addIssue({ code: "custom", message: "Nominal invoice wajib diisi." });
+  }
+});
+const invoicePatchSchema = invoiceBaseSchema
+  .omit({ projectId: true, packageId: true, quotationId: true, issueDate: true })
   .partial()
   .extend({ issueDate: isoDateSchema.optional() });
 const invoicePaymentSchema = z
@@ -218,11 +241,31 @@ const invoicePaymentSchema = z
     }
   });
 
-const quotationSchema = z.object({
+const quotationBaseSchema = z.object({
   status: z.enum(["Draft", "Sent", "Rejected", "Void"]).default("Draft"),
   issuedAt: isoDateSchema.default(() => new Date().toISOString().slice(0, 10)),
   validUntil: isoDateSchema.optional(),
+  discountEnabled: z.boolean().default(false),
+  discountType: z.enum(["Nominal", "Percent"]).default("Nominal"),
+  discountValue: nonNegativeMoney.default(0),
+  roundingMode: z.enum(["None", "Up", "Down", "Custom"]).default("None"),
+  roundingStep: z.union([z.literal(0), z.literal(1_000), z.literal(10_000), z.literal(100_000)]).default(0),
+  roundingAdjustment: z.number().int().min(-Number.MAX_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER).default(0),
+  roundingReason: z.string().trim().max(500).optional(),
 });
+const quotationRefinement = (
+  input: Partial<z.infer<typeof quotationBaseSchema>>,
+  context: z.RefinementCtx,
+) => {
+  if (input.discountType === "Percent" && (input.discountValue ?? 0) > 10_000) {
+    context.addIssue({ code: "custom", path: ["discountValue"], message: "Diskon persen tidak boleh melebihi 100%." });
+  }
+  if (input.roundingMode === "Custom" && !input.roundingReason?.trim()) {
+    context.addIssue({ code: "custom", path: ["roundingReason"], message: "Alasan pembulatan khusus wajib diisi." });
+  }
+};
+const quotationSchema = quotationBaseSchema.superRefine(quotationRefinement);
+const quotationPatchSchema = quotationBaseSchema.partial().superRefine(quotationRefinement);
 
 const vendorSchema = z.object({
   name: z.string().trim().min(2).max(160),
@@ -271,6 +314,8 @@ const transactionSchema = z.object({
 
 const bastSchema = z.object({
   projectId: idSchema,
+  packageId: idSchema.optional(),
+  deliveryCycle: z.number().int().min(1).max(100).default(1),
   completionDate: isoDateSchema,
   notes: z.string().trim().min(5).max(4_000),
   installedItems: z
@@ -290,6 +335,13 @@ const bastSchema = z.object({
   engineerRole: z.string().trim().min(2).max(120).optional(),
   engineerSignature: z.string().max(1_500_000).optional(),
   status: z.enum(["Draft", "Final"]).default("Draft"),
+});
+const bastSealSchema = z.object({
+  enabled: z.boolean(),
+  signerName: z.string().trim().min(2).max(120),
+  signerRole: z.string().trim().min(2).max(120),
+  sealMimeType: z.enum(["image/png", "image/jpeg", "image/webp"]).optional().nullable(),
+  sealContentBase64: z.string().max(3_000_000).optional().nullable(),
 });
 
 const userSchema = z.object({
@@ -526,17 +578,22 @@ function projectScopeCondition(user: AuthUser, projectAlias = "p") {
 async function resetProjectValidation(
   client: Awaited<ReturnType<typeof getDatabase>>["client"],
   projectId: string,
+  packageId?: string,
 ) {
   const timestamp = now();
+  const packageFilter = packageId ? " AND package_id=?" : "";
+  const args = packageId ? [projectId, packageId] : [projectId];
   await client.batch(
     [
       {
-        sql: "DELETE FROM project_validation_items WHERE validation_id IN (SELECT id FROM project_validations WHERE project_id=?)",
-        args: [projectId],
+        sql: `DELETE FROM project_validation_items WHERE validation_id IN
+          (SELECT id FROM project_validations WHERE project_id=?${packageFilter})`,
+        args,
       },
       {
-        sql: "UPDATE project_validations SET status='Draft',validated_by=NULL,completed_at=NULL,updated_at=? WHERE project_id=?",
-        args: [timestamp, projectId],
+        sql: `UPDATE project_validations SET status='Draft',validated_by=NULL,
+          completed_at=NULL,updated_at=? WHERE project_id=?${packageFilter}`,
+        args: [timestamp, ...args],
       },
     ],
     "write",
@@ -560,13 +617,86 @@ async function assertProjectAccess(user: AuthUser, projectId: string) {
 async function syncCommercialValues(
   client: Awaited<ReturnType<typeof getDatabase>>["client"],
   projectId: string,
+  auditContext?: { request: Request; user: AuthUser },
 ) {
+  const sentChanges = await client.execute({
+    sql: `SELECT q.*,
+      COALESCE((SELECT SUM(i.quantity*i.selling_price) FROM boq_items i
+        WHERE i.scope_id=q.scope_id),0) AS live_total
+      FROM quotations q
+      WHERE q.project_id=? AND q.status='Sent'
+        AND COALESCE((SELECT SUM(i.quantity*i.selling_price) FROM boq_items i
+          WHERE i.scope_id=q.scope_id),0)<>q.total`,
+    args: [projectId],
+  });
+  for (const oldQuote of sentChanges.rows) {
+    const timestamp = now();
+    const quotationId = randomUUID();
+    const revisionNo = asNumber(oldQuote.revision_no) + 1;
+    await snapshotQuotationItems(client, String(oldQuote.id));
+    await client.transaction(async (tx) => {
+      await tx.execute({
+        sql: "UPDATE quotations SET status='Superseded',updated_at=? WHERE id=? AND status='Sent'",
+        args: [timestamp, oldQuote.id],
+      });
+      await tx.execute({
+        sql: `INSERT INTO quotations
+          (id,project_id,package_id,scope_id,number,status,issued_at,valid_until,
+           total,revision_no,supersedes_id,discount_enabled,discount_type,
+           discount_value,discount_amount,taxable_base,tax_enabled,tax_revision,
+           rounding_mode,rounding_step,rounding_adjustment,rounding_reason,
+           grand_total,created_at,updated_at)
+          VALUES (?,?,?,?,?,'Draft',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        args: [
+          quotationId, oldQuote.project_id, oldQuote.package_id, oldQuote.scope_id,
+          `${String(oldQuote.number).replace(/-R\d+$/, "")}-R${revisionNo}`,
+          oldQuote.issued_at, oldQuote.valid_until, asNumber(oldQuote.live_total), revisionNo,
+          oldQuote.id, oldQuote.discount_enabled, oldQuote.discount_type,
+          oldQuote.discount_value, 0, 0, oldQuote.tax_enabled,
+          asNumber(oldQuote.tax_revision) + 1, oldQuote.rounding_mode,
+          oldQuote.rounding_step, oldQuote.rounding_adjustment, oldQuote.rounding_reason,
+          0, timestamp, timestamp,
+        ],
+      });
+      const taxes = await tx.execute({
+        sql: "SELECT * FROM document_taxes WHERE document_type='Quotation' AND document_id=?",
+        args: [oldQuote.id],
+      });
+      for (const tax of taxes.rows) {
+        await tx.execute({
+          sql: `INSERT INTO document_taxes
+            (id,document_type,document_id,project_id,rule_id,rule_code,rule_name,
+             rule_name_en,scope,effect,accounting_treatment,rate_bps,taxable_base,
+             amount,locked,created_by,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)`,
+          args: [
+            `document-tax-${randomUUID()}`, "Quotation", quotationId, oldQuote.project_id,
+            tax.rule_id, tax.rule_code, tax.rule_name, tax.rule_name_en, tax.scope,
+            tax.effect, tax.accounting_treatment, tax.rate_bps, 0, 0,
+            auditContext?.user.id ?? null, timestamp, timestamp,
+          ],
+        });
+      }
+    });
+    if (auditContext) {
+      await writeAuditLog(
+        client,
+        auditContext.request,
+        auditContext.user,
+        "revise",
+        "quotation",
+        quotationId,
+        { supersedesId: oldQuote.id, revisionNo, reason: "BoQ changed after quotation was sent" },
+      );
+    }
+  }
   const totalResult = await client.execute({
     sql: `
       SELECT
         COALESCE(SUM(i.quantity * i.selling_price), 0) AS boq_total,
         COALESCE((
-          SELECT SUM(q.total) FROM quotations q
+          SELECT SUM(CASE WHEN q.grand_total>0 THEN q.grand_total ELSE q.total END)
+          FROM quotations q
           WHERE q.project_id=? AND q.status='Accepted'
         ),0) AS accepted_total
       FROM boq_items i
@@ -591,7 +721,7 @@ async function syncCommercialValues(
         sql: `UPDATE quotations SET total=COALESCE((
           SELECT SUM(i.quantity*i.selling_price)
           FROM boq_items i WHERE i.scope_id=quotations.scope_id
-        ),0),status='Draft',updated_at=? WHERE project_id=? AND status<>'Accepted'`,
+        ),0),updated_at=? WHERE project_id=? AND status='Draft'`,
         args: [timestamp, projectId],
       },
       {
@@ -605,6 +735,13 @@ async function syncCommercialValues(
     ],
     "write",
   );
+  const draftQuotations = await client.execute({
+    sql: "SELECT id FROM quotations WHERE project_id=? AND status='Draft'",
+    args: [projectId],
+  });
+  for (const quotation of draftQuotations.rows) {
+    await refreshQuotationCommercialSnapshot(client, String(quotation.id));
+  }
   return total;
 }
 
@@ -612,10 +749,12 @@ async function assertBoqTotalCoversInvoices(
   client: Awaited<ReturnType<typeof getDatabase>>["client"],
   projectId: string,
   proposedTotal: number,
+  packageId?: string,
 ) {
   const result = await client.execute({
-    sql: "SELECT COALESCE(SUM(amount),0) AS total FROM invoices WHERE project_id=?",
-    args: [projectId],
+    sql: `SELECT COALESCE(SUM(amount),0) AS total FROM invoices
+      WHERE project_id=?${packageId ? " AND package_id=?" : ""}`,
+    args: packageId ? [projectId, packageId] : [projectId],
   });
   const invoicedTotal = asNumber(result.rows[0]?.total);
   if (proposedTotal < invoicedTotal) {
@@ -1410,6 +1549,33 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
           sql: "DELETE FROM spks WHERE project_id=?",
           args: [projectId],
         },
+        { sql: "DELETE FROM invoices WHERE project_id=?", args: [projectId] },
+        { sql: "DELETE FROM basts WHERE project_id=?", args: [projectId] },
+        {
+          sql: `DELETE FROM project_validation_items WHERE validation_id IN (
+            SELECT id FROM project_validations WHERE project_id=?
+          )`,
+          args: [projectId],
+        },
+        { sql: "DELETE FROM project_validations WHERE project_id=?", args: [projectId] },
+        { sql: "DELETE FROM quotations WHERE project_id=?", args: [projectId] },
+        {
+          sql: `DELETE FROM boq_items WHERE boq_id IN (
+            SELECT id FROM boqs WHERE project_id=?
+          )`,
+          args: [projectId],
+        },
+        {
+          sql: `DELETE FROM boq_scopes WHERE boq_id IN (
+            SELECT id FROM boqs WHERE project_id=?
+          )`,
+          args: [projectId],
+        },
+        { sql: "DELETE FROM boqs WHERE project_id=?", args: [projectId] },
+        {
+          sql: "DELETE FROM project_commercial_packages WHERE project_id=?",
+          args: [projectId],
+        },
         { sql: "DELETE FROM projects WHERE id = ?", args: [projectId] },
       ],
       "write",
@@ -1426,13 +1592,36 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
   throw new ApiError(404, "NOT_FOUND", "Endpoint proyek tidak ditemukan.");
 }
 
-async function getBoq(projectId: string) {
+async function resolveCommercialPackageId(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  projectId: string,
+  requestedPackageId?: string | null,
+) {
+  if (!requestedPackageId) {
+    return ensureDefaultCommercialPackage(client, projectId);
+  }
+  const result = await client.execute({
+    sql: "SELECT id FROM project_commercial_packages WHERE id=? AND project_id=? LIMIT 1",
+    args: [requestedPackageId, projectId],
+  });
+  if (!result.rows.length) {
+    throw new ApiError(404, "PACKAGE_NOT_FOUND", "Paket komersial tidak ditemukan.");
+  }
+  return requestedPackageId;
+}
+
+async function getBoq(projectId: string, requestedPackageId?: string | null) {
   const { client } = await getDatabase();
   const project = await ensureExists(
     "SELECT id,name,code,client FROM projects WHERE id = ?",
     [projectId],
     "Proyek tidak ditemukan.",
   );
+  const packageId = await resolveCommercialPackageId(client, projectId, requestedPackageId);
+  const packageResult = await client.execute({
+    sql: "SELECT id,code,title,status FROM project_commercial_packages WHERE id=? LIMIT 1",
+    args: [packageId],
+  });
   const result = await client.execute({
     sql: "SELECT * FROM boqs WHERE project_id = ? LIMIT 1",
     args: [projectId],
@@ -1448,14 +1637,24 @@ async function getBoq(projectId: string) {
         client: String(project.client),
       },
       status: "Draft",
+      package: packageResult.rows[0],
+      packageId,
       items: [],
       totals: { cost: 0, selling: 0, margin: 0, marginPercentage: 0 },
     };
   }
-  const itemsResult = await client.execute({
-    sql: "SELECT * FROM boq_items WHERE boq_id = ? ORDER BY sort_order, created_at",
-    args: [boq.id],
+  const scopeResult = await client.execute({
+    sql: `SELECT * FROM boq_scopes WHERE boq_id=? AND package_id=?
+      AND kind='Original' AND parent_scope_id IS NULL ORDER BY sequence LIMIT 1`,
+    args: [boq.id, packageId],
   });
+  const scope = scopeResult.rows[0];
+  const itemsResult = scope
+    ? await client.execute({
+        sql: "SELECT * FROM boq_items WHERE scope_id = ? ORDER BY sort_order, created_at",
+        args: [scope.id],
+      })
+    : { rows: [] as Array<Record<string, unknown>> };
   const items = itemsResult.rows.map((row) => ({
     id: String(row.id),
     category: String(row.category),
@@ -1475,13 +1674,23 @@ async function getBoq(projectId: string) {
   const margin = selling - cost;
   return {
     id: String(boq.id),
+    scopeId: scope ? String(scope.id) : null,
+    packageId,
+    package: packageResult.rows[0]
+      ? {
+          id: String(packageResult.rows[0].id),
+          code: String(packageResult.rows[0].code),
+          title: String(packageResult.rows[0].title),
+          status: String(packageResult.rows[0].status),
+        }
+      : null,
     project: {
       id: String(project.id),
       name: String(project.name),
       code: String(project.code),
       client: String(project.client),
     },
-    status: String(boq.status),
+    status: scope ? String(scope.status) : String(boq.status),
     notes: boq.notes,
     items,
     totals: {
@@ -1493,8 +1702,9 @@ async function getBoq(projectId: string) {
   };
 }
 
-async function ensureBoq(projectId: string) {
+async function ensureBoq(projectId: string, requestedPackageId?: string | null) {
   const { client } = await getDatabase();
+  const packageId = await resolveCommercialPackageId(client, projectId, requestedPackageId);
   const existing = await client.execute({
     sql: "SELECT id FROM boqs WHERE project_id = ? LIMIT 1",
     args: [projectId],
@@ -1508,24 +1718,37 @@ async function ensureBoq(projectId: string) {
     });
   }
   const scope = await client.execute({
-    sql: "SELECT id FROM boq_scopes WHERE boq_id=? AND sequence=0 LIMIT 1",
-    args: [id],
+    sql: `SELECT id FROM boq_scopes WHERE boq_id=? AND package_id=?
+      AND kind='Original' AND parent_scope_id IS NULL ORDER BY sequence LIMIT 1`,
+    args: [id, packageId],
   });
+  let scopeId = scope.rows[0] ? String(scope.rows[0].id) : "";
   if (!scope.rows[0]) {
+    const sequence = await client.execute({
+      sql: "SELECT COALESCE(MAX(sequence),-1)+1 AS sequence FROM boq_scopes WHERE boq_id=?",
+      args: [id],
+    });
+    const packageResult = await client.execute({
+      sql: "SELECT title FROM project_commercial_packages WHERE id=? LIMIT 1",
+      args: [packageId],
+    });
+    scopeId = randomUUID();
     await client.execute({
       sql: `INSERT INTO boq_scopes
-        (id,boq_id,kind,sequence,title,status,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?)`,
-      args: [randomUUID(), id, "Original", 0, "BoQ Original", "Draft", timestamp, timestamp],
+        (id,boq_id,package_id,kind,sequence,title,status,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?)`,
+      args: [scopeId, id, packageId, "Original", asNumber(sequence.rows[0]?.sequence),
+        String(packageResult.rows[0]?.title ?? "Lingkup Utama"), "Draft", timestamp, timestamp],
     });
   }
-  return id;
+  return { boqId: id, scopeId, packageId };
 }
 
 async function handleBoq(request: Request, path: string[], user: AuthUser) {
   const { client } = await getDatabase();
   const searchParams = new URL(request.url).searchParams;
   const projectId = searchParams.get("projectId");
+  const packageId = searchParams.get("packageId");
   const child = path[1];
   const childId = path[2];
 
@@ -1630,9 +1853,10 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
     throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
   }
   await assertProjectAccess(user, projectId);
+  const selectedPackageId = await resolveCommercialPackageId(client, projectId, packageId);
 
   if (request.method === "GET" && !child) {
-    return ok(await getBoq(projectId));
+    return ok(await getBoq(projectId, selectedPackageId));
   }
 
   if (request.method === "PUT" && !child) {
@@ -1651,11 +1875,17 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
       (sum, item) => sum + item.quantity * item.sellingPrice,
       0,
     );
-    await assertBoqTotalCoversInvoices(client, projectId, proposedTotal);
-    const boqId = await ensureBoq(projectId);
+    const ensured = await ensureBoq(projectId, selectedPackageId);
+    await assertBoqTotalCoversInvoices(
+      client,
+      projectId,
+      proposedTotal,
+      ensured.packageId,
+    );
+    const boqId = ensured.boqId;
     const originalScope = await ensureExists(
-      "SELECT id,status FROM boq_scopes WHERE boq_id=? AND sequence=0 LIMIT 1",
-      [boqId],
+      "SELECT id,status FROM boq_scopes WHERE id=? LIMIT 1",
+      [ensured.scopeId],
       "Scope BoQ Original tidak ditemukan.",
     );
     if (String(originalScope.status) === "Accepted") {
@@ -1686,10 +1916,10 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
       })),
     ];
     await client.batch(statements, "write");
-    await syncCommercialValues(client, projectId);
-    await resetProjectValidation(client, projectId);
+    await syncCommercialValues(client, projectId, { request, user });
+    await resetProjectValidation(client, projectId, ensured.packageId);
     await writeAuditLog(client, request, user, "replace", "boq", boqId, { projectId, itemCount: resolvedItems.length });
-    return ok(await getBoq(projectId));
+    return ok(await getBoq(projectId, ensured.packageId));
   }
 
   if (request.method === "POST" && child === "items") {
@@ -1699,10 +1929,11 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
       user,
       boqItemSchema.parse(await jsonBody(request)),
     );
-    const boqId = await ensureBoq(projectId);
+    const ensured = await ensureBoq(projectId, selectedPackageId);
+    const boqId = ensured.boqId;
     const originalScope = await ensureExists(
-      "SELECT id,status FROM boq_scopes WHERE boq_id=? AND sequence=0 LIMIT 1",
-      [boqId],
+      "SELECT id,status FROM boq_scopes WHERE id=? LIMIT 1",
+      [ensured.scopeId],
       "Scope BoQ Original tidak ditemukan.",
     );
     if (String(originalScope.status) === "Accepted") {
@@ -1730,8 +1961,8 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
         input.manualPriceOverride ? 1 : 0, input.priceOverrideReason,
         asNumber(count.rows[0]?.count), timestamp, timestamp],
     });
-    await syncCommercialValues(client, projectId);
-    await resetProjectValidation(client, projectId);
+    await syncCommercialValues(client, projectId, { request, user });
+    await resetProjectValidation(client, projectId, ensured.packageId);
     await writeAuditLog(client, request, user, "create", "boq_item", id, { projectId });
     return created({ id, ...input });
   }
@@ -1743,8 +1974,8 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
       `SELECT i.*,s.status AS scope_status FROM boq_items i
         JOIN boqs b ON b.id=i.boq_id
         LEFT JOIN boq_scopes s ON s.id=i.scope_id
-        WHERE i.id=? AND b.project_id=?`,
-      [childId, projectId],
+        WHERE i.id=? AND b.project_id=? AND s.package_id=?`,
+      [childId, projectId, selectedPackageId],
       "Item BoQ tidak ditemukan.",
     );
     if (String(current.scope_status) === "Accepted") {
@@ -1772,12 +2003,17 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
         ? (current.price_override_reason ? String(current.price_override_reason) : null)
         : input.priceOverrideReason,
     });
-    const currentBoq = await getBoq(projectId);
+    const currentBoq = await getBoq(projectId, selectedPackageId);
     const proposedTotal =
       currentBoq.totals.selling -
       asNumber(current.quantity) * asNumber(current.selling_price) +
       resolved.quantity * resolved.sellingPrice;
-    await assertBoqTotalCoversInvoices(client, projectId, proposedTotal);
+    await assertBoqTotalCoversInvoices(
+      client,
+      projectId,
+      proposedTotal,
+      currentBoq.packageId,
+    );
     await client.execute({
       sql: `UPDATE boq_items SET category=?,description=?,quantity=?,unit=?,cost_price=?,selling_price=?,
         catalog_item_id=?,catalog_price_tier=?,catalog_revision=?,manual_price_override=?,
@@ -1798,8 +2034,8 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
         childId,
       ],
     });
-    await syncCommercialValues(client, projectId);
-    await resetProjectValidation(client, projectId);
+    await syncCommercialValues(client, projectId, { request, user });
+    await resetProjectValidation(client, projectId, currentBoq.packageId);
     await writeAuditLog(client, request, user, "update", "boq_item", childId, input);
     const updated = await ensureExists(
       "SELECT * FROM boq_items WHERE id=?",
@@ -1828,8 +2064,8 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
       `SELECT i.id,s.status AS scope_status FROM boq_items i
         JOIN boqs b ON b.id=i.boq_id
         LEFT JOIN boq_scopes s ON s.id=i.scope_id
-        WHERE i.id=? AND b.project_id=?`,
-      [childId, projectId],
+        WHERE i.id=? AND b.project_id=? AND s.package_id=?`,
+      [childId, projectId, selectedPackageId],
       "Item BoQ tidak ditemukan.",
     );
     if (String(itemScope.scope_status) === "Accepted") {
@@ -1844,16 +2080,17 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
       [childId],
       "Item BoQ tidak ditemukan.",
     );
-    const currentBoq = await getBoq(projectId);
+    const currentBoq = await getBoq(projectId, selectedPackageId);
     await assertBoqTotalCoversInvoices(
       client,
       projectId,
       currentBoq.totals.selling -
         asNumber(item.quantity) * asNumber(item.selling_price),
+      currentBoq.packageId,
     );
     await client.execute({ sql: "DELETE FROM boq_items WHERE id = ?", args: [childId] });
-    await syncCommercialValues(client, projectId);
-    await resetProjectValidation(client, projectId);
+    await syncCommercialValues(client, projectId, { request, user });
+    await resetProjectValidation(client, projectId, currentBoq.packageId);
     await writeAuditLog(client, request, user, "delete", "boq_item", childId, { projectId });
     return noContent();
   }
@@ -1861,230 +2098,408 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
   throw new ApiError(404, "NOT_FOUND", "Endpoint BoQ tidak ditemukan.");
 }
 
+async function quotationResponse(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  row: Record<string, unknown>,
+) {
+  const taxableBase = asNumber(row.taxable_base) || asNumber(row.total);
+  const tax = await documentTaxSummary(client, "Quotation", String(row.id), taxableBase);
+  const totals = calculateQuotationCommercialTotals({
+    subtotal: asNumber(row.total),
+    discountEnabled: Number(row.discount_enabled) === 1,
+    discountType: String(row.discount_type) === "Percent" ? "Percent" : "Nominal",
+    discountValue: asNumber(row.discount_value),
+    taxAdditions: tax.taxAdditions,
+    taxWithholdings: tax.taxWithholdings,
+    roundingMode: ["Up", "Down", "Custom"].includes(String(row.rounding_mode))
+      ? String(row.rounding_mode) as "Up" | "Down" | "Custom"
+      : "None",
+    roundingStep: asNumber(row.rounding_step),
+    customRoundingAdjustment: asNumber(row.rounding_adjustment),
+  });
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    packageId: row.package_id ? String(row.package_id) : null,
+    packageTitle: row.package_title ? String(row.package_title) : null,
+    scopeId: row.scope_id ? String(row.scope_id) : null,
+    number: String(row.number),
+    status: String(row.status),
+    revisionNo: asNumber(row.revision_no) || 1,
+    supersedesId: row.supersedes_id ? String(row.supersedes_id) : null,
+    issuedAt: String(row.issued_at),
+    validUntil: row.valid_until ? String(row.valid_until) : null,
+    total: totals.subtotal,
+    subtotal: totals.subtotal,
+    discountEnabled: Number(row.discount_enabled) === 1,
+    discountType: String(row.discount_type),
+    discountValue: asNumber(row.discount_value),
+    discountAmount: totals.discountAmount,
+    taxableBase: totals.taxableBase,
+    taxEnabled: Number(row.tax_enabled) === 1,
+    taxRevision: asNumber(row.tax_revision),
+    taxes: tax.taxes,
+    taxAdditions: totals.taxAdditions,
+    taxWithholdings: totals.taxWithholdings,
+    roundingMode: String(row.rounding_mode ?? "None"),
+    roundingStep: asNumber(row.rounding_step),
+    roundingAdjustment: totals.roundingAdjustment,
+    roundingReason: row.rounding_reason ? String(row.rounding_reason) : null,
+    grandTotal: totals.grandTotal,
+    grossTotal: totals.grandTotal,
+    netCashDue: totals.netCashDue,
+    acceptedAt: row.accepted_at ? String(row.accepted_at) : null,
+    acceptanceAttachmentName: row.acceptance_attachment_name
+      ? String(row.acceptance_attachment_name)
+      : null,
+  };
+}
+
+async function refreshQuotationCommercialSnapshot(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  quotationId: string,
+) {
+  const result = await client.execute({
+    sql: "SELECT * FROM quotations WHERE id=? LIMIT 1",
+    args: [quotationId],
+  });
+  const row = result.rows[0];
+  if (!row) throw new ApiError(404, "NOT_FOUND", "Quotation tidak ditemukan.");
+  const preliminary = calculateQuotationCommercialTotals({
+    subtotal: asNumber(row.total),
+    discountEnabled: Number(row.discount_enabled) === 1,
+    discountType: String(row.discount_type) === "Percent" ? "Percent" : "Nominal",
+    discountValue: asNumber(row.discount_value),
+  });
+  const taxes = await client.execute({
+    sql: "SELECT id,rate_bps,locked FROM document_taxes WHERE document_type='Quotation' AND document_id=?",
+    args: [quotationId],
+  });
+  for (const tax of taxes.rows) {
+    if (Number(tax.locked) === 1) continue;
+    await client.execute({
+      sql: "UPDATE document_taxes SET taxable_base=?,amount=?,updated_at=? WHERE id=?",
+      args: [
+        preliminary.taxableBase,
+        calculateTaxAmount(preliminary.taxableBase, asNumber(tax.rate_bps)),
+        now(),
+        tax.id,
+      ],
+    });
+  }
+  const tax = await documentTaxSummary(client, "Quotation", quotationId, preliminary.taxableBase);
+  const totals = calculateQuotationCommercialTotals({
+    subtotal: asNumber(row.total),
+    discountEnabled: Number(row.discount_enabled) === 1,
+    discountType: String(row.discount_type) === "Percent" ? "Percent" : "Nominal",
+    discountValue: asNumber(row.discount_value),
+    taxAdditions: tax.taxAdditions,
+    taxWithholdings: tax.taxWithholdings,
+    roundingMode: ["Up", "Down", "Custom"].includes(String(row.rounding_mode))
+      ? String(row.rounding_mode) as "Up" | "Down" | "Custom"
+      : "None",
+    roundingStep: asNumber(row.rounding_step),
+    customRoundingAdjustment: asNumber(row.rounding_adjustment),
+  });
+  await client.execute({
+    sql: `UPDATE quotations SET discount_amount=?,taxable_base=?,
+      tax_additions_snapshot=?,tax_withholdings_snapshot=?,rounding_adjustment=?,
+      grand_total=?,updated_at=? WHERE id=?`,
+    args: [
+      totals.discountAmount,
+      totals.taxableBase,
+      totals.taxAdditions,
+      totals.taxWithholdings,
+      totals.roundingAdjustment,
+      totals.grandTotal,
+      now(),
+      quotationId,
+    ],
+  });
+  const refreshed = await client.execute({
+    sql: `SELECT q.*,cp.title AS package_title FROM quotations q
+      LEFT JOIN project_commercial_packages cp ON cp.id=q.package_id
+      WHERE q.id=? LIMIT 1`,
+    args: [quotationId],
+  });
+  return quotationResponse(client, refreshed.rows[0]);
+}
+
 async function handleQuotations(request: Request, user: AuthUser) {
   const { client } = await getDatabase();
-  const projectId = new URL(request.url).searchParams.get("projectId");
+  const searchParams = new URL(request.url).searchParams;
+  const projectId = searchParams.get("projectId");
   if (!projectId) throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
   await assertProjectAccess(user, projectId);
+  const packageId = await resolveCommercialPackageId(client, projectId, searchParams.get("packageId"));
 
   if (request.method === "GET") {
     const result = await client.execute({
-      sql: `SELECT q.id,q.number,q.status,q.issued_at,q.valid_until,q.total,
-        q.tax_enabled,q.tax_revision,
-        q.accepted_at,q.acceptance_attachment_name
-        FROM quotations q
-        LEFT JOIN boq_scopes s ON s.id=q.scope_id
-        WHERE q.project_id=? AND (s.sequence=0 OR q.scope_id IS NULL)
-        ORDER BY q.created_at DESC LIMIT 1`,
-      args: [projectId],
+      sql: `SELECT q.*,cp.title AS package_title FROM quotations q
+        LEFT JOIN project_commercial_packages cp ON cp.id=q.package_id
+        WHERE q.project_id=? AND q.package_id=? AND q.status<>'Superseded'
+        ORDER BY q.revision_no DESC,q.created_at DESC LIMIT 1`,
+      args: [projectId, packageId],
     });
-    const row = result.rows[0];
-    const base = row ? {
-      id: String(row.id),
-      number: String(row.number),
-      status: String(row.status),
-      issuedAt: String(row.issued_at),
-      validUntil: row.valid_until ? String(row.valid_until) : null,
-      total: asNumber(row.total),
-      taxEnabled: Number(row.tax_enabled) === 1,
-      taxRevision: asNumber(row.tax_revision),
-      acceptedAt: row.accepted_at ? String(row.accepted_at) : null,
-      acceptanceAttachmentName: row.acceptance_attachment_name
-        ? String(row.acceptance_attachment_name)
-        : null,
-    } : {
+    if (result.rows[0]) return ok(await quotationResponse(client, result.rows[0]));
+    const boq = await getBoq(projectId, packageId);
+    return ok({
       id: null,
+      projectId,
+      packageId,
+      packageTitle: boq.package?.title ?? "Lingkup Utama",
       number: null,
       status: "Draft",
-      issuedAt: new Date().toISOString().slice(0, 10),
+      revisionNo: 1,
+      issuedAt: now().slice(0, 10),
       validUntil: null,
-      total: (await getBoq(projectId)).totals.selling,
+      total: boq.totals.selling,
+      subtotal: boq.totals.selling,
+      discountEnabled: false,
+      discountType: "Nominal",
+      discountValue: 0,
+      discountAmount: 0,
+      taxableBase: boq.totals.selling,
       taxEnabled: false,
       taxRevision: 0,
-    };
-    const tax = row
-      ? await documentTaxSummary(client, "Quotation", String(row.id), asNumber(row.total))
-      : { taxes: [], taxAdditions: 0, taxWithholdings: 0, grossTotal: base.total, netCashDue: base.total };
-    return ok({ ...base, ...tax });
+      taxes: [],
+      taxAdditions: 0,
+      taxWithholdings: 0,
+      roundingMode: "None",
+      roundingStep: 0,
+      roundingAdjustment: 0,
+      grandTotal: boq.totals.selling,
+      grossTotal: boq.totals.selling,
+      netCashDue: boq.totals.selling,
+    });
   }
 
   if (request.method === "PATCH") {
     assertAccess(user, "billing", "manage");
-    const input = quotationSchema.partial().parse(await jsonBody(request));
-    if (
-      (input.issuedAt !== undefined || input.validUntil !== undefined) &&
-      !["Admin", "Finance"].includes(user.role)
-    ) {
+    const input = quotationPatchSchema.parse(await jsonBody(request));
+    const editsCommercial = [
+      "issuedAt", "validUntil", "discountEnabled", "discountType",
+      "discountValue", "roundingMode", "roundingStep", "roundingAdjustment",
+      "roundingReason",
+    ].some((key) => Object.prototype.hasOwnProperty.call(input, key));
+    if (editsCommercial && !["Admin", "Finance"].includes(user.role)) {
       throw new ApiError(
         403,
-        "QUOTATION_VALIDITY_FORBIDDEN",
-        "Hanya Admin dan Finance yang dapat mengubah tanggal dan masa berlaku Quotation.",
+        "QUOTATION_COMMERCIAL_FORBIDDEN",
+        "Hanya Admin dan Finance yang dapat mengubah tanggal, diskon, dan pembulatan Quotation.",
       );
     }
-    const boq = await getBoq(projectId);
+    const boq = await getBoq(projectId, packageId);
     if (!boq.items.length || boq.totals.selling <= 0) {
-      throw new ApiError(
-        409,
-        "EMPTY_BOQ",
-        "Tambahkan item BoQ terlebih dahulu sebelum membuat Quotation.",
-      );
+      throw new ApiError(409, "EMPTY_BOQ", "Tambahkan item BoQ pada paket ini terlebih dahulu.");
     }
-    const boqId = await ensureBoq(projectId);
-    const originalScope = await ensureExists(
-      "SELECT id,status FROM boq_scopes WHERE boq_id=? AND sequence=0 LIMIT 1",
-      [boqId],
-      "Scope BoQ Original tidak ditemukan.",
+    const ensured = await ensureBoq(projectId, packageId);
+    const scope = await ensureExists(
+      "SELECT id,status FROM boq_scopes WHERE id=? LIMIT 1",
+      [ensured.scopeId],
+      "Scope BoQ paket tidak ditemukan.",
     );
-    if (String(originalScope.status) === "Accepted") {
-      throw new ApiError(
-        409,
-        "ACCEPTED_QUOTATION_LOCKED",
-        "Quotation yang diterima klien sudah dikunci.",
-      );
+    if (String(scope.status) === "Accepted") {
+      throw new ApiError(409, "ACCEPTED_QUOTATION_LOCKED", "Quotation yang diterima klien sudah dikunci. Buat Addendum baru.");
     }
-    const originalTotalResult = await client.execute({
-      sql: "SELECT COALESCE(SUM(quantity*selling_price),0) AS total FROM boq_items WHERE scope_id=?",
-      args: [originalScope.id],
+    const currentResult = await client.execute({
+      sql: `SELECT * FROM quotations WHERE project_id=? AND package_id=?
+        AND scope_id=? AND status<>'Superseded'
+        ORDER BY revision_no DESC,created_at DESC LIMIT 1`,
+      args: [projectId, packageId, ensured.scopeId],
     });
-    const originalTotal = asNumber(originalTotalResult.rows[0]?.total);
-    const current = await client.execute({
-      sql: `SELECT q.* FROM quotations q
-        LEFT JOIN boq_scopes s ON s.id=q.scope_id
-        WHERE q.project_id=? AND (s.sequence=0 OR q.scope_id IS NULL)
-        ORDER BY q.created_at DESC LIMIT 1`,
-      args: [projectId],
-    });
-    const wasSent = String(current.rows[0]?.status ?? "") === "Sent";
+    const current = currentResult.rows[0];
     const timestamp = now();
-    let quotationId = current.rows[0] ? String(current.rows[0].id) : "";
-    if (quotationId) {
-      const quotation = current.rows[0];
-      if (input.status === "Sent" && Number(quotation.tax_enabled) === 1) {
-        const appliedTax = await client.execute({
-          sql: "SELECT id FROM document_taxes WHERE document_type='Quotation' AND document_id=? LIMIT 1",
-          args: [quotationId],
+    let quotationId = current ? String(current.id) : "";
+    const makeRevision = Boolean(
+      current && String(current.status) === "Sent" &&
+      !["Rejected", "Void"].includes(String(input.status ?? "")),
+    );
+    const requestedStatus = String(input.status ?? current?.status ?? "Draft");
+    if (requestedStatus === "Sent" && current && Number(current.tax_enabled) === 1) {
+      const selectedTaxes = await client.execute({
+        sql: "SELECT 1 FROM document_taxes WHERE document_type='Quotation' AND document_id=? LIMIT 1",
+        args: [current.id],
+      });
+      if (!selectedTaxes.rows.length) {
+        throw new ApiError(409, "TAX_RULE_REQUIRED", "Pilih minimal satu aturan pajak sebelum mengirim Quotation.");
+      }
+    }
+
+    if (makeRevision && current) {
+      const revisionNo = asNumber(current.revision_no) + 1;
+      quotationId = randomUUID();
+      assertDateOrder(
+        input.issuedAt ?? current.issued_at,
+        input.validUntil === undefined ? current.valid_until : input.validUntil,
+        "Masa berlaku Quotation tidak boleh lebih awal dari tanggal terbit.",
+      );
+      await snapshotQuotationItems(client, String(current.id));
+      await client.transaction(async (tx) => {
+        await tx.execute({
+          sql: "UPDATE quotations SET status='Superseded',updated_at=? WHERE id=?",
+          args: [timestamp, current.id],
         });
-        if (!appliedTax.rows.length) {
-          throw new ApiError(
-            409,
-            "TAX_RULE_REQUIRED",
-            "Pilih minimal satu aturan pajak sebelum mengirim Quotation yang memakai pajak.",
-          );
+        await tx.execute({
+          sql: `INSERT INTO quotations
+            (id,project_id,package_id,scope_id,number,status,issued_at,valid_until,
+             total,revision_no,supersedes_id,discount_enabled,discount_type,
+             discount_value,discount_amount,taxable_base,tax_enabled,tax_revision,
+             rounding_mode,rounding_step,rounding_adjustment,rounding_reason,
+             grand_total,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          args: [
+            quotationId, projectId, packageId, ensured.scopeId,
+            `${String(current.number).replace(/-R\d+$/, "")}-R${revisionNo}`,
+            input.status ?? "Draft",
+            input.issuedAt ?? current.issued_at,
+            input.validUntil === undefined ? current.valid_until : input.validUntil,
+            boq.totals.selling, revisionNo, current.id,
+            input.discountEnabled === undefined ? current.discount_enabled : input.discountEnabled ? 1 : 0,
+            input.discountType ?? current.discount_type,
+            input.discountValue ?? current.discount_value,
+            0, 0, current.tax_enabled, asNumber(current.tax_revision) + 1,
+            input.roundingMode ?? current.rounding_mode,
+            input.roundingStep ?? current.rounding_step,
+            input.roundingAdjustment ?? current.rounding_adjustment,
+            input.roundingReason === undefined ? current.rounding_reason : input.roundingReason,
+            0, timestamp, timestamp,
+          ],
+        });
+        const oldTaxes = await tx.execute({
+          sql: "SELECT * FROM document_taxes WHERE document_type='Quotation' AND document_id=?",
+          args: [current.id],
+        });
+        for (const tax of oldTaxes.rows) {
+          await tx.execute({
+            sql: `INSERT INTO document_taxes
+              (id,document_type,document_id,project_id,rule_id,rule_code,rule_name,
+               rule_name_en,scope,effect,accounting_treatment,rate_bps,taxable_base,
+               amount,locked,created_by,created_at,updated_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)`,
+            args: [
+              `document-tax-${randomUUID()}`, "Quotation", quotationId, projectId,
+              tax.rule_id, tax.rule_code, tax.rule_name, tax.rule_name_en, tax.scope,
+              tax.effect, tax.accounting_treatment, tax.rate_bps, 0, 0, user.id,
+              timestamp, timestamp,
+            ],
+          });
         }
+      });
+      await writeAuditLog(client, request, user, "revise", "quotation", quotationId, {
+        supersedesId: current.id,
+        revisionNo,
+      });
+    } else if (current) {
+      if (String(current.status) === "Accepted") {
+        throw new ApiError(409, "ACCEPTED_QUOTATION_LOCKED", "Quotation yang diterima klien sudah dikunci.");
       }
       assertDateOrder(
-        input.issuedAt ?? quotation.issued_at,
-        input.validUntil === undefined ? quotation.valid_until : input.validUntil,
+        input.issuedAt ?? current.issued_at,
+        input.validUntil === undefined ? current.valid_until : input.validUntil,
         "Masa berlaku Quotation tidak boleh lebih awal dari tanggal terbit.",
       );
       await client.execute({
-        sql: "UPDATE quotations SET status=?,issued_at=?,valid_until=?,total=?,updated_at=? WHERE id=?",
+        sql: `UPDATE quotations SET status=?,issued_at=?,valid_until=?,total=?,
+          discount_enabled=?,discount_type=?,discount_value=?,rounding_mode=?,
+          rounding_step=?,rounding_adjustment=?,rounding_reason=?,updated_at=? WHERE id=?`,
         args: [
-          input.status ?? quotation.status,
-          input.issuedAt ?? quotation.issued_at,
-          input.validUntil === undefined ? quotation.valid_until : input.validUntil,
-          originalTotal,
+          input.status ?? current.status,
+          input.issuedAt ?? current.issued_at,
+          input.validUntil === undefined ? current.valid_until : input.validUntil,
+          boq.totals.selling,
+          input.discountEnabled === undefined ? current.discount_enabled : input.discountEnabled ? 1 : 0,
+          input.discountType ?? current.discount_type,
+          input.discountValue ?? current.discount_value,
+          input.roundingMode ?? current.rounding_mode,
+          input.roundingStep ?? current.rounding_step,
+          input.roundingAdjustment ?? current.rounding_adjustment,
+          input.roundingReason === undefined ? current.rounding_reason : input.roundingReason,
           timestamp,
           quotationId,
         ],
       });
       await writeAuditLog(client, request, user, "update", "quotation", quotationId, input);
-      if (input.status) {
-        await client.execute({
-          sql: "UPDATE boq_scopes SET status=?,updated_at=? WHERE id=?",
-          args: [input.status, timestamp, originalScope.id],
-        });
-      }
     } else {
       const count = await client.execute("SELECT COUNT(*) AS count FROM quotations");
       quotationId = randomUUID();
       const issuedAt = input.issuedAt ?? timestamp.slice(0, 10);
-      const validUntil =
-        input.validUntil ??
-        new Date(new Date(`${issuedAt}T00:00:00.000Z`).getTime() + 14 * 86_400_000)
-          .toISOString()
-          .slice(0, 10);
-      assertDateOrder(
-        issuedAt,
-        validUntil,
-        "Masa berlaku Quotation tidak boleh lebih awal dari tanggal terbit.",
-      );
+      const validUntil = input.validUntil ?? new Date(
+        new Date(`${issuedAt}T00:00:00.000Z`).getTime() + 14 * 86_400_000,
+      ).toISOString().slice(0, 10);
+      assertDateOrder(issuedAt, validUntil, "Masa berlaku Quotation tidak boleh lebih awal dari tanggal terbit.");
       await client.execute({
-        sql: "INSERT INTO quotations (id,project_id,scope_id,number,status,issued_at,valid_until,total,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        sql: `INSERT INTO quotations
+          (id,project_id,package_id,scope_id,number,status,issued_at,valid_until,
+           total,revision_no,discount_enabled,discount_type,discount_value,
+           discount_amount,taxable_base,rounding_mode,rounding_step,
+           rounding_adjustment,rounding_reason,grand_total,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         args: [
-          quotationId,
-          projectId,
-          originalScope.id,
+          quotationId, projectId, packageId, ensured.scopeId,
           makeSequence("QUO", asNumber(count.rows[0]?.count)),
-          input.status ?? "Draft",
-          issuedAt,
-          validUntil,
-          originalTotal,
-          timestamp,
-          timestamp,
+          input.status ?? "Draft", issuedAt, validUntil, boq.totals.selling, 1,
+          input.discountEnabled ? 1 : 0, input.discountType ?? "Nominal",
+          input.discountValue ?? 0, 0, boq.totals.selling,
+          input.roundingMode ?? "None", input.roundingStep ?? 0,
+          input.roundingAdjustment ?? 0, input.roundingReason ?? null,
+          boq.totals.selling, timestamp, timestamp,
         ],
       });
-      await client.execute({
-        sql: "UPDATE boq_scopes SET status=?,updated_at=? WHERE id=?",
-        args: [input.status ?? "Draft", timestamp, originalScope.id],
+      await writeAuditLog(client, request, user, "create", "quotation", quotationId, {
+        projectId,
+        packageId,
       });
-      await writeAuditLog(client, request, user, "create", "quotation", quotationId, { projectId, status: input.status });
     }
-    const result = await client.execute({
-      sql: "SELECT id,number,status,issued_at,valid_until,total,tax_enabled,tax_revision FROM quotations WHERE id=?",
-      args: [quotationId],
+
+    const response = await refreshQuotationCommercialSnapshot(client, quotationId);
+    if (response.status === "Sent" && response.taxEnabled && !response.taxes.length) {
+      throw new ApiError(409, "TAX_RULE_REQUIRED", "Pilih minimal satu aturan pajak sebelum mengirim Quotation.");
+    }
+    await client.execute({
+      sql: "UPDATE boq_scopes SET status=?,updated_at=? WHERE id=?",
+      args: [response.status, timestamp, ensured.scopeId],
     });
-    const row = result.rows[0];
-    if (String(row.status) === "Sent" && !wasSent) {
+    if (response.status === "Sent") {
+      await snapshotQuotationItems(client, quotationId);
+      await lockDocumentTaxes(client, "Quotation", quotationId);
       await notifyProjectStakeholders(client, {
         projectId,
         eventType: "quotation_sent",
-        subject: `Quotation ${String(row.number)} siap dikirim`,
-        message: `quotation ${String(row.number)} sebesar Rp ${asNumber(row.total).toLocaleString("id-ID")} telah ditandai terkirim.`,
-        subjectEn: `Quotation ${String(row.number)} is ready`,
-        messageEn: `quotation ${String(row.number)} for IDR ${asNumber(row.total).toLocaleString("en-US")} has been marked as sent.`,
+        subject: `Quotation ${response.number} siap dikirim`,
+        message: `quotation ${response.number} sebesar Rp ${response.grandTotal.toLocaleString("id-ID")} telah ditandai terkirim.`,
+        subjectEn: `Quotation ${response.number} is ready`,
+        messageEn: `quotation ${response.number} for IDR ${response.grandTotal.toLocaleString("en-US")} has been marked as sent.`,
         includeFinance: true,
       });
     }
-    return ok({
-      id: String(row.id),
-      number: String(row.number),
-      status: String(row.status),
-      issuedAt: String(row.issued_at),
-      validUntil: row.valid_until ? String(row.valid_until) : null,
-      total: asNumber(row.total),
-      taxEnabled: Number(row.tax_enabled) === 1,
-      taxRevision: asNumber(row.tax_revision),
-      ...(await documentTaxSummary(client, "Quotation", String(row.id), asNumber(row.total))),
-    });
+    return ok(response);
   }
 
   if (request.method === "DELETE") {
     assertAccess(user, "billing", "manage");
     const result = await client.execute({
-      sql: `SELECT q.id FROM quotations q
-        LEFT JOIN boq_scopes s ON s.id=q.scope_id
-        WHERE q.project_id=? AND (s.sequence=0 OR q.scope_id IS NULL)
-        ORDER BY q.created_at DESC LIMIT 1`,
-      args: [projectId],
+      sql: `SELECT id,status FROM quotations WHERE project_id=? AND package_id=?
+        AND status<>'Superseded' ORDER BY revision_no DESC,created_at DESC LIMIT 1`,
+      args: [projectId, packageId],
     });
     const quotationId = result.rows[0]?.id;
     if (!quotationId) throw new ApiError(404, "NOT_FOUND", "Quotation tidak ditemukan.");
+    if (String(result.rows[0].status) === "Accepted") {
+      throw new ApiError(409, "ACCEPTED_QUOTATION_LOCKED", "Quotation yang diterima klien tidak dapat dihapus.");
+    }
     const invoiceUsage = await client.execute({
-      sql: "SELECT id FROM invoices WHERE project_id=? LIMIT 1",
-      args: [projectId],
+      sql: "SELECT id FROM invoices WHERE quotation_id=? LIMIT 1",
+      args: [quotationId],
     });
     if (invoiceUsage.rows.length) {
-      throw new ApiError(
-        409,
-        "QUOTATION_IN_USE",
-        "Quotation tidak dapat dihapus karena sudah memiliki Invoice.",
-      );
+      throw new ApiError(409, "QUOTATION_IN_USE", "Quotation tidak dapat dihapus karena sudah memiliki Invoice.");
     }
-    await client.execute({ sql: "DELETE FROM quotations WHERE id=?", args: [quotationId] });
-    await writeAuditLog(client, request, user, "delete", "quotation", String(quotationId), {
-      projectId,
-    });
+    await client.batch([
+      { sql: "DELETE FROM document_taxes WHERE document_type='Quotation' AND document_id=?", args: [quotationId] },
+      { sql: "DELETE FROM quotations WHERE id=?", args: [quotationId] },
+    ], "write");
+    await writeAuditLog(client, request, user, "delete", "quotation", String(quotationId), { projectId, packageId });
     return noContent();
   }
 
@@ -2103,6 +2518,20 @@ function mapInvoice(row: Record<string, unknown>) {
     issueDateIso: String(row.issue_date),
     dueDateIso: String(row.due_date),
     amount: asNumber(row.amount),
+    packageId: row.package_id ? String(row.package_id) : null,
+    packageTitle: row.package_title ? String(row.package_title) : null,
+    quotationId: row.quotation_id ? String(row.quotation_id) : null,
+    quotationNumber: row.quotation_number ? String(row.quotation_number) : null,
+    calculationMode: String(row.calculation_mode ?? "LegacyBase"),
+    installmentBps: row.installment_bps == null ? null : asNumber(row.installment_bps),
+    installmentPercent: row.installment_bps == null ? null : asNumber(row.installment_bps) / 100,
+    contractGrandTotal: asNumber(row.contract_grand_total),
+    subtotalSnapshot: asNumber(row.subtotal_snapshot),
+    discountSnapshot: asNumber(row.discount_snapshot),
+    taxableBaseSnapshot: asNumber(row.taxable_base_snapshot),
+    taxAdditionsSnapshot: asNumber(row.tax_additions_snapshot),
+    taxWithholdingsSnapshot: asNumber(row.tax_withholdings_snapshot),
+    roundingSnapshot: asNumber(row.rounding_snapshot),
     status: String(row.status),
     paidDate: row.paid_date ? formatDate(row.paid_date) : undefined,
     paidDateIso: row.paid_date ? String(row.paid_date) : undefined,
@@ -2111,13 +2540,23 @@ function mapInvoice(row: Record<string, unknown>) {
 
 async function getInvoice(client: Awaited<ReturnType<typeof getDatabase>>["client"], id: string) {
   const result = await client.execute({
-    sql: "SELECT i.*,p.name AS project_name FROM invoices i JOIN projects p ON p.id=i.project_id WHERE i.id=? LIMIT 1",
+    sql: `SELECT i.*,p.name AS project_name,cp.title AS package_title,
+      q.number AS quotation_number
+      FROM invoices i JOIN projects p ON p.id=i.project_id
+      LEFT JOIN project_commercial_packages cp ON cp.id=i.package_id
+      LEFT JOIN quotations q ON q.id=i.quotation_id
+      WHERE i.id=? LIMIT 1`,
     args: [id],
   });
   if (!result.rows[0]) throw new ApiError(404, "NOT_FOUND", "Invoice tidak ditemukan.");
   const row = result.rows[0] as Record<string, unknown>;
+  const allocated = String(row.calculation_mode) === "Percent" &&
+    asNumber(row.contract_grand_total) > 0;
+  const taxBase = allocated
+    ? asNumber(row.taxable_base_snapshot)
+    : asNumber(row.amount);
   const [tax, payments] = await Promise.all([
-    documentTaxSummary(client, "Invoice", id, asNumber(row.amount)),
+    documentTaxSummary(client, "Invoice", id, taxBase),
     client.execute({
       sql: `SELECT pay.*,u.name AS created_by_name,a.bank_name,
         a.account_number_masked
@@ -2145,17 +2584,30 @@ async function getInvoice(client: Awaited<ReturnType<typeof getDatabase>>["clien
   const status =
     paidGross <= 0
       ? "Belum Lunas"
-      : paidGross >= tax.grossTotal
+      : paidGross >= (allocated ? asNumber(row.amount) : tax.grossTotal)
         ? "Lunas"
         : "Dibayar Sebagian";
   return {
     ...mapInvoice(row),
     status,
     ...tax,
+    grossTotal: allocated ? asNumber(row.amount) : tax.grossTotal,
+    netCashDue: allocated
+      ? Math.max(0, asNumber(row.amount) - tax.taxWithholdings)
+      : tax.netCashDue,
+    contractValue: asNumber(row.contract_grand_total),
+    prepayment: paidGross,
+    balanceDue: Math.max(
+      0,
+      (allocated ? asNumber(row.amount) : tax.grossTotal) - paidGross,
+    ),
     paidGross,
     paidCash,
     withheldTax,
-    outstanding: Math.max(0, tax.grossTotal - paidGross),
+    outstanding: Math.max(
+      0,
+      (allocated ? asNumber(row.amount) : tax.grossTotal) - paidGross,
+    ),
     payments: payments.rows.map((payment) => ({
       id: String(payment.id),
       grossAmount: asNumber(payment.gross_amount),
@@ -2192,7 +2644,9 @@ async function assertInvoiceAmountWithinQuotation(
 ) {
   const boq = await getBoq(projectId);
   const quotation = await client.execute({
-    sql: "SELECT total FROM quotations WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
+    sql: `SELECT CASE WHEN grand_total>0 THEN grand_total ELSE total END AS total
+      FROM quotations WHERE project_id=? AND status<>'Superseded'
+      ORDER BY CASE status WHEN 'Accepted' THEN 0 ELSE 1 END,created_at DESC LIMIT 1`,
     args: [projectId],
   });
   const commercialTotal = quotation.rows[0]
@@ -2219,13 +2673,157 @@ async function assertInvoiceAmountWithinQuotation(
   }
 }
 
+async function invoiceQuotationSource(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  input: { projectId: string; packageId?: string; quotationId?: string },
+  requireAccepted: boolean,
+) {
+  const packageId = input.packageId
+    ? await resolveCommercialPackageId(client, input.projectId, input.packageId)
+    : await resolveCommercialPackageId(client, input.projectId, null);
+  const result = await client.execute({
+    sql: input.quotationId
+      ? `SELECT q.*,cp.title AS package_title FROM quotations q
+        LEFT JOIN project_commercial_packages cp ON cp.id=q.package_id
+        WHERE q.id=? AND q.project_id=? LIMIT 1`
+      : `SELECT q.*,cp.title AS package_title FROM quotations q
+        LEFT JOIN project_commercial_packages cp ON cp.id=q.package_id
+        WHERE q.project_id=? AND q.package_id=? AND q.status<>'Superseded'
+        ORDER BY CASE q.status WHEN 'Accepted' THEN 0 WHEN 'Sent' THEN 1 ELSE 2 END,
+          q.revision_no DESC,q.created_at DESC LIMIT 1`,
+    args: input.quotationId
+      ? [input.quotationId, input.projectId]
+      : [input.projectId, packageId],
+  });
+  const row = result.rows[0];
+  if (!row) {
+    if (requireAccepted) {
+      throw new ApiError(409, "ACCEPTED_QUOTATION_REQUIRED", "Terima Quotation paket terlebih dahulu sebelum membuat termin Invoice.");
+    }
+    return { packageId, quotation: null };
+  }
+  if (input.packageId && String(row.package_id) !== packageId) {
+    throw new ApiError(422, "PACKAGE_QUOTATION_MISMATCH", "Quotation tidak termasuk dalam paket yang dipilih.");
+  }
+  if (requireAccepted && String(row.status) !== "Accepted") {
+    throw new ApiError(409, "ACCEPTED_QUOTATION_REQUIRED", "Invoice termin hanya dapat dibuat dari Quotation yang sudah diterima klien.");
+  }
+  return { packageId: String(row.package_id ?? packageId), quotation: row };
+}
+
+async function invoiceAllocationForQuotation(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  quotation: Record<string, unknown>,
+  installmentBps: number,
+  excludeInvoiceId?: string,
+) {
+  const previousResult = await client.execute({
+    sql: `SELECT COALESCE(SUM(installment_bps),0) AS installment_bps,
+      COALESCE(SUM(subtotal_snapshot),0) AS subtotal,
+      COALESCE(SUM(discount_snapshot),0) AS discount_amount,
+      COALESCE(SUM(taxable_base_snapshot),0) AS taxable_base,
+      COALESCE(SUM(tax_additions_snapshot),0) AS tax_additions,
+      COALESCE(SUM(tax_withholdings_snapshot),0) AS tax_withholdings,
+      COALESCE(SUM(rounding_snapshot),0) AS rounding_adjustment,
+      COALESCE(SUM(amount),0) AS grand_total
+      FROM invoices WHERE quotation_id=?${excludeInvoiceId ? " AND id<>?" : ""}`,
+    args: excludeInvoiceId
+      ? [quotation.id, excludeInvoiceId]
+      : [quotation.id],
+  });
+  const previous = previousResult.rows[0] ?? {};
+  const committedBps = asNumber(previous.installment_bps);
+  if (committedBps + installmentBps > 10_000) {
+    throw new ApiError(
+      409,
+      "INVOICE_PERCENT_EXCEEDED",
+      `Akumulasi termin melebihi 100%. Sisa termin adalah ${(Math.max(0, 10_000 - committedBps) / 100).toLocaleString("id-ID")}% .`,
+    );
+  }
+  const allocation = calculateInvoiceAllocation(
+    {
+      subtotal: asNumber(quotation.total),
+      discountAmount: asNumber(quotation.discount_amount),
+      taxableBase: asNumber(quotation.taxable_base),
+      taxAdditions: asNumber(quotation.tax_additions_snapshot),
+      taxWithholdings: asNumber(quotation.tax_withholdings_snapshot),
+      roundingAdjustment: asNumber(quotation.rounding_adjustment),
+      grandTotal: asNumber(quotation.grand_total) || asNumber(quotation.total),
+    },
+    installmentBps,
+    {
+      installmentBps: committedBps,
+      subtotal: asNumber(previous.subtotal),
+      discountAmount: asNumber(previous.discount_amount),
+      taxableBase: asNumber(previous.taxable_base),
+      taxAdditions: asNumber(previous.tax_additions),
+      taxWithholdings: asNumber(previous.tax_withholdings),
+      roundingAdjustment: asNumber(previous.rounding_adjustment),
+      grandTotal: asNumber(previous.grand_total),
+    },
+  );
+  return { allocation, previous };
+}
+
+async function copyQuotationTaxAllocation(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  invoiceId: string,
+  projectId: string,
+  quotationId: string,
+  installmentBps: number,
+  taxableBase: number,
+  userId: string,
+) {
+  const quotationTaxes = await client.execute({
+    sql: `SELECT dt.* FROM document_taxes dt
+      WHERE dt.document_type='Quotation' AND dt.document_id=?
+      ORDER BY dt.created_at,dt.id`,
+    args: [quotationId],
+  });
+  const timestamp = now();
+  for (const tax of quotationTaxes.rows) {
+    const previouslyAllocated = await client.execute({
+      sql: `SELECT COALESCE(SUM(dt.amount),0) AS total
+        FROM document_taxes dt JOIN invoices i ON i.id=dt.document_id
+        WHERE dt.document_type='Invoice' AND i.quotation_id=?
+          AND dt.rule_code=? AND i.id<>?`,
+      args: [quotationId, tax.rule_code, invoiceId],
+    });
+    const used = asNumber(previouslyAllocated.rows[0]?.total);
+    const quoteAmount = asNumber(tax.amount);
+    const totalBps = await client.execute({
+      sql: "SELECT COALESCE(SUM(installment_bps),0) AS total FROM invoices WHERE quotation_id=? AND id<>?",
+      args: [quotationId, invoiceId],
+    });
+    const isFinal = asNumber(totalBps.rows[0]?.total) + installmentBps === 10_000;
+    const allocatedAmount = isFinal
+      ? Math.max(0, quoteAmount - used)
+      : Math.round((quoteAmount * installmentBps) / 10_000);
+    await client.execute({
+      sql: `INSERT INTO document_taxes
+        (id,document_type,document_id,project_id,rule_id,rule_code,rule_name,
+         rule_name_en,scope,effect,accounting_treatment,rate_bps,taxable_base,
+         amount,locked,created_by,created_at,updated_at)
+        VALUES (?,'Invoice',?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)`,
+      args: [
+        `document-tax-${randomUUID()}`, invoiceId, projectId, tax.rule_id,
+        tax.rule_code, tax.rule_name, tax.rule_name_en, tax.scope, tax.effect,
+        tax.accounting_treatment, tax.rate_bps, taxableBase, allocatedAmount,
+        userId, timestamp, timestamp,
+      ],
+    });
+  }
+}
+
 async function handleInvoices(request: Request, path: string[], user: AuthUser) {
   const { client } = await getDatabase();
   const invoiceId = path[1];
   const action = path[2];
 
   if (request.method === "GET" && !invoiceId) {
-    const projectId = new URL(request.url).searchParams.get("projectId");
+    const searchParams = new URL(request.url).searchParams;
+    const projectId = searchParams.get("projectId");
+    const packageId = searchParams.get("packageId");
     if (projectId) await assertProjectAccess(user, projectId);
     const scope = projectScopeCondition(user, "p");
     const conditions: string[] = [];
@@ -2233,6 +2831,10 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
     if (projectId) {
       conditions.push("i.project_id=?");
       args.push(projectId);
+    }
+    if (packageId) {
+      conditions.push("i.package_id=?");
+      args.push(packageId);
     }
     if (scope.sql) {
       conditions.push(scope.sql);
@@ -2258,62 +2860,101 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
       "Jatuh tempo Invoice tidak boleh lebih awal dari tanggal terbit.",
     );
     await assertProjectAccess(user, input.projectId);
-    await assertInvoiceAmountWithinQuotation(client, input.projectId, input.amount);
+    const percentMode = input.calculationMode === "Percent" ||
+      input.installmentPercent !== undefined || input.installmentBps !== undefined;
+    const source = await invoiceQuotationSource(
+      client,
+      input,
+      percentMode || Boolean(input.quotationId),
+    );
+    const installmentBps = input.installmentBps ??
+      (input.installmentPercent !== undefined
+        ? Math.round(input.installmentPercent * 100)
+        : null);
+    const allocation = percentMode && source.quotation && installmentBps
+      ? (await invoiceAllocationForQuotation(client, source.quotation, installmentBps)).allocation
+      : null;
+    const legacyAmount = input.amount ?? 0;
+    if (!allocation) {
+      await assertInvoiceAmountWithinQuotation(client, input.projectId, legacyAmount);
+    }
     const count = await client.execute("SELECT COUNT(*) AS count FROM invoices");
     const id = randomUUID();
     const timestamp = now();
     const number = makeSequence("INV", asNumber(count.rows[0]?.count));
     await client.transaction(async (tx) => {
       await tx.execute({
-        sql: "INSERT INTO invoices (id,project_id,number,type,issue_date,due_date,amount,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        args: [id, input.projectId, number, input.type, input.issueDate, input.dueDate, input.amount, "Belum Lunas", timestamp, timestamp],
+        sql: `INSERT INTO invoices
+          (id,project_id,package_id,quotation_id,number,type,issue_date,due_date,
+           amount,calculation_mode,installment_bps,contract_grand_total,
+           subtotal_snapshot,discount_snapshot,taxable_base_snapshot,
+           tax_additions_snapshot,tax_withholdings_snapshot,rounding_snapshot,
+           status,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        args: [
+          id, input.projectId, source.packageId, source.quotation?.id ?? null,
+          number, input.type, input.issueDate, input.dueDate,
+          allocation?.amount ?? legacyAmount,
+          allocation ? "Percent" : "LegacyBase",
+          allocation?.installmentBps ?? null,
+          source.quotation
+            ? asNumber(source.quotation.grand_total) || asNumber(source.quotation.total)
+            : 0,
+          allocation?.subtotalSnapshot ?? 0,
+          allocation?.discountSnapshot ?? 0,
+          allocation?.taxableBaseSnapshot ?? 0,
+          allocation?.taxAdditionsSnapshot ?? 0,
+          allocation?.taxWithholdingsSnapshot ?? 0,
+          allocation?.roundingSnapshot ?? 0,
+          "Belum Lunas", timestamp, timestamp,
+        ],
       });
-      const quotationTaxes = await tx.execute({
-        sql: `SELECT dt.* FROM document_taxes dt
-          JOIN quotations q ON q.id=dt.document_id
-          LEFT JOIN boq_scopes s ON s.id=q.scope_id
-          WHERE dt.document_type='Quotation' AND q.project_id=?
-            AND q.status='Accepted' AND (s.sequence=0 OR q.scope_id IS NULL)
-          ORDER BY q.accepted_at DESC,dt.created_at`,
-        args: [input.projectId],
-      });
-      for (const tax of quotationTaxes.rows) {
-        const rateBps = asNumber(tax.rate_bps);
-        await tx.execute({
-          sql: `INSERT INTO document_taxes
-            (id,document_type,document_id,project_id,rule_id,rule_code,rule_name,
-             rule_name_en,scope,effect,accounting_treatment,rate_bps,taxable_base,
-             amount,locked,created_by,created_at,updated_at)
-            VALUES (?,'Invoice',?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)`,
-          args: [
-            `document-tax-${randomUUID()}`,
-            id,
-            input.projectId,
-            tax.rule_id,
-            tax.rule_code,
-            tax.rule_name,
-            tax.rule_name_en,
-            tax.scope,
-            tax.effect,
-            tax.accounting_treatment,
-            rateBps,
-            input.amount,
-            calculateTaxAmount(input.amount, rateBps),
-            user.id,
-            timestamp,
-            timestamp,
-          ],
+      if (allocation && source.quotation && installmentBps) {
+        await copyQuotationTaxAllocation(
+          tx,
+          id,
+          input.projectId,
+          String(source.quotation.id),
+          installmentBps,
+          allocation.taxableBaseSnapshot,
+          user.id,
+        );
+      } else if (source.quotation) {
+        const quotationTaxes = await tx.execute({
+          sql: `SELECT dt.* FROM document_taxes dt
+            WHERE dt.document_type='Quotation' AND dt.document_id=?
+            ORDER BY dt.created_at`,
+          args: [source.quotation.id],
         });
+        for (const tax of quotationTaxes.rows) {
+          const rateBps = asNumber(tax.rate_bps);
+          await tx.execute({
+            sql: `INSERT INTO document_taxes
+              (id,document_type,document_id,project_id,rule_id,rule_code,rule_name,
+               rule_name_en,scope,effect,accounting_treatment,rate_bps,taxable_base,
+               amount,locked,created_by,created_at,updated_at)
+              VALUES (?,'Invoice',?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)`,
+            args: [
+              `document-tax-${randomUUID()}`, id, input.projectId, tax.rule_id,
+              tax.rule_code, tax.rule_name, tax.rule_name_en, tax.scope, tax.effect,
+              tax.accounting_treatment, rateBps, legacyAmount,
+              calculateTaxAmount(legacyAmount, rateBps), user.id, timestamp, timestamp,
+            ],
+          });
+        }
       }
     });
+    if (allocation && source.quotation) {
+      await lockDocumentTaxes(client, "Invoice", id, input.dueDate);
+    }
     await writeAuditLog(client, request, user, "create", "invoice", id, input);
     await notifyProjectStakeholders(client, {
       projectId: input.projectId,
       eventType: "invoice_created",
       subject: `Invoice ${number} diterbitkan`,
-      message: `invoice ${number} sebesar Rp ${input.amount.toLocaleString("id-ID")} telah diterbitkan dengan jatuh tempo ${input.dueDate}.`,
+      message: `invoice ${number} sebesar Rp ${(allocation?.amount ?? legacyAmount).toLocaleString("id-ID")} telah diterbitkan dengan jatuh tempo ${input.dueDate}.`,
       subjectEn: `Invoice ${number} issued`,
-      messageEn: `invoice ${number} for IDR ${input.amount.toLocaleString("en-US")} was issued with a due date of ${input.dueDate}.`,
+      messageEn: `invoice ${number} for IDR ${(allocation?.amount ?? legacyAmount).toLocaleString("en-US")} was issued with a due date of ${input.dueDate}.`,
       includeFinance: true,
     });
     return created(await getInvoice(client, id));
@@ -2547,18 +3188,13 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
           FROM invoice_payments WHERE invoice_id=? AND status='Posted'`,
         args: [invoiceId],
       });
-      const tax = await documentTaxSummary(
-        tx,
-        "Invoice",
-        invoiceId,
-        asNumber(payment.invoice_amount),
-      );
+      const invoiceAfterVoid = await getInvoice(tx, invoiceId);
       const paidGross = asNumber(remaining.rows[0]?.total);
       await tx.execute({
         sql: "UPDATE invoices SET status=?,paid_date=?,updated_at=? WHERE id=?",
         args: [
-          paidGross >= tax.grossTotal ? "Lunas" : "Belum Lunas",
-          paidGross >= tax.grossTotal
+          paidGross >= invoiceAfterVoid.grossTotal ? "Lunas" : "Belum Lunas",
+          paidGross >= invoiceAfterVoid.grossTotal
             ? remaining.rows[0]?.last_paid ?? null
             : null,
           timestamp,
@@ -2735,15 +3371,77 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
       input.dueDate ?? current.due_date,
       "Jatuh tempo Invoice tidak boleh lebih awal dari tanggal terbit.",
     );
-    await assertInvoiceAmountWithinQuotation(
-      client,
-      String(current.project_id),
-      input.amount ?? asNumber(current.amount),
-      invoiceId,
-    );
-    await client.execute({
-      sql: "UPDATE invoices SET type=?,issue_date=?,due_date=?,amount=?,updated_at=? WHERE id=?",
-      args: [input.type ?? current.type, input.issueDate ?? current.issue_date, input.dueDate ?? current.due_date, input.amount ?? current.amount, now(), invoiceId],
+    const percentMode = String(current.calculation_mode) === "Percent";
+    const requestedBps = input.installmentBps ??
+      (input.installmentPercent !== undefined
+        ? Math.round(input.installmentPercent * 100)
+        : asNumber(current.installment_bps));
+    let allocation: Awaited<ReturnType<typeof invoiceAllocationForQuotation>>["allocation"] | null = null;
+    let quotation: Record<string, unknown> | null = null;
+    if (percentMode) {
+      const quotationResult = await client.execute({
+        sql: "SELECT * FROM quotations WHERE id=? AND project_id=? LIMIT 1",
+        args: [current.quotation_id, current.project_id],
+      });
+      quotation = quotationResult.rows[0] ?? null;
+      if (!quotation || String(quotation.status) !== "Accepted") {
+        throw new ApiError(409, "ACCEPTED_QUOTATION_REQUIRED", "Quotation sumber Invoice tidak tersedia atau belum diterima.");
+      }
+      allocation = (await invoiceAllocationForQuotation(
+        client,
+        quotation,
+        requestedBps,
+        invoiceId,
+      )).allocation;
+    } else {
+      await assertInvoiceAmountWithinQuotation(
+        client,
+        String(current.project_id),
+        input.amount ?? asNumber(current.amount),
+        invoiceId,
+      );
+    }
+    const timestamp = now();
+    await client.transaction(async (tx) => {
+      await tx.execute({
+        sql: `UPDATE invoices SET type=?,issue_date=?,due_date=?,amount=?,
+          installment_bps=?,contract_grand_total=?,subtotal_snapshot=?,
+          discount_snapshot=?,taxable_base_snapshot=?,tax_additions_snapshot=?,
+          tax_withholdings_snapshot=?,rounding_snapshot=?,updated_at=? WHERE id=?`,
+        args: [
+          input.type ?? current.type,
+          input.issueDate ?? current.issue_date,
+          input.dueDate ?? current.due_date,
+          allocation?.amount ?? input.amount ?? current.amount,
+          allocation?.installmentBps ?? current.installment_bps,
+          quotation
+            ? asNumber(quotation.grand_total) || asNumber(quotation.total)
+            : current.contract_grand_total,
+          allocation?.subtotalSnapshot ?? current.subtotal_snapshot,
+          allocation?.discountSnapshot ?? current.discount_snapshot,
+          allocation?.taxableBaseSnapshot ?? current.taxable_base_snapshot,
+          allocation?.taxAdditionsSnapshot ?? current.tax_additions_snapshot,
+          allocation?.taxWithholdingsSnapshot ?? current.tax_withholdings_snapshot,
+          allocation?.roundingSnapshot ?? current.rounding_snapshot,
+          timestamp,
+          invoiceId,
+        ],
+      });
+      if (allocation && quotation) {
+        await tx.execute({
+          sql: "DELETE FROM document_taxes WHERE document_type='Invoice' AND document_id=? AND locked=0",
+          args: [invoiceId],
+        });
+        await copyQuotationTaxAllocation(
+          tx,
+          invoiceId,
+          String(current.project_id),
+          String(quotation.id),
+          allocation.installmentBps,
+          allocation.taxableBaseSnapshot,
+          user.id,
+        );
+      }
     });
     await writeAuditLog(client, request, user, "update", "invoice", invoiceId, input);
     return ok(await getInvoice(client, invoiceId));
@@ -3328,17 +4026,19 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
 
 type ValidationRow = Record<string, unknown>;
 
-async function validationBoqItems(projectId: string) {
+async function validationBoqItems(projectId: string, packageId: string) {
   const { client } = await getDatabase();
   const result = await client.execute({
     sql: `
       SELECT i.id,i.category,i.description,i.quantity,i.unit,i.sort_order
       FROM boq_items i
       JOIN boqs b ON b.id=i.boq_id
-      WHERE b.project_id=? AND i.category IN ('Perangkat','Material')
+      JOIN boq_scopes s ON s.id=i.scope_id
+      WHERE b.project_id=? AND s.package_id=?
+        AND i.category IN ('Perangkat','Material')
       ORDER BY i.sort_order,i.created_at
     `,
-    args: [projectId],
+    args: [projectId, packageId],
   });
   return result.rows;
 }
@@ -3358,6 +4058,9 @@ function mapValidation(row: ValidationRow, items: ValidationRow[]) {
     id: row.id ? String(row.id) : null,
     number: row.number ? String(row.number) : null,
     projectId: String(row.project_id),
+    packageId: row.package_id ? String(row.package_id) : null,
+    packageTitle: row.package_title ? String(row.package_title) : null,
+    deliveryCycle: asNumber(row.delivery_cycle) || 1,
     project: row.project_name ? String(row.project_name) : undefined,
     client: row.project_client ? String(row.project_client) : undefined,
     location: row.project_location ? String(row.project_location) : undefined,
@@ -3371,18 +4074,20 @@ function mapValidation(row: ValidationRow, items: ValidationRow[]) {
   };
 }
 
-async function readValidation(projectId: string) {
+async function readValidation(projectId: string, packageId: string, deliveryCycle = 1) {
   const { client } = await getDatabase();
   const result = await client.execute({
     sql: `
       SELECT v.*,p.name AS project_name,p.client AS project_client,p.location AS project_location,
+        cp.title AS package_title,
         u.name AS validator_name
       FROM project_validations v
       JOIN projects p ON p.id=v.project_id
+      LEFT JOIN project_commercial_packages cp ON cp.id=v.package_id
       LEFT JOIN users u ON u.id=v.validated_by
-      WHERE v.project_id=? LIMIT 1
+      WHERE v.project_id=? AND v.package_id=? AND v.delivery_cycle=? LIMIT 1
     `,
-    args: [projectId],
+    args: [projectId, packageId, deliveryCycle],
   });
   const validation = result.rows[0];
   if (!validation) {
@@ -3391,9 +4096,23 @@ async function readValidation(projectId: string) {
       [projectId],
       "Proyek tidak ditemukan.",
     );
-    const boqItems = await validationBoqItems(projectId);
+    const packageRow = await ensureExists(
+      "SELECT title AS package_title FROM project_commercial_packages WHERE id=? AND project_id=?",
+      [packageId, projectId],
+      "Paket komersial tidak ditemukan.",
+    );
+    const boqItems = await validationBoqItems(projectId, packageId);
     return mapValidation(
-      { ...project, id: null, number: null, status: "Draft", notes: "" },
+      {
+        ...project,
+        ...packageRow,
+        package_id: packageId,
+        delivery_cycle: deliveryCycle,
+        id: null,
+        number: null,
+        status: "Draft",
+        notes: "",
+      },
       boqItems.map((item) => ({
         ...item,
         id: String(item.id),
@@ -3410,9 +4129,14 @@ async function readValidation(projectId: string) {
   return mapValidation(validation as ValidationRow, items.rows as ValidationRow[]);
 }
 
-async function ensureValidation(projectId: string, userId: string) {
+async function ensureValidation(
+  projectId: string,
+  packageId: string,
+  deliveryCycle: number,
+  userId: string,
+) {
   const { client } = await getDatabase();
-  const boqItems = await validationBoqItems(projectId);
+  const boqItems = await validationBoqItems(projectId, packageId);
   if (!boqItems.length) {
     throw new ApiError(
       409,
@@ -3421,8 +4145,9 @@ async function ensureValidation(projectId: string, userId: string) {
     );
   }
   const existing = await client.execute({
-    sql: "SELECT id FROM project_validations WHERE project_id=? LIMIT 1",
-    args: [projectId],
+    sql: `SELECT id FROM project_validations
+      WHERE project_id=? AND package_id=? AND delivery_cycle=? LIMIT 1`,
+    args: [projectId, packageId, deliveryCycle],
   });
   const validationId = existing.rows[0]
     ? String(existing.rows[0].id)
@@ -3431,8 +4156,10 @@ async function ensureValidation(projectId: string, userId: string) {
   if (!existing.rows[0]) {
     const count = await client.execute("SELECT COUNT(*) AS count FROM project_validations");
     await client.execute({
-      sql: "INSERT INTO project_validations (id,number,project_id,status,notes,validated_by,completed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-      args: [validationId, makeSequence("VAL", asNumber(count.rows[0]?.count)), projectId, "Draft", "", userId, null, timestamp, timestamp],
+      sql: `INSERT INTO project_validations
+        (id,number,project_id,package_id,delivery_cycle,status,notes,validated_by,
+         completed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      args: [validationId, makeSequence("VAL", asNumber(count.rows[0]?.count)), projectId, packageId, deliveryCycle, "Draft", "", userId, null, timestamp, timestamp],
     });
   }
   const existingItems = await client.execute({
@@ -3450,14 +4177,19 @@ async function ensureValidation(projectId: string, userId: string) {
       "write",
     );
   }
-  return readValidation(projectId);
+  return readValidation(projectId, packageId, deliveryCycle);
 }
 
-async function assertCompletedValidation(projectId: string) {
+async function assertCompletedValidation(
+  projectId: string,
+  packageId: string,
+  deliveryCycle: number,
+) {
   const { client } = await getDatabase();
   const result = await client.execute({
-    sql: "SELECT id FROM project_validations WHERE project_id=? AND status='Completed' LIMIT 1",
-    args: [projectId],
+    sql: `SELECT id FROM project_validations WHERE project_id=? AND package_id=?
+      AND delivery_cycle=? AND status='Completed' LIMIT 1`,
+    args: [projectId, packageId, deliveryCycle],
   });
   if (!result.rows.length) {
     throw new ApiError(
@@ -3472,20 +4204,24 @@ async function handleValidations(request: Request, path: string[], user: AuthUse
   const { client } = await getDatabase();
   const validationId = path[1];
   const action = path[2];
-  const projectId = new URL(request.url).searchParams.get("projectId");
+  const searchParams = new URL(request.url).searchParams;
+  const projectId = searchParams.get("projectId");
+  const deliveryCycle = Math.max(1, Number(searchParams.get("deliveryCycle") ?? 1));
 
   if (!validationId && request.method === "GET") {
     if (!projectId) throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
     await assertProjectAccess(user, projectId);
-    return ok(await readValidation(projectId));
+    const packageId = await resolveCommercialPackageId(client, projectId, searchParams.get("packageId"));
+    return ok(await readValidation(projectId, packageId, deliveryCycle));
   }
 
   if (!validationId && request.method === "POST") {
     assertAccess(user, "bast", "manage");
     if (!projectId) throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
     await assertProjectAccess(user, projectId);
-    const validation = await ensureValidation(projectId, user.id);
-    await writeAuditLog(client, request, user, "create_or_sync", "project_validation", String(validation.id), { projectId });
+    const packageId = await resolveCommercialPackageId(client, projectId, searchParams.get("packageId"));
+    const validation = await ensureValidation(projectId, packageId, deliveryCycle, user.id);
+    await writeAuditLog(client, request, user, "create_or_sync", "project_validation", String(validation.id), { projectId, packageId, deliveryCycle });
     return created(validation);
   }
 
@@ -3550,7 +4286,11 @@ async function handleValidations(request: Request, path: string[], user: AuthUse
         messageEn: "all device and material items have been validated. The handover document can now be issued.",
       });
     }
-    return ok(await readValidation(String(validation.project_id)));
+    return ok(await readValidation(
+      String(validation.project_id),
+      String(validation.package_id),
+      asNumber(validation.delivery_cycle) || 1,
+    ));
   }
 
   throw new ApiError(404, "NOT_FOUND", "Endpoint validasi tidak ditemukan.");
@@ -3561,6 +4301,10 @@ function mapBast(row: Record<string, unknown>) {
     id: String(row.id),
     number: String(row.number),
     projectId: String(row.project_id),
+    packageId: row.package_id ? String(row.package_id) : null,
+    packageTitle: row.package_title ? String(row.package_title) : null,
+    deliveryCycle: asNumber(row.delivery_cycle) || 1,
+    revisionNo: asNumber(row.revision_no) || 1,
     project: row.project_name ? String(row.project_name) : undefined,
     client: row.project_client ? String(row.project_client) : undefined,
     location: row.project_location ? String(row.project_location) : undefined,
@@ -3576,13 +4320,22 @@ function mapBast(row: Record<string, unknown>) {
       : "Project Manager",
     engineerSignature: row.engineer_signature ? String(row.engineer_signature) : "",
     status: String(row.status),
+    finalizedAt: row.finalized_at ? String(row.finalized_at) : null,
+    pdfHash: row.pdf_hash ? String(row.pdf_hash) : null,
+    verificationToken: row.verification_token ? String(row.verification_token) : null,
+    revokedAt: row.revoked_at ? String(row.revoked_at) : null,
+    revocationReason: row.revocation_reason ? String(row.revocation_reason) : null,
   };
 }
 
 async function getBast(id: string) {
   const { client } = await getDatabase();
   const result = await client.execute({
-    sql: "SELECT b.*,p.name AS project_name,p.client AS project_client,p.location AS project_location FROM basts b JOIN projects p ON p.id=b.project_id WHERE b.id=? LIMIT 1",
+    sql: `SELECT b.*,p.name AS project_name,p.client AS project_client,
+      p.location AS project_location,cp.title AS package_title
+      FROM basts b JOIN projects p ON p.id=b.project_id
+      LEFT JOIN project_commercial_packages cp ON cp.id=b.package_id
+      WHERE b.id=? LIMIT 1`,
     args: [id],
   });
   if (!result.rows[0]) throw new ApiError(404, "NOT_FOUND", "BAST tidak ditemukan.");
@@ -3594,8 +4347,94 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
   const bastId = path[1];
   const action = path[2];
 
+  if (bastId === "settings" && action === "seal") {
+    if (request.method === "GET") {
+      assertAccess(user, "bast", "view");
+      const result = await client.execute(
+        "SELECT * FROM bast_seal_settings WHERE id='global' LIMIT 1",
+      );
+      const row = result.rows[0];
+      return ok({
+        enabled: Boolean(asNumber(row?.enabled)),
+        signerName: String(row?.signer_name ?? "PerumNet Enterprise"),
+        signerRole: String(row?.signer_role ?? "Authorized Representative"),
+        hasSeal: Boolean(row?.seal_content_base64),
+        sealMimeType: row?.seal_mime_type ? String(row.seal_mime_type) : null,
+      });
+    }
+    if (request.method === "PUT") {
+      if (user.role !== "Admin") {
+        throw new ApiError(403, "FORBIDDEN", "Hanya Admin yang dapat mengubah cap perusahaan.");
+      }
+      const input = bastSealSchema.parse(await jsonBody(request));
+      const current = await client.execute(
+        "SELECT * FROM bast_seal_settings WHERE id='global' LIMIT 1",
+      );
+      const currentRow = current.rows[0];
+      const sealContent = input.sealContentBase64 === undefined
+        ? currentRow?.seal_content_base64 ?? null
+        : input.sealContentBase64;
+      const sealMime = input.sealMimeType === undefined
+        ? currentRow?.seal_mime_type ?? null
+        : input.sealMimeType;
+      if (input.enabled && (!sealContent || !sealMime)) {
+        throw new ApiError(422, "SEAL_IMAGE_REQUIRED", "Unggah gambar cap sebelum mengaktifkan cap digital.");
+      }
+      if (input.sealContentBase64) {
+        let bytes: Buffer;
+        try {
+          bytes = Buffer.from(input.sealContentBase64, "base64");
+          if (!bytes.length || bytes.length > 2 * 1024 * 1024) throw new Error("size");
+          const metadata = await sharp(bytes).metadata();
+          const detectedMime = metadata.format === "jpeg"
+            ? "image/jpeg"
+            : metadata.format === "png"
+              ? "image/png"
+              : metadata.format === "webp"
+                ? "image/webp"
+                : null;
+          if (!detectedMime || detectedMime !== sealMime) throw new Error("mime");
+          if (!metadata.width || !metadata.height || metadata.width > 4_096 || metadata.height > 4_096) {
+            throw new Error("dimensions");
+          }
+        } catch {
+          throw new ApiError(415, "INVALID_SEAL_IMAGE", "Gambar cap tidak valid, terlalu besar, atau format aslinya tidak sesuai MIME.");
+        }
+      }
+      await client.execute({
+        sql: `INSERT INTO bast_seal_settings
+          (id,enabled,signer_name,signer_role,seal_mime_type,seal_content_base64,
+           updated_by,updated_at) VALUES ('global',?,?,?,?,?,?,?)
+          ON CONFLICT (id) DO UPDATE SET enabled=excluded.enabled,
+            signer_name=excluded.signer_name,signer_role=excluded.signer_role,
+            seal_mime_type=excluded.seal_mime_type,
+            seal_content_base64=excluded.seal_content_base64,
+            updated_by=excluded.updated_by,updated_at=excluded.updated_at`,
+        args: [
+          input.enabled ? 1 : 0,
+          input.signerName,
+          input.signerRole,
+          sealMime,
+          sealContent,
+          user.id,
+          now(),
+        ],
+      });
+      await writeAuditLog(client, request, user, "update", "bast_seal_settings", "global", {
+        enabled: input.enabled,
+        signerName: input.signerName,
+        signerRole: input.signerRole,
+        sealUpdated: input.sealContentBase64 !== undefined,
+      });
+      return ok({ ...input, hasSeal: Boolean(sealContent), sealContentBase64: undefined });
+    }
+    throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
+  }
+
   if (request.method === "GET" && !bastId) {
-    const projectId = new URL(request.url).searchParams.get("projectId");
+    const searchParams = new URL(request.url).searchParams;
+    const projectId = searchParams.get("projectId");
+    const packageId = searchParams.get("packageId");
     if (projectId) await assertProjectAccess(user, projectId);
     const scope = projectScopeCondition(user, "p");
     const conditions: string[] = [];
@@ -3604,12 +4443,21 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
       conditions.push("b.project_id=?");
       args.push(projectId);
     }
+    if (packageId) {
+      conditions.push("b.package_id=?");
+      args.push(packageId);
+    }
     if (scope.sql) {
       conditions.push(scope.sql);
       args.push(...scope.args);
     }
     const result = await client.execute({
-      sql: `SELECT b.*,p.name AS project_name,p.client AS project_client,p.location AS project_location FROM basts b JOIN projects p ON p.id=b.project_id ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY b.created_at DESC`,
+      sql: `SELECT b.*,p.name AS project_name,p.client AS project_client,
+        p.location AS project_location,cp.title AS package_title
+        FROM basts b JOIN projects p ON p.id=b.project_id
+        LEFT JOIN project_commercial_packages cp ON cp.id=b.package_id
+        ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+        ORDER BY b.delivery_cycle DESC,b.revision_no DESC,b.created_at DESC`,
       args,
     });
     return ok(result.rows.map((row) => mapBast(row as Record<string, unknown>)));
@@ -3618,27 +4466,22 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
   if (request.method === "POST" && !bastId) {
     if (!mutationRoles("bast").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat membuat BAST.");
     const input = bastSchema.parse(await jsonBody(request));
+    if (input.status === "Final") {
+      throw new ApiError(409, "FINALIZE_ENDPOINT_REQUIRED", "Simpan BAST sebagai Draft, lalu gunakan proses finalisasi agar cap, hash, dan QR verifikasi diterapkan.");
+    }
     await assertProjectAccess(user, input.projectId);
-    await assertCompletedValidation(input.projectId);
+    const packageId = await resolveCommercialPackageId(client, input.projectId, input.packageId ?? null);
+    await assertCompletedValidation(input.projectId, packageId, input.deliveryCycle);
     const existing = await client.execute({
-      sql: "SELECT id FROM basts WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
-      args: [input.projectId],
+      sql: `SELECT id FROM basts WHERE project_id=? AND package_id=?
+        AND delivery_cycle=? AND status<>'Void' ORDER BY revision_no DESC LIMIT 1`,
+      args: [input.projectId, packageId, input.deliveryCycle],
     });
     if (existing.rows.length) {
       throw new ApiError(
         409,
         "BAST_EXISTS",
-        "Proyek ini sudah memiliki BAST. Buka dan edit dokumen yang sudah ada.",
-      );
-    }
-    if (
-      input.status === "Final" &&
-      (!input.clientSignature || !input.engineerSignature)
-    ) {
-      throw new ApiError(
-        409,
-        "SIGNATURES_REQUIRED",
-        "Tanda tangan klien dan PerumNet wajib lengkap sebelum BAST difinalkan.",
+        "Paket dan siklus ini sudah memiliki BAST. Buka dokumen yang ada atau buat siklus baru.",
       );
     }
     const count = await client.execute("SELECT COUNT(*) AS count FROM basts");
@@ -3646,34 +4489,158 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
     const number = makeSequence("BAST", asNumber(count.rows[0]?.count));
     const timestamp = now();
     await client.execute({
-      sql: "INSERT INTO basts (id,number,project_id,completion_date,notes,installed_items_json,client_name,client_role,client_signature,engineer_name,engineer_role,engineer_signature,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      args: [id, number, input.projectId, input.completionDate, input.notes, JSON.stringify(input.installedItems), input.clientName, input.clientRole, input.clientSignature ?? null, input.engineerName, input.engineerRole ?? "Project Manager", input.engineerSignature ?? null, input.status, timestamp, timestamp],
+      sql: `INSERT INTO basts
+        (id,number,project_id,package_id,delivery_cycle,revision_no,completion_date,
+         notes,installed_items_json,client_name,client_role,client_signature,
+         engineer_name,engineer_role,engineer_signature,status,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      args: [id, number, input.projectId, packageId, input.deliveryCycle, 1, input.completionDate, input.notes, JSON.stringify(input.installedItems), input.clientName, input.clientRole, input.clientSignature ?? null, input.engineerName, input.engineerRole ?? "Project Manager", input.engineerSignature ?? null, input.status, timestamp, timestamp],
     });
-    if (input.status === "Final") {
-      await client.execute({
-        sql: "UPDATE projects SET status='Selesai',updated_at=? WHERE id=?",
-        args: [timestamp, input.projectId],
-      });
-    }
-    await writeAuditLog(client, request, user, "create", "bast", id, { projectId: input.projectId, status: input.status });
-    if (input.status === "Final") {
-      await notifyProjectStakeholders(client, {
-        projectId: input.projectId,
-        eventType: "bast_finalized",
-        subject: `BAST ${number} telah final`,
-        message: `BAST ${number} sudah ditandatangani dan proyek ditandai selesai.`,
-        subjectEn: `Handover ${number} finalized`,
-        messageEn: `handover ${number} has been signed and the project is marked completed.`,
-        includeFinance: true,
-      });
-    }
+    await writeAuditLog(client, request, user, "create", "bast", id, { projectId: input.projectId, packageId, deliveryCycle: input.deliveryCycle, status: input.status });
     return created(await getBast(id));
   }
 
   if (bastId && action === "pdf" && request.method === "GET") {
-    const bast = await ensureExists("SELECT project_id FROM basts WHERE id=?", [bastId], "BAST tidak ditemukan.");
+    const bast = await ensureExists(
+      "SELECT project_id,number,finalized_pdf_storage_url,finalized_pdf_content_base64 FROM basts WHERE id=?",
+      [bastId],
+      "BAST tidak ditemukan.",
+    );
     await assertProjectAccess(user, String(bast.project_id));
+    if (bast.finalized_pdf_storage_url || bast.finalized_pdf_content_base64) {
+      const stored = bast.finalized_pdf_storage_url
+        ? await readProjectFile(String(bast.finalized_pdf_storage_url))
+        : null;
+      const content = stored?.content ?? Buffer.from(
+        String(bast.finalized_pdf_content_base64 ?? ""),
+        "base64",
+      );
+      return new Response(content, {
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `inline; filename="${String(bast.number).replaceAll("/", "-")}.pdf"`,
+          "Cache-Control": "private, no-store",
+        },
+      });
+    }
     return renderBusinessPdf("bast", bastId, user.preferredLanguage);
+  }
+
+  if (bastId && action === "finalize" && request.method === "POST") {
+    if (!mutationRoles("bast").includes(user.role)) {
+      throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat memfinalisasi BAST.");
+    }
+    const bast = await ensureExists("SELECT * FROM basts WHERE id=?", [bastId], "BAST tidak ditemukan.");
+    await assertProjectAccess(user, String(bast.project_id));
+    const projectBeforeFinalization = await ensureExists(
+      "SELECT status FROM projects WHERE id=?",
+      [bast.project_id],
+      "Proyek tidak ditemukan.",
+    );
+    if (bast.finalized_at) {
+      throw new ApiError(409, "BAST_ALREADY_FINAL", "BAST ini sudah difinalisasi dan bersifat immutable.");
+    }
+    if (!bast.client_signature || !bast.engineer_signature) {
+      throw new ApiError(409, "SIGNATURES_REQUIRED", "Tanda tangan klien dan PerumNet wajib lengkap sebelum finalisasi.");
+    }
+    await assertCompletedValidation(
+      String(bast.project_id),
+      String(bast.package_id),
+      asNumber(bast.delivery_cycle) || 1,
+    );
+    const sealResult = await client.execute(
+      "SELECT * FROM bast_seal_settings WHERE id='global' AND enabled=1 LIMIT 1",
+    );
+    const seal = sealResult.rows[0];
+    if (!seal?.seal_content_base64) {
+      throw new ApiError(409, "DIGITAL_SEAL_REQUIRED", "Aktifkan dan unggah cap perusahaan sebelum finalisasi BAST.");
+    }
+    const timestamp = now();
+    const verificationToken = randomUUID().replaceAll("-", "");
+    await client.execute({
+      sql: `UPDATE basts SET status='Final',verification_token=?,
+        seal_name_snapshot=?,seal_role_snapshot=?,updated_at=? WHERE id=?`,
+      args: [verificationToken, seal.signer_name, seal.signer_role, timestamp, bastId],
+    });
+    let stored: Awaited<ReturnType<typeof storeProjectFile>> | null = null;
+    try {
+      const pdfResponse = await renderBusinessPdf("bast", bastId, user.preferredLanguage);
+      const pdf = await pdfResponse.arrayBuffer();
+      const pdfHash = createHash("sha256").update(Buffer.from(pdf)).digest("hex");
+      stored = await storeProjectFile(
+        `bast-final-${bastId}-${randomUUID()}.pdf`,
+        "application/pdf",
+        pdf,
+      );
+      await client.execute({
+        sql: `UPDATE basts SET finalized_pdf_storage_url=?,
+          finalized_pdf_content_base64=?,pdf_hash=?,finalized_at=?,finalized_by=?,
+          updated_at=? WHERE id=?`,
+        args: [
+          stored.storageUrl,
+          stored.contentBase64,
+          pdfHash,
+          timestamp,
+          user.id,
+          timestamp,
+          bastId,
+        ],
+      });
+      await client.execute({
+        sql: "UPDATE projects SET status='Selesai',updated_at=? WHERE id=?",
+        args: [timestamp, bast.project_id],
+      });
+      await writeAuditLog(client, request, user, "finalize", "bast", bastId, {
+        pdfHash,
+        verificationToken,
+        packageId: bast.package_id,
+        deliveryCycle: bast.delivery_cycle,
+      });
+    } catch (error) {
+      if (stored?.storageUrl) await cleanupProjectFile(stored.storageUrl, "BAST finalize rollback");
+      await client.execute({
+        sql: `UPDATE basts SET status=?,verification_token=NULL,
+          seal_name_snapshot=NULL,seal_role_snapshot=NULL,
+          finalized_pdf_storage_url=NULL,finalized_pdf_content_base64=NULL,
+          pdf_hash=NULL,finalized_at=NULL,finalized_by=NULL,updated_at=? WHERE id=?`,
+        args: [bast.status, now(), bastId],
+      });
+      await client.execute({
+        sql: "UPDATE projects SET status=?,updated_at=? WHERE id=?",
+        args: [projectBeforeFinalization.status, now(), bast.project_id],
+      });
+      throw error;
+    }
+    await notifyProjectStakeholders(client, {
+      projectId: String(bast.project_id),
+      eventType: "bast_finalized",
+      subject: `BAST ${String(bast.number)} telah final`,
+      message: `BAST ${String(bast.number)} sudah dikunci dengan cap, hash, dan QR verifikasi.`,
+      subjectEn: `Handover ${String(bast.number)} finalized`,
+      messageEn: `handover ${String(bast.number)} has been sealed with a hash and verification QR.`,
+      includeFinance: true,
+    }).catch(() => undefined);
+    return ok(await getBast(bastId));
+  }
+
+  if (bastId && action === "void" && request.method === "POST") {
+    if (user.role !== "Admin") {
+      throw new ApiError(403, "FORBIDDEN", "Hanya Admin yang dapat mencabut BAST final.");
+    }
+    const input = z.object({ reason: z.string().trim().min(5).max(500) }).parse(await jsonBody(request));
+    const bast = await ensureExists("SELECT * FROM basts WHERE id=?", [bastId], "BAST tidak ditemukan.");
+    await assertProjectAccess(user, String(bast.project_id));
+    if (!bast.finalized_at || bast.revoked_at) {
+      throw new ApiError(409, "BAST_NOT_ACTIVE_FINAL", "Hanya BAST final aktif yang dapat dicabut.");
+    }
+    const timestamp = now();
+    await client.execute({
+      sql: `UPDATE basts SET status='Void',revoked_at=?,revoked_by=?,
+        revocation_reason=?,updated_at=? WHERE id=?`,
+      args: [timestamp, user.id, input.reason, timestamp, bastId],
+    });
+    await writeAuditLog(client, request, user, "void", "bast", bastId, input);
+    return ok(await getBast(bastId));
   }
 
   if (bastId && !action && request.method === "GET") {
@@ -3685,24 +4652,13 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
   if (bastId && !action && request.method === "PATCH") {
     if (!mutationRoles("bast").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah BAST.");
     const input = bastSchema.omit({ projectId: true }).partial().parse(await jsonBody(request));
+    if (input.status === "Final") {
+      throw new ApiError(409, "FINALIZE_ENDPOINT_REQUIRED", "Gunakan proses finalisasi agar cap, hash, dan QR verifikasi diterapkan.");
+    }
     const current = await ensureExists("SELECT * FROM basts WHERE id=?", [bastId], "BAST tidak ditemukan.");
     await assertProjectAccess(user, String(current.project_id));
-    if (input.status === "Final") await assertCompletedValidation(String(current.project_id));
-    const nextClientSignature =
-      input.clientSignature === undefined ? current.client_signature : input.clientSignature;
-    const nextEngineerSignature =
-      input.engineerSignature === undefined
-        ? current.engineer_signature
-        : input.engineerSignature;
-    if (
-      input.status === "Final" &&
-      (!nextClientSignature || !nextEngineerSignature)
-    ) {
-      throw new ApiError(
-        409,
-        "SIGNATURES_REQUIRED",
-        "Tanda tangan klien dan PerumNet wajib lengkap sebelum BAST difinalkan.",
-      );
+    if (current.finalized_at || current.revoked_at) {
+      throw new ApiError(409, "BAST_IMMUTABLE", "BAST yang sudah difinalisasi atau dicabut tidak dapat diedit. Buat revisi baru.");
     }
     await client.execute({
       sql: "UPDATE basts SET completion_date=?,notes=?,installed_items_json=?,client_name=?,client_role=?,client_signature=?,engineer_name=?,engineer_role=?,engineer_signature=?,status=?,updated_at=? WHERE id=?",
@@ -3721,31 +4677,17 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
         bastId,
       ],
     });
-    if (input.status === "Final") {
-      await client.execute({
-        sql: "UPDATE projects SET status='Selesai',updated_at=? WHERE id=?",
-        args: [now(), current.project_id],
-      });
-    }
     await writeAuditLog(client, request, user, "update", "bast", bastId, { status: input.status });
-    if (input.status === "Final" && current.status !== "Final") {
-      await notifyProjectStakeholders(client, {
-        projectId: String(current.project_id),
-        eventType: "bast_finalized",
-        subject: `BAST ${String(current.number)} telah final`,
-        message: `BAST ${String(current.number)} sudah ditandatangani dan proyek ditandai selesai.`,
-        subjectEn: `Handover ${String(current.number)} finalized`,
-        messageEn: `handover ${String(current.number)} has been signed and the project is marked completed.`,
-        includeFinance: true,
-      });
-    }
     return ok(await getBast(bastId));
   }
 
   if (bastId && !action && request.method === "DELETE") {
     if (!mutationRoles("bast").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menghapus BAST.");
-    const bast = await ensureExists("SELECT project_id FROM basts WHERE id=?", [bastId], "BAST tidak ditemukan.");
+    const bast = await ensureExists("SELECT project_id,finalized_at,revoked_at FROM basts WHERE id=?", [bastId], "BAST tidak ditemukan.");
     await assertProjectAccess(user, String(bast.project_id));
+    if (bast.finalized_at || bast.revoked_at) {
+      throw new ApiError(409, "BAST_IMMUTABLE", "BAST final tidak dapat dihapus. Gunakan void untuk mencabut dokumen.");
+    }
     await client.execute({ sql: "DELETE FROM basts WHERE id=?", args: [bastId] });
     await writeAuditLog(client, request, user, "delete", "bast", bastId);
     return noContent();
@@ -5035,7 +5977,11 @@ export async function dispatchApi(request: Request, path: string[]) {
     }
   }
 
+  if (resource === "projects" && path[2] === "packages") {
+    return handleCommercialPackages(request, path, user);
+  }
   if (resource === "projects") return handleProjects(request, path, user);
+  if (resource === "catalog" && path[1] === "ai") return handleCatalogAi(request, path, user);
   if (resource === "catalog") return handleCatalog(request, path, user);
   if (resource === "boq" && path[1] === "standalone") {
     return handleStandaloneBoqs(request, path, user);

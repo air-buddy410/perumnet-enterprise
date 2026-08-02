@@ -4,20 +4,24 @@ import {
   Check,
   CheckCircle2,
   Download,
+  Eye,
   FileCheck2,
   LockKeyhole,
   PenLine,
   Plus,
   Save,
   ShieldCheck,
+  Stamp,
   Trash2,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, downloadApiFile, messageOf } from "../api-client";
-import { BoqItem, Project, ViewKey } from "../data";
+import { BoqItem, CommercialPackage, Project, ViewKey } from "../data";
 import type { AppLanguage } from "../i18n";
 import { appPath } from "../paths";
 import { SignaturePad } from "./signature-pad";
+import { CommercialPackageSwitcher } from "./commercial-package-switcher";
+import { DocumentPreviewModal } from "./document-preview-modal";
 
 interface BastViewProps {
   language: AppLanguage;
@@ -25,6 +29,7 @@ interface BastViewProps {
   notify: (message: string) => void;
   projectId: string;
   canManage: boolean;
+  isAdmin: boolean;
   userName: string;
   onProjectUpdated: (project: Project) => void;
 }
@@ -61,6 +66,12 @@ interface BastRecord {
   engineerRole: string;
   engineerSignature: string;
   status: "Draft" | "Final";
+  packageId?: string | null;
+  packageTitle?: string | null;
+  deliveryCycle?: number;
+  finalizedAt?: string | null;
+  verificationToken?: string | null;
+  revokedAt?: string | null;
 }
 
 export function BastView({
@@ -69,6 +80,7 @@ export function BastView({
   notify,
   projectId,
   canManage,
+  isAdmin,
   userName,
   onProjectUpdated,
 }: BastViewProps) {
@@ -92,19 +104,33 @@ export function BastView({
   const [bastNumber, setBastNumber] = useState("");
   const [validationCompleted, setValidationCompleted] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [packageId, setPackageId] = useState("");
+  const [finalizedAt, setFinalizedAt] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [showSealSettings, setShowSealSettings] = useState(false);
+  const [sealEnabled, setSealEnabled] = useState(false);
+  const [sealName, setSealName] = useState("PerumNet Enterprise");
+  const [sealRole, setSealRole] = useState("Authorized Representative");
+  const [sealFile, setSealFile] = useState<File | null>(null);
+  const selectPackage = useCallback((nextPackageId: string, packages: CommercialPackage[]) => {
+    void packages;
+    setPackageId(nextPackageId);
+  }, []);
 
   useEffect(() => {
+    if (!packageId) return;
     let active = true;
+    const packageQuery = `&packageId=${encodeURIComponent(packageId)}`;
     Promise.all([
       api<Project>(`/api/projects/${encodeURIComponent(projectId)}`),
       api<{ items: BoqItem[] }>(
-        `/api/boq?projectId=${encodeURIComponent(projectId)}`,
+        `/api/boq?projectId=${encodeURIComponent(projectId)}${packageQuery}`,
       ),
       api<BastRecord[]>(
-        `/api/bast?projectId=${encodeURIComponent(projectId)}`,
+        `/api/bast?projectId=${encodeURIComponent(projectId)}${packageQuery}`,
       ),
       api<{ status: "Draft" | "Completed" }>(
-        `/api/validations?projectId=${encodeURIComponent(projectId)}`,
+        `/api/validations?projectId=${encodeURIComponent(projectId)}${packageQuery}`,
       ),
     ])
       .then(([projectData, boq, records, validation]) => {
@@ -131,6 +157,7 @@ export function BastView({
           setEngineerRole(record.engineerRole);
           setEngineerSignature(record.engineerSignature);
           setBastStatus(record.status);
+          setFinalizedAt(record.finalizedAt ?? null);
           return;
         }
         setClientName(projectData.client);
@@ -154,7 +181,18 @@ export function BastView({
     return () => {
       active = false;
     };
-  }, [id, language, notify, projectId]);
+  }, [id, language, notify, packageId, projectId]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    api<{ enabled: boolean; signerName: string; signerRole: string }>("/api/bast/settings/seal")
+      .then((settings) => {
+        setSealEnabled(settings.enabled);
+        setSealName(settings.signerName);
+        setSealRole(settings.signerRole);
+      })
+      .catch(() => undefined);
+  }, [isAdmin]);
 
   function updateInstalledItem(
     index: number,
@@ -178,6 +216,8 @@ export function BastView({
     }
     const payload = {
       projectId,
+      packageId,
+      deliveryCycle: 1,
       completionDate: date,
       notes,
       installedItems: installedItems.map(({ name, quantity, status }) => ({
@@ -203,17 +243,15 @@ export function BastView({
     setBastId(record.id);
     setBastNumber(record.number);
     setBastStatus(record.status);
+    setFinalizedAt(record.finalizedAt ?? null);
     return record;
   }
 
   async function saveBast() {
     try {
-      await persistBast(bastStatus);
-      notify(
-        bastStatus === "Final"
-          ? id ? "Perubahan BAST final berhasil disimpan." : "Final handover changes saved."
-          : id ? "Draft BAST dan tanda tangan berhasil disimpan." : "Handover draft and signatures saved.",
-      );
+      if (finalizedAt) throw new Error(id ? "BAST final bersifat immutable. Buat siklus atau revisi baru." : "A finalized handover is immutable. Create a new cycle or revision.");
+      await persistBast("Draft");
+      notify(id ? "Draft BAST dan tanda tangan berhasil disimpan." : "Handover draft and signatures saved.");
     } catch (error) {
       notify(messageOf(error, language));
     }
@@ -223,7 +261,7 @@ export function BastView({
     try {
       let id = bastId;
       let number = bastNumber;
-      if (canManage) {
+      if (canManage && !finalizedAt) {
         if (!clientSignature || !engineerSignature) {
           throw new Error(
             id
@@ -231,9 +269,11 @@ export function BastView({
               : "Complete the client and PerumNet signatures before finalizing the handover.",
           );
         }
-        const record = await persistBast("Final");
+        const draft = await persistBast("Draft");
+        const record = await api<BastRecord>(`/api/bast/${draft.id}/finalize`, { method: "POST" });
         id = record.id;
         number = record.number;
+        setFinalizedAt(record.finalizedAt ?? null);
         const updatedProject = await api<Project>(
           `/api/projects/${encodeURIComponent(projectId)}`,
         );
@@ -266,8 +306,47 @@ export function BastView({
     }
   }
 
+  async function saveSealSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      let sealContentBase64: string | undefined;
+      let sealMimeType: string | undefined;
+      if (sealFile) {
+        if (sealFile.size > 2 * 1024 * 1024) {
+          throw new Error(id ? "Gambar cap maksimal 2 MB." : "The seal image must not exceed 2 MB.");
+        }
+        if (!["image/png", "image/jpeg", "image/webp"].includes(sealFile.type)) {
+          throw new Error(id ? "Gunakan gambar PNG, JPG, atau WebP." : "Use a PNG, JPG, or WebP image.");
+        }
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(reader.error);
+          reader.onload = () => resolve(String(reader.result ?? ""));
+          reader.readAsDataURL(sealFile);
+        });
+        sealContentBase64 = dataUrl.split(",")[1] ?? "";
+        sealMimeType = sealFile.type;
+      }
+      await api("/api/bast/settings/seal", {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: sealEnabled,
+          signerName: sealName,
+          signerRole: sealRole,
+          ...(sealContentBase64 ? { sealContentBase64, sealMimeType } : {}),
+        }),
+      });
+      setShowSealSettings(false);
+      setSealFile(null);
+      notify(id ? "Pengaturan cap digital disimpan." : "Digital seal settings saved.");
+    } catch (error) {
+      notify(messageOf(error, language));
+    }
+  }
+
   const signaturesComplete = Boolean(clientSignature && engineerSignature);
-  const isFinal = bastStatus === "Final";
+  const isFinal = Boolean(finalizedAt);
+  const canEdit = canManage && !isFinal;
 
   if (loading) {
     return <section className="panel empty-state"><p>{id ? "Memuat BAST..." : "Loading handover..."}</p></section>;
@@ -297,15 +376,18 @@ export function BastView({
           </p>
         </div>
         <div className="title-actions">
-          {canManage && (
+          <CommercialPackageSwitcher projectId={projectId} language={language} canManage={canManage} value={packageId} onChange={selectPackage} notify={notify} />
+          {isAdmin && <button className="button secondary" type="button" onClick={() => setShowSealSettings(true)}><Stamp size={16} /> {id ? "Pengaturan cap" : "Seal settings"}</button>}
+          {canEdit && (
             <button className="button secondary" type="button" onClick={saveBast}>
-              <Save size={16} /> {isFinal ? (id ? "Simpan perubahan" : "Save changes") : (id ? "Simpan draft" : "Save draft")}
+              <Save size={16} /> {id ? "Simpan draft" : "Save draft"}
             </button>
           )}
           <button className="button primary" type="button" onClick={downloadBast}>
-            <Download size={16} /> {canManage ? (id ? "Finalkan & unduh" : "Finalize & download") : (id ? "Unduh PDF" : "Download PDF")}
+            <Download size={16} /> {canEdit ? (id ? "Finalkan & unduh" : "Finalize & download") : (id ? "Unduh PDF" : "Download PDF")}
           </button>
-          {canManage && bastId && (
+          {bastId && <button className="icon-button" type="button" aria-label={id ? "Pratinjau BAST" : "Preview handover"} onClick={() => setPreviewOpen(true)}><Eye size={18} /></button>}
+          {canManage && bastId && !isFinal && (
             <button className="button danger" type="button" onClick={deleteBast}>
               <Trash2 size={16} /> {id ? "Hapus" : "Delete"}
             </button>
@@ -328,8 +410,8 @@ export function BastView({
           <article className="panel bast-document">
             <header className="bast-letterhead">
               <img src={appPath("/perumnet-enterprise-brand.png")} alt="PerumNet Enterprise" width={120} height={126} />
-              <div><strong>PERUMNET ENTERPRISE</strong><span>{id ? "Konsultan IT & Managed Services" : "IT Consulting & Managed Services"}</span><small>Gianyar, Bali · it@perumnet.id</small></div>
-              <span className="status-badge info"><ShieldCheck size={14} /> {bastStatus}</span>
+              <div><strong>PERUMNET ENTERPRISE</strong><span>{id ? "Konsultan IT & Managed Services" : "IT Consulting & Managed Services"}</span><small>Gianyar, Bali · enterprise@perumnet.id</small></div>
+              <span className="status-badge info"><ShieldCheck size={14} /> {isFinal ? "Final" : bastStatus}</span>
             </header>
             <div className="bast-title">
               <span>{id ? "BERITA ACARA SERAH TERIMA" : "HANDOVER CERTIFICATE"}</span>
@@ -344,31 +426,31 @@ export function BastView({
             <section className="bast-data-grid">
               <label className="field"><span>{id ? "Nama proyek" : "Project name"}</span><input value={project?.name ?? ""} readOnly /></label>
               <label className="field"><span>{id ? "Klien" : "Client"}</span><input value={project?.client ?? ""} readOnly /></label>
-              <label className="field"><span>{id ? "Tanggal selesai" : "Completion date"}</span><input disabled={!canManage} type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
+              <label className="field"><span>{id ? "Tanggal selesai" : "Completion date"}</span><input disabled={!canEdit} type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
               <label className="field"><span>{id ? "Lokasi" : "Location"}</span><input value={project?.location ?? ""} readOnly /></label>
             </section>
 
             <section className="installed-items">
               <div className="subsection-head">
                 <div><span className="eyebrow">{id ? "ITEM TERPASANG" : "INSTALLED ITEMS"}</span><h3>{id ? "Hasil pekerjaan dari BoQ" : "Work results from the BoQ"}</h3></div>
-                {canManage && <button className="button secondary small" type="button" onClick={() => setInstalledItems((current) => [...current, { id: `new-${Date.now()}`, name: id ? "Item baru" : "New item", quantity: "1 unit", status: id ? "Terpasang" : "Installed" }])}><Plus size={14} /> {id ? "Tambah item" : "Add item"}</button>}
+                {canEdit && <button className="button secondary small" type="button" onClick={() => setInstalledItems((current) => [...current, { id: `new-${Date.now()}`, name: id ? "Item baru" : "New item", quantity: "1 unit", status: id ? "Terpasang" : "Installed" }])}><Plus size={14} /> {id ? "Tambah item" : "Add item"}</button>}
               </div>
               <div className="installed-item-list">
                 {installedItems.map((item, index) => (
                   <div className="installed-item editable" key={item.id ?? `item-${index}`}>
                     <span className="installed-number">{index + 1}</span>
                     <div>
-                      <input disabled={!canManage} value={item.name} onChange={(event) => updateInstalledItem(index, "name", event.target.value)} aria-label={`${id ? "Nama item" : "Item name"} ${index + 1}`} />
-                      <input disabled={!canManage} value={item.quantity} onChange={(event) => updateInstalledItem(index, "quantity", event.target.value)} aria-label={`${id ? "Jumlah item" : "Item quantity"} ${index + 1}`} />
+                      <input disabled={!canEdit} value={item.name} onChange={(event) => updateInstalledItem(index, "name", event.target.value)} aria-label={`${id ? "Nama item" : "Item name"} ${index + 1}`} />
+                      <input disabled={!canEdit} value={item.quantity} onChange={(event) => updateInstalledItem(index, "quantity", event.target.value)} aria-label={`${id ? "Jumlah item" : "Item quantity"} ${index + 1}`} />
                     </div>
-                    <input disabled={!canManage} value={item.status} onChange={(event) => updateInstalledItem(index, "status", event.target.value)} aria-label={`${id ? "Status item" : "Item status"} ${index + 1}`} />
-                    {canManage && <button className="icon-button danger" type="button" aria-label={`${id ? "Hapus item" : "Delete item"} ${index + 1}`} onClick={() => setInstalledItems((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={15} /></button>}
+                    <input disabled={!canEdit} value={item.status} onChange={(event) => updateInstalledItem(index, "status", event.target.value)} aria-label={`${id ? "Status item" : "Item status"} ${index + 1}`} />
+                    {canEdit && <button className="icon-button danger" type="button" aria-label={`${id ? "Hapus item" : "Delete item"} ${index + 1}`} onClick={() => setInstalledItems((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={15} /></button>}
                   </div>
                 ))}
                 {!installedItems.length && <div className="empty-state compact"><p>{id ? "BoQ belum memiliki item. Tambahkan item manual atau isi BoQ terlebih dahulu." : "The BoQ has no items. Add one manually or complete the BoQ first."}</p></div>}
               </div>
             </section>
-            <label className="field bast-notes"><span>{id ? "Catatan serah terima" : "Handover notes"}</span><textarea disabled={!canManage} rows={4} value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
+            <label className="field bast-notes"><span>{id ? "Catatan serah terima" : "Handover notes"}</span><textarea disabled={!canEdit} rows={4} value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
           </article>
 
           <section className="panel signature-section">
@@ -376,18 +458,18 @@ export function BastView({
             <div className="signature-grid">
               <div>
                 <div className="signer-fields">
-                  <label className="field"><span>{id ? "Nama klien" : "Client name"}</span><input disabled={!canManage} value={clientName} onChange={(event) => setClientName(event.target.value)} /></label>
-                  <label className="field"><span>{id ? "Jabatan" : "Title"}</span><input disabled={!canManage} value={clientRole} onChange={(event) => setClientRole(event.target.value)} /></label>
+                  <label className="field"><span>{id ? "Nama klien" : "Client name"}</span><input disabled={!canEdit} value={clientName} onChange={(event) => setClientName(event.target.value)} /></label>
+                  <label className="field"><span>{id ? "Jabatan" : "Title"}</span><input disabled={!canEdit} value={clientRole} onChange={(event) => setClientRole(event.target.value)} /></label>
                 </div>
-                <SignaturePad language={language} label={id ? "Pihak Klien" : "Client"} signer={clientName} value={clientSignature} disabled={!canManage} onChange={setClientSignature} />
+                <SignaturePad language={language} label={id ? "Pihak Klien" : "Client"} signer={clientName} value={clientSignature} disabled={!canEdit} onChange={setClientSignature} />
               </div>
               <div>
                 <div className="signer-fields">
-                  <label className="field"><span>{id ? "Nama engineer / PM" : "Engineer / PM name"}</span><input disabled={!canManage} value={engineerName} onChange={(event) => setEngineerName(event.target.value)} /></label>
+                  <label className="field"><span>{id ? "Nama engineer / PM" : "Engineer / PM name"}</span><input disabled={!canEdit} value={engineerName} onChange={(event) => setEngineerName(event.target.value)} /></label>
                   <label className="field">
                     <span>{id ? "Jabatan di BAST" : "Role in handover"}</span>
                     <input
-                      disabled={!canManage}
+                      disabled={!canEdit}
                       list="bast-engineer-roles"
                       value={engineerRole}
                       onChange={(event) => setEngineerRole(event.target.value)}
@@ -398,7 +480,7 @@ export function BastView({
                     </datalist>
                   </label>
                 </div>
-                <SignaturePad language={language} label={id ? "Pihak PerumNet" : "PerumNet"} signer={engineerName} value={engineerSignature} disabled={!canManage} onChange={setEngineerSignature} />
+                <SignaturePad language={language} label={id ? "Pihak PerumNet" : "PerumNet"} signer={engineerName} value={engineerSignature} disabled={!canEdit} onChange={setEngineerSignature} />
               </div>
             </div>
             <div className={`signature-completion ${signaturesComplete ? "complete" : ""}`}>
@@ -417,12 +499,28 @@ export function BastView({
               <div className={clientSignature ? "" : "pending"}><span>{clientSignature ? <Check size={14} /> : <PenLine size={14} />}</span><div><strong>{id ? "Tanda tangan klien" : "Client signature"}</strong><small>{clientSignature ? (id ? "Tersimpan" : "Saved") : (id ? "Belum ada" : "Missing")}</small></div></div>
               <div className={engineerSignature ? "" : "pending"}><span>{engineerSignature ? <Check size={14} /> : <PenLine size={14} />}</span><div><strong>{id ? "Tanda tangan PerumNet" : "PerumNet signature"}</strong><small>{engineerSignature ? (id ? "Tersimpan" : "Saved") : (id ? "Belum ada" : "Missing")}</small></div></div>
             </div>
-            {canManage && <button className="button primary full-width" type="button" onClick={saveBast}><Save size={16} /> {isFinal ? (id ? "Simpan Perubahan" : "Save Changes") : (id ? "Simpan Draft" : "Save Draft")}</button>}
-            <button className="button secondary full-width" type="button" onClick={downloadBast}><Download size={16} /> {canManage ? (id ? "Finalkan & unduh PDF" : "Finalize & download PDF") : (id ? "Unduh PDF final" : "Download final PDF")}</button>
+            {canEdit && <button className="button primary full-width" type="button" onClick={saveBast}><Save size={16} /> {id ? "Simpan Draft" : "Save Draft"}</button>}
+            <button className="button secondary full-width" type="button" onClick={downloadBast}><Download size={16} /> {canEdit ? (id ? "Finalkan & unduh PDF" : "Finalize & download PDF") : (id ? "Unduh PDF final" : "Download final PDF")}</button>
           </section>
           <section className="security-note"><ShieldCheck size={20} /><div><strong>{id ? "Dokumen terlindungi" : "Protected document"}</strong><span>{id ? "Tanda tangan disimpan sebagai bagian dari BAST proyek." : "Signatures are stored as part of the project handover."}</span></div></section>
         </aside>
       </section>
+      <DocumentPreviewModal open={previewOpen} url={bastId ? `/api/bast/${bastId}/pdf` : ""} title={bastNumber || "BAST"} filename={`${(bastNumber || "BAST-PerumNet").replaceAll("/", "-")}.pdf`} onClose={() => setPreviewOpen(false)} />
+      {showSealSettings && (
+        <div className="modal-backdrop" onMouseDown={() => setShowSealSettings(false)}>
+          <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="seal-settings-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-head"><div><span className="eyebrow">CAP DIGITAL INTERNAL</span><h2 id="seal-settings-title">{id ? "Identitas penandatangan perusahaan" : "Company signatory identity"}</h2></div><button className="icon-button" type="button" onClick={() => setShowSealSettings(false)} aria-label={id ? "Tutup" : "Close"}>×</button></div>
+            <form className="modal-form form-grid" onSubmit={saveSealSettings}>
+              <label className="field full check-field"><input type="checkbox" checked={sealEnabled} onChange={(event) => setSealEnabled(event.target.checked)} /><span>{id ? "Aktifkan cap saat finalisasi" : "Enable seal during finalization"}</span></label>
+              <label className="field full"><span>{id ? "Nama penandatangan" : "Signatory name"}</span><input required value={sealName} onChange={(event) => setSealName(event.target.value)} /></label>
+              <label className="field full"><span>{id ? "Jabatan" : "Title"}</span><input required value={sealRole} onChange={(event) => setSealRole(event.target.value)} /></label>
+              <label className="field full"><span>{id ? "Gambar cap (PNG/JPG/WebP, maks. 2 MB)" : "Seal image (PNG/JPG/WebP, max. 2 MB)"}</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setSealFile(event.target.files?.[0] ?? null)} /></label>
+              <div className="security-note full"><ShieldCheck size={19} /><div><strong>{id ? "Cap internal tamper-evident" : "Tamper-evident internal seal"}</strong><span>{id ? "PDF final dikunci dengan hash SHA-256 dan QR verifikasi. Fitur ini bukan TTE tersertifikasi PSrE." : "The final PDF is locked with a SHA-256 hash and verification QR. This is not a certified PSrE signature."}</span></div></div>
+              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowSealSettings(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit"><Stamp size={16} /> {id ? "Simpan cap" : "Save seal"}</button></div>
+            </form>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { jsPDF } from "jspdf";
+import QRCode from "qrcode";
 import { ApiError } from "./errors";
 import { getDatabase } from "../db/client";
 import { asNumber, formatDate, parseJson } from "../format";
@@ -305,7 +306,7 @@ function drawHeader(context: PdfContext, continuation = false) {
   );
   doc.setTextColor(...colors.muted);
   doc.setFontSize(6.8);
-  doc.text("it@perumnet.id  |  perumnet.id", 31, 20);
+  doc.text("enterprise@perumnet.id  |  enterprise.perumnet.id", 31, 20);
 
   doc.setFont("helvetica", "bold");
   const documentTitle = continuation
@@ -686,7 +687,7 @@ function applyFooters(context: PdfContext) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(6.8);
     doc.text(
-      "PerumNet Enterprise  |  it@perumnet.id  |  perumnet.id",
+      "PerumNet Enterprise  |  enterprise@perumnet.id  |  enterprise.perumnet.id",
       MARGIN,
       287.5,
     );
@@ -718,9 +719,11 @@ function response(context: PdfContext, filename: string) {
 async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage) {
   const { client } = await getDatabase();
   const directQuotation = await client.execute({
-    sql: `SELECT q.*,s.kind AS scope_kind,s.title AS scope_title,s.sequence
+    sql: `SELECT q.*,s.kind AS scope_kind,s.title AS scope_title,s.sequence,
+      cp.title AS package_title
       FROM quotations q
       LEFT JOIN boq_scopes s ON s.id=q.scope_id
+      LEFT JOIN project_commercial_packages cp ON cp.id=q.package_id
       WHERE q.id=? LIMIT 1`,
     args: [projectOrQuotationId],
   });
@@ -738,24 +741,34 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
   const quotationResult = directQuotation.rows[0]
     ? directQuotation
     : await client.execute({
-        sql: `SELECT q.*,s.kind AS scope_kind,s.title AS scope_title,s.sequence
+        sql: `SELECT q.*,s.kind AS scope_kind,s.title AS scope_title,s.sequence,
+          cp.title AS package_title
           FROM quotations q
           LEFT JOIN boq_scopes s ON s.id=q.scope_id
+          LEFT JOIN project_commercial_packages cp ON cp.id=q.package_id
           WHERE q.project_id=? AND (s.sequence=0 OR q.scope_id IS NULL)
           ORDER BY q.created_at DESC LIMIT 1`,
         args: [projectId],
       });
   const quotation = quotationResult.rows[0];
-  const itemResult = await client.execute({
-    sql: quotation?.scope_id
-      ? "SELECT i.* FROM boq_items i WHERE i.scope_id=? ORDER BY i.sort_order"
-      : `SELECT i.* FROM boq_items i
-          JOIN boqs b ON b.id=i.boq_id
-          LEFT JOIN boq_scopes s ON s.id=i.scope_id
-          WHERE b.project_id=? AND (s.sequence=0 OR i.scope_id IS NULL)
-          ORDER BY i.sort_order`,
-    args: [quotation?.scope_id ?? projectId],
-  });
+  const snapshotItems = quotation?.id
+    ? await client.execute({
+        sql: "SELECT * FROM quotation_items WHERE quotation_id=? ORDER BY sort_order,created_at",
+        args: [quotation.id],
+      })
+    : { rows: [] as Array<Record<string, unknown>> };
+  const itemResult = snapshotItems.rows.length
+    ? snapshotItems
+    : await client.execute({
+        sql: quotation?.scope_id
+          ? "SELECT i.* FROM boq_items i WHERE i.scope_id=? ORDER BY i.sort_order"
+          : `SELECT i.* FROM boq_items i
+              JOIN boqs b ON b.id=i.boq_id
+              LEFT JOIN boq_scopes s ON s.id=i.scope_id
+              WHERE b.project_id=? AND (s.sequence=0 OR i.scope_id IS NULL)
+              ORDER BY i.sort_order`,
+        args: [quotation?.scope_id ?? projectId],
+      });
   if (!itemResult.rows.length) {
     throw new ApiError(409, "EMPTY_BOQ", "BoQ belum memiliki item.");
   }
@@ -769,7 +782,7 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
         client,
         "Quotation",
         String(quotation.id),
-        total,
+        asNumber(quotation.taxable_base) || total,
       )
     : {
         taxes: [],
@@ -811,6 +824,10 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
         : tr(language, "BoQ Original", "Original BoQ"),
     },
     {
+      label: tr(language, "Paket komersial", "Commercial package"),
+      value: String(quotation?.package_title ?? "Lingkup Utama"),
+    },
+    {
       label: tr(language, "Persetujuan klien", "Client acceptance"),
       value: quotation?.accepted_at
         ? `${displayDate(quotation.accepted_at, language)} · ${String(quotation.acceptance_attachment_name ?? "-")}`
@@ -843,17 +860,45 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
   );
   y = drawTotals(context, y, [
     { label: "Subtotal", value: rupiah(total, language) },
+    ...(asNumber(quotation?.discount_amount) > 0
+      ? [
+          {
+            label: tr(language, "Dikurangi diskon", "Less discount"),
+            value: `-${rupiah(quotation?.discount_amount, language)}`,
+          },
+          {
+            label: tr(language, "Dasar pengenaan pajak", "Taxable subtotal"),
+            value: rupiah(quotation?.taxable_base, language),
+          },
+        ]
+      : []),
     ...quotationTax.taxes.map((tax) => ({
       label: `${language === "en" ? tax.nameEn : tax.name} (${tax.effect === "Add" ? tr(language, "ditagihkan ke klien", "charged to client") : tr(language, "dipotong klien", "withheld by client")})`,
       value: rupiah(tax.amount, language),
     })),
+    ...(asNumber(quotation?.rounding_adjustment) !== 0
+      ? [{
+          label: tr(language, "Penyesuaian pembulatan", "Rounding adjustment"),
+          value: rupiah(quotation?.rounding_adjustment, language),
+        }]
+      : []),
     {
       label: tr(language, "Total tagihan klien", "Total billed to client"),
-      value: rupiah(quotationTax.grossTotal, language),
+      value: rupiah(
+        asNumber(quotation?.grand_total) || quotationTax.grossTotal,
+        language,
+      ),
     },
     {
       label: tr(language, "Kas bersih", "Net cash due"),
-      value: rupiah(quotationTax.netCashDue, language),
+      value: rupiah(
+        Math.max(
+          0,
+          (asNumber(quotation?.grand_total) || quotationTax.grossTotal) -
+            quotationTax.taxWithholdings,
+        ),
+        language,
+      ),
       highlight: true,
     },
   ]);
@@ -885,18 +930,28 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
 async function invoicePdf(invoiceId: string, language: PdfLanguage) {
   const { client } = await getDatabase();
   const result = await client.execute({
-    sql: "SELECT i.*,p.code AS project_code,p.name AS project_name,p.client,p.location FROM invoices i JOIN projects p ON p.id=i.project_id WHERE i.id=? LIMIT 1",
+    sql: `SELECT i.*,p.code AS project_code,p.name AS project_name,p.client,p.location,
+      cp.title AS package_title,q.number AS quotation_number
+      FROM invoices i JOIN projects p ON p.id=i.project_id
+      LEFT JOIN project_commercial_packages cp ON cp.id=i.package_id
+      LEFT JOIN quotations q ON q.id=i.quotation_id
+      WHERE i.id=? LIMIT 1`,
     args: [invoiceId],
   });
   const invoice = result.rows[0];
   if (!invoice) {
     throw new ApiError(404, "NOT_FOUND", "Invoice tidak ditemukan.");
   }
+  const allocated = String(invoice.calculation_mode) === "Percent" &&
+    asNumber(invoice.contract_grand_total) > 0;
+  const taxableBase = allocated
+    ? asNumber(invoice.taxable_base_snapshot)
+    : asNumber(invoice.amount);
   const invoiceTax = await documentTaxSummary(
     client,
     "Invoice",
     invoiceId,
-    asNumber(invoice.amount),
+    taxableBase,
   );
   const invoicePayments = await client.execute({
     sql: `SELECT COALESCE(SUM(gross_amount),0) AS gross,
@@ -906,10 +961,25 @@ async function invoicePdf(invoiceId: string, language: PdfLanguage) {
     args: [invoiceId],
   });
   const paidGross = asNumber(invoicePayments.rows[0]?.gross);
+  const invoiceGross = allocated ? asNumber(invoice.amount) : invoiceTax.grossTotal;
+  const packageSummary = await client.execute({
+    sql: `SELECT
+      COALESCE(SUM(CASE WHEN calculation_mode='Percent' THEN amount ELSE amount+
+        COALESCE((SELECT SUM(dt.amount) FROM document_taxes dt
+          WHERE dt.document_type='Invoice' AND dt.document_id=invoices.id
+            AND dt.effect='Add'),0) END),0) AS invoiced,
+      COALESCE(SUM((SELECT COALESCE(SUM(ip.gross_amount),0)
+        FROM invoice_payments ip WHERE ip.invoice_id=invoices.id AND ip.status='Posted')),0) AS paid
+      FROM invoices WHERE package_id=?`,
+    args: [invoice.package_id],
+  });
+  const packageInvoiced = asNumber(packageSummary.rows[0]?.invoiced);
+  const packagePaid = asNumber(packageSummary.rows[0]?.paid);
+  const contractGrandTotal = asNumber(invoice.contract_grand_total) || invoiceGross;
   const displayStatus =
     paidGross <= 0
       ? "Belum Lunas"
-      : paidGross >= invoiceTax.grossTotal
+      : paidGross >= invoiceGross
         ? "Lunas"
         : "Dibayar Sebagian";
   const context = await createDocument({
@@ -937,6 +1007,16 @@ async function invoicePdf(invoiceId: string, language: PdfLanguage) {
         ? displayDate(invoice.paid_date, language)
         : tr(language, "Belum dikonfirmasi", "Not confirmed"),
     },
+    {
+      label: tr(language, "Paket / quotation", "Package / quotation"),
+      value: `${String(invoice.package_title ?? "Lingkup Utama")} · ${String(invoice.quotation_number ?? "-")}`,
+    },
+    {
+      label: tr(language, "Persentase termin", "Installment percentage"),
+      value: invoice.installment_bps
+        ? `${(asNumber(invoice.installment_bps) / 100).toLocaleString(language === "en" ? "en-US" : "id-ID")}%`
+        : tr(language, "Nominal", "Nominal"),
+    },
   ]);
   y = drawSectionTitle(
     context,
@@ -958,35 +1038,60 @@ async function invoicePdf(invoiceId: string, language: PdfLanguage) {
         1,
         `${cleanText(invoice.type)}\n${cleanText(invoice.project_name)}`,
         tr(language, "1 paket", "1 package"),
-        rupiah(invoice.amount, language),
+        rupiah(allocated ? invoice.subtotal_snapshot : invoice.amount, language),
       ],
     ],
   );
   y = drawTotals(context, y, [
-    { label: "Subtotal", value: rupiah(invoice.amount, language) },
+    {
+      label: tr(language, "Nilai kontrak / paket", "Contract / package value"),
+      value: rupiah(contractGrandTotal, language),
+    },
+    { label: "Subtotal", value: rupiah(allocated ? invoice.subtotal_snapshot : invoice.amount, language) },
+    ...(allocated && asNumber(invoice.discount_snapshot) > 0
+      ? [{ label: tr(language, "Dikurangi diskon", "Less discount"), value: `-${rupiah(invoice.discount_snapshot, language)}` }]
+      : []),
+    ...(allocated
+      ? [{ label: tr(language, "Dasar pengenaan pajak", "Taxable subtotal"), value: rupiah(invoice.taxable_base_snapshot, language) }]
+      : []),
     ...invoiceTax.taxes.map((tax) => ({
       label: `${language === "en" ? tax.nameEn : tax.name} (${tax.effect === "Add" ? tr(language, "ditagihkan ke klien", "charged to client") : tr(language, "dipotong klien", "withheld by client")})`,
       value: rupiah(tax.amount, language),
     })),
+    ...(allocated && asNumber(invoice.rounding_snapshot) !== 0
+      ? [{ label: tr(language, "Penyesuaian pembulatan", "Rounding adjustment"), value: rupiah(invoice.rounding_snapshot, language) }]
+      : []),
     {
       label: tr(language, "Total tagihan klien", "Total billed to client"),
-      value: rupiah(invoiceTax.grossTotal, language),
+      value: rupiah(invoiceGross, language),
     },
     {
       label: tr(language, "Kas bersih jatuh tempo", "Net cash due"),
-      value: rupiah(invoiceTax.netCashDue, language),
+      value: rupiah(Math.max(0, invoiceGross - invoiceTax.taxWithholdings), language),
+    },
+    {
+      label: tr(language, "Pembayaran diterima / prepayment", "Payments received / prepayment"),
+      value: rupiah(paidGross, language),
+    },
+    {
+      label: tr(language, "Balance due invoice", "Invoice balance due"),
+      value: rupiah(Math.max(0, invoiceGross - paidGross), language),
       highlight: true,
     },
     {
-      label: tr(language, "Bruto sudah dibayar", "Gross paid"),
-      value: rupiah(paidGross, language),
+      label: tr(language, "Kontrak belum diterbitkan sebagai invoice", "Contract not yet invoiced"),
+      value: rupiah(Math.max(0, contractGrandTotal - packageInvoiced), language),
+    },
+    {
+      label: tr(language, "Outstanding seluruh invoice paket", "Total package invoice outstanding"),
+      value: rupiah(Math.max(0, packageInvoiced - packagePaid), language),
     },
   ]);
   y = drawCallout(
     context,
     y,
     tr(language, "Instruksi pembayaran", "Payment instructions"),
-    tr(language, `Gunakan nomor invoice ${cleanText(invoice.number)} sebagai referensi pembayaran. Bukti pembayaran dan pertanyaan terkait tagihan dapat dikirim ke it@perumnet.id. Pembayaran dinyatakan sah setelah dikonfirmasi oleh bagian Finance PerumNet Enterprise.`, `Use invoice number ${cleanText(invoice.number)} as the payment reference. Send payment evidence and billing questions to it@perumnet.id. Payment is valid after confirmation by PerumNet Enterprise Finance.`),
+    tr(language, `Gunakan nomor invoice ${cleanText(invoice.number)} sebagai referensi pembayaran. Bukti pembayaran dan pertanyaan terkait tagihan dapat dikirim ke enterprise@perumnet.id. Pembayaran dinyatakan sah setelah dikonfirmasi oleh bagian Finance PerumNet Enterprise.`, `Use invoice number ${cleanText(invoice.number)} as the payment reference. Send payment evidence and billing questions to enterprise@perumnet.id. Payment is valid after confirmation by PerumNet Enterprise Finance.`),
     invoice.status === "Lunas" ? "teal" : "warning",
   );
   y = drawSectionTitle(context, y, tr(language, "Otorisasi", "Authorization"));
@@ -1342,7 +1447,13 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
 async function bastPdf(bastId: string, language: PdfLanguage) {
   const { client } = await getDatabase();
   const result = await client.execute({
-    sql: "SELECT b.*,p.code AS project_code,p.name AS project_name,p.client,p.location FROM basts b JOIN projects p ON p.id=b.project_id WHERE b.id=? LIMIT 1",
+    sql: `SELECT b.*,p.code AS project_code,p.name AS project_name,p.client,p.location,
+      cp.title AS package_title,bs.enabled AS seal_enabled,
+      bs.seal_mime_type,bs.seal_content_base64
+      FROM basts b JOIN projects p ON p.id=b.project_id
+      LEFT JOIN project_commercial_packages cp ON cp.id=b.package_id
+      LEFT JOIN bast_seal_settings bs ON bs.id='global'
+      WHERE b.id=? LIMIT 1`,
     args: [bastId],
   });
   const bast = result.rows[0];
@@ -1366,6 +1477,10 @@ async function bastPdf(bastId: string, language: PdfLanguage) {
     },
     { label: tr(language, "Pihak klien", "Client"), value: String(bast.client) },
     { label: tr(language, "Lokasi pekerjaan", "Work location"), value: String(bast.location) },
+    {
+      label: tr(language, "Paket / siklus", "Package / cycle"),
+      value: `${String(bast.package_title ?? "Lingkup Utama")} / ${String(bast.delivery_cycle ?? 1)}`,
+    },
     { label: tr(language, "Tanggal serah terima", "Handover date"), value: displayDate(bast.completion_date, language) },
   ]);
   y = drawCallout(
@@ -1409,7 +1524,7 @@ async function bastPdf(bastId: string, language: PdfLanguage) {
     tr(language, "Tanda Tangan", "Signatures"),
     tr(language, "Persetujuan tersimpan sebagai bagian dari dokumen BAST", "Approvals are stored as part of this handover document"),
   );
-  drawSignaturePair(
+  y = drawSignaturePair(
     context,
     y,
     {
@@ -1425,6 +1540,52 @@ async function bastPdf(bastId: string, language: PdfLanguage) {
       signature: bast.engineer_signature,
     },
   );
+  if (bast.seal_enabled && bast.seal_content_base64) {
+    try {
+      const sealData = `data:${String(bast.seal_mime_type ?? "image/png")};base64,${String(bast.seal_content_base64)}`;
+      const sealFormat = String(bast.seal_mime_type) === "image/jpeg"
+        ? "JPEG"
+        : String(bast.seal_mime_type) === "image/webp"
+          ? "WEBP"
+          : "PNG";
+      context.doc.addImage(sealData, sealFormat, PAGE_WIDTH - MARGIN - 43, y - 35, 24, 24, undefined, "FAST");
+    } catch {
+      // The snapshot text below still identifies the internal seal when an old image is invalid.
+    }
+  }
+  if (bast.verification_token) {
+    y = ensureSpace(context, y, 31);
+    const baseUrl = (process.env.APP_URL ?? "https://enterprise.perumnet.id").replace(/\/+$/, "");
+    const verificationUrl = `${baseUrl}/verify/bast/${String(bast.verification_token)}`;
+    const qr = await QRCode.toDataURL(verificationUrl, { margin: 1, width: 240 });
+    context.doc.setFillColor(...colors.tealSoft);
+    context.doc.roundedRect(MARGIN, y, CONTENT_WIDTH, 27, 2, 2, "F");
+    context.doc.addImage(qr, "PNG", MARGIN + 4, y + 3, 21, 21, undefined, "FAST");
+    context.doc.setTextColor(...colors.navyDark);
+    context.doc.setFont("helvetica", "bold");
+    context.doc.setFontSize(8.5);
+    context.doc.text(
+      tr(language, "VERIFIKASI DOKUMEN DAN CAP DIGITAL INTERNAL", "DOCUMENT AND INTERNAL DIGITAL SEAL VERIFICATION"),
+      MARGIN + 30,
+      y + 8,
+    );
+    context.doc.setTextColor(...colors.muted);
+    context.doc.setFont("helvetica", "normal");
+    context.doc.setFontSize(7);
+    context.doc.text(
+      tr(
+        language,
+        `Pindai QR untuk memeriksa status dan hash dokumen. Cap: ${String(bast.seal_name_snapshot ?? "PerumNet Enterprise")} - ${String(bast.seal_role_snapshot ?? "Authorized Representative")}.`,
+        `Scan the QR code to verify document status and hash. Seal: ${String(bast.seal_name_snapshot ?? "PerumNet Enterprise")} - ${String(bast.seal_role_snapshot ?? "Authorized Representative")}.`,
+      ),
+      MARGIN + 30,
+      y + 14,
+      { maxWidth: CONTENT_WIDTH - 35 },
+    );
+    context.doc.setFont("courier", "normal");
+    context.doc.setFontSize(6.5);
+    context.doc.text(verificationUrl, MARGIN + 30, y + 23, { maxWidth: CONTENT_WIDTH - 35 });
+  }
   return response(context, `${String(bast.number).replaceAll("/", "-")}.pdf`);
 }
 

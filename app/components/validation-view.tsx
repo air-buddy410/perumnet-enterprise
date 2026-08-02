@@ -5,14 +5,17 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Download,
+  Eye,
   FileCheck2,
   Save,
   ShieldCheck,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, downloadApiFile, messageOf } from "../api-client";
-import type { ViewKey } from "../data";
+import type { CommercialPackage, ViewKey } from "../data";
 import { localizedLabel, type AppLanguage } from "../i18n";
+import { CommercialPackageSwitcher } from "./commercial-package-switcher";
+import { DocumentPreviewModal } from "./document-preview-modal";
 
 interface ValidationItem {
   id: string;
@@ -29,6 +32,9 @@ interface ProjectValidation {
   id: string | null;
   number: string | null;
   projectId: string;
+  packageId?: string | null;
+  packageTitle?: string | null;
+  deliveryCycle?: number;
   project?: string;
   client?: string;
   location?: string;
@@ -62,12 +68,19 @@ export function ValidationView({
   const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [packageId, setPackageId] = useState("");
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const selectPackage = useCallback((nextPackageId: string, packages: CommercialPackage[]) => {
+    void packages;
+    setPackageId(nextPackageId);
+  }, []);
 
   const load = useCallback(async () => {
+    if (!packageId) return;
     try {
       setLoading(true);
       const data = await api<ProjectValidation>(
-        `/api/validations?projectId=${encodeURIComponent(projectId)}`,
+        `/api/validations?projectId=${encodeURIComponent(projectId)}&packageId=${encodeURIComponent(packageId)}`,
         canManage ? { method: "POST" } : undefined,
       );
       setValidation(data);
@@ -78,7 +91,7 @@ export function ValidationView({
     } finally {
       setLoading(false);
     }
-  }, [canManage, language, notify, projectId]);
+  }, [canManage, language, notify, packageId, projectId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
@@ -160,6 +173,7 @@ export function ValidationView({
           </div>
           <div><strong>{checkedCount} / {items.length} {id ? "item" : "items"}</strong><span>{validation?.location}</span></div>
         </div>
+        <CommercialPackageSwitcher projectId={projectId} language={language} canManage={canManage} value={packageId} onChange={selectPackage} notify={notify} />
       </section>
 
       <section className={`validation-gate ${completed ? "complete" : "pending"}`}>
@@ -203,9 +217,11 @@ export function ValidationView({
         <div className="validation-actions">
           {canManage && !completed && <button className="button secondary" disabled={saving} type="button" onClick={() => save("Draft")}><Save size={16} /> {id ? "Simpan draft" : "Save draft"}</button>}
           {canManage && !completed && <button className="button primary" disabled={saving || !allChecked} type="button" onClick={() => save("Completed")}><CheckCircle2 size={16} /> {id ? "Selesaikan validasi" : "Complete validation"}</button>}
+          {validation?.id && <button className="icon-button" type="button" aria-label={id ? "Pratinjau validasi" : "Preview validation"} onClick={() => setPreviewOpen(true)}><Eye size={17} /></button>}
           {validation?.id && <button className="button secondary" type="button" onClick={downloadPdf}><Download size={16} /> {id ? "Unduh PDF" : "Download PDF"}</button>}
         </div>
       </section>
+      <DocumentPreviewModal open={previewOpen} url={validation?.id ? `/api/validations/${validation.id}/pdf` : ""} title={validation?.number ?? (id ? "Form Validasi" : "Validation Form")} filename={`${(validation?.number ?? "VALIDATION").replaceAll("/", "-")}.pdf`} onClose={() => setPreviewOpen(false)} />
     </div>
   );
 }

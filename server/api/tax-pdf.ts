@@ -11,6 +11,8 @@ export interface TaxReportRow {
   settled: number;
   outstanding: number;
   status: string;
+  reportingStatus: string;
+  taxPeriod?: string;
   dueDate?: string;
 }
 
@@ -96,10 +98,10 @@ export function renderTaxReportPdf(
   doc.text(money(receivable, language), 114, y + 18);
   y += 34;
 
-  const widths = [28, 29, 24, 25, 27, 27, 22];
+  const widths = [25, 27, 21, 21, 25, 25, 20, 18];
   const headers = en
-    ? ["Project", "Document", "Tax", "Position", "Amount", "Outstanding", "Status"]
-    : ["Proyek", "Dokumen", "Pajak", "Posisi", "Nilai", "Outstanding", "Status"];
+    ? ["Project", "Document", "Tax", "Position", "Amount", "Outstanding", "Reporting", "Period"]
+    : ["Proyek", "Dokumen", "Pajak", "Posisi", "Nilai", "Outstanding", "Pelaporan", "Masa"];
 
   function tableHeader() {
     doc.setFillColor(31, 70, 84);
@@ -132,7 +134,8 @@ export function renderTaxReportPdf(
           : "Piutang",
       money(row.amount, language),
       money(row.outstanding, language),
-      row.status,
+      row.reportingStatus,
+      row.taxPeriod ?? "-",
     ];
     const lines = cells.map((cell, index) =>
       doc.splitTextToSize(clean(cell), widths[index] - 3),
@@ -167,4 +170,3 @@ export function renderTaxReportPdf(
     },
   });
 }
-

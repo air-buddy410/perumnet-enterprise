@@ -5,6 +5,7 @@ import { canAccess } from "@/shared/access";
 import { z } from "zod";
 import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
+import { calculateQuotationCommercialTotals } from "../commercial";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import {
   calculateTaxAmount,
@@ -58,6 +59,14 @@ const settlementSchema = z.object({
 });
 const voidSchema = z.object({
   reason: z.string().trim().min(5).max(500),
+});
+const reportingSchema = z.object({
+  reportingStatus: z.enum(["Candidate", "Ready", "Reported", "Settled", "Void"]),
+  taxPeriod: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional().nullable(),
+  taxInvoiceNumber: z.string().trim().max(120).optional().nullable(),
+  taxInvoiceDate: isoDateSchema.optional().nullable(),
+  returnReference: z.string().trim().max(160).optional().nullable(),
+  notes: z.string().trim().max(1_000).optional().nullable(),
 });
 
 function now() {
@@ -125,7 +134,9 @@ async function documentDescriptor(
 ) {
   if (documentType === "Quotation") {
     const result = await client.execute({
-      sql: "SELECT id,project_id,total AS base_amount,status,tax_enabled,tax_revision FROM quotations WHERE id=? LIMIT 1",
+      sql: `SELECT id,project_id,
+        CASE WHEN taxable_base>0 OR discount_enabled=1 THEN taxable_base ELSE total END AS base_amount,
+        status,tax_enabled,tax_revision FROM quotations WHERE id=? LIMIT 1`,
       args: [documentId],
     });
     if (!result.rows[0]) throw new ApiError(404, "NOT_FOUND", "Quotation tidak ditemukan.");
@@ -141,7 +152,9 @@ async function documentDescriptor(
   }
   if (documentType === "Invoice") {
     const result = await client.execute({
-      sql: `SELECT i.id,i.project_id,i.amount AS base_amount,
+      sql: `SELECT i.id,i.project_id,i.calculation_mode,
+        CASE WHEN i.calculation_mode='Percent' OR i.taxable_base_snapshot>0
+          THEN i.taxable_base_snapshot ELSE i.amount END AS base_amount,
         EXISTS(SELECT 1 FROM invoice_payments p
           WHERE p.invoice_id=i.id AND p.status='Posted') AS has_payment
         FROM invoices i WHERE i.id=? LIMIT 1`,
@@ -151,7 +164,8 @@ async function documentDescriptor(
     return {
       projectId: String(result.rows[0].project_id),
       baseAmount: numberValue(result.rows[0].base_amount),
-      locked: boolValue(result.rows[0].has_payment),
+      locked: boolValue(result.rows[0].has_payment) ||
+        String(result.rows[0].calculation_mode) === "Percent",
       scope: "Client" as const,
       taxEnabled: true,
       taxRevision: 0,
@@ -179,6 +193,76 @@ async function documentDescriptor(
     taxRevision: 0,
     status: String(result.rows[0].approval_status),
   };
+}
+
+async function refreshQuotationCommercialSnapshot(
+  client: DatabaseClient,
+  quotationId: string,
+) {
+  const result = await client.execute({
+    sql: "SELECT * FROM quotations WHERE id=? LIMIT 1",
+    args: [quotationId],
+  });
+  const row = result.rows[0];
+  if (!row) throw new ApiError(404, "NOT_FOUND", "Quotation tidak ditemukan.");
+  const preliminary = calculateQuotationCommercialTotals({
+    subtotal: numberValue(row.total),
+    discountEnabled: boolValue(row.discount_enabled),
+    discountType: String(row.discount_type) === "Percent" ? "Percent" : "Nominal",
+    discountValue: numberValue(row.discount_value),
+  });
+  const taxes = await client.execute({
+    sql: `SELECT id,rate_bps,locked FROM document_taxes
+      WHERE document_type='Quotation' AND document_id=?`,
+    args: [quotationId],
+  });
+  for (const tax of taxes.rows) {
+    if (boolValue(tax.locked)) continue;
+    await client.execute({
+      sql: "UPDATE document_taxes SET taxable_base=?,amount=?,updated_at=? WHERE id=?",
+      args: [
+        preliminary.taxableBase,
+        calculateTaxAmount(preliminary.taxableBase, numberValue(tax.rate_bps)),
+        now(),
+        tax.id,
+      ],
+    });
+  }
+  const tax = await documentTaxSummary(
+    client,
+    "Quotation",
+    quotationId,
+    preliminary.taxableBase,
+  );
+  const totals = calculateQuotationCommercialTotals({
+    subtotal: numberValue(row.total),
+    discountEnabled: boolValue(row.discount_enabled),
+    discountType: String(row.discount_type) === "Percent" ? "Percent" : "Nominal",
+    discountValue: numberValue(row.discount_value),
+    taxAdditions: tax.taxAdditions,
+    taxWithholdings: tax.taxWithholdings,
+    roundingMode: ["Up", "Down", "Custom"].includes(String(row.rounding_mode))
+      ? (String(row.rounding_mode) as "Up" | "Down" | "Custom")
+      : "None",
+    roundingStep: numberValue(row.rounding_step),
+    customRoundingAdjustment: numberValue(row.rounding_adjustment),
+  });
+  await client.execute({
+    sql: `UPDATE quotations SET discount_amount=?,taxable_base=?,
+      tax_additions_snapshot=?,tax_withholdings_snapshot=?,rounding_adjustment=?,
+      grand_total=?,updated_at=? WHERE id=?`,
+    args: [
+      totals.discountAmount,
+      totals.taxableBase,
+      totals.taxAdditions,
+      totals.taxWithholdings,
+      totals.roundingAdjustment,
+      totals.grandTotal,
+      now(),
+      quotationId,
+    ],
+  });
+  return totals;
 }
 
 async function globalTaxEnabled(client: DatabaseClient) {
@@ -460,6 +544,9 @@ export async function handleDocumentTaxes(
       `${documentType}:${documentId}`,
       input,
     );
+    const refreshed = documentType === "Quotation"
+      ? await refreshQuotationCommercialSnapshot(client, documentId)
+      : undefined;
     return ok({
       enabled: true,
       documentType,
@@ -471,8 +558,18 @@ export async function handleDocumentTaxes(
         client,
         documentType,
         documentId,
-        document.baseAmount,
+        refreshed?.taxableBase ?? document.baseAmount,
       )),
+      ...(refreshed
+        ? {
+            subtotal: refreshed.subtotal,
+            discountAmount: refreshed.discountAmount,
+            taxableBase: refreshed.taxableBase,
+            roundingAdjustment: refreshed.roundingAdjustment,
+            grandTotal: refreshed.grandTotal,
+            netCashDue: refreshed.netCashDue,
+          }
+        : {}),
     });
   }
   throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
@@ -489,7 +586,7 @@ export async function handleQuotationTaxMode(
   assertFinanceManage(user);
   const { client } = await getDatabase();
   const quotation = await client.execute({
-    sql: "SELECT id,project_id,total,status,tax_enabled,tax_revision FROM quotations WHERE id=? LIMIT 1",
+    sql: "SELECT id,project_id,total,taxable_base,status,tax_enabled,tax_revision FROM quotations WHERE id=? LIMIT 1",
     args: [quotationId],
   });
   const row = quotation.rows[0];
@@ -526,11 +623,18 @@ export async function handleQuotationTaxMode(
     enabled: input.enabled,
     previousRevision: numberValue(row.tax_revision),
   });
+  const refreshed = await refreshQuotationCommercialSnapshot(client, quotationId);
   return ok({
     enabled: input.enabled,
     taxEnabled: input.enabled,
     revision: numberValue(row.tax_revision) + 1,
-    ...(await documentTaxSummary(client, "Quotation", quotationId, numberValue(row.total))),
+    ...(await documentTaxSummary(client, "Quotation", quotationId, refreshed.taxableBase)),
+    subtotal: refreshed.subtotal,
+    discountAmount: refreshed.discountAmount,
+    taxableBase: refreshed.taxableBase,
+    roundingAdjustment: refreshed.roundingAdjustment,
+    grandTotal: refreshed.grandTotal,
+    netCashDue: refreshed.netCashDue,
   });
 }
 
@@ -542,9 +646,51 @@ function obligationStatus(amount: number, settled: number) {
 
 export async function handleTaxObligations(
   request: Request,
+  path: string[],
   user: AuthUser,
 ) {
-  if (request.method !== "GET") {
+  const obligationId = path[2];
+  const action = path[3];
+  if (request.method === "PATCH" && obligationId && action === "reporting") {
+    assertFinanceManage(user);
+    const { client } = await getDatabase();
+    const input = reportingSchema.parse(await jsonBody(request));
+    const current = await client.execute({
+      sql: "SELECT * FROM tax_obligations WHERE id=? LIMIT 1",
+      args: [obligationId],
+    });
+    const row = current.rows[0];
+    if (!row) throw new ApiError(404, "NOT_FOUND", "Kewajiban pajak tidak ditemukan.");
+    await assertProjectAccess(client, user, String(row.project_id ?? ""));
+    if (input.reportingStatus === "Reported" && !input.returnReference?.trim()) {
+      throw new ApiError(422, "REPORT_REFERENCE_REQUIRED", "Referensi pelaporan pajak wajib diisi.");
+    }
+    const timestamp = now();
+    await client.execute({
+      sql: `UPDATE tax_obligations SET reporting_status=?,tax_period=?,
+        tax_invoice_number=?,tax_invoice_date=?,return_reference=?,
+        reporting_notes=?,reported_at=?,reported_by=?,updated_at=? WHERE id=?`,
+      args: [
+        input.reportingStatus,
+        input.taxPeriod ?? row.tax_period,
+        input.taxInvoiceNumber ?? row.tax_invoice_number,
+        input.taxInvoiceDate ?? row.tax_invoice_date,
+        input.returnReference ?? row.return_reference,
+        input.notes ?? row.reporting_notes,
+        ["Reported", "Settled"].includes(input.reportingStatus)
+          ? row.reported_at ?? timestamp
+          : null,
+        ["Reported", "Settled"].includes(input.reportingStatus)
+          ? user.id
+          : null,
+        timestamp,
+        obligationId,
+      ],
+    });
+    await writeAuditLog(client, request, user, "reporting", "tax_obligation", obligationId, input);
+    return ok({ id: obligationId, ...input });
+  }
+  if (request.method !== "GET" || obligationId) {
     throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
   }
   assertFinanceView(user);
@@ -587,6 +733,13 @@ export async function handleTaxObligations(
         numberValue(row.amount) - numberValue(row.settled_amount),
       ),
       status: String(row.status),
+      reportingStatus: String(row.reporting_status ?? "Candidate"),
+      taxPeriod: row.tax_period ? String(row.tax_period) : undefined,
+      taxInvoiceNumber: row.tax_invoice_number ? String(row.tax_invoice_number) : undefined,
+      taxInvoiceDate: row.tax_invoice_date ? String(row.tax_invoice_date) : undefined,
+      returnReference: row.return_reference ? String(row.return_reference) : undefined,
+      reportedAt: row.reported_at ? String(row.reported_at) : undefined,
+      reportingNotes: row.reporting_notes ? String(row.reporting_notes) : undefined,
       dueDate: row.due_date ? String(row.due_date) : undefined,
     })),
   );
@@ -849,6 +1002,8 @@ async function handleTaxReport(request: Request, section: string, user: AuthUser
       numberValue(row.amount) - numberValue(row.settled_amount),
     ),
     status: String(row.status),
+    reportingStatus: String(row.reporting_status ?? "Candidate"),
+    taxPeriod: row.tax_period ? String(row.tax_period) : undefined,
     dueDate: row.due_date ? String(row.due_date) : undefined,
   }));
   if (section === "report.pdf") {
@@ -866,6 +1021,8 @@ async function handleTaxReport(request: Request, section: string, user: AuthUser
       en ? "Outstanding (IDR)" : "Outstanding (IDR)",
       en ? "Due date" : "Jatuh tempo",
       "Status",
+      en ? "Reporting status" : "Status pelaporan",
+      en ? "Tax period" : "Masa pajak",
     ].map(csvCell).join(","),
     ...rows.map((row) =>
       [
@@ -884,6 +1041,8 @@ async function handleTaxReport(request: Request, section: string, user: AuthUser
         row.outstanding,
         row.dueDate ?? "",
         row.status,
+        row.reportingStatus,
+        row.taxPeriod ?? "",
       ]
         .map(csvCell)
         .join(","),
@@ -910,7 +1069,7 @@ export async function handleTax(
   if (section === "settings") return handleTaxSettings(request, user);
   if (section === "rules") return handleTaxRules(request, path, user);
   if (section === "documents") return handleDocumentTaxes(request, path, user);
-  if (section === "obligations") return handleTaxObligations(request, user);
+  if (section === "obligations") return handleTaxObligations(request, path, user);
   if (section === "settlements") return handleTaxSettlements(request, path, user);
   throw new ApiError(404, "NOT_FOUND", "Endpoint pajak tidak ditemukan.");
 }

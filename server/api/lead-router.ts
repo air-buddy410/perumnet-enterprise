@@ -199,7 +199,7 @@ async function submitLead(request: Request) {
     throw error;
   }
   await sendEmailDelivery(client, {
-    recipient: "it@perumnet.id",
+    recipient: "enterprise@perumnet.id",
     eventType: "cms.lead.created",
     subject: `Lead baru: ${input.fullName} — ${input.serviceInterest}`,
     respectPreference: false,

@@ -6,6 +6,7 @@ import { canAccess } from "@/shared/access";
 import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
+import { snapshotQuotationItems } from "../quotation-snapshot";
 import { lockDocumentTaxes } from "../tax";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
 import { renderBusinessPdf } from "./pdf";
@@ -213,7 +214,10 @@ async function scopeDetail(client: DatabaseClient, scopeId: string) {
       q.acceptance_attachment_name AS quotation_attachment_name
       FROM boq_scopes s
       JOIN boqs b ON b.id=s.boq_id
-      LEFT JOIN quotations q ON q.scope_id=s.id
+      LEFT JOIN quotations q ON q.id=(
+        SELECT id FROM quotations WHERE scope_id=s.id AND status<>'Superseded'
+        ORDER BY revision_no DESC,created_at DESC LIMIT 1
+      )
       WHERE s.id=? LIMIT 1`,
     args: [scopeId],
   });
@@ -586,6 +590,7 @@ export async function handleQuotationLifecycle(
       }
     }
     const timestamp = now();
+    await snapshotQuotationItems(client, quotationId);
     await client.transaction(async (tx) => {
       await tx.execute({
         sql: "UPDATE quotations SET updated_at=updated_at WHERE id=?",
@@ -704,6 +709,7 @@ export async function handleQuotationLifecycle(
         },
       ], "write");
     });
+    if (nextStatus === "Sent") await snapshotQuotationItems(client, quotationId);
     await syncProjectCommercialValue(client, String(quotation.project_id));
     await writeAuditLog(client, request, user, action ?? "update", "quotation", quotationId, {
       status: nextStatus,
