@@ -67,7 +67,7 @@ export function parseRecommendation(text: string): Recommendation {
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new Error("OpenAI mengembalikan JSON yang tidak valid.");
+    throw new Error("AI mengembalikan JSON yang tidak valid.");
   }
   const result = recommendationSchema.safeParse(parsed);
   if (!result.success) {
@@ -82,38 +82,4 @@ export function parseRecommendation(text: string): Recommendation {
 
 export function isRetryable(status: number) {
   return status === 429 || status >= 500;
-}
-
-export function outputText(payload: Record<string, unknown>) {
-  if (typeof payload.output_text === "string") return payload.output_text;
-  const output = Array.isArray(payload.output) ? payload.output : [];
-  for (const item of output) {
-    if (!item || typeof item !== "object") continue;
-    const content = Array.isArray((item as { content?: unknown }).content)
-      ? (item as { content: unknown[] }).content
-      : [];
-    for (const part of content) {
-      if (part && typeof part === "object" &&
-        typeof (part as { text?: unknown }).text === "string") {
-        return String((part as { text: string }).text);
-      }
-    }
-  }
-  return "";
-}
-
-export function citedSources(payload: Record<string, unknown>) {
-  const found = new Map<string, string>();
-  const walk = (value: unknown) => {
-    if (!value || typeof value !== "object") return;
-    if (Array.isArray(value)) return value.forEach(walk);
-    const record = value as Record<string, unknown>;
-    const url = typeof record.url === "string" ? record.url : undefined;
-    if (url && /^https?:\/\//i.test(url)) {
-      found.set(url, typeof record.title === "string" ? record.title : new URL(url).hostname);
-    }
-    Object.values(record).forEach(walk);
-  };
-  walk(payload.output);
-  return [...found].slice(0, 30).map(([url, title]) => ({ url, title }));
 }

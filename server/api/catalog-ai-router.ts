@@ -6,15 +6,7 @@ import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { callGemini, defaultGeminiModel } from "./catalog-ai-gemini";
-import {
-  catalogAiInstructions,
-  citedSources,
-  isRetryable,
-  outputText,
-  parseRecommendation,
-  recommendationJsonSchema,
-  type Recommendation,
-} from "./catalog-ai-schema";
+import type { Recommendation } from "./catalog-ai-schema";
 import { ApiError, created, jsonBody, ok } from "./errors";
 
 const idSchema = z.string().trim().min(1).max(100);
@@ -43,27 +35,14 @@ const approveSchema = z.object({
 });
 const rejectSchema = z.object({ reason: z.string().trim().min(5).max(500) });
 
-type CatalogAiProvider = "openai" | "gemini";
-
-function resolveAiProvider(): CatalogAiProvider {
-  const configured = process.env.CATALOG_AI_PROVIDER;
-  if (configured === "openai" || configured === "gemini") return configured;
-  return process.env.GEMINI_API_KEY ? "gemini" : "openai";
-}
-
-function assertProviderConfigured(provider: CatalogAiProvider) {
-  if (provider === "gemini" && !process.env.GEMINI_API_KEY) {
+function assertGeminiConfigured() {
+  if (!process.env.GEMINI_API_KEY) {
     throw new ApiError(503, "GEMINI_NOT_CONFIGURED", "GEMINI_API_KEY belum tersedia pada secret server.");
   }
-  if (provider === "openai" && !process.env.OPENAI_API_KEY) {
-    throw new ApiError(503, "OPENAI_NOT_CONFIGURED", "OPENAI_API_KEY belum tersedia pada secret server.");
-  }
 }
 
-function pendingModelName(provider: CatalogAiProvider) {
-  return provider === "gemini"
-    ? process.env.GEMINI_CATALOG_MODEL ?? defaultGeminiModel
-    : process.env.OPENAI_CATALOG_MODEL ?? "gpt-5-mini";
+function pendingModelName() {
+  return process.env.GEMINI_CATALOG_MODEL ?? defaultGeminiModel;
 }
 
 function manage(user: AuthUser) {
@@ -118,82 +97,6 @@ async function readRun(client: DatabaseClient, runId: string) {
   return mapRun(result.rows[0], sources.rows);
 }
 
-async function callOpenAi(
-  input: z.infer<typeof analyzeSchema>,
-  internalBenchmarks: Array<Record<string, unknown>>,
-) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new ApiError(503, "OPENAI_NOT_CONFIGURED", "OPENAI_API_KEY belum tersedia pada secret server.");
-  const content: Array<Record<string, unknown>> = [{
-    type: "input_text",
-    text: JSON.stringify({
-      requestedProduct: input.query,
-      sourceUrl: input.sourceUrl ?? null,
-      anonymousInternalBenchmarks: internalBenchmarks,
-    }),
-  }];
-  if (input.file) {
-    if (input.file.mimeType === "application/pdf") {
-      content.push({
-        type: "input_file",
-        filename: input.file.name,
-        file_data: `data:${input.file.mimeType};base64,${input.file.contentBase64}`,
-      });
-    } else {
-      content.push({
-        type: "input_image",
-        image_url: `data:${input.file.mimeType};base64,${input.file.contentBase64}`,
-      });
-    }
-  }
-  const body = {
-    model: process.env.OPENAI_CATALOG_MODEL ?? "gpt-5-mini",
-    store: false,
-    reasoning: { effort: "low" },
-    max_output_tokens: 6_000,
-    tools: [{ type: "web_search" }],
-    tool_choice: "auto",
-    instructions: catalogAiInstructions,
-    input: [{ role: "user", content }],
-    text: {
-      format: {
-        type: "json_schema",
-        name: "catalog_recommendation",
-        strict: true,
-        schema: recommendationJsonSchema,
-      },
-    },
-  };
-  const endpoint = `${process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1"}/responses`;
-  const timeoutMs = Number(process.env.CATALOG_AI_TIMEOUT_MS ?? 90_000);
-  let lastError = "OpenAI request failed";
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
-      if (response.ok && payload) {
-        const text = outputText(payload);
-        if (!text) throw new Error("OpenAI tidak mengembalikan structured output.");
-        return {
-          model: String(payload.model ?? body.model),
-          recommendation: parseRecommendation(text),
-          sources: citedSources(payload),
-        };
-      }
-      lastError = String((payload?.error as { message?: unknown } | undefined)?.message ?? `OpenAI merespons ${response.status}`);
-      if (!isRetryable(response.status)) break;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-    }
-  }
-  throw new Error(lastError);
-}
-
 export async function sweepStaleCatalogAiRuns(client: DatabaseClient) {
   const staleMs = Number(process.env.CATALOG_AI_STALE_MS ?? 600_000);
   const cutoff = new Date(Date.now() - staleMs).toISOString();
@@ -222,9 +125,7 @@ async function executeAnalysis(
       ROUND(AVG(i.margin_2_bps))/100.0 AS avg_margin_2
       FROM item_catalog_categories c LEFT JOIN item_catalog_items i ON i.category_id=c.id
       GROUP BY c.id,c.boq_role,c.name ORDER BY c.sort_order LIMIT 60`);
-    const result = resolveAiProvider() === "gemini"
-      ? await callGemini(input, benchmarks.rows)
-      : await callOpenAi(input, benchmarks.rows);
+    const result = await callGemini(input, benchmarks.rows);
     const timestamp = new Date().toISOString();
     const expiresAt = new Date(Date.now() + 7 * 86_400_000).toISOString();
     await client.transaction(async (tx) => {
@@ -288,8 +189,7 @@ export async function handleCatalogAi(request: Request, path: string[], user: Au
 
   if (request.method === "POST" && action === "analyze" && !runId) {
     const input = analyzeSchema.parse(await jsonBody(request));
-    const provider = resolveAiProvider();
-    assertProviderConfigured(provider);
+    assertGeminiConfigured();
     const since = new Date(Date.now() - 86_400_000).toISOString();
     const usage = await client.execute({
       sql: `SELECT
@@ -311,7 +211,7 @@ export async function handleCatalogAi(request: Request, path: string[], user: Au
         (id,requested_by,status,query,source_url,input_mime_type,model,confidence,
          created_at,updated_at) VALUES (?,?, 'Running',?,?,?,?,0,?,?)`,
       args: [newRunId, user.id, input.query, input.sourceUrl ?? null, input.file?.mimeType ?? null,
-        pendingModelName(provider), timestamp, timestamp],
+        pendingModelName(), timestamp, timestamp],
     });
     void executeAnalysis(client, request, user, newRunId, input).catch(console.error);
     return ok(await readRun(client, newRunId), 202);

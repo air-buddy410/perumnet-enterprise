@@ -272,10 +272,9 @@ autentikasi, RBAC, CRUD modul, kalkulasi keuangan, audit log, dan PDF.
   tidak dianggap kas keluar sampai pembayaran vendor dikonfirmasi terpisah.
 - Konfirmasi dan koreksi pembayaran membutuhkan izin `finance:manage`, memakai
   tanggal mutasi aktual, dan mempertahankan mutasi bank yang sudah direkonsiliasi.
-- AI Catalog Assistant mendukung dua provider: OpenAI dan Google Gemini.
-  `CATALOG_AI_PROVIDER` memilih provider secara eksplisit; tanpa nilai itu,
-  Gemini (free tier via `GEMINI_API_KEY` dari aistudio.google.com) menjadi
-  default saat key-nya tersedia, selain itu OpenAI dipakai.
+- AI Catalog Assistant memakai Google Gemini sebagai satu-satunya provider
+  (free tier via `GEMINI_API_KEY` dari aistudio.google.com; model diatur
+  lewat `GEMINI_CATALOG_MODEL`, default `gemini-2.5-flash`).
 - Dokumen proyek menerima JPG, PNG, WebP, atau PDF hingga 5 MB.
 - Quotation, invoice, SPK, dan BAST dibuat sebagai PDF di server.
 - Semua mutasi penting dicatat pada audit log.

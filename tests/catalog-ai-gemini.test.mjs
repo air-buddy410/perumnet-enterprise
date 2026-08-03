@@ -199,11 +199,7 @@ test(
   "catalog AI on Gemini fails closed without a key and burns no quota",
   { timeout: 120_000 },
   async () => {
-    await startApp({
-      CATALOG_AI_PROVIDER: "gemini",
-      GEMINI_API_KEY: "",
-      OPENAI_API_KEY: "",
-    });
+    await startApp({ GEMINI_API_KEY: "" });
     await login();
 
     const analyze = await request("/api/catalog/ai/analyze", {
@@ -222,7 +218,7 @@ test(
 );
 
 test(
-  "catalog AI on Gemini runs the two-step grounded analysis and surfaces zod failures",
+  "catalog AI on Gemini runs the two-step grounded analysis with failure handling, sweeper, and approval",
   { timeout: 240_000 },
   async () => {
     const mockPort = await freePort();
@@ -242,6 +238,7 @@ test(
           hasTools: Array.isArray(body.tools) && body.tools.length > 0,
           responseSchema: body.generationConfig?.responseSchema ?? null,
         });
+        if (mockMode === "hang") return;
         if (incoming.headers["x-goog-api-key"] !== "test-gemini-key") {
           response.writeHead(401, { "Content-Type": "application/json" });
           response.end(JSON.stringify({ error: { message: "API key salah." } }));
@@ -270,14 +267,27 @@ test(
     await new Promise((resolve) => mockServer.listen(mockPort, "127.0.0.1", resolve));
 
     await startApp({
-      CATALOG_AI_PROVIDER: "gemini",
       GEMINI_API_KEY: "test-gemini-key",
       GEMINI_BASE_URL: `http://127.0.0.1:${mockPort}`,
-      OPENAI_API_KEY: "",
       CATALOG_AI_TIMEOUT_MS: "2000",
       CATALOG_AI_STALE_MS: "4000",
     });
     await login();
+
+    const catalog = await json("/api/catalog?includeInactive=true");
+    const networking = catalog.categories.find(
+      (entry) => entry.boqRole === "Perangkat" && entry.name === "Networking",
+    );
+    assert.ok(networking);
+    const brand = await json("/api/catalog/brands", {
+      method: "POST",
+      body: JSON.stringify({
+        categoryId: networking.id,
+        name: "Ruijie",
+        status: "Aktif",
+        sortOrder: 10,
+      }),
+    }, 201);
 
     // a. Happy path: 202 + Running, poll to Draft, grounded sources persisted.
     mockMode = "happy";
@@ -336,6 +346,69 @@ test(
     assert.equal(failedRun.status, "Failed");
     assert.match(failedRun.errorMessage, /Struktur rekomendasi AI tidak valid/);
     assert.match(failedRun.errorMessage, /sku/);
+
+    // c. A hanging upstream times out, and a new analyze is not blocked afterwards.
+    mockMode = "hang";
+    const hangRun = await json("/api/catalog/ai/analyze", {
+      method: "POST",
+      body: JSON.stringify({ query: "Perangkat dengan upstream menggantung" }),
+    }, 202);
+    assert.equal(hangRun.status, "Running");
+    const timedOutRun = await pollRun(hangRun.id, ["Failed"], 20_000);
+    assert.equal(timedOutRun.status, "Failed");
+    assert.ok(timedOutRun.errorMessage);
+
+    mockMode = "happy";
+    const secondRun = await json("/api/catalog/ai/analyze", {
+      method: "POST",
+      body: JSON.stringify({ query: "Ruijie RG-RAP2260 unit kedua" }),
+    }, 202);
+    assert.equal(secondRun.status, "Running");
+    const secondDraft = await pollRun(secondRun.id, ["Draft", "Failed"]);
+    assert.equal(secondDraft.status, "Draft");
+
+    // d. Approve with overridden fields creates the catalog item with the overrides.
+    const approved = await json(`/api/catalog/ai/runs/${draftRun.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        categoryId: networking.id,
+        brandId: brand.id,
+        sku: "RG-RAP2260-CUSTOM",
+        name: "Access Point Kustom Review",
+        model: "RG-RAP2260 Rev B",
+        unit: "unit",
+        costPrice: 1_750_000,
+        margin1Percent: 25,
+        margin2Percent: 40,
+      }),
+    }, 201);
+    assert.equal(approved.status, "Approved");
+    assert.ok(approved.catalogItemId);
+
+    const catalogAfter = await json("/api/catalog?includeInactive=true");
+    const item = catalogAfter.items.find((entry) => entry.id === approved.catalogItemId);
+    assert.ok(item);
+    assert.equal(item.sku, "RG-RAP2260-CUSTOM");
+    assert.equal(item.name, "Access Point Kustom Review");
+    assert.equal(item.model, "RG-RAP2260 Rev B");
+    assert.equal(item.brand, "Ruijie");
+    assert.equal(item.costPrice, 1_750_000);
+    assert.equal(item.margin1Percent, 25);
+    assert.equal(item.margin2Percent, 40);
+    assert.equal(item.price1, Math.round(1_750_000 * 1.25));
+    assert.equal(item.price2, Math.round(1_750_000 * 1.4));
+
+    // e. Approving a second draft with an already-used SKU is rejected.
+    const duplicate = await request(`/api/catalog/ai/runs/${secondDraft.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        categoryId: networking.id,
+        brandId: brand.id,
+        sku: "RG-RAP2260-CUSTOM",
+      }),
+    });
+    assert.equal(duplicate.status, 409);
+    assert.equal((await duplicate.json()).error.code, "SKU_EXISTS");
 
     await stopApp();
     mockServer.closeAllConnections?.();
