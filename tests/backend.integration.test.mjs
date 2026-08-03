@@ -1206,6 +1206,10 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   );
   assert.equal(acceptedTaxQuotation.status, "Accepted");
   assert.equal(
+    (await json(`/api/projects/${taxProject.id}`)).value,
+    555_000,
+  );
+  assert.equal(
     (
       await request(`/api/quotations/${taxableQuotation.id}/tax-mode`, {
         method: "PATCH",
@@ -1214,6 +1218,72 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     ).status,
     409,
   );
+
+  const taxedCatalogProject = await json(
+    "/api/projects",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Proyek Pajak Katalog",
+        client: "Klien Pajak Katalog",
+        location: "Ubud",
+        status: "Draft",
+        value: 0,
+      }),
+    },
+    201,
+  );
+  await json(
+    `/api/boq/items?projectId=${taxedCatalogProject.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        category: "Perangkat",
+        description: "Item pajak katalog",
+        quantity: 1,
+        unit: "unit",
+        costPrice: 1,
+        sellingPrice: 1,
+        catalogItemId: catalogItem.id,
+        catalogPriceTier: 1,
+      }),
+    },
+    201,
+  );
+  const taxedCatalogQuotation = await json(
+    `/api/quotations?projectId=${taxedCatalogProject.id}`,
+    { method: "PATCH", body: JSON.stringify({ status: "Draft" }) },
+  );
+  await json(`/api/quotations/${taxedCatalogQuotation.id}/tax-mode`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled: true }),
+  });
+  const taxedCatalogSummary = await json(
+    `/api/quotations/${taxedCatalogQuotation.id}/taxes`,
+    { method: "PUT", body: JSON.stringify({ ruleIds: [ppnRule.id] }) },
+  );
+  assert.ok(taxedCatalogSummary.taxAdditions > 0);
+  const taxedCatalogUpdate = await json(`/api/catalog/items/${catalogItem.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ costPrice: 1_300_000 }),
+  });
+  assert.ok(taxedCatalogUpdate.id);
+  const taxedAfterCatalogChange = await json(
+    `/api/quotations?projectId=${taxedCatalogProject.id}`,
+  );
+  assert.ok(taxedAfterCatalogChange.taxAdditions > 0);
+  const taxedScopes = await json(
+    `/api/boq/scopes?projectId=${taxedCatalogProject.id}`,
+  );
+  const taxedScopeQuotation = taxedScopes.find(
+    (scope) => scope.quotation?.id === taxedCatalogQuotation.id,
+  )?.quotation;
+  assert.ok(taxedScopeQuotation);
+  assert.equal(
+    taxedScopeQuotation.grandTotal,
+    taxedAfterCatalogChange.total + taxedAfterCatalogChange.taxAdditions,
+  );
+  await json(`/api/projects/${taxedCatalogProject.id}`, { method: "DELETE" }, 204);
   const inheritedTaxInvoice = await json(
     "/api/invoices",
     {
@@ -3140,6 +3210,38 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   await json(`/api/projects/${taxProject.id}`, { method: "DELETE" }, 204);
   await json(`/api/projects/${projectManagerProject.id}`, { method: "DELETE" }, 204);
   assert.equal((await request(`/api/projects/${project.id}`)).status, 404);
+
+  const numberingFirst = await json(
+    "/api/projects",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Proyek Penomoran Pertama",
+        client: "Klien Penomoran",
+        location: "Denpasar",
+        status: "Draft",
+        value: 1_000_000,
+      }),
+    },
+    201,
+  );
+  await json(`/api/projects/${numberingFirst.id}`, { method: "DELETE" }, 204);
+  const numberingSecond = await json(
+    "/api/projects",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Proyek Penomoran Kedua",
+        client: "Klien Penomoran",
+        location: "Denpasar",
+        status: "Draft",
+        value: 1_000_000,
+      }),
+    },
+    201,
+  );
+  assert.notEqual(numberingSecond.code, numberingFirst.code);
+  await json(`/api/projects/${numberingSecond.id}`, { method: "DELETE" }, 204);
   assert.equal((await request(`/api/invoices/${invoice.id}`)).status, 404);
   assert.equal((await request(`/api/spks/${spk.id}`)).status, 404);
   assert.equal((await request(`/api/bast/${bast.id}`)).status, 404);

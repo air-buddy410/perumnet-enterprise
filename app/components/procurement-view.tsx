@@ -10,7 +10,6 @@ import {
   Filter,
   Mail,
   MapPin,
-  MoreHorizontal,
   Pencil,
   Phone,
   Plus,
@@ -426,7 +425,7 @@ export function ProcurementView({ language, notify, projectId, canManage, canMan
                 <div className="vendor-card-head">
                   <span className={`vendor-logo variant-${index % 4}`}><Building2 size={21} /></span>
                   <span className={`status-badge ${vendor.status === "Aktif" ? "success" : "neutral"}`}>{localizedLabel(language, vendor.status)}</span>
-                  {canManageVendors && <button className="icon-button" type="button" aria-label={`Edit ${vendor.name}`} onClick={() => openEditVendor(vendor)}><MoreHorizontal size={17} /></button>}
+                  {canManageVendors && <button className="icon-button" type="button" aria-label={`Edit ${vendor.name}`} onClick={() => openEditVendor(vendor)}><Pencil size={15} /></button>}
                 </div>
                 <div className="vendor-card-copy">
                   <strong>{vendor.name}</strong>

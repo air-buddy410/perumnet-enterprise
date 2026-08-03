@@ -200,6 +200,7 @@ export function DocumentTaxEditor({
               <span><small>{id ? "Dasar pengenaan" : "Taxable base"}</small><strong>{formatCurrency(summary.baseAmount, language)}</strong></span>
               <span><small>{id ? "Pajak tambah" : "Tax additions"}</small><strong>{formatCurrency(summary.taxAdditions, language)}</strong></span>
               <span><small>{id ? "Pajak potong" : "Withholdings"}</small><strong>{formatCurrency(summary.taxWithholdings, language)}</strong></span>
+              <span><small>{id ? "Total tagihan klien" : "Total billed to client"}</small><strong>{formatCurrency(summary.grossTotal, language)}</strong></span>
               <span><small>{id ? "Kas bersih" : "Net cash due"}</small><strong>{formatCurrency(summary.netCashDue, language)}</strong></span>
             </div>
             {canManage ? <fieldset className="field category-picker">

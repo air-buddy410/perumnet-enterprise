@@ -219,6 +219,7 @@ export interface CommercialScope {
     issuedAt: string;
     validUntil?: string | null;
     total: number;
+    grandTotal?: number;
     taxEnabled?: boolean;
     taxRevision?: number;
     acceptedAt?: string | null;

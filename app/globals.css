@@ -2550,6 +2550,19 @@ h3 {
 .catalog-ai-sources a { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; background: #fff; color: var(--teal-dark); font-size: 9px; text-decoration: none; }
 .catalog-ai-classification { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; border-top: 1px solid var(--line); padding-top: 16px; }
 .catalog-ai-actions { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: 9px; border-top: 1px solid var(--line); padding: 14px 20px calc(14px + env(safe-area-inset-bottom)); background: #fff; }
+.catalog-ai-progress { display: flex; align-items: flex-start; gap: 14px; border: 1px solid #cde5e1; border-radius: 14px; padding: 18px; background: linear-gradient(145deg, #fff, #eef9f7); color: var(--teal-dark); }
+.catalog-ai-progress > div { display: grid; gap: 6px; min-width: 0; }
+.catalog-ai-progress strong { color: var(--navy); font-size: 12px; }
+.catalog-ai-progress p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; overflow-wrap: anywhere; }
+.catalog-ai-progress small { color: var(--teal-dark); font-size: 9px; font-weight: 700; letter-spacing: .04em; }
+.catalog-ai-error { display: grid; gap: 8px; border: 1px solid #f0b9ab; border-radius: 11px; padding: 13px; background: #fff4f0; }
+.catalog-ai-error > strong { display: flex; align-items: center; gap: 6px; color: #a4402c; font-size: 10px; }
+.catalog-ai-error p { margin: 0; color: #7c3a2b; font-size: 9px; line-height: 1.55; overflow-wrap: anywhere; }
+.catalog-ai-review { display: grid; gap: 12px; border-top: 1px solid var(--line); padding-top: 15px; }
+.catalog-ai-review > strong { color: var(--navy); font-size: 10px; }
+.catalog-ai-review details { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fff; }
+.catalog-ai-review summary { cursor: pointer; color: var(--teal-dark); font-size: 9px; font-weight: 700; }
+.catalog-ai-review details .field { margin-top: 10px; }
 .spin { animation: catalog-spin 900ms linear infinite; }
 @keyframes catalog-spin { to { transform: rotate(360deg); } }
 
@@ -7642,6 +7655,21 @@ h3 {
 }
 
 @media (max-width: 760px) {
+  .module-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .module-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .module-tabs > button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
   .catalog-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 12px; }
   .catalog-toolbar .search-field { grid-column: 1 / -1; }
   .catalog-toolbar select { min-width: 0; width: 100%; }

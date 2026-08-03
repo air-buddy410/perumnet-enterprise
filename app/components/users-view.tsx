@@ -6,7 +6,7 @@ import {
   Filter,
   KeyRound,
   Mail,
-  MoreHorizontal,
+  Pencil,
   Plus,
   Search,
   ShieldCheck,
@@ -205,7 +205,7 @@ export function UsersView({ notify, language, currentUserId, canManage }: UsersV
               <div className="user-last-active"><span>{id ? "Aktivitas terakhir" : "Last activity"}</span><strong>{user.lastActive}</strong></div>
               <span className={`status-badge ${user.status === "Aktif" ? "success" : "neutral"}`}><span className="badge-dot" /> {localizedLabel(language, user.status)}</span>
               {canManage && <button className={`button small ${user.status === "Aktif" ? "subtle" : "secondary"}`} type="button" disabled={user.id === currentUserId} onClick={() => toggleUser(user)}>{user.status === "Aktif" ? <UserRoundX size={15} /> : <UserCheck size={15} />}{user.status === "Aktif" ? (id ? "Nonaktifkan" : "Disable") : (id ? "Aktifkan" : "Enable")}</button>}
-              {canManage && <button className="icon-button" type="button" aria-label={`${id ? "Atur" : "Edit"} ${user.name}`} onClick={() => openEditUser(user)}><MoreHorizontal size={17} /></button>}
+              {canManage && <button className="icon-button" type="button" aria-label={`${id ? "Atur" : "Edit"} ${user.name}`} onClick={() => openEditUser(user)}><Pencil size={15} /></button>}
             </article>
           ))}
         </div>

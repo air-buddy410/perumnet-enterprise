@@ -8,6 +8,7 @@ import { ApiError } from "./errors";
 import { getDatabase } from "../db/client";
 import { asNumber, formatDate, parseJson } from "../format";
 import { documentTaxSummary } from "../tax";
+import { refreshQuotationCommercialSnapshot } from "./tax-router";
 
 type PdfKind = "quotation" | "invoice" | "spk" | "bast";
 type PdfLanguage = "id" | "en";
@@ -750,7 +751,20 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
           ORDER BY q.created_at DESC LIMIT 1`,
         args: [projectId],
       });
-  const quotation = quotationResult.rows[0];
+  let quotation = quotationResult.rows[0];
+  if (quotation?.id && String(quotation.status) === "Draft") {
+    await refreshQuotationCommercialSnapshot(client, String(quotation.id));
+    const refreshed = await client.execute({
+      sql: `SELECT q.*,s.kind AS scope_kind,s.title AS scope_title,s.sequence,
+        cp.title AS package_title
+        FROM quotations q
+        LEFT JOIN boq_scopes s ON s.id=q.scope_id
+        LEFT JOIN project_commercial_packages cp ON cp.id=q.package_id
+        WHERE q.id=? LIMIT 1`,
+      args: [quotation.id],
+    });
+    quotation = refreshed.rows[0] ?? quotation;
+  }
   const snapshotItems = quotation?.id
     ? await client.execute({
         sql: "SELECT * FROM quotation_items WHERE quotation_id=? ORDER BY sort_order,created_at",

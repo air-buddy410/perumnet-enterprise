@@ -88,7 +88,7 @@ export function DocumentPreviewModal({
               <Download size={16} /> Unduh
             </button>
             <button className="icon-button" type="button" onClick={onClose} aria-label="Tutup pratinjau">
-              <X size={20} />
+              <X size={18} />
             </button>
           </div>
         </header>

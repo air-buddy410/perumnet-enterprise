@@ -195,7 +195,7 @@ async function documentDescriptor(
   };
 }
 
-async function refreshQuotationCommercialSnapshot(
+export async function refreshQuotationCommercialSnapshot(
   client: DatabaseClient,
   quotationId: string,
 ) {

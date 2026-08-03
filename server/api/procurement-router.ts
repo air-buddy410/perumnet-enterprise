@@ -6,6 +6,7 @@ import { canAccess } from "@/shared/access";
 import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
+import { claimSequence } from "../db/counters";
 import { notifyProjectStakeholders } from "../email";
 import { documentTaxSummary, lockDocumentTaxes } from "../tax";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
@@ -171,7 +172,7 @@ async function assertProjectAccess(
 
 function orderNumber(type: "SPK" | "PO", count: number) {
   const date = new Date();
-  return `${type}/PN/${String(date.getUTCMonth() + 1).padStart(2, "0")}/${date.getUTCFullYear()}/${String(count + 1).padStart(3, "0")}`;
+  return `${type}/PN/${String(date.getUTCMonth() + 1).padStart(2, "0")}/${date.getUTCFullYear()}/${String(count).padStart(3, "0")}`;
 }
 
 function paymentState(contract: number, paid: number) {
@@ -797,14 +798,8 @@ async function createOrder(
         );
       }
     }
-    const count = await tx.execute({
-      sql: "SELECT COUNT(*) AS count FROM spks WHERE document_type=?",
-      args: [input.documentType],
-    });
-    const number = orderNumber(
-      input.documentType,
-      numberValue(count.rows[0]?.count),
-    );
+    const sequence = await claimSequence(tx, "spks", "SELECT number AS value FROM spks");
+    const number = orderNumber(input.documentType, sequence);
     await tx.execute({
       sql: `INSERT INTO spks
         (id,number,vendor_id,project_id,scope,cost,status,document_type,

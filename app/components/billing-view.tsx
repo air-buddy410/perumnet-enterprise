@@ -761,6 +761,24 @@ export function BillingView({
               {roundingMode !== "None" && roundingMode !== "Custom" && <label className="field select-field"><span>{id ? "Kelipatan" : "Increment"}</span><select value={roundingStep} onChange={(event) => setRoundingStep(Number(event.target.value))}><option value={1000}>Rp1.000</option><option value={10000}>Rp10.000</option><option value={100000}>Rp100.000</option></select><ChevronDown size={15} /></label>}
               {roundingMode === "Custom" && <><label className="field"><span>{id ? "Penyesuaian (+/-)" : "Adjustment (+/-)"}</span><input type="number" value={roundingAdjustment} onChange={(event) => setRoundingAdjustment(Number(event.target.value))} /></label><label className="field full"><span>{id ? "Alasan wajib" : "Required reason"}</span><textarea required minLength={5} value={roundingReason} onChange={(event) => setRoundingReason(event.target.value)} /></label></>}
               <div className="invoice-form-summary full"><span>{id ? "Subtotal BoQ" : "BoQ subtotal"}</span><strong>{formatCurrency(boqTotal, language)}</strong><small>{id ? "Urutan: subtotal − diskon + pajak ± pembulatan." : "Order: subtotal − discount + tax ± rounding."}</small></div>
+              <div className="invoice-form-summary full"><span>{id ? "Perkiraan total tagihan klien" : "Estimated total billed to client"}</span><strong>{formatCurrency((() => {
+                const previewDiscount = discountEnabled
+                  ? discountType === "Percent"
+                    ? Math.round((boqTotal * Math.min(10_000, discountValue)) / 10_000)
+                    : Math.min(boqTotal, discountValue)
+                  : 0;
+                const previewBase = Math.max(0, boqTotal - previewDiscount);
+                const beforeRounding = previewBase + (quotation?.taxAdditions ?? 0);
+                const step = [1_000, 10_000, 100_000].includes(roundingStep) ? roundingStep : 0;
+                const adjustment = roundingMode === "Custom"
+                  ? roundingAdjustment
+                  : roundingMode === "Up" && step > 0
+                    ? Math.ceil(beforeRounding / step) * step - beforeRounding
+                    : roundingMode === "Down" && step > 0
+                      ? Math.floor(beforeRounding / step) * step - beforeRounding
+                      : 0;
+                return Math.max(0, beforeRounding + adjustment);
+              })(), language)}</strong><small>{id ? "Termasuk pajak tersimpan; nilai final mengikuti aturan pajak yang dipilih." : "Includes stored tax; final value follows the selected tax rules."}</small></div>
               <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setShowQuotationForm(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit"><Pencil size={16} /> {id ? "Simpan Quotation" : "Save Quotation"}</button></div>
             </form>
           </section>
