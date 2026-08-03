@@ -13,6 +13,7 @@ import {
   jsonBody,
   noContent,
   ok,
+  partialPatchSchema,
 } from "./errors";
 
 const idSchema = z.string().trim().min(1).max(100);
@@ -24,9 +25,9 @@ const allocationSchema = z.object({
   percentage: z.number().positive().max(100),
   notes: z.string().trim().max(500).optional().default(""),
 });
-const allocationUpdateSchema = allocationSchema
-  .omit({ projectId: true })
-  .partial();
+const allocationUpdateSchema = partialPatchSchema(
+  allocationSchema.omit({ projectId: true }),
+);
 const paymentSchema = z.object({
   paidDate: isoDateSchema,
 });

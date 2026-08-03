@@ -14,7 +14,7 @@ import {
   readStoredFile,
   storeUploadedFile,
 } from "../storage";
-import { ApiError, created, jsonBody, noContent, ok } from "./errors";
+import { ApiError, created, jsonBody, noContent, ok, partialPatchSchema } from "./errors";
 
 const idSchema = z.string().trim().min(1).max(100);
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -820,7 +820,7 @@ export async function handleProjectExpenses(
     if (String(expense.created_by) !== user.id && !["Admin", "Finance"].includes(user.role)) {
       throw new ApiError(403, "FORBIDDEN", "Hanya pengaju yang dapat mengubah data ini.");
     }
-    const input = expenseSchema.partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(expenseSchema).parse(await jsonBody(request));
     if (input.projectId) await assertProjectAccess(client, user, input.projectId);
     if (input.categoryId) {
       const category = await client.execute({
@@ -1175,7 +1175,7 @@ export async function handleProjectExpenseCategories(
   });
   if (!current.rows[0]) throw new ApiError(404, "NOT_FOUND", "Kategori tidak ditemukan.");
   if (request.method === "PATCH") {
-    const input = categorySchema.partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(categorySchema).parse(await jsonBody(request));
     await client.execute({
       sql: "UPDATE project_expense_categories SET name=?,name_en=?,status=?,sort_order=?,updated_at=? WHERE id=?",
       args: [
