@@ -1,4 +1,22 @@
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
+
+// In Zod 4 `.partial()` keeps `.default()` values firing for missing keys, so
+// `schema.partial().parse({one:"field"})` silently materializes every other
+// defaulted field, and PATCH handlers written as `input.x ?? current.x` then
+// reset stored data to the defaults. Patch schemas must strip the defaults
+// BEFORE making the fields optional.
+export function partialPatchSchema<S extends z.ZodObject<z.ZodRawShape>>(schema: S) {
+  const shape = Object.fromEntries(
+    Object.entries(schema.shape).map(([key, field]) => {
+      let inner = field as z.ZodType;
+      while (inner instanceof z.ZodDefault) {
+        inner = (inner as z.ZodDefault<z.ZodType>).removeDefault() as z.ZodType;
+      }
+      return [key, inner.optional()];
+    }),
+  );
+  return z.object(shape) as unknown as ReturnType<S["partial"]>;
+}
 
 export class ApiError extends Error {
   constructor(

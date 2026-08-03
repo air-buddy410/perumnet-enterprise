@@ -57,6 +57,7 @@ import {
   jsonBody,
   noContent,
   ok,
+  partialPatchSchema,
 } from "./errors";
 import {
   renderBusinessPdf,
@@ -252,7 +253,10 @@ const quotationBaseSchema = z.object({
   roundingMode: z.enum(["None", "Up", "Down", "Custom"]).default("None"),
   roundingStep: z.union([z.literal(0), z.literal(1_000), z.literal(10_000), z.literal(100_000)]).default(0),
   roundingAdjustment: z.number().int().min(-Number.MAX_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER).default(0),
-  roundingReason: z.string().trim().max(500).optional(),
+  // The UI clears the reason by sending null, so the field must be nullable —
+  // rejecting null here made every quotation save without a custom rounding
+  // reason fail with 422 VALIDATION_ERROR ("Data yang dikirim belum valid").
+  roundingReason: z.string().trim().max(500).nullable().optional(),
 });
 const quotationRefinement = (
   input: Partial<z.infer<typeof quotationBaseSchema>>,
@@ -265,7 +269,7 @@ const quotationRefinement = (
     context.addIssue({ code: "custom", path: ["roundingReason"], message: "Alasan pembulatan khusus wajib diisi." });
   }
 };
-const quotationPatchSchema = quotationBaseSchema.partial().superRefine(quotationRefinement);
+const quotationPatchSchema = partialPatchSchema(quotationBaseSchema).superRefine(quotationRefinement);
 
 const vendorSchema = z.object({
   name: z.string().trim().min(2).max(160),
@@ -1344,7 +1348,7 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     }
 
     if (childId && request.method === "PATCH") {
-      const input = taskSchema.partial().parse(await jsonBody(request));
+      const input = partialPatchSchema(taskSchema).parse(await jsonBody(request));
       const current = await ensureExists(
         "SELECT * FROM project_tasks WHERE id = ? AND project_id = ?",
         [childId, projectId],
@@ -1436,7 +1440,7 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
   if (projectId && !child && request.method === "PATCH") {
     if (!mutationRoles("projects").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah proyek.");
     await assertProjectAccess(user, projectId);
-    const input = projectSchema.partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(projectSchema).parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM projects WHERE id = ?", [projectId], "Proyek tidak ditemukan.");
     assertDateOrder(
       input.startDate === undefined ? current.start_date : input.startDate,
@@ -1969,7 +1973,7 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
 
   if (child === "items" && childId && request.method === "PATCH") {
     if (!mutationRoles("boq").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah item BoQ.");
-    const input = boqItemSchema.partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(boqItemSchema).parse(await jsonBody(request));
     const current = await ensureExists(
       `SELECT i.*,s.status AS scope_status FROM boq_items i
         JOIN boqs b ON b.id=i.boq_id
@@ -2439,6 +2443,15 @@ async function handleQuotations(request: Request, user: AuthUser) {
         new Date(`${issuedAt}T00:00:00.000Z`).getTime() + 14 * 86_400_000,
       ).toISOString().slice(0, 10);
       assertDateOrder(issuedAt, validUntil, "Masa berlaku Quotation tidak boleh lebih awal dari tanggal terbit.");
+      // Never hardcode revision_no=1: a scope can still carry Superseded
+      // revisions (legacy data from the old delete path), and inserting a
+      // duplicate revision number would violate
+      // UNIQUE(scope_id,revision_no) and surface as a raw 500.
+      const maxRevision = await client.execute({
+        sql: "SELECT COALESCE(MAX(revision_no),0) AS max_revision FROM quotations WHERE scope_id=?",
+        args: [ensured.scopeId],
+      });
+      const revisionNo = asNumber(maxRevision.rows[0]?.max_revision) + 1;
       await client.execute({
         sql: `INSERT INTO quotations
           (id,project_id,package_id,scope_id,number,status,issued_at,valid_until,
@@ -2449,7 +2462,7 @@ async function handleQuotations(request: Request, user: AuthUser) {
         args: [
           quotationId, projectId, packageId, ensured.scopeId,
           makeSequence("QUO", sequence),
-          input.status ?? "Draft", issuedAt, validUntil, boq.totals.selling, 1,
+          input.status ?? "Draft", issuedAt, validUntil, boq.totals.selling, revisionNo,
           input.discountEnabled ? 1 : 0, input.discountType ?? "Nominal",
           input.discountValue ?? 0, 0, boq.totals.selling,
           input.roundingMode ?? "None", input.roundingStep ?? 0,
@@ -2463,7 +2476,7 @@ async function handleQuotations(request: Request, user: AuthUser) {
       });
     }
 
-    const response = await refreshQuotationCommercialSnapshot(client, quotationId);
+    let response = await refreshQuotationCommercialSnapshot(client, quotationId);
     if (response.status === "Sent" && response.taxEnabled && !response.taxes.length) {
       throw new ApiError(409, "TAX_RULE_REQUIRED", "Pilih minimal satu aturan pajak sebelum mengirim Quotation.");
     }
@@ -2473,7 +2486,9 @@ async function handleQuotations(request: Request, user: AuthUser) {
     });
     if (response.status === "Sent") {
       await snapshotQuotationItems(client, quotationId);
-      await lockDocumentTaxes(client, "Quotation", quotationId);
+      const lockedTaxes = await lockDocumentTaxes(client, "Quotation", quotationId);
+      // The response was assembled before the lock — reflect the real state.
+      response = { ...response, taxes: lockedTaxes };
       await notifyProjectStakeholders(client, {
         projectId,
         eventType: "quotation_sent",
@@ -2490,13 +2505,14 @@ async function handleQuotations(request: Request, user: AuthUser) {
   if (request.method === "DELETE") {
     assertAccess(user, "billing", "manage");
     const result = await client.execute({
-      sql: `SELECT id,status FROM quotations WHERE project_id=? AND package_id=?
+      sql: `SELECT id,status,scope_id FROM quotations WHERE project_id=? AND package_id=?
         AND status<>'Superseded' ORDER BY revision_no DESC,created_at DESC LIMIT 1`,
       args: [projectId, packageId],
     });
-    const quotationId = result.rows[0]?.id;
-    if (!quotationId) throw new ApiError(404, "NOT_FOUND", "Quotation tidak ditemukan.");
-    if (String(result.rows[0].status) === "Accepted") {
+    const currentRow = result.rows[0];
+    if (!currentRow) throw new ApiError(404, "NOT_FOUND", "Quotation tidak ditemukan.");
+    const quotationId = String(currentRow.id);
+    if (String(currentRow.status) === "Accepted") {
       throw new ApiError(409, "ACCEPTED_QUOTATION_LOCKED", "Quotation yang diterima klien tidak dapat dihapus.");
     }
     const invoiceUsage = await client.execute({
@@ -2506,11 +2522,68 @@ async function handleQuotations(request: Request, user: AuthUser) {
     if (invoiceUsage.rows.length) {
       throw new ApiError(409, "QUOTATION_IN_USE", "Quotation tidak dapat dihapus karena sudah memiliki Invoice.");
     }
+    // SQLite does not enforce the spks/spk_items RESTRICT foreign keys here, so
+    // deleting a referenced quotation would silently orphan procurement
+    // documents (or crash where FKs are enforced). Refuse with a clear 409.
+    const procurementUsage = await client.execute({
+      sql: `SELECT id FROM spks WHERE quotation_id=?
+        UNION SELECT spk_id FROM spk_items WHERE quotation_id=? LIMIT 1`,
+      args: [quotationId, quotationId],
+    });
+    if (procurementUsage.rows.length) {
+      throw new ApiError(
+        409,
+        "QUOTATION_IN_USE_PROCUREMENT",
+        "Quotation tidak dapat dihapus karena sudah dirujuk dokumen procurement (SPK/PO). Hapus atau lepaskan dokumen tersebut terlebih dahulu.",
+      );
+    }
+    const scopeId = currentRow.scope_id ? String(currentRow.scope_id) : null;
+    const timestamp = now();
     await client.batch([
       { sql: "DELETE FROM document_taxes WHERE document_type='Quotation' AND document_id=?", args: [quotationId] },
+      { sql: "DELETE FROM quotation_items WHERE quotation_id=?", args: [quotationId] },
       { sql: "DELETE FROM quotations WHERE id=?", args: [quotationId] },
     ], "write");
-    await writeAuditLog(client, request, user, "delete", "quotation", String(quotationId), { projectId, packageId });
+    let promotedId: string | null = null;
+    if (scopeId) {
+      // Deleting the active revision must not strand the Superseded history:
+      // the previous revision becomes the active document again as an
+      // editable Draft. Otherwise the next save would insert revision_no=1
+      // next to the orphaned Superseded revision and explode on
+      // UNIQUE(scope_id,revision_no) with a raw 500.
+      const previous = await client.execute({
+        sql: `SELECT id FROM quotations WHERE scope_id=? AND status='Superseded'
+          ORDER BY revision_no DESC,created_at DESC LIMIT 1`,
+        args: [scopeId],
+      });
+      if (previous.rows[0]) {
+        promotedId = String(previous.rows[0].id);
+        await client.batch([
+          {
+            sql: `UPDATE quotations SET status='Draft',accepted_at=NULL,
+              acceptance_attachment_name=NULL,acceptance_attachment_mime_type=NULL,
+              acceptance_attachment_content_base64=NULL,updated_at=? WHERE id=?`,
+            args: [timestamp, promotedId],
+          },
+          {
+            sql: `UPDATE document_taxes SET locked=0,locked_at=NULL,updated_at=?
+              WHERE document_type='Quotation' AND document_id=?`,
+            args: [timestamp, promotedId],
+          },
+        ], "write");
+        await refreshQuotationCommercialSnapshot(client, promotedId);
+      }
+      await client.execute({
+        sql: "UPDATE boq_scopes SET status='Draft',updated_at=? WHERE id=? AND status<>'Accepted'",
+        args: [timestamp, scopeId],
+      });
+    }
+    await syncCommercialValues(client, projectId, { request, user });
+    await writeAuditLog(client, request, user, "delete", "quotation", quotationId, {
+      projectId,
+      packageId,
+      promotedRevisionId: promotedId,
+    });
     return noContent();
   }
 
@@ -3388,23 +3461,44 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
     const input = invoicePatchSchema.parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM invoices WHERE id=?", [invoiceId], "Invoice tidak ditemukan.");
     await assertProjectAccess(user, String(current.project_id));
+    // Percent invoices lock their tax snapshot at creation, so "any locked
+    // tax" used to make every freshly issued invoice uneditable. The real
+    // business boundary is the same one deletion uses: payment history, or
+    // tax obligations that are already settled/reported.
     const locked = await client.execute({
       sql: `SELECT
         EXISTS(SELECT 1 FROM invoice_payments WHERE invoice_id=?) AS has_payment,
-        EXISTS(SELECT 1 FROM document_taxes
-          WHERE document_type='Invoice' AND document_id=? AND locked=1) AS tax_locked`,
+        EXISTS(
+          SELECT 1 FROM tax_obligations o
+          JOIN document_taxes dt ON dt.id=o.document_tax_id
+          WHERE dt.document_type='Invoice' AND dt.document_id=?
+            AND (
+              o.settled_amount>0
+              OR o.status NOT IN ('Outstanding','Void')
+              OR o.reporting_status NOT IN ('Candidate','Void')
+              OR EXISTS(SELECT 1 FROM tax_settlements s WHERE s.obligation_id=o.id)
+            )
+        ) AS tax_committed`,
       args: [invoiceId, invoiceId],
     });
     if (
       Number(locked.rows[0]?.has_payment) === 1 ||
-      locked.rows[0]?.has_payment === true ||
-      Number(locked.rows[0]?.tax_locked) === 1 ||
-      locked.rows[0]?.tax_locked === true
+      locked.rows[0]?.has_payment === true
     ) {
       throw new ApiError(
         409,
         "INVOICE_LOCKED",
-        "Invoice yang sudah memiliki histori pembayaran atau snapshot pajak terkunci tidak dapat diedit.",
+        "Invoice yang sudah memiliki histori pembayaran tidak dapat diedit. Void pembayaran terlebih dahulu.",
+      );
+    }
+    if (
+      Number(locked.rows[0]?.tax_committed) === 1 ||
+      locked.rows[0]?.tax_committed === true
+    ) {
+      throw new ApiError(
+        409,
+        "INVOICE_TAX_COMMITTED",
+        "Invoice dengan kewajiban pajak yang sudah disetor atau dilaporkan tidak dapat diedit.",
       );
     }
     assertDateOrder(
@@ -3469,8 +3563,18 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
         ],
       });
       if (allocation && quotation) {
+        // Rebuild the allocation from scratch: the existing rows are locked
+        // copies from creation time, so a partial `locked=0` delete would
+        // duplicate every tax line. Candidate obligations are recreated when
+        // the refreshed snapshot is locked again below.
         await tx.execute({
-          sql: "DELETE FROM document_taxes WHERE document_type='Invoice' AND document_id=? AND locked=0",
+          sql: `DELETE FROM tax_obligations WHERE document_tax_id IN (
+            SELECT id FROM document_taxes
+            WHERE document_type='Invoice' AND document_id=?)`,
+          args: [invoiceId],
+        });
+        await tx.execute({
+          sql: "DELETE FROM document_taxes WHERE document_type='Invoice' AND document_id=?",
           args: [invoiceId],
         });
         await copyQuotationTaxAllocation(
@@ -3484,6 +3588,14 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
         );
       }
     });
+    if (allocation && quotation) {
+      await lockDocumentTaxes(
+        client,
+        "Invoice",
+        invoiceId,
+        String(input.dueDate ?? current.due_date),
+      );
+    }
     await writeAuditLog(client, request, user, "update", "invoice", invoiceId, input);
     return ok(await getInvoice(client, invoiceId));
   }
@@ -3735,7 +3847,7 @@ async function handleVendors(request: Request, path: string[], user: AuthUser) {
 
   if (vendorId && request.method === "PATCH") {
     if (!["Admin", "Finance"].includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Hanya Admin dan Finance yang dapat mengubah vendor.");
-    const input = vendorSchema.partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(vendorSchema).parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM vendors WHERE id=?", [vendorId], "Vendor tidak ditemukan.");
     const vendorType = input.vendorType ?? String(current.vendor_type ?? "Jasa") as "Supplier" | "Jasa" | "Hybrid";
     let categoryIds = input.categoryIds;
@@ -4033,7 +4145,7 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
 
   if (spkId && !action && request.method === "PATCH") {
     if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah SPK.");
-    const input = spkSchema.partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(spkSchema).parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
     if (current.payment_status === "Dibayar") {
       assertAccess(user, "finance", "manage");

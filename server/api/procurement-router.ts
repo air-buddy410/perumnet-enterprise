@@ -1328,9 +1328,13 @@ async function voidOrder(request: Request, user: AuthUser, orderId: string) {
       "Void seluruh pembayaran aktif terlebih dahulu sebelum melakukan void dokumen.",
     );
   }
+  // The legacy `status` column is CHECK-constrained to the four workflow
+  // labels and cannot hold 'Void' — writing it here made every void 500 with
+  // SQLITE_CONSTRAINT. `workflow_status`/`approval_status` are the source of
+  // truth for voided documents, so the legacy mirror stays untouched.
   await client.execute({
     sql: `UPDATE spks SET workflow_status='Void',approval_status='Void',
-      status='Void',override_reason=?,updated_at=? WHERE id=?`,
+      override_reason=?,updated_at=? WHERE id=?`,
     args: [input.reason, now(), orderId],
   });
   await writeAuditLog(client, request, user, "void", "procurement_order", orderId, input);

@@ -82,7 +82,10 @@ export function messageOf(error: unknown, language: "id" | "en" = "id") {
       INVOICE_HISTORY_EXISTS: "An invoice with payment history cannot be deleted. Void the payment instead.",
       INVOICE_TAX_COMMITTED: "An invoice whose tax obligations are already settled or reported cannot be deleted.",
       QUOTATION_IN_USE: "The quotation cannot be deleted because it already has an invoice.",
+      QUOTATION_IN_USE_PROCUREMENT: "The quotation cannot be deleted because a procurement document (SPK/PO) still references it.",
       ACCEPTED_QUOTATION_LOCKED: "A client-accepted quotation is locked and cannot be changed or deleted.",
+      INVOICE_LOCKED: "An invoice with payment history cannot be edited. Void the payment first.",
+      VALIDATION_ERROR: "The submitted data is not valid. Check the highlighted fields and try again.",
       BRAND_REQUIRED: "Select a brand for Device or Material items.",
       BRAND_CATEGORY_MISMATCH: "The brand does not belong to the selected active category.",
     };

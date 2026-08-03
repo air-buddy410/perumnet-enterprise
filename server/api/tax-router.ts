@@ -13,7 +13,7 @@ import {
   getDocumentTaxes,
   type TaxDocumentType,
 } from "../tax";
-import { ApiError, created, jsonBody, ok } from "./errors";
+import { ApiError, created, jsonBody, ok, partialPatchSchema } from "./errors";
 import { renderTaxReportPdf, type TaxReportRow } from "./tax-pdf";
 
 const idSchema = z.string().trim().min(1).max(100);
@@ -43,7 +43,7 @@ const ruleSchema = z.object({
   status: z.enum(["Active", "Inactive"]).default("Inactive"),
   sortOrder: z.number().int().min(0).max(10_000).default(0),
 });
-const rulePatchSchema = ruleSchema.partial();
+const rulePatchSchema = partialPatchSchema(ruleSchema);
 const documentTaxSchema = z.object({
   ruleIds: z.array(idSchema).max(20),
 });

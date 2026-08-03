@@ -7,7 +7,7 @@ import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
 import type { DatabaseClient } from "../db/client";
 import { getDatabase } from "../db/client";
-import { ApiError, created, jsonBody, noContent, ok } from "./errors";
+import { ApiError, created, jsonBody, noContent, ok, partialPatchSchema } from "./errors";
 
 const packageSchema = z.object({
   title: z.string().trim().min(2).max(160),
@@ -178,7 +178,7 @@ export async function handleCommercialPackages(
   if (!current.rows[0]) throw new ApiError(404, "NOT_FOUND", "Paket komersial tidak ditemukan.");
 
   if (request.method === "PATCH") {
-    const input = packageSchema.partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(packageSchema).parse(await jsonBody(request));
     const merged = packageSchema.parse({
       title: input.title ?? current.rows[0].title,
       code: input.code ?? current.rows[0].code,
