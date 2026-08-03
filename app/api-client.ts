@@ -73,6 +73,14 @@ export function messageOf(error: unknown, language: "id" | "en" = "id") {
       INVALID_STATEMENT: "No valid bank transactions were found in this statement.",
       STATEMENT_PERIOD_MISMATCH: "The selected period does not match the period in the PDF.",
       BANK_ACCOUNT_MISMATCH: "The account number in the PDF does not match the selected bank account.",
+      OPENAI_NOT_CONFIGURED: "The AI assistant is not configured on this server yet.",
+      AI_DAILY_LIMIT: "The limit of 20 AI analyses per user per day has been reached.",
+      AI_CONCURRENCY_LIMIT: "At most two AI analyses can run at the same time.",
+      AI_RUN_NOT_DRAFT: "Only draft AI recommendations can be processed.",
+      AI_RECOMMENDATION_EXPIRED: "The recommendation is older than seven days. Refresh the analysis or provide an override reason.",
+      SKU_EXISTS: "This SKU is already used by another item.",
+      BRAND_REQUIRED: "Select a brand for Device or Material items.",
+      BRAND_CATEGORY_MISMATCH: "The brand does not belong to the selected active category.",
     };
     return error.code && messages[error.code]
       ? messages[error.code]

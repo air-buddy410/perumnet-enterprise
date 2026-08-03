@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { getDatabase } from "@/server/db/client";
 import { dispatchEmailOutbox } from "@/server/email";
 import { anonymizeExpiredLeads } from "@/server/api/lead-router";
+import { sweepStaleCatalogAiRuns } from "@/server/api/catalog-ai-router";
 import { ApiError, errorResponse, ok } from "@/server/api/errors";
 
 export const runtime = "nodejs";
@@ -26,12 +27,14 @@ export async function POST(request: Request) {
     }
     const { client } = await getDatabase();
     const anonymizedLeads = await anonymizeExpiredLeads(client);
+    const sweptAiRuns = await sweepStaleCatalogAiRuns(client);
     const result = await dispatchEmailOutbox(client, 25);
     return ok({
       processed: result.length,
       sent: result.filter((item) => item.status === "sent").length,
       failed: result.filter((item) => item.status === "failed").length,
       anonymizedLeads,
+      sweptAiRuns,
     });
   } catch (error) {
     return errorResponse(error);

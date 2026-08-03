@@ -21,7 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, downloadApiFile, messageOf } from "../api-client";
+import { api, ApiClientError, downloadApiFile, messageOf } from "../api-client";
 import type { CatalogBrand, CatalogCategory, CatalogItem, CatalogPayload } from "../data";
 import { formatCurrency } from "../data";
 import type { AppLanguage } from "../i18n";
@@ -66,7 +66,27 @@ type CatalogAiRun = {
   recommendation?: CatalogAiRecommendation | null;
   sources: Array<{ title: string; url: string; accessedAt: string }>;
   catalogItemId?: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
+
+type AiPhase = "loading" | "idle" | "analyzing" | "draft-review" | "failed" | "approved" | "rejected";
+
+type AiReviewForm = {
+  sku: string; name: string; nameEn: string; model: string; unit: string;
+  specifications: string; costPrice: number; margin1Percent: number; margin2Percent: number;
+};
+
+const emptyAiForm: AiReviewForm = {
+  sku: "", name: "", nameEn: "", model: "", unit: "unit",
+  specifications: "", costPrice: 0, margin1Percent: 20, margin2Percent: 30,
+};
+
+function formatElapsed(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
 
 const roles = ["Perangkat", "Material", "Jasa", "Mobilitas"] as const;
 const emptyItem: ItemFormState = {
@@ -91,6 +111,7 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
   const importRef = useRef<HTMLInputElement>(null);
   const aiFileRef = useRef<HTMLInputElement>(null);
   const [aiOpen, setAiOpen] = useState(false);
+  const [aiPhase, setAiPhase] = useState<AiPhase>("loading");
   const [aiQuery, setAiQuery] = useState("");
   const [aiSourceUrl, setAiSourceUrl] = useState("");
   const [aiFile, setAiFile] = useState<File | null>(null);
@@ -98,6 +119,12 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
   const [aiRun, setAiRun] = useState<CatalogAiRun | null>(null);
   const [aiCategoryId, setAiCategoryId] = useState("");
   const [aiBrandId, setAiBrandId] = useState("");
+  const [aiForm, setAiForm] = useState<AiReviewForm>(emptyAiForm);
+  const [aiOverrideReason, setAiOverrideReason] = useState("");
+  const [aiShowOverride, setAiShowOverride] = useState(false);
+  const [aiActionError, setAiActionError] = useState("");
+  const [aiElapsed, setAiElapsed] = useState(0);
+  const [aiPollTimedOut, setAiPollTimedOut] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -192,7 +219,7 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
     });
   }
 
-  function selectSuggestedClassification(run: CatalogAiRun) {
+  const selectSuggestedClassification = useCallback((run: CatalogAiRun) => {
     const recommendation = run.recommendation;
     if (!recommendation) return;
     const normalizedCategory = recommendation.productCategory.trim().toLowerCase();
@@ -204,11 +231,110 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
     const suggestedBrand = data.brands.find((entry) => entry.status === "Aktif" &&
       entry.categoryId === suggestedCategory?.id && entry.name.trim().toLowerCase() === recommendation.brand.trim().toLowerCase());
     setAiBrandId(suggestedBrand?.id ?? "");
+  }, [data.brands, data.categories]);
+
+  const enterDraftReview = useCallback((run: CatalogAiRun) => {
+    const recommendation = run.recommendation;
+    setAiRun(run);
+    if (recommendation) {
+      setAiForm({
+        sku: recommendation.sku,
+        name: recommendation.nameId,
+        nameEn: recommendation.nameEn,
+        model: recommendation.model,
+        unit: recommendation.unit,
+        specifications: recommendation.specifications.join("\n"),
+        costPrice: recommendation.recommendedCostPrice,
+        margin1Percent: recommendation.margin1Percent,
+        margin2Percent: recommendation.margin2Percent,
+      });
+    }
+    selectSuggestedClassification(run);
+    setAiOverrideReason("");
+    setAiShowOverride(Boolean(run.expiresAt && run.expiresAt < new Date().toISOString()));
+    setAiActionError("");
+    setAiPhase("draft-review");
+  }, [selectSuggestedClassification]);
+
+  useEffect(() => {
+    if (!aiOpen) return;
+    let active = true;
+    api<CatalogAiRun[]>("/api/catalog/ai?mine=1")
+      .then((runs) => {
+        if (!active) return;
+        const running = runs.find((entry) => entry.status === "Running");
+        const draft = runs.find((entry) => entry.status === "Draft");
+        if (running) {
+          setAiRun(running);
+          setAiQuery(running.query);
+          setAiSourceUrl(running.sourceUrl ?? "");
+          setAiElapsed(Math.max(0, Math.floor((Date.now() - new Date(running.createdAt).getTime()) / 1_000)));
+          setAiPollTimedOut(false);
+          setAiPhase("analyzing");
+        } else if (draft?.recommendation) {
+          setAiQuery(draft.query);
+          setAiSourceUrl(draft.sourceUrl ?? "");
+          enterDraftReview(draft);
+        } else {
+          setAiPhase("idle");
+        }
+      })
+      .catch(() => { if (active) setAiPhase("idle"); });
+    return () => { active = false; };
+  }, [aiOpen, enterDraftReview]);
+
+  useEffect(() => {
+    if (!aiOpen || aiPhase !== "analyzing" || !aiRun) return;
+    const runId = aiRun.id;
+    const startedAt = new Date(aiRun.createdAt).getTime();
+    const ticker = window.setInterval(() => {
+      setAiElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1_000)));
+    }, 1_000);
+    const poller = window.setInterval(() => {
+      if (Date.now() - startedAt > 600_000) {
+        setAiPollTimedOut(true);
+        window.clearInterval(poller);
+        return;
+      }
+      api<CatalogAiRun>(`/api/catalog/ai/runs/${runId}`)
+        .then((run) => {
+          if (run.status === "Draft") {
+            enterDraftReview(run);
+          } else if (run.status === "Failed") {
+            setAiRun(run);
+            setAiPhase("failed");
+          } else if (run.status === "Approved") {
+            setAiRun(run);
+            setAiPhase("approved");
+          } else if (run.status === "Rejected") {
+            setAiRun(run);
+            setAiPhase("rejected");
+          }
+        })
+        .catch(() => undefined);
+    }, 3_000);
+    return () => {
+      window.clearInterval(ticker);
+      window.clearInterval(poller);
+    };
+  }, [aiOpen, aiPhase, aiRun, enterDraftReview]);
+
+  function resetAiToIdle() {
+    setAiRun(null);
+    setAiCategoryId("");
+    setAiBrandId("");
+    setAiForm(emptyAiForm);
+    setAiOverrideReason("");
+    setAiShowOverride(false);
+    setAiActionError("");
+    setAiPollTimedOut(false);
+    setAiPhase("idle");
   }
 
   async function analyzeWithAi(event: FormEvent) {
     event.preventDefault();
     setAiLoading(true);
+    setAiActionError("");
     try {
       const file = aiFile ? {
         name: aiFile.name,
@@ -220,28 +346,50 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
         body: JSON.stringify({ query: aiQuery, sourceUrl: aiSourceUrl || undefined, file }),
       });
       setAiRun(run);
-      selectSuggestedClassification(run);
-      notify(id ? "Analisis selesai. Tinjau hasil sebelum menyetujui." : "Analysis completed. Review it before approval.");
+      setAiElapsed(0);
+      setAiPollTimedOut(false);
+      setAiPhase("analyzing");
     } catch (error) {
-      notify(messageOf(error, language));
+      setAiActionError(messageOf(error, language));
     } finally {
       setAiLoading(false);
     }
   }
 
-  async function approveAiRun() {
-    if (!aiRun?.recommendation || !aiCategoryId) return;
+  async function approveAiRun(event: FormEvent) {
+    event.preventDefault();
+    if (!aiRun?.recommendation || !aiCategoryId || aiPhase !== "draft-review") return;
     setAiLoading(true);
+    setAiActionError("");
     try {
       await api(`/api/catalog/ai/runs/${aiRun.id}/approve`, {
         method: "POST",
-        body: JSON.stringify({ categoryId: aiCategoryId, brandId: aiBrandId || null }),
+        body: JSON.stringify({
+          categoryId: aiCategoryId,
+          brandId: aiBrandId || null,
+          sku: aiForm.sku.trim(),
+          name: aiForm.name.trim(),
+          nameEn: aiForm.nameEn.trim(),
+          model: aiForm.model.trim(),
+          specifications: aiForm.specifications,
+          unit: aiForm.unit.trim(),
+          costPrice: Math.round(aiForm.costPrice),
+          margin1Percent: aiForm.margin1Percent,
+          margin2Percent: aiForm.margin2Percent,
+          ...(aiShowOverride ? { overrideReason: aiOverrideReason.trim() } : {}),
+        }),
       });
+      setAiPhase("approved");
       notify(id ? "Rekomendasi disetujui dan ditambahkan ke katalog." : "Recommendation approved and added to the catalog.");
       setAiOpen(false); setAiRun(null); setAiQuery(""); setAiSourceUrl(""); setAiFile(null);
+      setAiCategoryId(""); setAiBrandId(""); setAiForm(emptyAiForm);
+      setAiOverrideReason(""); setAiShowOverride(false);
       await load();
     } catch (error) {
-      notify(messageOf(error, language));
+      if (error instanceof ApiClientError && error.code === "AI_RECOMMENDATION_EXPIRED") {
+        setAiShowOverride(true);
+      }
+      setAiActionError(messageOf(error, language));
     } finally {
       setAiLoading(false);
     }
@@ -252,12 +400,14 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
     const reason = window.prompt(id ? "Alasan penolakan (minimal 5 karakter):" : "Reason for rejection (at least 5 characters):");
     if (!reason) return;
     setAiLoading(true);
+    setAiActionError("");
     try {
       await api(`/api/catalog/ai/runs/${aiRun.id}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
       notify(id ? "Rekomendasi AI ditolak." : "AI recommendation rejected.");
       setAiRun((current) => current ? { ...current, status: "Rejected" } : current);
+      setAiPhase("rejected");
     } catch (error) {
-      notify(messageOf(error, language));
+      setAiActionError(messageOf(error, language));
     } finally {
       setAiLoading(false);
     }
@@ -270,6 +420,15 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
     .filter((entry): entry is CatalogCategory => Boolean(entry));
   const price1 = Math.round(itemForm.costPrice * (1 + itemForm.margin1Percent / 100));
   const price2 = Math.round(itemForm.costPrice * (1 + itemForm.margin2Percent / 100));
+  const aiReviewPrice1 = Math.round(aiForm.costPrice * (1 + aiForm.margin1Percent / 100));
+  const aiReviewPrice2 = Math.round(aiForm.costPrice * (1 + aiForm.margin2Percent / 100));
+  const aiRequiresBrand = ["Perangkat", "Material"].includes(data.categories.find((entry) => entry.id === aiCategoryId)?.boqRole ?? "");
+  const aiReviewValid = Boolean(aiCategoryId) && (!aiRequiresBrand || Boolean(aiBrandId)) &&
+    aiForm.sku.trim().length >= 2 && aiForm.name.trim().length >= 2 && aiForm.unit.trim().length >= 1 &&
+    Number.isFinite(aiForm.costPrice) && aiForm.costPrice >= 0 &&
+    aiForm.margin1Percent >= 0 && aiForm.margin1Percent <= 1000 &&
+    aiForm.margin2Percent >= 0 && aiForm.margin2Percent <= 1000 &&
+    (!aiShowOverride || aiOverrideReason.trim().length >= 5);
 
   return <div className="page-stack catalog-page" data-testid="catalog-view">
     <section className="page-title-row">
@@ -279,7 +438,7 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
         <input ref={importRef} hidden type="file" accept=".xlsx" onChange={(event) => void importFile(event.target.files?.[0])} />
         <button className="button secondary" type="button" onClick={() => importRef.current?.click()}><FileUp size={16} /> Import Excel</button>
         <button className="button secondary" type="button" onClick={() => void downloadApiFile("/api/catalog/export.xlsx", "katalog-item.xlsx")}><Download size={16} /> Export</button>
-        <button className="button ai-catalog-button" type="button" onClick={() => setAiOpen(true)}><Sparkles size={16} /> AI Assistant</button>
+        <button className="button ai-catalog-button" type="button" onClick={() => { setAiPhase("loading"); setAiActionError(""); setAiOpen(true); }}><Sparkles size={16} /> AI Assistant</button>
         <button className="button primary" type="button" onClick={() => openItem()}><Plus size={16} /> {id ? "Item baru" : "New item"}</button>
       </div>
     </section>
@@ -354,16 +513,50 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
           <button className="icon-button" type="button" onClick={() => setAiOpen(false)} aria-label={id ? "Tutup" : "Close"}><X size={18} /></button>
         </header>
 
-        {!aiRun && <form className="catalog-ai-input" onSubmit={analyzeWithAi}>
+        {aiPhase === "loading" && <div className="catalog-ai-result">
+          <section className="catalog-ai-progress">
+            <LoaderCircle className="spin" size={20} />
+            <div><strong>{id ? "Memuat status analisis..." : "Loading analysis status..."}</strong></div>
+          </section>
+        </div>}
+
+        {aiPhase === "idle" && <form className="catalog-ai-input" onSubmit={analyzeWithAi}>
           <label className="field"><span>{id ? "Model, SKU, atau kebutuhan perangkat" : "Model, SKU, or product requirement"}</span><textarea required minLength={2} maxLength={500} value={aiQuery} onChange={(event) => setAiQuery(event.target.value)} placeholder="Contoh: Ruijie Reyee RG-RAP2260(E), access point WiFi 6 indoor" /></label>
           <label className="field"><span><Link size={14} /> {id ? "URL produk (opsional)" : "Product URL (optional)"}</span><input type="url" value={aiSourceUrl} onChange={(event) => setAiSourceUrl(event.target.value)} placeholder="https://..." /></label>
           <input ref={aiFileRef} hidden type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={(event) => setAiFile(event.target.files?.[0] ?? null)} />
           <button className="catalog-ai-file" type="button" onClick={() => aiFileRef.current?.click()}><FileText size={20} /><span><strong>{aiFile?.name ?? (id ? "Tambahkan foto atau datasheet" : "Add a photo or datasheet")}</strong><small>PNG, JPG, WebP, PDF · maks. 10 MB</small></span></button>
           <div className="catalog-ai-safety"><Check size={15} /><p>{id ? "Data klien, proyek, dan vendor tidak dikirim. Sumber web diperlakukan sebagai data yang tidak tepercaya." : "Client, project, and vendor data is never sent. Web sources are treated as untrusted data."}</p></div>
-          <button className="button primary catalog-ai-submit" type="submit" disabled={aiLoading || aiQuery.trim().length < 2}>{aiLoading ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />} {aiLoading ? (id ? "Menganalisis..." : "Analyzing...") : (id ? "Mulai analisis" : "Start analysis")}</button>
+          {aiActionError && <section className="catalog-ai-error" role="alert"><strong><AlertTriangle size={14} /> {id ? "Analisis tidak dapat dimulai" : "The analysis could not start"}</strong><p>{aiActionError}</p></section>}
+          <button className="button primary catalog-ai-submit" type="submit" disabled={aiLoading || aiQuery.trim().length < 2}>{aiLoading ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />} {aiLoading ? (id ? "Mengirim..." : "Submitting...") : (id ? "Mulai analisis" : "Start analysis")}</button>
         </form>}
 
-        {aiRun?.recommendation && <div className="catalog-ai-result">
+        {aiPhase === "analyzing" && aiRun && <div className="catalog-ai-result">
+          <section className="catalog-ai-progress">
+            <LoaderCircle className="spin" size={22} />
+            <div>
+              <strong>{id ? "AI sedang menganalisis produk..." : "AI analysis in progress..."}</strong>
+              <p>{aiRun.query}</p>
+              <small>{id ? "Berjalan" : "Elapsed"} {formatElapsed(aiElapsed)}</small>
+            </div>
+          </section>
+          <div className="catalog-ai-safety"><Check size={15} /><p>{id ? "Anda dapat menutup panel ini — analisis berlanjut di server." : "You can close this panel — the analysis continues on the server."}</p></div>
+          {aiPollTimedOut && <section className="catalog-ai-section warning"><strong><AlertTriangle size={14} /> {id ? "Pemantauan dijeda" : "Monitoring paused"}</strong><ul><li>{id ? "Analisis berjalan lebih dari 10 menit. Tutup lalu buka kembali panel ini untuk menyegarkan status." : "The analysis has been running for over 10 minutes. Close and reopen this panel to refresh the status."}</li></ul></section>}
+        </div>}
+
+        {aiPhase === "failed" && aiRun && <div className="catalog-ai-result">
+          <section className="catalog-ai-error" role="alert">
+            <strong><AlertTriangle size={14} /> {id ? "Analisis gagal" : "Analysis failed"}</strong>
+            <p>{aiRun.errorMessage || (id ? "Analisis gagal tanpa pesan galat." : "The analysis failed without an error message.")}</p>
+          </section>
+          <button className="button primary" type="button" onClick={resetAiToIdle}>{id ? "Coba lagi" : "Try again"}</button>
+        </div>}
+
+        {aiPhase === "approved" && <div className="catalog-ai-result">
+          <section className="catalog-ai-section"><strong><Check size={14} /> {id ? "Rekomendasi telah disetujui dan masuk ke katalog." : "The recommendation has been approved and added to the catalog."}</strong></section>
+          <button className="button secondary" type="button" onClick={resetAiToIdle}>{id ? "Analisis baru" : "New analysis"}</button>
+        </div>}
+
+        {(aiPhase === "draft-review" || aiPhase === "rejected") && aiRun?.recommendation && <form id="catalog-ai-review-form" className="catalog-ai-result" onSubmit={approveAiRun}>
           <div className="catalog-ai-result-title"><span className={`status-badge ${aiRun.status === "Draft" ? "warning" : aiRun.status === "Approved" ? "success" : "muted"}`}>{aiRun.status}</span><span>Confidence {aiRun.recommendation.confidence}%</span></div>
           <div className="catalog-ai-product"><span>{aiRun.recommendation.brand}</span><h3>{id ? aiRun.recommendation.nameId : aiRun.recommendation.nameEn}</h3><p>{aiRun.recommendation.model} · {aiRun.recommendation.sku}</p></div>
           <div className="catalog-ai-prices">
@@ -375,10 +568,38 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
           <section className="catalog-ai-section"><strong>{id ? "Spesifikasi teridentifikasi" : "Identified specifications"}</strong><ul>{aiRun.recommendation.specifications.map((entry) => <li key={entry}>{entry}</li>)}</ul></section>
           {(aiRun.recommendation.warnings.length > 0 || aiRun.recommendation.assumptions.length > 0) && <section className="catalog-ai-section warning"><strong><AlertTriangle size={14} /> {id ? "Asumsi dan catatan" : "Assumptions and notes"}</strong><ul>{[...aiRun.recommendation.warnings, ...aiRun.recommendation.assumptions].map((entry) => <li key={entry}>{entry}</li>)}</ul></section>}
           {aiRun.sources.length > 0 && <section className="catalog-ai-section"><strong>{id ? "Sumber publik" : "Public sources"}</strong><div className="catalog-ai-sources">{aiRun.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer"><span>{source.title}</span><ExternalLink size={13} /></a>)}</div></section>}
-          <section className="catalog-ai-classification"><label className="field select-field"><span>{id ? "Kategori katalog" : "Catalog category"}</span><select required value={aiCategoryId} onChange={(event) => { setAiCategoryId(event.target.value); setAiBrandId(""); }}><option value="">{id ? "Pilih kategori" : "Select category"}</option>{data.categories.filter((entry) => entry.status === "Aktif").map((entry) => <option key={entry.id} value={entry.id}>{entry.boqRole} · {entry.name}</option>)}</select></label><label className="field select-field"><span>{id ? "Merek" : "Brand"}</span><select value={aiBrandId} onChange={(event) => setAiBrandId(event.target.value)}><option value="">{id ? "Pilih merek" : "Select brand"}</option>{data.brands.filter((entry) => entry.status === "Aktif" && entry.categoryId === aiCategoryId).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label></section>
-        </div>}
+          {aiPhase === "draft-review" && <>
+            <section className="catalog-ai-review">
+              <strong>{id ? "Tinjau dan sesuaikan sebelum menyetujui" : "Review and adjust before approving"}</strong>
+              <div className="form-grid two-columns">
+                <label className="field"><span>SKU</span><input required minLength={2} maxLength={80} value={aiForm.sku} onChange={(event) => setAiForm((current) => ({ ...current, sku: event.target.value }))} /></label>
+                <label className="field"><span>Model</span><input maxLength={120} value={aiForm.model} onChange={(event) => setAiForm((current) => ({ ...current, model: event.target.value }))} /></label>
+              </div>
+              <label className="field"><span>{id ? "Nama item" : "Item name"}</span><input required minLength={2} maxLength={180} value={aiForm.name} onChange={(event) => setAiForm((current) => ({ ...current, name: event.target.value }))} /></label>
+              <div className="form-grid two-columns">
+                <label className="field"><span>{id ? "Satuan" : "Unit"}</span><input required maxLength={40} value={aiForm.unit} onChange={(event) => setAiForm((current) => ({ ...current, unit: event.target.value }))} /></label>
+                <label className="field"><span>{id ? "Harga pokok" : "Cost price"}</span><input type="number" min="0" required value={aiForm.costPrice || ""} onChange={(event) => setAiForm((current) => ({ ...current, costPrice: Number(event.target.value) }))} /></label>
+              </div>
+              <div className="catalog-price-grid">
+                <label className="field"><span>Margin 1 (%)</span><input type="number" min="0" max="1000" step="0.01" value={aiForm.margin1Percent} onChange={(event) => setAiForm((current) => ({ ...current, margin1Percent: Number(event.target.value) }))} /><strong>{formatCurrency(aiReviewPrice1, language)}</strong></label>
+                <label className="field"><span>Margin 2 (%)</span><input type="number" min="0" max="1000" step="0.01" value={aiForm.margin2Percent} onChange={(event) => setAiForm((current) => ({ ...current, margin2Percent: Number(event.target.value) }))} /><strong>{formatCurrency(aiReviewPrice2, language)}</strong></label>
+              </div>
+              <details>
+                <summary>{id ? "Detail lanjutan" : "Advanced details"}</summary>
+                <label className="field"><span>{id ? "Nama Inggris" : "English name"}</span><input maxLength={180} value={aiForm.nameEn} onChange={(event) => setAiForm((current) => ({ ...current, nameEn: event.target.value }))} /></label>
+                <label className="field"><span>{id ? "Spesifikasi" : "Specifications"}</span><textarea maxLength={2000} value={aiForm.specifications} onChange={(event) => setAiForm((current) => ({ ...current, specifications: event.target.value }))} /></label>
+              </details>
+            </section>
+            <section className="catalog-ai-classification"><label className="field select-field"><span>{id ? "Kategori katalog" : "Catalog category"}</span><select required value={aiCategoryId} onChange={(event) => { setAiCategoryId(event.target.value); setAiBrandId(""); }}><option value="">{id ? "Pilih kategori" : "Select category"}</option>{data.categories.filter((entry) => entry.status === "Aktif").map((entry) => <option key={entry.id} value={entry.id}>{entry.boqRole} · {entry.name}</option>)}</select></label><label className="field select-field"><span>{id ? "Merek" : "Brand"}{aiRequiresBrand ? " *" : ""}</span><select required={aiRequiresBrand} value={aiBrandId} onChange={(event) => setAiBrandId(event.target.value)}><option value="">{id ? "Pilih merek" : "Select brand"}</option>{data.brands.filter((entry) => entry.status === "Aktif" && entry.categoryId === aiCategoryId).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label></section>
+            {aiShowOverride && <section className="catalog-ai-section warning">
+              <strong><AlertTriangle size={14} /> {id ? "Rekomendasi kedaluwarsa" : "Recommendation expired"}</strong>
+              <label className="field"><span>{id ? "Alasan override (min. 5 karakter)" : "Override reason (min. 5 characters)"}</span><textarea required minLength={5} maxLength={500} value={aiOverrideReason} onChange={(event) => setAiOverrideReason(event.target.value)} placeholder={id ? "Rekomendasi lebih dari tujuh hari. Jelaskan alasan tetap menyetujui." : "This recommendation is older than seven days. Explain why you are approving anyway."} /></label>
+            </section>}
+            {aiActionError && <section className="catalog-ai-error" role="alert"><strong><AlertTriangle size={14} /> {id ? "Tindakan gagal" : "The action failed"}</strong><p>{aiActionError}</p></section>}
+          </>}
+        </form>}
 
-        {aiRun?.recommendation && <footer className="catalog-ai-actions"><button className="button secondary" type="button" onClick={() => { setAiRun(null); setAiCategoryId(""); setAiBrandId(""); }} disabled={aiLoading}>{id ? "Analisis baru" : "New analysis"}</button>{aiRun.status === "Draft" && <><button className="button danger" type="button" onClick={() => void rejectAiRun()} disabled={aiLoading}>{id ? "Tolak" : "Reject"}</button><button className="button primary" type="button" onClick={() => void approveAiRun()} disabled={aiLoading || !aiCategoryId || (["Perangkat", "Material"].includes(data.categories.find((entry) => entry.id === aiCategoryId)?.boqRole ?? "") && !aiBrandId)}><Check size={16} /> {id ? "Setujui ke katalog" : "Approve to catalog"}</button></>}</footer>}
+        {(aiPhase === "draft-review" || aiPhase === "rejected") && aiRun?.recommendation && <footer className="catalog-ai-actions"><button className="button secondary" type="button" onClick={resetAiToIdle} disabled={aiLoading}>{id ? "Analisis baru" : "New analysis"}</button>{aiPhase === "draft-review" && <><button className="button danger" type="button" onClick={() => void rejectAiRun()} disabled={aiLoading}>{id ? "Tolak" : "Reject"}</button><button className="button primary" type="submit" form="catalog-ai-review-form" disabled={aiLoading || !aiReviewValid}><Check size={16} /> {id ? "Setujui ke katalog" : "Approve to catalog"}</button></>}</footer>}
       </aside>
     </div>}
   </div>;
