@@ -507,12 +507,11 @@ CREATE TABLE IF NOT EXISTS basts (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS basts_project_idx ON basts(project_id);
-CREATE UNIQUE INDEX IF NOT EXISTS basts_project_unique ON basts(project_id);
 
 CREATE TABLE IF NOT EXISTS project_validations (
   id TEXT PRIMARY KEY,
   number TEXT NOT NULL UNIQUE,
-  project_id TEXT NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Completed')),
   notes TEXT,
   validated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
@@ -520,7 +519,7 @@ CREATE TABLE IF NOT EXISTS project_validations (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS project_validations_project_unique ON project_validations(project_id);
+CREATE INDEX IF NOT EXISTS project_validations_project_idx ON project_validations(project_id);
 
 CREATE TABLE IF NOT EXISTS project_validation_items (
   id TEXT PRIMARY KEY,
@@ -1336,6 +1335,18 @@ async function ensureColumn(
   }
 }
 
+async function dropLegacyConstraint(
+  client: DatabaseClient,
+  table: string,
+  constraint: string,
+) {
+  try {
+    await client.execute(`ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${constraint}`);
+  } catch {
+    // SQLite/libSQL cannot drop table constraints; fresh databases no longer declare them.
+  }
+}
+
 async function ensureCommercialPackageSchema(client: DatabaseClient) {
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS project_commercial_packages (
@@ -1479,6 +1490,8 @@ async function ensureCommercialPackageSchema(client: DatabaseClient) {
   await client.execute("DROP INDEX IF EXISTS quotations_scope_unique");
   await client.execute("DROP INDEX IF EXISTS basts_project_unique");
   await client.execute("DROP INDEX IF EXISTS project_validations_project_unique");
+  await dropLegacyConstraint(client, "project_validations", "project_validations_project_id_key");
+  await dropLegacyConstraint(client, "basts", "basts_project_id_key");
   await client.execute(
     "CREATE UNIQUE INDEX IF NOT EXISTS quotations_scope_revision_unique ON quotations(scope_id,revision_no)",
   );
@@ -2070,9 +2083,6 @@ async function ensureProcurementSchema(client: DatabaseClient) {
   }
 
   await client.execute("DROP INDEX IF EXISTS quotations_project_unique");
-  await client.execute(
-    "CREATE UNIQUE INDEX IF NOT EXISTS quotations_scope_unique ON quotations(scope_id)",
-  );
   await client.execute(
     "CREATE INDEX IF NOT EXISTS boq_items_scope_idx ON boq_items(scope_id,sort_order)",
   );

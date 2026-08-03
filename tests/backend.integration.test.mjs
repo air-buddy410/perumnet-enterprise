@@ -1880,9 +1880,6 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     0,
   );
 
-  const quotationForProcurement = await json(
-    `/api/quotations?projectId=${project.id}`,
-  );
   const acceptanceAttachment = {
     name: "persetujuan-klien.png",
     mimeType: "image/png",

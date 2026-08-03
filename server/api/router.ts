@@ -264,7 +264,6 @@ const quotationRefinement = (
     context.addIssue({ code: "custom", path: ["roundingReason"], message: "Alasan pembulatan khusus wajib diisi." });
   }
 };
-const quotationSchema = quotationBaseSchema.superRefine(quotationRefinement);
 const quotationPatchSchema = quotationBaseSchema.partial().superRefine(quotationRefinement);
 
 const vendorSchema = z.object({
