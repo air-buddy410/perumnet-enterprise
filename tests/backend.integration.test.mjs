@@ -602,6 +602,61 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   );
   assert.equal(overriddenCatalogItem.sellingPrice, 1_700_000);
   assert.equal(overriddenCatalogItem.manualPriceOverride, true);
+  const disposableCategory = await json(
+    "/api/catalog/categories",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        boqRole: "Perangkat",
+        name: "Kategori Sekali Pakai",
+        nameEn: "Disposable Category",
+        defaultMargin1Percent: 20,
+        defaultMargin2Percent: 30,
+        status: "Aktif",
+        sortOrder: 950,
+      }),
+    },
+    201,
+  );
+  const disposableBrand = await json(
+    "/api/catalog/brands",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        categoryId: disposableCategory.id,
+        name: "Merek Sekali Pakai",
+        status: "Nonaktif",
+        sortOrder: 7,
+      }),
+    },
+    201,
+  );
+  await json(`/api/catalog/brands/${disposableBrand.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name: "Merek Sekali Pakai Baru" }),
+  });
+  const renamedBrand = (await json("/api/catalog?includeInactive=true")).brands.find(
+    (entry) => entry.id === disposableBrand.id,
+  );
+  assert.equal(renamedBrand.name, "Merek Sekali Pakai Baru");
+  assert.equal(renamedBrand.status, "Nonaktif");
+  assert.equal(renamedBrand.sortOrder, 7);
+  await json(`/api/catalog/categories/${disposableCategory.id}`, { method: "DELETE" }, 204);
+  assert.equal(
+    (await json("/api/catalog?includeInactive=true")).categories.some(
+      (entry) => entry.id === disposableCategory.id,
+    ),
+    false,
+  );
+  assert.equal(
+    (
+      await request(`/api/catalog/categories/${networkingCategory.id}`, {
+        method: "DELETE",
+      })
+    ).status,
+    409,
+  );
+
   const catalogExport = await request("/api/catalog/export.xlsx");
   assert.equal(catalogExport.status, 200);
   const catalogWorkbook = new ExcelJS.Workbook();

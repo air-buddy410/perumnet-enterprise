@@ -8,7 +8,7 @@ import type { AuthUser } from "../auth";
 import { calculateQuotationCommercialTotals } from "../commercial";
 import { syncProjectCommercialValue } from "./commercial-scope-router";
 import { getDatabase, type DatabaseClient } from "../db/client";
-import { ApiError, created, jsonBody, noContent, ok } from "./errors";
+import { ApiError, created, jsonBody, noContent, ok, partialPatchSchema } from "./errors";
 
 const roleSchema = z.enum(["Perangkat", "Material", "Jasa", "Mobilitas"]);
 const statusSchema = z.enum(["Aktif", "Nonaktif"]);
@@ -490,7 +490,7 @@ export async function handleCatalog(request: Request, path: string[], user: Auth
   if (child === "categories" && id && request.method === "PATCH") {
     const current = (await client.execute({ sql: "SELECT * FROM item_catalog_categories WHERE id=?", args: [id] })).rows[0];
     if (!current) throw new ApiError(404, "NOT_FOUND", "Kategori tidak ditemukan.");
-    const input = categorySchema.partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(categorySchema).parse(await jsonBody(request));
     await client.execute({ sql: `UPDATE item_catalog_categories SET boq_role=?,name=?,name_en=?,default_margin_1_bps=?,
       default_margin_2_bps=?,status=?,sort_order=?,updated_at=? WHERE id=?`, args: [input.boqRole ?? current.boq_role,
       input.name ?? current.name,input.nameEn ?? current.name_en,input.defaultMargin1Percent === undefined ? current.default_margin_1_bps : bps(input.defaultMargin1Percent),
@@ -502,7 +502,10 @@ export async function handleCatalog(request: Request, path: string[], user: Auth
   if (child === "categories" && id && request.method === "DELETE") {
     const usage = await client.execute({ sql: "SELECT id FROM item_catalog_items WHERE category_id=? LIMIT 1", args: [id] });
     if (usage.rows.length) throw new ApiError(409, "CATEGORY_IN_USE", "Kategori sudah memiliki item. Nonaktifkan kategori agar histori tetap aman.");
-    await client.execute({ sql: "DELETE FROM item_catalog_categories WHERE id=?", args: [id] });
+    await client.batch([
+      { sql: "DELETE FROM item_catalog_brands WHERE category_id=?", args: [id] },
+      { sql: "DELETE FROM item_catalog_categories WHERE id=?", args: [id] },
+    ], "write");
     await writeAuditLog(client, request, user, "delete", "item_catalog_category", id);
     return noContent();
   }
@@ -522,7 +525,7 @@ export async function handleCatalog(request: Request, path: string[], user: Auth
   if (child === "brands" && id && request.method === "PATCH") {
     const current = (await client.execute({ sql: "SELECT * FROM item_catalog_brands WHERE id=?", args: [id] })).rows[0];
     if (!current) throw new ApiError(404, "NOT_FOUND", "Merek tidak ditemukan.");
-    const input = brandSchema.partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(brandSchema).parse(await jsonBody(request));
     await client.execute({ sql: "UPDATE item_catalog_brands SET category_id=?,name=?,status=?,sort_order=?,updated_at=? WHERE id=?",
       args: [input.categoryId ?? current.category_id,input.name ?? current.name,input.status ?? current.status,input.sortOrder ?? current.sort_order,new Date().toISOString(),id] });
     await writeAuditLog(client, request, user, "update", "item_catalog_brand", id, input); return ok({ id });
@@ -546,7 +549,7 @@ export async function handleCatalog(request: Request, path: string[], user: Auth
   if (child === "items" && id && request.method === "PATCH") {
     const current = (await client.execute({ sql: "SELECT * FROM item_catalog_items WHERE id=?", args: [id] })).rows[0];
     if (!current) throw new ApiError(404, "NOT_FOUND", "Item katalog tidak ditemukan.");
-    const input = itemSchema.partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(itemSchema).parse(await jsonBody(request));
     const nextCategoryId = String(input.categoryId ?? current.category_id);
     const nextBrandId = input.brandId === undefined ? (current.brand_id ? String(current.brand_id) : null) : input.brandId;
     await categoryAndBrand(client, nextCategoryId, nextBrandId);

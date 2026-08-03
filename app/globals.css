@@ -3355,12 +3355,40 @@ h3 {
   gap: 7px;
 }
 
-.invoice-form-summary {
+.field.check-field {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px 13px;
+  background: var(--surface-soft);
+  cursor: pointer;
+}
+
+.field.check-field input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--teal-dark);
+  cursor: pointer;
+}
+
+.field.check-field span {
+  color: var(--navy);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.invoice-form-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px 14px;
   border-radius: 9px;
-  padding: 13px;
+  padding: 12px 14px;
   background: var(--teal-pale);
 }
 
@@ -3372,6 +3400,25 @@ h3 {
 .invoice-form-summary strong {
   color: var(--teal-dark);
   font-family: "Plus Jakarta Sans", sans-serif;
+  text-align: right;
+}
+
+.invoice-form-summary small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.form-hint {
+  margin: 0;
+  border-left: 3px solid var(--teal);
+  padding: 8px 12px;
+  border-radius: 0 8px 8px 0;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
 }
 
 /* Project details */
@@ -4212,13 +4259,51 @@ h3 {
 
 .category-picker label {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: 999px;
-  padding: 6px 9px;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
   background: var(--surface-soft);
   color: var(--navy);
+  font-size: 10px;
+  line-height: 1.55;
+  cursor: pointer;
+}
+
+.category-picker label:has(input:checked) {
+  border-color: var(--teal);
+  background: var(--teal-pale);
+}
+
+.tax-rule-copy { display: grid; gap: 3px; min-width: 0; }
+
+.tax-rule-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+.tax-rule-title strong { color: var(--navy); font-size: 11px; }
+
+.tax-rule-chip {
+  border-radius: 999px;
+  padding: 2px 8px;
   font-size: 8px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+
+.tax-rule-chip.add { background: var(--teal-pale); color: var(--teal-dark); }
+
+.tax-rule-chip.withhold { background: #fef3e2; color: #a16207; }
+
+.tax-rule-copy small { color: var(--muted); font-size: 9px; line-height: 1.5; }
+
+.category-picker label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  flex: 0 0 auto;
+  accent-color: var(--teal-dark);
+  cursor: pointer;
 }
 
 .procurement-line-picker {
@@ -6421,6 +6506,8 @@ h3 {
   padding: 12px 14px;
   background: var(--surface-soft);
 }
+.tax-mode-row > span { display: grid; gap: 4px; min-width: 0; }
+.tax-mode-row > span small { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .tax-mode-row > div { display: grid; gap: 3px; }
 .tax-mode-row strong { color: var(--navy); font-size: 12px; }
 .tax-mode-row small { color: var(--muted); font-size: 10px; }
@@ -7236,7 +7323,7 @@ h3 {
 
 .document-tax-summary {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
   margin: 16px 0;
 }

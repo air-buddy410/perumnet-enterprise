@@ -219,14 +219,16 @@ export function DocumentTaxEditor({
                       )
                     }
                   />
-                  <span>
-                    <strong>{rule.code} · {rule.ratePercent}%</strong>
+                  <span className="tax-rule-copy">
+                    <span className="tax-rule-title">
+                      <strong>{rule.code} · {rule.ratePercent}%</strong>
+                      <em className={`tax-rule-chip ${rule.effect === "Add" ? "add" : "withhold"}`}>
+                        {rule.effect === "Add" ? (id ? "Tambah ke tagihan" : "Added to bill") : (id ? "Potong dari kas" : "Withheld from cash")}
+                      </em>
+                    </span>
                     <small>
-                      {id ? rule.name : rule.nameEn} · {rule.effect === "Add" ? (id ? "Tambah" : "Add") : (
-                        <span title={id ? "Mengurangi kas diterima, bukan menambah tagihan" : "Reduces the cash received; does not increase the bill"}>
-                          {id ? "Potong — mengurangi kas diterima, bukan menambah tagihan" : "Withhold — reduces cash received, not the bill"}
-                        </span>
-                      )}
+                      {id ? rule.name : rule.nameEn}
+                      {rule.effect === "Withhold" ? (id ? " — mengurangi kas diterima, bukan menambah tagihan." : " — reduces cash received, not the bill.") : null}
                     </small>
                   </span>
                 </label>
