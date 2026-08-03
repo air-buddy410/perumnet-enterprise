@@ -7,6 +7,7 @@ import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { asNumber } from "../format";
+import { syncProjectCommercialValue } from "./commercial-scope-router";
 import {
   ApiError,
   created,
@@ -372,13 +373,10 @@ export async function handleStandaloneBoqs(
             timestamp,
           ],
         })),
-        {
-          sql: "UPDATE projects SET value=?,updated_at=? WHERE id=?",
-          args: [source.total, timestamp, input.projectId],
-        },
       ],
       "write",
     );
+    await syncProjectCommercialValue(client, input.projectId);
     await writeAuditLog(
       client,
       request,

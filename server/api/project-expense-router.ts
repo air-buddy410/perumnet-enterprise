@@ -7,6 +7,7 @@ import { z } from "zod";
 import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
+import { claimSequence } from "../db/counters";
 import { asNumber } from "../format";
 import {
   deleteStoredFile,
@@ -773,9 +774,9 @@ export async function handleProjectExpenses(
     if (!category.rows.length) {
       throw new ApiError(422, "CATEGORY_REQUIRED", "Kategori biaya aktif tidak ditemukan.");
     }
-    const count = await client.execute("SELECT COUNT(*) AS count FROM project_expenses");
+    const sequence = await claimSequence(client, "project_expenses", "SELECT number AS value FROM project_expenses");
     const id = randomUUID();
-    const number = `BLJ-${input.purchaseDate.slice(0, 7).replace("-", "")}-${String(asNumber(count.rows[0]?.count) + 1).padStart(4, "0")}`;
+    const number = `BLJ-${input.purchaseDate.slice(0, 7).replace("-", "")}-${String(sequence).padStart(4, "0")}`;
     const timestamp = now();
     await client.execute({
       sql: `INSERT INTO project_expenses
@@ -1298,10 +1299,10 @@ export async function handleProjectAdvances(
       args: [input.projectId, input.recipientUserId],
     });
     if (!member.rows.length) throw new ApiError(422, "INVALID_RECIPIENT", "Penerima uang muka bukan anggota proyek.");
-    const count = await client.execute("SELECT COUNT(*) AS count FROM project_advances");
+    const sequence = await claimSequence(client, "project_advances", "SELECT number AS value FROM project_advances");
     const id = randomUUID();
     const transactionId = randomUUID();
-    const number = `UM-${input.disbursedDate.slice(0, 7).replace("-", "")}-${String(asNumber(count.rows[0]?.count) + 1).padStart(4, "0")}`;
+    const number = `UM-${input.disbursedDate.slice(0, 7).replace("-", "")}-${String(sequence).padStart(4, "0")}`;
     await client.transaction(async (tx) => {
       await tx.execute({
         sql: `INSERT INTO transactions

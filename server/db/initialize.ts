@@ -1347,6 +1347,13 @@ async function dropLegacyConstraint(
   }
 }
 
+async function ensureDocumentCounters(client: DatabaseClient) {
+  await client.execute(`CREATE TABLE IF NOT EXISTS document_counters (
+    key TEXT PRIMARY KEY,
+    last_value INTEGER NOT NULL DEFAULT 0
+  )`);
+}
+
 async function ensureCommercialPackageSchema(client: DatabaseClient) {
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS project_commercial_packages (
@@ -2585,6 +2592,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureSpkPaymentColumns(client);
   await ensureProcurementSchema(client);
   await ensureCommercialPackageSchema(client);
+  await ensureDocumentCounters(client);
   await ensureTaxAndEmailSchema(client);
   await ensureProjectExpenseSchema(client);
   await ensureItemCatalogSchema(client);
@@ -2757,6 +2765,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   // Original scope, vendor classification, procurement lines, and payments.
   await ensureProcurementSchema(client);
   await ensureCommercialPackageSchema(client);
+  await ensureDocumentCounters(client);
   await ensureTaxAndEmailSchema(client);
   await ensureProjectExpenseSchema(client);
   await ensureItemCatalogSchema(client);

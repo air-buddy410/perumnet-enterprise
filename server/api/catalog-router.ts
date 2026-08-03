@@ -6,6 +6,7 @@ import { z } from "zod";
 import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
 import { calculateQuotationCommercialTotals } from "../commercial";
+import { syncProjectCommercialValue } from "./commercial-scope-router";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
 
@@ -195,8 +196,8 @@ async function resetAffectedQuotations(client: DatabaseClient, catalogItemId: st
       });
       const taxTotals = await client.execute({
         sql: `SELECT
-          COALESCE(SUM(CASE WHEN effect='Tambah' THEN amount ELSE 0 END),0) AS additions,
-          COALESCE(SUM(CASE WHEN effect='Potong' THEN amount ELSE 0 END),0) AS withholdings
+          COALESCE(SUM(CASE WHEN effect='Add' THEN amount ELSE 0 END),0) AS additions,
+          COALESCE(SUM(CASE WHEN effect='Withhold' THEN amount ELSE 0 END),0) AS withholdings
           FROM document_taxes WHERE document_type='Quotation' AND document_id=?`,
         args: [scope.quotation_id],
       });
@@ -227,15 +228,7 @@ async function resetAffectedQuotations(client: DatabaseClient, catalogItemId: st
       args: [timestamp, scope.id],
     });
     if (scope.project_id) {
-      const commercial = await client.execute({
-        sql: `SELECT COALESCE(SUM(q.total),0) AS total FROM quotations q
-          WHERE q.project_id=? AND q.status='Accepted'`,
-        args: [scope.project_id],
-      });
-      await client.execute({
-        sql: "UPDATE projects SET value=?,updated_at=? WHERE id=?",
-        args: [Number(commercial.rows[0]?.total ?? 0), timestamp, scope.project_id],
-      });
+      await syncProjectCommercialValue(client, String(scope.project_id));
     }
   }
   return quotationsReset;

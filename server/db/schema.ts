@@ -841,6 +841,11 @@ export const bastSealSettings = sqliteTable("bast_seal_settings", {
   updatedAt: text("updated_at").notNull(),
 });
 
+export const documentCounters = sqliteTable("document_counters", {
+  key: text("key").primaryKey(),
+  lastValue: integer("last_value").notNull().default(0),
+});
+
 export const projectValidations = sqliteTable(
   "project_validations",
   {

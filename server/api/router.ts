@@ -32,6 +32,7 @@ import {
   type UserRole,
 } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
+import { claimSequence } from "../db/counters";
 import {
   emailDeliveryConfigured,
   emailMode,
@@ -495,9 +496,9 @@ function localizedTransactionCategory(
   return categories[category] ?? category;
 }
 
-function makeSequence(prefix: string, count: number) {
+function makeSequence(prefix: string, sequence: number) {
   const date = new Date();
-  return `${prefix}/PN/${String(date.getUTCMonth() + 1).padStart(2, "0")}/${date.getUTCFullYear()}/${String(count + 1).padStart(3, "0")}`;
+  return `${prefix}/PN/${String(date.getUTCMonth() + 1).padStart(2, "0")}/${date.getUTCFullYear()}/${String(sequence).padStart(3, "0")}`;
 }
 
 async function ensureExists(sql: string, args: unknown[], message: string) {
@@ -1171,8 +1172,8 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     const input = projectSchema.parse(await jsonBody(request));
     assertDateOrder(input.startDate, input.targetDate);
     const id = randomUUID();
-    const count = await client.execute("SELECT COUNT(*) AS count FROM projects");
-    const code = `PN-${new Date().getUTCFullYear().toString().slice(-2)}${String(new Date().getUTCMonth() + 1).padStart(2, "0")}-${String(asNumber(count.rows[0]?.count) + 1).padStart(3, "0")}`;
+    const sequence = await claimSequence(client, "projects", "SELECT code AS value FROM projects");
+    const code = `PN-${new Date().getUTCFullYear().toString().slice(-2)}${String(new Date().getUTCMonth() + 1).padStart(2, "0")}-${String(sequence).padStart(3, "0")}`;
     const timestamp = now();
     if (input.managerId) {
       await ensureExists(
@@ -2420,7 +2421,7 @@ async function handleQuotations(request: Request, user: AuthUser) {
       });
       await writeAuditLog(client, request, user, "update", "quotation", quotationId, input);
     } else {
-      const count = await client.execute("SELECT COUNT(*) AS count FROM quotations");
+      const sequence = await claimSequence(client, "quotations", "SELECT number AS value FROM quotations");
       quotationId = randomUUID();
       const issuedAt = input.issuedAt ?? timestamp.slice(0, 10);
       const validUntil = input.validUntil ?? new Date(
@@ -2436,7 +2437,7 @@ async function handleQuotations(request: Request, user: AuthUser) {
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         args: [
           quotationId, projectId, packageId, ensured.scopeId,
-          makeSequence("QUO", asNumber(count.rows[0]?.count)),
+          makeSequence("QUO", sequence),
           input.status ?? "Draft", issuedAt, validUntil, boq.totals.selling, 1,
           input.discountEnabled ? 1 : 0, input.discountType ?? "Nominal",
           input.discountValue ?? 0, 0, boq.totals.selling,
@@ -2877,10 +2878,10 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
     if (!allocation) {
       await assertInvoiceAmountWithinQuotation(client, input.projectId, legacyAmount);
     }
-    const count = await client.execute("SELECT COUNT(*) AS count FROM invoices");
+    const sequence = await claimSequence(client, "invoices", "SELECT number AS value FROM invoices");
     const id = randomUUID();
     const timestamp = now();
-    const number = makeSequence("INV", asNumber(count.rows[0]?.count));
+    const number = makeSequence("INV", sequence);
     await client.transaction(async (tx) => {
       await tx.execute({
         sql: `INSERT INTO invoices
@@ -3833,9 +3834,9 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
     assertDateOrder(input.startDate, input.endDate);
     await ensureExists("SELECT id FROM vendors WHERE id=? AND status='Aktif'", [input.vendorId], "Vendor aktif tidak ditemukan.");
     await assertProjectAccess(user, input.projectId);
-    const count = await client.execute("SELECT COUNT(*) AS count FROM spks");
+    const sequence = await claimSequence(client, "spks", "SELECT number AS value FROM spks");
     const id = randomUUID();
-    const number = makeSequence("SPK", asNumber(count.rows[0]?.count));
+    const number = makeSequence("SPK", sequence);
     const timestamp = now();
     await client.execute({
       sql: "INSERT INTO spks (id,number,vendor_id,project_id,scope,cost,status,start_date,end_date,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -4153,12 +4154,12 @@ async function ensureValidation(
     : randomUUID();
   const timestamp = now();
   if (!existing.rows[0]) {
-    const count = await client.execute("SELECT COUNT(*) AS count FROM project_validations");
+    const sequence = await claimSequence(client, "validations", "SELECT number AS value FROM project_validations");
     await client.execute({
       sql: `INSERT INTO project_validations
         (id,number,project_id,package_id,delivery_cycle,status,notes,validated_by,
          completed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-      args: [validationId, makeSequence("VAL", asNumber(count.rows[0]?.count)), projectId, packageId, deliveryCycle, "Draft", "", userId, null, timestamp, timestamp],
+      args: [validationId, makeSequence("VAL", sequence), projectId, packageId, deliveryCycle, "Draft", "", userId, null, timestamp, timestamp],
     });
   }
   const existingItems = await client.execute({
@@ -4483,9 +4484,9 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
         "Paket dan siklus ini sudah memiliki BAST. Buka dokumen yang ada atau buat siklus baru.",
       );
     }
-    const count = await client.execute("SELECT COUNT(*) AS count FROM basts");
+    const sequence = await claimSequence(client, "basts", "SELECT number AS value FROM basts");
     const id = randomUUID();
-    const number = makeSequence("BAST", asNumber(count.rows[0]?.count));
+    const number = makeSequence("BAST", sequence);
     const timestamp = now();
     await client.execute({
       sql: `INSERT INTO basts

@@ -6,6 +6,7 @@ import { canAccess } from "@/shared/access";
 import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
+import { claimSequence } from "../db/counters";
 import { snapshotQuotationItems } from "../quotation-snapshot";
 import { lockDocumentTaxes } from "../tax";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
@@ -176,10 +177,10 @@ async function assertProjectAccess(
 
 function quotationNumber(count: number) {
   const date = new Date();
-  return `QUO/PN/${String(date.getUTCMonth() + 1).padStart(2, "0")}/${date.getUTCFullYear()}/${String(count + 1).padStart(3, "0")}`;
+  return `QUO/PN/${String(date.getUTCMonth() + 1).padStart(2, "0")}/${date.getUTCFullYear()}/${String(count).padStart(3, "0")}`;
 }
 
-async function syncProjectCommercialValue(client: DatabaseClient, projectId: string) {
+export async function syncProjectCommercialValue(client: DatabaseClient, projectId: string) {
   await client.execute({
     sql: `UPDATE quotations SET total=COALESCE((
       SELECT SUM(i.quantity*i.selling_price)
@@ -189,7 +190,9 @@ async function syncProjectCommercialValue(client: DatabaseClient, projectId: str
   });
   const totals = await client.execute({
     sql: `SELECT
-      COALESCE(SUM(CASE WHEN q.status='Accepted' THEN q.total ELSE 0 END),0) AS accepted_total,
+      COALESCE(SUM(CASE WHEN q.status='Accepted'
+        THEN CASE WHEN q.grand_total>0 THEN q.grand_total ELSE q.total END
+        ELSE 0 END),0) AS accepted_total,
       COALESCE((SELECT SUM(i.quantity*i.selling_price)
         FROM boq_items i JOIN boqs b ON b.id=i.boq_id
         WHERE b.project_id=?),0) AS boq_total
@@ -208,7 +211,7 @@ async function syncProjectCommercialValue(client: DatabaseClient, projectId: str
 async function scopeDetail(client: DatabaseClient, scopeId: string) {
   const scopeResult = await client.execute({
     sql: `SELECT s.*,b.project_id,q.id AS quotation_id,q.number AS quotation_number,
-      q.status AS quotation_status,q.issued_at,q.valid_until,q.total,
+      q.status AS quotation_status,q.issued_at,q.valid_until,q.total,q.grand_total,
       q.tax_enabled,q.tax_revision,
       q.accepted_at AS quotation_accepted_at,
       q.acceptance_attachment_name AS quotation_attachment_name
@@ -246,6 +249,9 @@ async function scopeDetail(client: DatabaseClient, scopeId: string) {
           issuedAt: String(scope.issued_at),
           validUntil: scope.valid_until ? String(scope.valid_until) : null,
           total: numberValue(scope.total),
+          grandTotal: numberValue(scope.grand_total) > 0
+            ? numberValue(scope.grand_total)
+            : numberValue(scope.total),
           taxEnabled: Number(scope.tax_enabled) === 1,
           taxRevision: numberValue(scope.tax_revision),
           acceptedAt: scope.quotation_accepted_at
@@ -332,7 +338,7 @@ export async function handleBoqScopes(
       sql: "SELECT COALESCE(MAX(sequence),0)+1 AS sequence FROM boq_scopes WHERE boq_id=?",
       args: [boq.rows[0].id],
     });
-    const count = await client.execute("SELECT COUNT(*) AS count FROM quotations");
+    const sequence = await claimSequence(client, "quotations", "SELECT number AS value FROM quotations");
     const scopeIdValue = randomUUID();
     const quotationId = randomUUID();
     const timestamp = now();
@@ -400,7 +406,7 @@ export async function handleBoqScopes(
           quotationId,
           projectId,
           scopeIdValue,
-          quotationNumber(numberValue(count.rows[0]?.count)),
+          quotationNumber(sequence),
           "Draft",
           issuedAt,
           validUntil,

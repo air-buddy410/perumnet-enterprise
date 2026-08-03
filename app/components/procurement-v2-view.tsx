@@ -910,7 +910,7 @@ export function ProcurementViewV2({
             {scopes.map((scope) => (
               <article className="commercial-scope-card" key={scope.id}>
                 <div className="commercial-scope-main"><span className="eyebrow">{scope.kind} {scope.kind === "Addendum" ? `#${scope.sequence}` : ""}</span><strong>{scope.title}</strong><small>{scope.quotation?.number ?? (id ? "Quotation belum dibuat" : "Quotation not created")} · {scope.items.length} item</small></div>
-                <div className="commercial-scope-value"><span>{id ? "Nilai komersial" : "Commercial value"}</span><strong>{formatCurrency(scope.quotation?.total ?? 0, language)}</strong></div>
+                <div className="commercial-scope-value"><span>{id ? "Nilai komersial" : "Commercial value"}</span><strong>{formatCurrency(scope.quotation?.grandTotal ?? scope.quotation?.total ?? 0, language)}</strong></div>
                 <span className={`status-badge ${scope.quotation?.validUntil && scope.quotation.validUntil < serverToday && scope.quotation.status !== "Accepted" ? "danger" : statusTone(scope.quotation?.status ?? scope.status)}`}>{scope.quotation?.validUntil && scope.quotation.validUntil < serverToday && scope.quotation.status !== "Accepted" ? (id ? "Kedaluwarsa" : "Expired") : scope.quotation?.status ?? scope.status}</span>
                 <div className="table-row-actions">
                   {scope.quotation && <button className="icon-button" type="button" aria-label={id ? "Pratinjau quotation" : "Preview quotation"} onClick={() => setPreview({ url: `/api/quotations/${scope.quotation?.id}/pdf`, title: scope.quotation?.number ?? "Quotation", filename: `${(scope.quotation?.number ?? "Quotation").replaceAll("/", "-")}.pdf` })}><Eye size={15} /></button>}
