@@ -253,7 +253,7 @@ export function PanelApp() {
   return (
     <div className={styles.panelRoot}>
       <aside className={`${styles.sidebar} ${sidebarOpen ? styles.sidebarOpen : ""}`}>
-        <div className={styles.sideBrand}><img src="/perumnet-mark.png" alt="" /><span><strong>PERUMNET</strong><small>CONTENT STUDIO</small></span><button onClick={() => setSidebarOpen(false)} aria-label="Tutup menu"><X size={20} /></button></div>
+        <div className={styles.sideBrand}><img src="/perumnet-mark.png" alt="" /><span><strong>PERUMNET</strong><small>CONTENT STUDIO</small></span><button onClick={() => setSidebarOpen(false)} aria-label="Tutup menu"><X size={18} /></button></div>
         <div className={styles.sideLabel}>PENGELOLAAN SITUS</div>
         <nav>{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={section === id ? styles.activeSide : ""} onClick={() => { setSection(id); setSidebarOpen(false); }}><Icon size={18} /><span>{label}</span>{section === id && <ChevronRight size={15} />}</button>)}</nav>
         <div className={styles.sideFooter}>
@@ -666,7 +666,7 @@ function LeadEditor() {
       </div>
       <aside className={styles.leadDetail}>
         {selected ? <>
-          <div className={styles.leadDetailHead}><div><span>{selected.serviceInterest}</span><h3>{selected.fullName}</h3><p>{selected.companyName || "Individu"}{selected.jobTitle ? ` · ${selected.jobTitle}` : ""}</p></div><button type="button" aria-label="Tutup detail lead" onClick={() => setSelected(null)}><X size={17} /></button></div>
+          <div className={styles.leadDetailHead}><div><span>{selected.serviceInterest}</span><h3>{selected.fullName}</h3><p>{selected.companyName || "Individu"}{selected.jobTitle ? ` · ${selected.jobTitle}` : ""}</p></div><button type="button" aria-label="Tutup detail lead" onClick={() => setSelected(null)}><X size={18} /></button></div>
           <dl className={styles.leadFacts}><div><dt>WhatsApp</dt><dd><a href={`https://wa.me/${selected.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer">{selected.whatsapp}</a></dd></div><div><dt>Email</dt><dd>{selected.email ? <a href={`mailto:${selected.email}`}>{selected.email}</a> : "—"}</dd></div><div><dt>Lokasi</dt><dd>{selected.location}</dd></div><div><dt>Budget</dt><dd>{selected.budgetRange || "Belum ditentukan"}</dd></div><div><dt>Target</dt><dd>{selected.targetStart ? leadDate(`${selected.targetStart}T00:00:00+08:00`) : "Belum ditentukan"}</dd></div><div><dt>Sumber</dt><dd>{selected.sourcePath}</dd></div></dl>
           <div className={styles.leadMessage}><span>Kebutuhan</span><p>{selected.message}</p></div>
           <label className={styles.leadControl}><span>Status pipeline</span><select value={selected.status} disabled={saving} onChange={(event) => void updateLead({ status: event.target.value as LeadStatus })}>{leadStatuses.map((item) => <option key={item}>{item}</option>)}</select></label>

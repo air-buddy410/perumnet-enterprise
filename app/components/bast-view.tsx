@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   Stamp,
   Trash2,
+  X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, downloadApiFile, messageOf } from "../api-client";
@@ -509,7 +510,7 @@ export function BastView({
       {showSealSettings && (
         <div className="modal-backdrop" onMouseDown={() => setShowSealSettings(false)}>
           <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="seal-settings-title" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="modal-head"><div><span className="eyebrow">CAP DIGITAL INTERNAL</span><h2 id="seal-settings-title">{id ? "Identitas penandatangan perusahaan" : "Company signatory identity"}</h2></div><button className="icon-button" type="button" onClick={() => setShowSealSettings(false)} aria-label={id ? "Tutup" : "Close"}>×</button></div>
+            <div className="modal-head"><div><span className="eyebrow">CAP DIGITAL INTERNAL</span><h2 id="seal-settings-title">{id ? "Identitas penandatangan perusahaan" : "Company signatory identity"}</h2></div><button className="icon-button" type="button" onClick={() => setShowSealSettings(false)} aria-label={id ? "Tutup" : "Close"}><X size={18} /></button></div>
             <form className="modal-form form-grid" onSubmit={saveSealSettings}>
               <label className="field full check-field"><input type="checkbox" checked={sealEnabled} onChange={(event) => setSealEnabled(event.target.checked)} /><span>{id ? "Aktifkan cap saat finalisasi" : "Enable seal during finalization"}</span></label>
               <label className="field full"><span>{id ? "Nama penandatangan" : "Signatory name"}</span><input required value={sealName} onChange={(event) => setSealName(event.target.value)} /></label>
