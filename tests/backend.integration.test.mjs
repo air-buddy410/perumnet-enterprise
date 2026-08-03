@@ -860,7 +860,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
         engineerName: "Dewa Mahardika",
         engineerRole: "Project Manager",
         engineerSignature: signature,
-        status: "Final",
+        status: "Draft",
       }),
     },
     201,
@@ -888,6 +888,38 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     (await json(`/api/bast/${bast.id}`)).engineerRole,
     "Engineer",
   );
+
+  const sealMissingFinalize = await request(`/api/bast/${bast.id}/finalize`, {
+    method: "POST",
+  });
+  assert.equal(sealMissingFinalize.status, 409);
+  await json("/api/bast/settings/seal", {
+    method: "PUT",
+    body: JSON.stringify({
+      enabled: true,
+      signerName: "Direktur PerumNet",
+      signerRole: "Direktur",
+      sealMimeType: "image/png",
+      sealContentBase64: signature.split(",")[1],
+    }),
+  });
+  const finalizedBast = await json(`/api/bast/${bast.id}/finalize`, {
+    method: "POST",
+  });
+  assert.equal(finalizedBast.status, "Final");
+  assert.match(finalizedBast.pdfHash ?? "", /^[0-9a-f]{64}$/);
+  assert.ok(finalizedBast.verificationToken);
+  assert.equal((await request(`/api/bast/${bast.id}/pdf`)).status, 200);
+  const verifyPage = await fetch(
+    `${baseUrl}/verify/bast/${finalizedBast.verificationToken}`,
+  );
+  assert.equal(verifyPage.status, 200);
+  assert.ok((await verifyPage.text()).includes(finalizedBast.number));
+  const immutableBastPatch = await request(`/api/bast/${bast.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ notes: "BAST final tidak boleh berubah lagi." }),
+  });
+  assert.equal(immutableBastPatch.status, 409);
 
   const transaction = await json(
     "/api/transactions",
@@ -1848,31 +1880,28 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     0,
   );
 
-  const quotationForProcurement = await json(
-    `/api/quotations?projectId=${project.id}`,
-  );
   const acceptanceAttachment = {
     name: "persetujuan-klien.png",
     mimeType: "image/png",
     contentBase64: Buffer.from("client-approval").toString("base64"),
   };
-  await json(`/api/quotations?projectId=${project.id}`, {
+  const expiredQuotation = await json(`/api/quotations?projectId=${project.id}`, {
     method: "PATCH",
     body: JSON.stringify({ status: "Sent", issuedAt: "2019-12-01", validUntil: "2020-01-01" }),
   });
   assert.equal(
-    (await request(`/api/quotations/${quotationForProcurement.id}/accept`, {
+    (await request(`/api/quotations/${expiredQuotation.id}/accept`, {
       method: "POST",
       body: JSON.stringify({ acceptedAt: "2026-07-29", attachment: acceptanceAttachment }),
     })).status,
     409,
   );
-  await json(`/api/quotations?projectId=${project.id}`, {
+  const resentQuotation = await json(`/api/quotations?projectId=${project.id}`, {
     method: "PATCH",
     body: JSON.stringify({ status: "Sent", issuedAt: "2026-07-19", validUntil: "2099-12-31" }),
   });
   const acceptedOriginal = await json(
-    `/api/quotations/${quotationForProcurement.id}/accept`,
+    `/api/quotations/${resentQuotation.id}/accept`,
     {
       method: "POST",
       body: JSON.stringify({
@@ -1932,7 +1961,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
         documentType: "PO",
         vendorId: financeVendor.id,
         projectId: project.id,
-        quotationId: quotationForProcurement.id,
+        quotationId: resentQuotation.id,
         items: [
           {
             boqItemId: boqItem.id,
@@ -1960,7 +1989,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
           documentType: "PO",
           vendorId: financeVendor.id,
           projectId: project.id,
-          quotationId: quotationForProcurement.id,
+          quotationId: resentQuotation.id,
           items: [
             {
               boqItemId: boqItem.id,

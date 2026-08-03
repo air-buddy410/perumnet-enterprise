@@ -1,14 +1,21 @@
 "use client";
 
 import {
+  AlertTriangle,
   Boxes,
+  Check,
   Download,
+  ExternalLink,
+  FileText,
   FileUp,
   Layers3,
+  Link,
+  LoaderCircle,
   Pencil,
   Plus,
   Save,
   Search,
+  Sparkles,
   Tags,
   Trash2,
   X,
@@ -24,6 +31,41 @@ type ItemFormState = {
   categoryId: string; brandId: string; sku: string; name: string; nameEn: string;
   model: string; specifications: string; unit: string; costPrice: number;
   margin1Percent: number; margin2Percent: number; status: "Aktif" | "Nonaktif";
+};
+
+type CatalogAiRecommendation = {
+  brand: string;
+  productCategory: string;
+  boqRole: "Perangkat" | "Material" | "Jasa" | "Mobilitas";
+  nameId: string;
+  nameEn: string;
+  model: string;
+  sku: string;
+  unit: string;
+  specifications: string[];
+  marketPrice: { min: number; max: number; currency: "IDR" };
+  recommendedCostPrice: number;
+  margin1Percent: number;
+  margin2Percent: number;
+  price1: number;
+  price2: number;
+  confidence: number;
+  assumptions: string[];
+  warnings: string[];
+};
+
+type CatalogAiRun = {
+  id: string;
+  status: "Running" | "Draft" | "Approved" | "Rejected" | "Failed";
+  query: string;
+  sourceUrl?: string | null;
+  model: string;
+  confidence: number;
+  expiresAt?: string | null;
+  errorMessage?: string | null;
+  recommendation?: CatalogAiRecommendation | null;
+  sources: Array<{ title: string; url: string; accessedAt: string }>;
+  catalogItemId?: string | null;
 };
 
 const roles = ["Perangkat", "Material", "Jasa", "Mobilitas"] as const;
@@ -47,6 +89,15 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
   const [categoryForm, setCategoryForm] = useState({ boqRole: "Perangkat", name: "", nameEn: "", defaultMargin1Percent: 20, defaultMargin2Percent: 30, status: "Aktif", sortOrder: 0 });
   const [brandForm, setBrandForm] = useState({ categoryId: "", name: "", status: "Aktif", sortOrder: 0 });
   const importRef = useRef<HTMLInputElement>(null);
+  const aiFileRef = useRef<HTMLInputElement>(null);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiQuery, setAiQuery] = useState("");
+  const [aiSourceUrl, setAiSourceUrl] = useState("");
+  const [aiFile, setAiFile] = useState<File | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiRun, setAiRun] = useState<CatalogAiRun | null>(null);
+  const [aiCategoryId, setAiCategoryId] = useState("");
+  const [aiBrandId, setAiBrandId] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -131,6 +182,87 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
     finally { if (importRef.current) importRef.current.value = ""; }
   }
 
+  async function fileToBase64(file: File) {
+    if (file.size > 10 * 1024 * 1024) throw new Error(id ? "Berkas maksimal 10 MB." : "The file must not exceed 10 MB.");
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error(id ? "Berkas tidak dapat dibaca." : "The file could not be read."));
+      reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function selectSuggestedClassification(run: CatalogAiRun) {
+    const recommendation = run.recommendation;
+    if (!recommendation) return;
+    const normalizedCategory = recommendation.productCategory.trim().toLowerCase();
+    const suggestedCategory = data.categories.find((entry) =>
+      entry.status === "Aktif" && entry.boqRole === recommendation.boqRole &&
+      [entry.name, entry.nameEn].some((value) => value.trim().toLowerCase() === normalizedCategory),
+    ) ?? data.categories.find((entry) => entry.status === "Aktif" && entry.boqRole === recommendation.boqRole);
+    setAiCategoryId(suggestedCategory?.id ?? "");
+    const suggestedBrand = data.brands.find((entry) => entry.status === "Aktif" &&
+      entry.categoryId === suggestedCategory?.id && entry.name.trim().toLowerCase() === recommendation.brand.trim().toLowerCase());
+    setAiBrandId(suggestedBrand?.id ?? "");
+  }
+
+  async function analyzeWithAi(event: FormEvent) {
+    event.preventDefault();
+    setAiLoading(true);
+    try {
+      const file = aiFile ? {
+        name: aiFile.name,
+        mimeType: aiFile.type,
+        contentBase64: await fileToBase64(aiFile),
+      } : undefined;
+      const run = await api<CatalogAiRun>("/api/catalog/ai/analyze", {
+        method: "POST",
+        body: JSON.stringify({ query: aiQuery, sourceUrl: aiSourceUrl || undefined, file }),
+      });
+      setAiRun(run);
+      selectSuggestedClassification(run);
+      notify(id ? "Analisis selesai. Tinjau hasil sebelum menyetujui." : "Analysis completed. Review it before approval.");
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  async function approveAiRun() {
+    if (!aiRun?.recommendation || !aiCategoryId) return;
+    setAiLoading(true);
+    try {
+      await api(`/api/catalog/ai/runs/${aiRun.id}/approve`, {
+        method: "POST",
+        body: JSON.stringify({ categoryId: aiCategoryId, brandId: aiBrandId || null }),
+      });
+      notify(id ? "Rekomendasi disetujui dan ditambahkan ke katalog." : "Recommendation approved and added to the catalog.");
+      setAiOpen(false); setAiRun(null); setAiQuery(""); setAiSourceUrl(""); setAiFile(null);
+      await load();
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  async function rejectAiRun() {
+    if (!aiRun) return;
+    const reason = window.prompt(id ? "Alasan penolakan (minimal 5 karakter):" : "Reason for rejection (at least 5 characters):");
+    if (!reason) return;
+    setAiLoading(true);
+    try {
+      await api(`/api/catalog/ai/runs/${aiRun.id}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
+      notify(id ? "Rekomendasi AI ditolak." : "AI recommendation rejected.");
+      setAiRun((current) => current ? { ...current, status: "Rejected" } : current);
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
   const selectedCategory = data.categories.find((entry) => entry.id === itemForm.categoryId);
   const itemBrands = data.brands.filter((entry) => entry.categoryId === itemForm.categoryId && entry.status === "Aktif");
   const projectProducts = ["Networking", "CCTV", "IP PABX", "Smart Home Device"]
@@ -147,6 +279,7 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
         <input ref={importRef} hidden type="file" accept=".xlsx" onChange={(event) => void importFile(event.target.files?.[0])} />
         <button className="button secondary" type="button" onClick={() => importRef.current?.click()}><FileUp size={16} /> Import Excel</button>
         <button className="button secondary" type="button" onClick={() => void downloadApiFile("/api/catalog/export.xlsx", "katalog-item.xlsx")}><Download size={16} /> Export</button>
+        <button className="button ai-catalog-button" type="button" onClick={() => setAiOpen(true)}><Sparkles size={16} /> AI Assistant</button>
         <button className="button primary" type="button" onClick={() => openItem()}><Plus size={16} /> {id ? "Item baru" : "New item"}</button>
       </div>
     </section>
@@ -213,5 +346,40 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
         {editor === "brand" && <><label className="field select-field"><span>{id ? "Kategori" : "Category"}</span><select required value={brandForm.categoryId} onChange={(event) => setBrandForm((current) => ({ ...current, categoryId: event.target.value }))}>{data.categories.map((entry) => <option key={entry.id} value={entry.id}>{entry.boqRole} · {entry.name}</option>)}</select></label><label className="field"><span>{id ? "Nama merek" : "Brand name"}</span><input required value={brandForm.name} onChange={(event) => setBrandForm((current) => ({ ...current, name: event.target.value }))} /></label><div className="catalog-related-list"><strong>{id ? "Merek tersedia" : "Available brands"}</strong>{data.brands.filter((entry) => entry.categoryId === brandForm.categoryId).map((entry) => <button type="button" key={entry.id} onClick={() => openBrand(entry)}><span>{entry.name}</span><Pencil size={14} /></button>)}</div></>}
       </div><div className="catalog-editor-actions">{editingId && <button className="button danger" type="button" onClick={() => void remove(editor === "item" ? "items" : editor === "category" ? "categories" : "brands", editingId, editor)}><Trash2 size={15} /> {id ? "Hapus" : "Delete"}</button>}<button className="button primary" type="submit"><Save size={16} /> {id ? "Simpan" : "Save"}</button></div>
     </form></div>}
+
+    {aiOpen && <div className="modal-backdrop catalog-modal-backdrop" role="presentation">
+      <aside className="catalog-ai-drawer" role="dialog" aria-modal="true" aria-labelledby="catalog-ai-title">
+        <header className="catalog-ai-head">
+          <div><span className="eyebrow"><Sparkles size={13} /> AI CATALOG ASSISTANT</span><h2 id="catalog-ai-title">{id ? "Riset perangkat lebih cepat" : "Research products faster"}</h2><p>{id ? "AI merangkum data publik. Harga akhir tetap dihitung aplikasi dan wajib ditinjau manusia." : "AI summarizes public data. Final prices remain deterministic and require human review."}</p></div>
+          <button className="icon-button" type="button" onClick={() => setAiOpen(false)} aria-label={id ? "Tutup" : "Close"}><X size={18} /></button>
+        </header>
+
+        {!aiRun && <form className="catalog-ai-input" onSubmit={analyzeWithAi}>
+          <label className="field"><span>{id ? "Model, SKU, atau kebutuhan perangkat" : "Model, SKU, or product requirement"}</span><textarea required minLength={2} maxLength={500} value={aiQuery} onChange={(event) => setAiQuery(event.target.value)} placeholder="Contoh: Ruijie Reyee RG-RAP2260(E), access point WiFi 6 indoor" /></label>
+          <label className="field"><span><Link size={14} /> {id ? "URL produk (opsional)" : "Product URL (optional)"}</span><input type="url" value={aiSourceUrl} onChange={(event) => setAiSourceUrl(event.target.value)} placeholder="https://..." /></label>
+          <input ref={aiFileRef} hidden type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={(event) => setAiFile(event.target.files?.[0] ?? null)} />
+          <button className="catalog-ai-file" type="button" onClick={() => aiFileRef.current?.click()}><FileText size={20} /><span><strong>{aiFile?.name ?? (id ? "Tambahkan foto atau datasheet" : "Add a photo or datasheet")}</strong><small>PNG, JPG, WebP, PDF · maks. 10 MB</small></span></button>
+          <div className="catalog-ai-safety"><Check size={15} /><p>{id ? "Data klien, proyek, dan vendor tidak dikirim. Sumber web diperlakukan sebagai data yang tidak tepercaya." : "Client, project, and vendor data is never sent. Web sources are treated as untrusted data."}</p></div>
+          <button className="button primary catalog-ai-submit" type="submit" disabled={aiLoading || aiQuery.trim().length < 2}>{aiLoading ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />} {aiLoading ? (id ? "Menganalisis..." : "Analyzing...") : (id ? "Mulai analisis" : "Start analysis")}</button>
+        </form>}
+
+        {aiRun?.recommendation && <div className="catalog-ai-result">
+          <div className="catalog-ai-result-title"><span className={`status-badge ${aiRun.status === "Draft" ? "warning" : aiRun.status === "Approved" ? "success" : "muted"}`}>{aiRun.status}</span><span>Confidence {aiRun.recommendation.confidence}%</span></div>
+          <div className="catalog-ai-product"><span>{aiRun.recommendation.brand}</span><h3>{id ? aiRun.recommendation.nameId : aiRun.recommendation.nameEn}</h3><p>{aiRun.recommendation.model} · {aiRun.recommendation.sku}</p></div>
+          <div className="catalog-ai-prices">
+            <article><span>{id ? "Harga pasar" : "Market price"}</span><strong>{formatCurrency(aiRun.recommendation.marketPrice.min, language)} – {formatCurrency(aiRun.recommendation.marketPrice.max, language)}</strong></article>
+            <article><span>{id ? "Rekomendasi harga pokok" : "Recommended cost"}</span><strong>{formatCurrency(aiRun.recommendation.recommendedCostPrice, language)}</strong></article>
+            <article><span>Harga 1 · +{aiRun.recommendation.margin1Percent}%</span><strong>{formatCurrency(aiRun.recommendation.price1, language)}</strong></article>
+            <article><span>Harga 2 · +{aiRun.recommendation.margin2Percent}%</span><strong>{formatCurrency(aiRun.recommendation.price2, language)}</strong></article>
+          </div>
+          <section className="catalog-ai-section"><strong>{id ? "Spesifikasi teridentifikasi" : "Identified specifications"}</strong><ul>{aiRun.recommendation.specifications.map((entry) => <li key={entry}>{entry}</li>)}</ul></section>
+          {(aiRun.recommendation.warnings.length > 0 || aiRun.recommendation.assumptions.length > 0) && <section className="catalog-ai-section warning"><strong><AlertTriangle size={14} /> {id ? "Asumsi dan catatan" : "Assumptions and notes"}</strong><ul>{[...aiRun.recommendation.warnings, ...aiRun.recommendation.assumptions].map((entry) => <li key={entry}>{entry}</li>)}</ul></section>}
+          {aiRun.sources.length > 0 && <section className="catalog-ai-section"><strong>{id ? "Sumber publik" : "Public sources"}</strong><div className="catalog-ai-sources">{aiRun.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer"><span>{source.title}</span><ExternalLink size={13} /></a>)}</div></section>}
+          <section className="catalog-ai-classification"><label className="field select-field"><span>{id ? "Kategori katalog" : "Catalog category"}</span><select required value={aiCategoryId} onChange={(event) => { setAiCategoryId(event.target.value); setAiBrandId(""); }}><option value="">{id ? "Pilih kategori" : "Select category"}</option>{data.categories.filter((entry) => entry.status === "Aktif").map((entry) => <option key={entry.id} value={entry.id}>{entry.boqRole} · {entry.name}</option>)}</select></label><label className="field select-field"><span>{id ? "Merek" : "Brand"}</span><select value={aiBrandId} onChange={(event) => setAiBrandId(event.target.value)}><option value="">{id ? "Pilih merek" : "Select brand"}</option>{data.brands.filter((entry) => entry.status === "Aktif" && entry.categoryId === aiCategoryId).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label></section>
+        </div>}
+
+        {aiRun?.recommendation && <footer className="catalog-ai-actions"><button className="button secondary" type="button" onClick={() => { setAiRun(null); setAiCategoryId(""); setAiBrandId(""); }} disabled={aiLoading}>{id ? "Analisis baru" : "New analysis"}</button>{aiRun.status === "Draft" && <><button className="button danger" type="button" onClick={() => void rejectAiRun()} disabled={aiLoading}>{id ? "Tolak" : "Reject"}</button><button className="button primary" type="button" onClick={() => void approveAiRun()} disabled={aiLoading || !aiCategoryId || (["Perangkat", "Material"].includes(data.categories.find((entry) => entry.id === aiCategoryId)?.boqRole ?? "") && !aiBrandId)}><Check size={16} /> {id ? "Setujui ke katalog" : "Approve to catalog"}</button></>}</footer>}
+      </aside>
+    </div>}
   </div>;
 }

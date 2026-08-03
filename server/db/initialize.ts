@@ -507,12 +507,11 @@ CREATE TABLE IF NOT EXISTS basts (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS basts_project_idx ON basts(project_id);
-CREATE UNIQUE INDEX IF NOT EXISTS basts_project_unique ON basts(project_id);
 
 CREATE TABLE IF NOT EXISTS project_validations (
   id TEXT PRIMARY KEY,
   number TEXT NOT NULL UNIQUE,
-  project_id TEXT NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Completed')),
   notes TEXT,
   validated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
@@ -520,7 +519,7 @@ CREATE TABLE IF NOT EXISTS project_validations (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS project_validations_project_unique ON project_validations(project_id);
+CREATE INDEX IF NOT EXISTS project_validations_project_idx ON project_validations(project_id);
 
 CREATE TABLE IF NOT EXISTS project_validation_items (
   id TEXT PRIMARY KEY,
@@ -1163,7 +1162,7 @@ async function ensureCmsSeed(client: DatabaseClient) {
     ["company_name", "PerumNet Enterprise"],
     ["company_tagline", "Konsultan IT untuk operasional yang lebih andal"],
     ["whatsapp_number", "085155026889"],
-    ["email", "it@perumnet.id"],
+    ["email", "enterprise@perumnet.id"],
     ["phone", "0851 5502 6889"],
     ["address", "BTN Kecicang Indah Blok A5, Bungaya Kangin, Karangasem, Bali 80813"],
     ["instagram_url", "https://www.instagram.com/perum_net"],
@@ -1334,6 +1333,264 @@ async function ensureColumn(
       await client.execute(`SELECT ${column} FROM ${table} LIMIT 1`);
     }
   }
+}
+
+async function dropLegacyConstraint(
+  client: DatabaseClient,
+  table: string,
+  constraint: string,
+) {
+  try {
+    await client.execute(`ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${constraint}`);
+  } catch {
+    // SQLite/libSQL cannot drop table constraints; fresh databases no longer declare them.
+  }
+}
+
+async function ensureCommercialPackageSchema(client: DatabaseClient) {
+  await client.executeMultiple(`
+    CREATE TABLE IF NOT EXISTS project_commercial_packages (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      code TEXT NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'Draft',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS project_commercial_packages_code_unique
+      ON project_commercial_packages(project_id,code);
+    CREATE INDEX IF NOT EXISTS project_commercial_packages_project_idx
+      ON project_commercial_packages(project_id,sort_order);
+
+    CREATE TABLE IF NOT EXISTS quotation_items (
+      id TEXT PRIMARY KEY,
+      quotation_id TEXT NOT NULL REFERENCES quotations(id) ON DELETE CASCADE,
+      source_item_id TEXT,
+      category TEXT NOT NULL,
+      description TEXT NOT NULL,
+      quantity INTEGER NOT NULL,
+      unit TEXT NOT NULL,
+      cost_price INTEGER NOT NULL DEFAULT 0,
+      selling_price INTEGER NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS quotation_items_quotation_idx
+      ON quotation_items(quotation_id,sort_order);
+
+    CREATE TABLE IF NOT EXISTS bast_seal_settings (
+      id TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      signer_name TEXT NOT NULL DEFAULT 'PerumNet Enterprise',
+      signer_role TEXT NOT NULL DEFAULT 'Authorized Representative',
+      seal_mime_type TEXT,
+      seal_content_base64 TEXT,
+      updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS catalog_ai_runs (
+      id TEXT PRIMARY KEY,
+      requested_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'Requested',
+      query TEXT NOT NULL,
+      source_url TEXT,
+      input_mime_type TEXT,
+      recommendation_json TEXT,
+      model TEXT NOT NULL,
+      confidence INTEGER NOT NULL DEFAULT 0,
+      expires_at TEXT,
+      error_message TEXT,
+      approved_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      approved_at TEXT,
+      rejected_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      rejected_at TEXT,
+      override_reason TEXT,
+      catalog_item_id TEXT REFERENCES item_catalog_items(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS catalog_ai_runs_user_idx
+      ON catalog_ai_runs(requested_by,created_at);
+
+    CREATE TABLE IF NOT EXISTS catalog_ai_sources (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES catalog_ai_runs(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      accessed_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS catalog_ai_sources_run_idx
+      ON catalog_ai_sources(run_id);
+  `);
+
+  const columns: Array<[string, string, string]> = [
+    ["boq_scopes", "package_id", "TEXT REFERENCES project_commercial_packages(id) ON DELETE RESTRICT"],
+    ["boq_scopes", "parent_scope_id", "TEXT"],
+    ["quotations", "package_id", "TEXT REFERENCES project_commercial_packages(id) ON DELETE RESTRICT"],
+    ["quotations", "revision_no", "INTEGER NOT NULL DEFAULT 1"],
+    ["quotations", "supersedes_id", "TEXT"],
+    ["quotations", "discount_enabled", "INTEGER NOT NULL DEFAULT 0"],
+    ["quotations", "discount_type", "TEXT NOT NULL DEFAULT 'Nominal'"],
+    ["quotations", "discount_value", "INTEGER NOT NULL DEFAULT 0"],
+    ["quotations", "discount_amount", "INTEGER NOT NULL DEFAULT 0"],
+    ["quotations", "taxable_base", "INTEGER NOT NULL DEFAULT 0"],
+    ["quotations", "tax_additions_snapshot", "INTEGER NOT NULL DEFAULT 0"],
+    ["quotations", "tax_withholdings_snapshot", "INTEGER NOT NULL DEFAULT 0"],
+    ["quotations", "rounding_mode", "TEXT NOT NULL DEFAULT 'None'"],
+    ["quotations", "rounding_step", "INTEGER NOT NULL DEFAULT 0"],
+    ["quotations", "rounding_adjustment", "INTEGER NOT NULL DEFAULT 0"],
+    ["quotations", "rounding_reason", "TEXT"],
+    ["quotations", "grand_total", "INTEGER NOT NULL DEFAULT 0"],
+    ["invoices", "package_id", "TEXT REFERENCES project_commercial_packages(id) ON DELETE RESTRICT"],
+    ["invoices", "quotation_id", "TEXT REFERENCES quotations(id) ON DELETE RESTRICT"],
+    ["invoices", "calculation_mode", "TEXT NOT NULL DEFAULT 'Nominal'"],
+    ["invoices", "installment_bps", "INTEGER"],
+    ["invoices", "contract_grand_total", "INTEGER NOT NULL DEFAULT 0"],
+    ["invoices", "subtotal_snapshot", "INTEGER NOT NULL DEFAULT 0"],
+    ["invoices", "discount_snapshot", "INTEGER NOT NULL DEFAULT 0"],
+    ["invoices", "taxable_base_snapshot", "INTEGER NOT NULL DEFAULT 0"],
+    ["invoices", "tax_additions_snapshot", "INTEGER NOT NULL DEFAULT 0"],
+    ["invoices", "tax_withholdings_snapshot", "INTEGER NOT NULL DEFAULT 0"],
+    ["invoices", "rounding_snapshot", "INTEGER NOT NULL DEFAULT 0"],
+    ["project_validations", "package_id", "TEXT REFERENCES project_commercial_packages(id) ON DELETE RESTRICT"],
+    ["project_validations", "delivery_cycle", "INTEGER NOT NULL DEFAULT 1"],
+    ["basts", "package_id", "TEXT REFERENCES project_commercial_packages(id) ON DELETE RESTRICT"],
+    ["basts", "delivery_cycle", "INTEGER NOT NULL DEFAULT 1"],
+    ["basts", "revision_no", "INTEGER NOT NULL DEFAULT 1"],
+    ["basts", "finalized_pdf_storage_url", "TEXT"],
+    ["basts", "finalized_pdf_content_base64", "TEXT"],
+    ["basts", "pdf_hash", "TEXT"],
+    ["basts", "verification_token", "TEXT"],
+    ["basts", "finalized_at", "TEXT"],
+    ["basts", "finalized_by", "TEXT REFERENCES users(id) ON DELETE SET NULL"],
+    ["basts", "revoked_at", "TEXT"],
+    ["basts", "revoked_by", "TEXT REFERENCES users(id) ON DELETE SET NULL"],
+    ["basts", "revocation_reason", "TEXT"],
+    ["basts", "seal_name_snapshot", "TEXT"],
+    ["basts", "seal_role_snapshot", "TEXT"],
+    ["tax_obligations", "reporting_status", "TEXT NOT NULL DEFAULT 'Candidate'"],
+    ["tax_obligations", "tax_period", "TEXT"],
+    ["tax_obligations", "tax_invoice_number", "TEXT"],
+    ["tax_obligations", "tax_invoice_date", "TEXT"],
+    ["tax_obligations", "return_reference", "TEXT"],
+    ["tax_obligations", "reported_at", "TEXT"],
+    ["tax_obligations", "reported_by", "TEXT REFERENCES users(id) ON DELETE SET NULL"],
+    ["tax_obligations", "reporting_notes", "TEXT"],
+  ];
+  for (const [table, column, definition] of columns) {
+    await ensureColumn(client, table, column, definition);
+  }
+
+  await client.execute("DROP INDEX IF EXISTS quotations_scope_unique");
+  await client.execute("DROP INDEX IF EXISTS basts_project_unique");
+  await client.execute("DROP INDEX IF EXISTS project_validations_project_unique");
+  await dropLegacyConstraint(client, "project_validations", "project_validations_project_id_key");
+  await dropLegacyConstraint(client, "basts", "basts_project_id_key");
+  await client.execute(
+    "CREATE UNIQUE INDEX IF NOT EXISTS quotations_scope_revision_unique ON quotations(scope_id,revision_no)",
+  );
+  await client.execute(
+    "CREATE INDEX IF NOT EXISTS quotations_package_idx ON quotations(package_id,created_at)",
+  );
+  await client.execute(
+    "CREATE INDEX IF NOT EXISTS invoices_quotation_idx ON invoices(quotation_id,created_at)",
+  );
+  await client.execute(
+    "CREATE UNIQUE INDEX IF NOT EXISTS project_validations_package_cycle_unique ON project_validations(package_id,delivery_cycle)",
+  );
+  await client.execute(
+    "CREATE UNIQUE INDEX IF NOT EXISTS basts_package_cycle_revision_unique ON basts(package_id,delivery_cycle,revision_no)",
+  );
+  await client.execute(
+    "CREATE UNIQUE INDEX IF NOT EXISTS basts_verification_token_unique ON basts(verification_token)",
+  );
+
+  const timestamp = new Date().toISOString();
+  const projects = await client.execute(
+    "SELECT id,created_by,created_at FROM projects ORDER BY created_at,id",
+  );
+  for (const project of projects.rows) {
+    const projectId = String(project.id);
+    const existing = await client.execute({
+      sql: "SELECT id FROM project_commercial_packages WHERE project_id=? ORDER BY sort_order,created_at LIMIT 1",
+      args: [projectId],
+    });
+    const packageId = existing.rows[0]
+      ? String(existing.rows[0].id)
+      : `commercial-package-default-${projectId}`;
+    if (!existing.rows[0]) {
+      await client.execute({
+        sql: `INSERT INTO project_commercial_packages
+          (id,project_id,code,title,status,sort_order,created_by,created_at,updated_at)
+          VALUES (?,?,?,'Lingkup Utama','Active',0,?,?,?)`,
+        args: [
+          packageId,
+          projectId,
+          "PKG-01",
+          project.created_by ?? null,
+          project.created_at ?? timestamp,
+          timestamp,
+        ],
+      });
+    }
+    await client.batch([
+      {
+        sql: `UPDATE boq_scopes SET package_id=? WHERE package_id IS NULL
+          AND boq_id IN (SELECT id FROM boqs WHERE project_id=?)`,
+        args: [packageId, projectId],
+      },
+      {
+        sql: "UPDATE quotations SET package_id=? WHERE project_id=? AND package_id IS NULL",
+        args: [packageId, projectId],
+      },
+      {
+        sql: `UPDATE invoices SET package_id=?,quotation_id=COALESCE(quotation_id,
+          (SELECT q.id FROM quotations q WHERE q.project_id=? ORDER BY q.created_at DESC LIMIT 1))
+          WHERE project_id=? AND package_id IS NULL`,
+        args: [packageId, projectId, projectId],
+      },
+      {
+        sql: "UPDATE project_validations SET package_id=? WHERE project_id=? AND package_id IS NULL",
+        args: [packageId, projectId],
+      },
+      {
+        sql: "UPDATE basts SET package_id=? WHERE project_id=? AND package_id IS NULL",
+        args: [packageId, projectId],
+      },
+    ], "write");
+  }
+
+  await client.execute(`UPDATE quotations SET
+    taxable_base=CASE WHEN taxable_base=0 THEN total ELSE taxable_base END,
+    grand_total=CASE WHEN grand_total=0 THEN total ELSE grand_total END`);
+  await client.execute(`UPDATE invoices SET
+    contract_grand_total=CASE WHEN contract_grand_total=0 THEN amount ELSE contract_grand_total END,
+    subtotal_snapshot=CASE WHEN subtotal_snapshot=0 THEN amount ELSE subtotal_snapshot END,
+    taxable_base_snapshot=CASE WHEN taxable_base_snapshot=0 THEN amount ELSE taxable_base_snapshot END`);
+  await client.execute({
+    sql: `INSERT INTO quotation_items
+      (id,quotation_id,source_item_id,category,description,quantity,unit,cost_price,
+       selling_price,sort_order,created_at)
+      SELECT 'quotation-item-' || q.id || '-' || i.id,q.id,i.id,i.category,
+        i.description,i.quantity,i.unit,i.cost_price,i.selling_price,i.sort_order,?
+      FROM quotations q JOIN boq_items i ON i.scope_id=q.scope_id
+      WHERE q.status<>'Draft'
+        AND NOT EXISTS (SELECT 1 FROM quotation_items qi WHERE qi.quotation_id=q.id)`,
+    args: [timestamp],
+  });
+  await client.execute({
+    sql: `INSERT INTO bast_seal_settings
+      (id,enabled,signer_name,signer_role,updated_at)
+      VALUES ('global',0,'PerumNet Enterprise','Authorized Representative',?)
+      ON CONFLICT (id) DO NOTHING`,
+    args: [timestamp],
+  });
 }
 
 async function ensureCmsBilingualSchema(client: DatabaseClient) {
@@ -1602,7 +1859,7 @@ async function ensureCmsLandingFeatures(client: DatabaseClient) {
       "syarat-ketentuan",
       "Ketentuan penggunaan layanan dan kerja sama dengan PerumNet Enterprise.",
       "Terms governing the use of PerumNet Enterprise services and project engagements.",
-      "Dokumen ini mengatur penggunaan situs dan layanan PerumNet Enterprise. Ruang lingkup pekerjaan, jadwal, biaya, metode pembayaran, garansi, dan dukungan mengikuti proposal, BOQ, SPK, atau perjanjian tertulis yang disetujui para pihak.\n\nKlien bertanggung jawab memberikan informasi lokasi, akses kerja, persetujuan teknis, dan pembayaran sesuai jadwal. Perubahan ruang lingkup harus disepakati tertulis dan dapat memengaruhi biaya maupun waktu pelaksanaan.\n\nHak atas perangkat lunak, desain, dokumentasi, konfigurasi, atau materi lain mengikuti ketentuan pada dokumen proyek. Informasi bisnis dan akses sistem diperlakukan sebagai informasi rahasia sesuai kebutuhan pelaksanaan.\n\nPerumNet Enterprise menerapkan upaya profesional untuk menjaga mutu pekerjaan. Batas tanggung jawab, keadaan kahar, penghentian pekerjaan, serta penyelesaian perselisihan mengikuti perjanjian yang berlaku dan hukum Republik Indonesia.\n\nPertanyaan dapat dikirim ke it@perumnet.id.",
+      "Dokumen ini mengatur penggunaan situs dan layanan PerumNet Enterprise. Ruang lingkup pekerjaan, jadwal, biaya, metode pembayaran, garansi, dan dukungan mengikuti proposal, BOQ, SPK, atau perjanjian tertulis yang disetujui para pihak.\n\nKlien bertanggung jawab memberikan informasi lokasi, akses kerja, persetujuan teknis, dan pembayaran sesuai jadwal. Perubahan ruang lingkup harus disepakati tertulis dan dapat memengaruhi biaya maupun waktu pelaksanaan.\n\nHak atas perangkat lunak, desain, dokumentasi, konfigurasi, atau materi lain mengikuti ketentuan pada dokumen proyek. Informasi bisnis dan akses sistem diperlakukan sebagai informasi rahasia sesuai kebutuhan pelaksanaan.\n\nPerumNet Enterprise menerapkan upaya profesional untuk menjaga mutu pekerjaan. Batas tanggung jawab, keadaan kahar, penghentian pekerjaan, serta penyelesaian perselisihan mengikuti perjanjian yang berlaku dan hukum Republik Indonesia.\n\nPertanyaan dapat dikirim ke enterprise@perumnet.id.",
     ],
     [
       "cms-page-privacy",
@@ -1611,13 +1868,13 @@ async function ensureCmsLandingFeatures(client: DatabaseClient) {
       "kebijakan-privasi",
       "Cara PerumNet Enterprise mengelola informasi pengunjung dan klien.",
       "How PerumNet Enterprise manages visitor and client information.",
-      "PerumNet Enterprise dapat mengumpulkan informasi yang Anda kirimkan melalui formulir, WhatsApp, email, konsultasi, atau pelaksanaan proyek; termasuk nama, perusahaan, informasi kontak, lokasi, dan kebutuhan teknis.\n\nInformasi digunakan untuk menjawab permintaan, menyiapkan proposal, melaksanakan dan mendukung layanan, menjaga keamanan sistem, memenuhi kewajiban administrasi, serta meningkatkan kualitas layanan.\n\nAkses informasi dibatasi sesuai kebutuhan kerja dan dapat dibagikan kepada mitra pelaksana atau penyedia teknologi hanya sejauh diperlukan. Kami tidak menjual data pribadi.\n\nSitus dapat memproses data teknis dasar seperti alamat IP, jenis perangkat, log keamanan, dan cookie esensial. Data disimpan selama diperlukan untuk tujuan layanan, keamanan, kewajiban hukum, atau penyelesaian sengketa.\n\nAnda dapat meminta akses, koreksi, atau penghapusan data yang memenuhi ketentuan melalui it@perumnet.id. Kebijakan ini dapat diperbarui ketika layanan atau ketentuan hukum berubah.",
+      "PerumNet Enterprise dapat mengumpulkan informasi yang Anda kirimkan melalui formulir, WhatsApp, email, konsultasi, atau pelaksanaan proyek; termasuk nama, perusahaan, informasi kontak, lokasi, dan kebutuhan teknis.\n\nInformasi digunakan untuk menjawab permintaan, menyiapkan proposal, melaksanakan dan mendukung layanan, menjaga keamanan sistem, memenuhi kewajiban administrasi, serta meningkatkan kualitas layanan.\n\nAkses informasi dibatasi sesuai kebutuhan kerja dan dapat dibagikan kepada mitra pelaksana atau penyedia teknologi hanya sejauh diperlukan. Kami tidak menjual data pribadi.\n\nSitus dapat memproses data teknis dasar seperti alamat IP, jenis perangkat, log keamanan, dan cookie esensial. Data disimpan selama diperlukan untuk tujuan layanan, keamanan, kewajiban hukum, atau penyelesaian sengketa.\n\nAnda dapat meminta akses, koreksi, atau penghapusan data yang memenuhi ketentuan melalui enterprise@perumnet.id. Kebijakan ini dapat diperbarui ketika layanan atau ketentuan hukum berubah.",
     ],
   ];
   for (const [id, title, titleEn, slug, excerpt, excerptEn, content] of pages) {
     const contentEn = slug === "syarat-ketentuan"
-      ? "These terms govern the use of the PerumNet Enterprise website and services. Project scope, schedule, fees, payment terms, warranty, and support are defined by the approved proposal, BOQ, work order, or written agreement.\n\nClients are responsible for providing accurate site information, work access, technical approvals, and payments on schedule. Scope changes must be agreed in writing and may affect delivery time and cost.\n\nOwnership of software, designs, documentation, configurations, and other deliverables follows the relevant project agreement. Business information and system credentials are treated as confidential as required for delivery.\n\nPerumNet Enterprise applies professional care to every engagement. Liability limits, force majeure, termination, and dispute resolution follow the applicable agreement and the laws of the Republic of Indonesia.\n\nQuestions can be sent to it@perumnet.id."
-      : "PerumNet Enterprise may collect information you provide through forms, WhatsApp, email, consultations, or project delivery, including names, company details, contact information, locations, and technical requirements.\n\nWe use this information to respond to enquiries, prepare proposals, deliver and support services, protect systems, fulfil administrative obligations, and improve service quality.\n\nAccess is restricted to people who need it for their work. Information may be shared with delivery partners or technology providers only when necessary. We do not sell personal data.\n\nThe website may process basic technical data such as IP addresses, device types, security logs, and essential cookies. Data is retained only as required for services, security, legal obligations, or dispute handling.\n\nYou may request access, correction, or eligible deletion by contacting it@perumnet.id. This policy may be updated as services or legal requirements change.";
+      ? "These terms govern the use of the PerumNet Enterprise website and services. Project scope, schedule, fees, payment terms, warranty, and support are defined by the approved proposal, BOQ, work order, or written agreement.\n\nClients are responsible for providing accurate site information, work access, technical approvals, and payments on schedule. Scope changes must be agreed in writing and may affect delivery time and cost.\n\nOwnership of software, designs, documentation, configurations, and other deliverables follows the relevant project agreement. Business information and system credentials are treated as confidential as required for delivery.\n\nPerumNet Enterprise applies professional care to every engagement. Liability limits, force majeure, termination, and dispute resolution follow the applicable agreement and the laws of the Republic of Indonesia.\n\nQuestions can be sent to enterprise@perumnet.id."
+      : "PerumNet Enterprise may collect information you provide through forms, WhatsApp, email, consultations, or project delivery, including names, company details, contact information, locations, and technical requirements.\n\nWe use this information to respond to enquiries, prepare proposals, deliver and support services, protect systems, fulfil administrative obligations, and improve service quality.\n\nAccess is restricted to people who need it for their work. Information may be shared with delivery partners or technology providers only when necessary. We do not sell personal data.\n\nThe website may process basic technical data such as IP addresses, device types, security logs, and essential cookies. Data is retained only as required for services, security, legal obligations, or dispute handling.\n\nYou may request access, correction, or eligible deletion by contacting enterprise@perumnet.id. This policy may be updated as services or legal requirements change.";
     statements.push(statement(
       `INSERT INTO cms_pages
         (id,title,title_en,slug,excerpt,excerpt_en,content,content_en,is_published,show_in_navigation,sort_order,created_at,updated_at)
@@ -1826,9 +2083,6 @@ async function ensureProcurementSchema(client: DatabaseClient) {
   }
 
   await client.execute("DROP INDEX IF EXISTS quotations_project_unique");
-  await client.execute(
-    "CREATE UNIQUE INDEX IF NOT EXISTS quotations_scope_unique ON quotations(scope_id)",
-  );
   await client.execute(
     "CREATE INDEX IF NOT EXISTS boq_items_scope_idx ON boq_items(scope_id,sort_order)",
   );
@@ -2330,6 +2584,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureTransactionCategoryColumn(client);
   await ensureSpkPaymentColumns(client);
   await ensureProcurementSchema(client);
+  await ensureCommercialPackageSchema(client);
   await ensureTaxAndEmailSchema(client);
   await ensureProjectExpenseSchema(client);
   await ensureItemCatalogSchema(client);
@@ -2501,6 +2756,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   // idempotent migration once more so those rows immediately receive their
   // Original scope, vendor classification, procurement lines, and payments.
   await ensureProcurementSchema(client);
+  await ensureCommercialPackageSchema(client);
   await ensureTaxAndEmailSchema(client);
   await ensureProjectExpenseSchema(client);
   await ensureItemCatalogSchema(client);

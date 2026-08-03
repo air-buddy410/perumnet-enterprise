@@ -132,12 +132,13 @@ export async function lockDocumentTaxes(
     await client.execute({
       sql: `INSERT INTO tax_obligations
         (id,document_tax_id,project_id,direction,amount,settled_amount,status,
-         due_date,created_at,updated_at)
-        VALUES (?,?,?,?,?,0,'Outstanding',?,?,?)
+         reporting_status,tax_period,due_date,created_at,updated_at)
+        VALUES (?,?,?,?,?,0,'Outstanding','Candidate',?,?,?,?)
         ON CONFLICT (document_tax_id) DO UPDATE SET
           project_id=excluded.project_id,
           direction=excluded.direction,
           amount=excluded.amount,
+          tax_period=COALESCE(excluded.tax_period,tax_obligations.tax_period),
           due_date=COALESCE(excluded.due_date,tax_obligations.due_date),
           updated_at=excluded.updated_at`,
       args: [
@@ -146,6 +147,7 @@ export async function lockDocumentTaxes(
         tax.projectId ?? null,
         direction,
         tax.amount,
+        dueDate?.slice(0, 7) ?? null,
         dueDate ?? null,
         timestamp,
         timestamp,

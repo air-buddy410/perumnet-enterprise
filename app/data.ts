@@ -120,6 +120,22 @@ export interface Invoice {
   issueDateIso?: string;
   dueDateIso?: string;
   amount: number;
+  packageId?: string | null;
+  packageTitle?: string | null;
+  quotationId?: string | null;
+  quotationNumber?: string | null;
+  calculationMode?: "Percent" | "Nominal" | "LegacyBase";
+  installmentBps?: number | null;
+  installmentPercent?: number | null;
+  contractGrandTotal?: number;
+  subtotalSnapshot?: number;
+  discountSnapshot?: number;
+  taxableBaseSnapshot?: number;
+  taxAdditionsSnapshot?: number;
+  taxWithholdingsSnapshot?: number;
+  roundingSnapshot?: number;
+  prepayment?: number;
+  balanceDue?: number;
   status: "Lunas" | "Belum Lunas" | "Dibayar Sebagian";
   paidDate?: string;
   paidDateIso?: string;
@@ -146,6 +162,21 @@ export interface Invoice {
     createdBy?: string;
     voidReason?: string;
   }>;
+}
+
+export interface CommercialPackage {
+  id: string;
+  projectId: string;
+  code: string;
+  title: string;
+  status: "Draft" | "Active" | "Completed" | "Void";
+  sortOrder: number;
+  quotationCount?: number;
+  invoiceCount?: number;
+  validationCount?: number;
+  bastCount?: number;
+  grandTotal?: number;
+  invoicedTotal?: number;
 }
 
 export interface Vendor {

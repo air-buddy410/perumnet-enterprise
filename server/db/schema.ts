@@ -153,6 +153,26 @@ export const projects = sqliteTable(
   ],
 );
 
+export const projectCommercialPackages = sqliteTable(
+  "project_commercial_packages",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    code: text("code").notNull(),
+    title: text("title").notNull(),
+    status: text("status").notNull().default("Draft"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("project_commercial_packages_code_unique").on(table.projectId, table.code),
+    index("project_commercial_packages_project_idx").on(table.projectId, table.sortOrder),
+  ],
+);
+
 export const projectMembers = sqliteTable(
   "project_members",
   {
@@ -292,6 +312,10 @@ export const boqScopes = sqliteTable(
     boqId: text("boq_id")
       .notNull()
       .references(() => boqs.id, { onDelete: "cascade" }),
+    packageId: text("package_id").references(() => projectCommercialPackages.id, {
+      onDelete: "restrict",
+    }),
+    parentScopeId: text("parent_scope_id"),
     kind: text("kind").notNull(),
     sequence: integer("sequence").notNull().default(0),
     title: text("title").notNull(),
@@ -432,6 +456,9 @@ export const quotations = sqliteTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
+    packageId: text("package_id").references(() => projectCommercialPackages.id, {
+      onDelete: "restrict",
+    }),
     scopeId: text("scope_id").references(() => boqScopes.id, {
       onDelete: "restrict",
     }),
@@ -440,6 +467,20 @@ export const quotations = sqliteTable(
     issuedAt: text("issued_at").notNull(),
     validUntil: text("valid_until"),
     total: integer("total").notNull(),
+    revisionNo: integer("revision_no").notNull().default(1),
+    supersedesId: text("supersedes_id"),
+    discountEnabled: integer("discount_enabled").notNull().default(0),
+    discountType: text("discount_type").notNull().default("Nominal"),
+    discountValue: integer("discount_value").notNull().default(0),
+    discountAmount: integer("discount_amount").notNull().default(0),
+    taxableBase: integer("taxable_base").notNull().default(0),
+    taxAdditionsSnapshot: integer("tax_additions_snapshot").notNull().default(0),
+    taxWithholdingsSnapshot: integer("tax_withholdings_snapshot").notNull().default(0),
+    roundingMode: text("rounding_mode").notNull().default("None"),
+    roundingStep: integer("rounding_step").notNull().default(0),
+    roundingAdjustment: integer("rounding_adjustment").notNull().default(0),
+    roundingReason: text("rounding_reason"),
+    grandTotal: integer("grand_total").notNull().default(0),
     acceptedAt: text("accepted_at"),
     acceptanceAttachmentName: text("acceptance_attachment_name"),
     acceptanceAttachmentMimeType: text("acceptance_attachment_mime_type"),
@@ -450,8 +491,31 @@ export const quotations = sqliteTable(
   },
   (table) => [
     uniqueIndex("quotations_number_unique").on(table.number),
-    uniqueIndex("quotations_scope_unique").on(table.scopeId),
+    uniqueIndex("quotations_scope_revision_unique").on(table.scopeId, table.revisionNo),
     index("quotations_project_idx").on(table.projectId, table.createdAt),
+    index("quotations_package_idx").on(table.packageId, table.createdAt),
+  ],
+);
+
+export const quotationItems = sqliteTable(
+  "quotation_items",
+  {
+    id: text("id").primaryKey(),
+    quotationId: text("quotation_id")
+      .notNull()
+      .references(() => quotations.id, { onDelete: "cascade" }),
+    sourceItemId: text("source_item_id"),
+    category: text("category").notNull(),
+    description: text("description").notNull(),
+    quantity: integer("quantity").notNull(),
+    unit: text("unit").notNull(),
+    costPrice: integer("cost_price").notNull().default(0),
+    sellingPrice: integer("selling_price").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("quotation_items_quotation_idx").on(table.quotationId, table.sortOrder),
   ],
 );
 
@@ -462,11 +526,26 @@ export const invoices = sqliteTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
+    packageId: text("package_id").references(() => projectCommercialPackages.id, {
+      onDelete: "restrict",
+    }),
+    quotationId: text("quotation_id").references(() => quotations.id, {
+      onDelete: "restrict",
+    }),
     number: text("number").notNull(),
     type: text("type").notNull(),
     issueDate: text("issue_date").notNull(),
     dueDate: text("due_date").notNull(),
     amount: integer("amount").notNull(),
+    calculationMode: text("calculation_mode").notNull().default("Nominal"),
+    installmentBps: integer("installment_bps"),
+    contractGrandTotal: integer("contract_grand_total").notNull().default(0),
+    subtotalSnapshot: integer("subtotal_snapshot").notNull().default(0),
+    discountSnapshot: integer("discount_snapshot").notNull().default(0),
+    taxableBaseSnapshot: integer("taxable_base_snapshot").notNull().default(0),
+    taxAdditionsSnapshot: integer("tax_additions_snapshot").notNull().default(0),
+    taxWithholdingsSnapshot: integer("tax_withholdings_snapshot").notNull().default(0),
+    roundingSnapshot: integer("rounding_snapshot").notNull().default(0),
     status: text("status").notNull().default("Belum Lunas"),
     paidDate: text("paid_date"),
     ...timestamps,
@@ -474,6 +553,7 @@ export const invoices = sqliteTable(
   (table) => [
     uniqueIndex("invoices_number_unique").on(table.number),
     index("invoices_project_idx").on(table.projectId),
+    index("invoices_quotation_idx").on(table.quotationId, table.createdAt),
   ],
 );
 
@@ -714,6 +794,11 @@ export const basts = sqliteTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
+    packageId: text("package_id").references(() => projectCommercialPackages.id, {
+      onDelete: "restrict",
+    }),
+    deliveryCycle: integer("delivery_cycle").notNull().default(1),
+    revisionNo: integer("revision_no").notNull().default(1),
     completionDate: text("completion_date").notNull(),
     notes: text("notes").notNull(),
     installedItemsJson: text("installed_items_json").notNull(),
@@ -724,13 +809,37 @@ export const basts = sqliteTable(
     engineerRole: text("engineer_role").notNull().default("Project Manager"),
     engineerSignature: text("engineer_signature"),
     status: text("status").notNull().default("Draft"),
+    finalizedPdfStorageUrl: text("finalized_pdf_storage_url"),
+    finalizedPdfContentBase64: text("finalized_pdf_content_base64"),
+    pdfHash: text("pdf_hash"),
+    verificationToken: text("verification_token"),
+    finalizedAt: text("finalized_at"),
+    finalizedBy: text("finalized_by").references(() => users.id, { onDelete: "set null" }),
+    revokedAt: text("revoked_at"),
+    revokedBy: text("revoked_by").references(() => users.id, { onDelete: "set null" }),
+    revocationReason: text("revocation_reason"),
+    sealNameSnapshot: text("seal_name_snapshot"),
+    sealRoleSnapshot: text("seal_role_snapshot"),
     ...timestamps,
   },
   (table) => [
     uniqueIndex("basts_number_unique").on(table.number),
-    uniqueIndex("basts_project_unique").on(table.projectId),
+    uniqueIndex("basts_package_cycle_revision_unique").on(table.packageId, table.deliveryCycle, table.revisionNo),
+    uniqueIndex("basts_verification_token_unique").on(table.verificationToken),
+    index("basts_project_idx").on(table.projectId),
   ],
 );
+
+export const bastSealSettings = sqliteTable("bast_seal_settings", {
+  id: text("id").primaryKey(),
+  enabled: integer("enabled").notNull().default(0),
+  signerName: text("signer_name").notNull().default("PerumNet Enterprise"),
+  signerRole: text("signer_role").notNull().default("Authorized Representative"),
+  sealMimeType: text("seal_mime_type"),
+  sealContentBase64: text("seal_content_base64"),
+  updatedBy: text("updated_by").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: text("updated_at").notNull(),
+});
 
 export const projectValidations = sqliteTable(
   "project_validations",
@@ -740,6 +849,10 @@ export const projectValidations = sqliteTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
+    packageId: text("package_id").references(() => projectCommercialPackages.id, {
+      onDelete: "restrict",
+    }),
+    deliveryCycle: integer("delivery_cycle").notNull().default(1),
     status: text("status").notNull().default("Draft"),
     notes: text("notes"),
     validatedBy: text("validated_by").references(() => users.id, { onDelete: "set null" }),
@@ -748,7 +861,8 @@ export const projectValidations = sqliteTable(
   },
   (table) => [
     uniqueIndex("project_validations_number_unique").on(table.number),
-    uniqueIndex("project_validations_project_unique").on(table.projectId),
+    uniqueIndex("project_validations_package_cycle_unique").on(table.packageId, table.deliveryCycle),
+    index("project_validations_project_idx").on(table.projectId),
   ],
 );
 
@@ -1265,6 +1379,14 @@ export const taxObligations = sqliteTable(
     amount: integer("amount").notNull(),
     settledAmount: integer("settled_amount").notNull().default(0),
     status: text("status").notNull().default("Outstanding"),
+    reportingStatus: text("reporting_status").notNull().default("Candidate"),
+    taxPeriod: text("tax_period"),
+    taxInvoiceNumber: text("tax_invoice_number"),
+    taxInvoiceDate: text("tax_invoice_date"),
+    returnReference: text("return_reference"),
+    reportedAt: text("reported_at"),
+    reportedBy: text("reported_by").references(() => users.id, { onDelete: "set null" }),
+    reportingNotes: text("reporting_notes"),
     dueDate: text("due_date"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -1278,6 +1400,44 @@ export const taxObligations = sqliteTable(
     ),
     index("tax_obligations_project_idx").on(table.projectId, table.status),
   ],
+);
+
+export const catalogAiRuns = sqliteTable(
+  "catalog_ai_runs",
+  {
+    id: text("id").primaryKey(),
+    requestedBy: text("requested_by").references(() => users.id, { onDelete: "set null" }),
+    status: text("status").notNull().default("Requested"),
+    query: text("query").notNull(),
+    sourceUrl: text("source_url"),
+    inputMimeType: text("input_mime_type"),
+    recommendationJson: text("recommendation_json"),
+    model: text("model").notNull(),
+    confidence: integer("confidence").notNull().default(0),
+    expiresAt: text("expires_at"),
+    errorMessage: text("error_message"),
+    approvedBy: text("approved_by").references(() => users.id, { onDelete: "set null" }),
+    approvedAt: text("approved_at"),
+    rejectedBy: text("rejected_by").references(() => users.id, { onDelete: "set null" }),
+    rejectedAt: text("rejected_at"),
+    overrideReason: text("override_reason"),
+    catalogItemId: text("catalog_item_id").references(() => itemCatalogItems.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (table) => [index("catalog_ai_runs_user_idx").on(table.requestedBy, table.createdAt)],
+);
+
+export const catalogAiSources = sqliteTable(
+  "catalog_ai_sources",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull().references(() => catalogAiRuns.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    url: text("url").notNull(),
+    accessedAt: text("accessed_at").notNull(),
+    ...timestamps,
+  },
+  (table) => [index("catalog_ai_sources_run_idx").on(table.runId)],
 );
 
 export const taxSettlements = sqliteTable(

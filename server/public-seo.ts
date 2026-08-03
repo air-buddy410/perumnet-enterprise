@@ -73,7 +73,7 @@ export function businessStructuredData(content: CmsContent, language: PublicLang
     logo: `${publicOrigin}/perumnet-mark.png`,
     image: `${publicOrigin}/og.png`,
     description: translated("seo_description"),
-    email: settings.email || "it@perumnet.id",
+    email: settings.email || "enterprise@perumnet.id",
     telephone: rawPhone || undefined,
     address: {
       "@type": "PostalAddress",

@@ -119,7 +119,7 @@ export function HelpView({ language }: HelpViewProps) {
         <div><span className="metric-icon green"><ShieldCheck size={20} /></span><span><strong>{id ? "Panduan operasional lengkap" : "Complete operations guide"}</strong><small>{id ? "Unduh SOP proyek, dokumen, finance, rekonsiliasi, pembagian laba, dan kontrol akses." : "Download the SOP for projects, documents, finance, reconciliation, profit sharing, and access control."}</small></span></div>
         <div className="title-actions">
           <button className="button primary" type="button" onClick={downloadSop}><Download size={16} /> {id ? "Unduh SOP PDF" : "Download SOP PDF"}</button>
-          <a className="button secondary" href="mailto:it@perumnet.id">{id ? "Email dukungan" : "Email support"}</a>
+          <a className="button secondary" href="mailto:enterprise@perumnet.id">{id ? "Email dukungan" : "Email support"}</a>
         </div>
       </section>
     </div>

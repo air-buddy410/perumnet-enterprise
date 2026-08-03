@@ -5,6 +5,7 @@ import ExcelJS from "exceljs";
 import { z } from "zod";
 import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
+import { calculateQuotationCommercialTotals } from "../commercial";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
 
@@ -149,11 +150,12 @@ async function resetAffectedQuotations(client: DatabaseClient, catalogItemId: st
     sql: `SELECT DISTINCT s.id,s.boq_id,q.id AS quotation_id,q.project_id,q.status AS quotation_status
       FROM boq_items i
       JOIN boq_scopes s ON s.id=i.scope_id
-      LEFT JOIN quotations q ON q.scope_id=s.id
+      LEFT JOIN quotations q ON q.scope_id=s.id AND q.status IN ('Draft','Sent')
       WHERE i.catalog_item_id=? AND s.status<>'Accepted'`,
     args: [catalogItemId],
   });
   const timestamp = new Date().toISOString();
+  let quotationsReset = 0;
   for (const scope of scopes.rows) {
     const totalResult = await client.execute({
       sql: "SELECT COALESCE(SUM(quantity*selling_price),0) AS total FROM boq_items WHERE scope_id=?",
@@ -161,16 +163,63 @@ async function resetAffectedQuotations(client: DatabaseClient, catalogItemId: st
     });
     const total = Number(totalResult.rows[0]?.total ?? 0);
     if (scope.quotation_id) {
-      await client.execute({
-        sql: `UPDATE quotations SET total=?,status=CASE WHEN status='Sent' THEN 'Draft' ELSE status END,
-          updated_at=? WHERE id=?`,
-        args: [total, timestamp, scope.quotation_id],
+      if (String(scope.quotation_status) === "Sent") {
+        quotationsReset += 1;
+        await client.execute({
+          sql: "UPDATE quotations SET status='Draft',updated_at=? WHERE id=? AND status='Sent'",
+          args: [timestamp, scope.quotation_id],
+        });
+      }
+      const quote = await client.execute({
+        sql: `SELECT discount_enabled,discount_type,discount_value,rounding_mode,
+          rounding_step,rounding_adjustment FROM quotations WHERE id=? AND status='Draft' LIMIT 1`,
+        args: [scope.quotation_id],
+      });
+      if (!quote.rows[0]) continue;
+      const commercialBeforeTax = calculateQuotationCommercialTotals({
+        subtotal: total,
+        discountEnabled: Boolean(Number(quote.rows[0].discount_enabled ?? 0)),
+        discountType: String(quote.rows[0].discount_type ?? "Nominal") as "Nominal" | "Percent",
+        discountValue: Number(quote.rows[0].discount_value ?? 0),
+        roundingMode: String(quote.rows[0].rounding_mode ?? "None") as "None" | "Up" | "Down" | "Custom",
+        roundingStep: Number(quote.rows[0].rounding_step ?? 0),
+        customRoundingAdjustment: String(quote.rows[0].rounding_mode) === "Custom"
+          ? Number(quote.rows[0].rounding_adjustment ?? 0)
+          : 0,
       });
       await client.execute({
         sql: `UPDATE document_taxes
           SET taxable_base=?,amount=ROUND(?*rate_bps/10000.0),locked=0,locked_at=NULL,updated_at=?
           WHERE document_type='Quotation' AND document_id=?`,
-        args: [total, total, timestamp, scope.quotation_id],
+        args: [commercialBeforeTax.taxableBase, commercialBeforeTax.taxableBase, timestamp, scope.quotation_id],
+      });
+      const taxTotals = await client.execute({
+        sql: `SELECT
+          COALESCE(SUM(CASE WHEN effect='Tambah' THEN amount ELSE 0 END),0) AS additions,
+          COALESCE(SUM(CASE WHEN effect='Potong' THEN amount ELSE 0 END),0) AS withholdings
+          FROM document_taxes WHERE document_type='Quotation' AND document_id=?`,
+        args: [scope.quotation_id],
+      });
+      const commercial = calculateQuotationCommercialTotals({
+        subtotal: total,
+        discountEnabled: Boolean(Number(quote.rows[0].discount_enabled ?? 0)),
+        discountType: String(quote.rows[0].discount_type ?? "Nominal") as "Nominal" | "Percent",
+        discountValue: Number(quote.rows[0].discount_value ?? 0),
+        taxAdditions: Number(taxTotals.rows[0]?.additions ?? 0),
+        taxWithholdings: Number(taxTotals.rows[0]?.withholdings ?? 0),
+        roundingMode: String(quote.rows[0].rounding_mode ?? "None") as "None" | "Up" | "Down" | "Custom",
+        roundingStep: Number(quote.rows[0].rounding_step ?? 0),
+        customRoundingAdjustment: String(quote.rows[0].rounding_mode) === "Custom"
+          ? Number(quote.rows[0].rounding_adjustment ?? 0)
+          : 0,
+      });
+      await client.execute({
+        sql: `UPDATE quotations SET total=?,discount_amount=?,taxable_base=?,tax_additions_snapshot=?,
+          tax_withholdings_snapshot=?,rounding_adjustment=?,grand_total=?,updated_at=?
+          WHERE id=? AND status='Draft'`,
+        args: [commercial.subtotal, commercial.discountAmount, commercial.taxableBase,
+          commercial.taxAdditions, commercial.taxWithholdings, commercial.roundingAdjustment,
+          commercial.grandTotal, timestamp, scope.quotation_id],
       });
     }
     await client.execute({
@@ -189,7 +238,7 @@ async function resetAffectedQuotations(client: DatabaseClient, catalogItemId: st
       });
     }
   }
-  return scopes.rows.filter((scope) => scope.quotation_status === "Sent").length;
+  return quotationsReset;
 }
 
 async function syncCatalogItem(client: DatabaseClient, itemId: string) {
@@ -243,7 +292,7 @@ async function assertCatalogPriceUpdateCoversInvoices(
       FROM boq_items i
       JOIN boqs b ON b.id=i.boq_id
       LEFT JOIN boq_scopes s ON s.id=i.scope_id
-      WHERE i.catalog_item_id=? AND COALESCE(s.status,'Draft')<>'Accepted'`,
+      WHERE i.catalog_item_id=? AND COALESCE(s.status,'Draft')='Draft'`,
     args: [itemId],
   });
   const tier1 = price(costPrice, margin1Bps);
@@ -261,7 +310,7 @@ async function assertCatalogPriceUpdateCoversInvoices(
           LEFT JOIN boq_scopes s ON s.id=i.scope_id
           WHERE b.project_id=? AND i.catalog_item_id=?
             AND i.manual_price_override=0
-            AND COALESCE(s.status,'Draft')<>'Accepted'),0) AS delta,
+            AND COALESCE(s.status,'Draft')='Draft'),0) AS delta,
         COALESCE((SELECT SUM(amount) FROM invoices WHERE project_id=?),0) AS invoiced_total`,
       args: [project.project_id, tier2, tier1, project.project_id, itemId, project.project_id],
     });

@@ -19,11 +19,12 @@ import {
   Truck,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api, messageOf } from "../api-client";
-import { BoqItem, type CatalogItem, formatCurrency, ViewKey } from "../data";
+import { BoqItem, type CatalogItem, type CommercialPackage, formatCurrency, ViewKey } from "../data";
 import { type AppLanguage, localizedLabel } from "../i18n";
 import { CatalogPicker } from "./catalog-picker";
+import { CommercialPackageSwitcher } from "./commercial-package-switcher";
 
 interface BoqViewProps {
   language: AppLanguage;
@@ -69,11 +70,17 @@ export function BoqView({ language, navigate, notify, projectId, canManage, canM
   const [selectedCatalog, setSelectedCatalog] = useState<CatalogItem | null>(null);
   const [manualPriceOverride, setManualPriceOverride] = useState(false);
   const [priceOverrideReason, setPriceOverrideReason] = useState("");
+  const [packageId, setPackageId] = useState("");
+  const selectPackage = useCallback((nextPackageId: string, packages: CommercialPackage[]) => {
+    void packages;
+    setPackageId(nextPackageId);
+  }, []);
 
   useEffect(() => {
+    if (!packageId) return;
     let active = true;
     Promise.all([
-      api<{ items: BoqItem[]; project: typeof project; status: string }>(`/api/boq?projectId=${encodeURIComponent(projectId)}`),
+      api<{ items: BoqItem[]; project: typeof project; status: string }>(`/api/boq?projectId=${encodeURIComponent(projectId)}&packageId=${encodeURIComponent(packageId)}`),
       api<BoqTemplate[]>("/api/boq/templates"),
     ])
       .then(([boq, savedTemplates]) => {
@@ -88,7 +95,7 @@ export function BoqView({ language, navigate, notify, projectId, canManage, canM
     return () => {
       active = false;
     };
-  }, [language, notify, projectId]);
+  }, [language, notify, packageId, projectId]);
 
   const totals = useMemo(() => {
     const cost = items.reduce((sum, item) => sum + item.quantity * item.costPrice, 0);
@@ -114,8 +121,8 @@ export function BoqView({ language, navigate, notify, projectId, canManage, canM
     if (!description.trim() || quantity < 1 || sellingPrice <= 0) return;
     try {
       const item = await api<BoqItem>(editingItemId
-        ? `/api/boq/items/${editingItemId}?projectId=${encodeURIComponent(projectId)}`
-        : `/api/boq/items?projectId=${encodeURIComponent(projectId)}`, {
+        ? `/api/boq/items/${editingItemId}?projectId=${encodeURIComponent(projectId)}&packageId=${encodeURIComponent(packageId)}`
+        : `/api/boq/items?projectId=${encodeURIComponent(projectId)}&packageId=${encodeURIComponent(packageId)}`, {
         method: editingItemId ? "PATCH" : "POST",
         body: JSON.stringify({ category, description: description.trim(), quantity, unit, costPrice, sellingPrice,
           catalogItemId, catalogPriceTier, manualPriceOverride, priceOverrideReason: manualPriceOverride ? priceOverrideReason : null }),
@@ -164,7 +171,7 @@ export function BoqView({ language, navigate, notify, projectId, canManage, canM
   async function saveBoq(nextItems = items) {
     try {
       const saved = await api<{ items: BoqItem[]; status: string }>(
-        `/api/boq?projectId=${encodeURIComponent(projectId)}`,
+        `/api/boq?projectId=${encodeURIComponent(projectId)}&packageId=${encodeURIComponent(packageId)}`,
         {
           method: "PUT",
           body: JSON.stringify({
@@ -196,7 +203,7 @@ export function BoqView({ language, navigate, notify, projectId, canManage, canM
 
   async function deleteItem(itemId: string) {
     try {
-      await api(`/api/boq/items/${itemId}?projectId=${encodeURIComponent(projectId)}`, { method: "DELETE" });
+      await api(`/api/boq/items/${itemId}?projectId=${encodeURIComponent(projectId)}&packageId=${encodeURIComponent(packageId)}`, { method: "DELETE" });
       setItems((current) => current.filter((item) => item.id !== itemId));
       notify(id ? "Item dihapus dari BoQ." : "The item was removed from the BoQ.");
     } catch (error) {
@@ -298,6 +305,7 @@ export function BoqView({ language, navigate, notify, projectId, canManage, canM
           <p>{id ? "Susun kebutuhan, harga pokok, dan margin proyek secara terstruktur." : "Structure project requirements, costs, and margins."}</p>
         </div>
         <div className="title-actions">
+          <CommercialPackageSwitcher projectId={projectId} language={language} canManage={canManage} value={packageId} onChange={selectPackage} notify={notify} />
           {canManage && (
             <>
               <button className="button secondary" type="button" onClick={() => saveBoq()}>

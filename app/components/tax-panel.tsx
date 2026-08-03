@@ -3,6 +3,7 @@
 import {
   Calculator,
   Download,
+  Eye,
   FileCheck2,
   Plus,
   RefreshCw,
@@ -13,6 +14,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api, downloadApiFile, messageOf } from "../api-client";
 import { type BankAccount, formatCurrency } from "../data";
 import { type AppLanguage, localizedDate } from "../i18n";
+import { DocumentPreviewModal } from "./document-preview-modal";
 
 interface TaxRule {
   id: string;
@@ -42,6 +44,12 @@ interface TaxObligation {
   settledAmount: number;
   outstandingAmount: number;
   status: string;
+  reportingStatus: "Candidate" | "Ready" | "Reported" | "Settled" | "Void";
+  taxPeriod?: string;
+  taxInvoiceNumber?: string;
+  taxInvoiceDate?: string;
+  returnReference?: string;
+  reportingNotes?: string;
   dueDate?: string;
 }
 
@@ -91,6 +99,14 @@ export function TaxPanel({
   const [settlementMethod, setSettlementMethod] = useState("Transfer Bank");
   const [settlementAccount, setSettlementAccount] = useState("");
   const [settlementFile, setSettlementFile] = useState<File | null>(null);
+  const [reporting, setReporting] = useState<TaxObligation | null>(null);
+  const [reportingStatus, setReportingStatus] = useState<TaxObligation["reportingStatus"]>("Candidate");
+  const [taxPeriod, setTaxPeriod] = useState("");
+  const [taxInvoiceNumber, setTaxInvoiceNumber] = useState("");
+  const [taxInvoiceDate, setTaxInvoiceDate] = useState("");
+  const [returnReference, setReturnReference] = useState("");
+  const [reportingNotes, setReportingNotes] = useState("");
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -261,6 +277,42 @@ export function TaxPanel({
     }
   }
 
+  function openReporting(obligation: TaxObligation) {
+    setReporting(obligation);
+    setReportingStatus(obligation.reportingStatus ?? "Candidate");
+    setTaxPeriod(obligation.taxPeriod ?? serverToday.slice(0, 7));
+    setTaxInvoiceNumber(obligation.taxInvoiceNumber ?? "");
+    setTaxInvoiceDate(obligation.taxInvoiceDate ?? "");
+    setReturnReference(obligation.returnReference ?? "");
+    setReportingNotes(obligation.reportingNotes ?? "");
+  }
+
+  async function saveReporting(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!reporting) return;
+    setSaving(true);
+    try {
+      await api(`/api/tax/obligations/${reporting.id}/reporting`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          reportingStatus,
+          taxPeriod: taxPeriod || null,
+          taxInvoiceNumber: taxInvoiceNumber || null,
+          taxInvoiceDate: taxInvoiceDate || null,
+          returnReference: returnReference || null,
+          notes: reportingNotes || null,
+        }),
+      });
+      setReporting(null);
+      await load();
+      notify(id ? "Status pelaporan pajak diperbarui." : "Tax reporting status updated.");
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <section className="panel tax-panel">
       <div className="panel-head tax-panel-head">
@@ -283,6 +335,7 @@ export function TaxPanel({
           <button className="button subtle small" type="button" onClick={() => void exportTax("pdf")}>
             <Download size={15} /> PDF
           </button>
+          <button className="icon-button" type="button" onClick={() => setPreviewOpen(true)} aria-label={id ? "Pratinjau laporan pajak" : "Preview tax report"}><Eye size={16} /></button>
           {canConfigure ? (
             <button className={`button small ${enabled ? "danger" : "primary"}`} type="button" onClick={() => void toggleTax()}>
               {enabled ? (id ? "Nonaktifkan" : "Disable") : (id ? "Aktifkan" : "Enable")}
@@ -327,19 +380,20 @@ export function TaxPanel({
           aria-label={id ? "Tabel posisi pajak" : "Tax position table"}
         >
           <table className="data-table tax-table">
-            <thead><tr><th>{id ? "Dokumen" : "Document"}</th><th>{id ? "Aturan" : "Rule"}</th><th>{id ? "Posisi" : "Position"}</th><th>{id ? "Outstanding" : "Outstanding"}</th><th>{id ? "Jatuh tempo" : "Due"}</th><th><span className="sr-only">{id ? "Aksi" : "Actions"}</span></th></tr></thead>
+            <thead><tr><th>{id ? "Dokumen" : "Document"}</th><th>{id ? "Aturan" : "Rule"}</th><th>{id ? "Pelaporan" : "Reporting"}</th><th>{id ? "Posisi" : "Position"}</th><th>{id ? "Outstanding" : "Outstanding"}</th><th>{id ? "Jatuh tempo" : "Due"}</th><th><span className="sr-only">{id ? "Aksi" : "Actions"}</span></th></tr></thead>
             <tbody>
               {obligations.map((obligation) => (
                 <tr key={obligation.id}>
                   <td><strong>{obligation.documentType}</strong><small>{obligation.projectCode ?? obligation.projectName ?? "—"}</small></td>
                   <td>{obligation.ruleCode}</td>
+                  <td><span className="status-badge info">{obligation.reportingStatus}</span><small>{obligation.taxPeriod ?? "—"}</small></td>
                   <td>{obligation.direction === "Payable" ? (id ? "Utang" : "Payable") : (id ? "Piutang" : "Receivable")}</td>
                   <td>{formatCurrency(obligation.outstandingAmount, language)}</td>
                   <td>{obligation.dueDate ? localizedDate(language, obligation.dueDate) : "—"}</td>
-                  <td>{canManage && obligation.outstandingAmount > 0 ? <button className="button primary small" type="button" onClick={() => openSettlement(obligation)}>{id ? "Settlement" : "Settle"}</button> : null}</td>
+                  <td><div className="table-row-actions">{canManage ? <button className="button secondary small" type="button" onClick={() => openReporting(obligation)}>{id ? "Lapor" : "Report"}</button> : null}{canManage && obligation.outstandingAmount > 0 ? <button className="button primary small" type="button" onClick={() => openSettlement(obligation)}>{id ? "Settlement" : "Settle"}</button> : null}</div></td>
                 </tr>
               ))}
-              {!obligations.length ? <tr><td colSpan={6}><div className="empty-state compact"><Calculator size={22} /><p>{id ? "Belum ada posisi pajak terkunci." : "No locked tax positions yet."}</p></div></td></tr> : null}
+              {!obligations.length ? <tr><td colSpan={7}><div className="empty-state compact"><Calculator size={22} /><p>{id ? "Belum ada posisi pajak terkunci." : "No locked tax positions yet."}</p></div></td></tr> : null}
             </tbody>
           </table>
         </div>
@@ -380,6 +434,23 @@ export function TaxPanel({
           </section>
         </div>
       ) : null}
+      {reporting ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setReporting(null)}>
+          <section className="modal-card" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-head"><div><span className="eyebrow">{id ? "PELAPORAN PAJAK" : "TAX REPORTING"}</span><h2>{reporting.ruleCode} · {reporting.documentType}</h2></div><button className="icon-button" type="button" onClick={() => setReporting(null)}><X size={18} /></button></div>
+            <form className="form-grid" onSubmit={saveReporting}>
+              <label className="field"><span>Status</span><select value={reportingStatus} onChange={(event) => setReportingStatus(event.target.value as TaxObligation["reportingStatus"])}><option value="Candidate">Candidate</option><option value="Ready">Ready</option><option value="Reported">Reported</option><option value="Settled">Settled</option><option value="Void">Void</option></select></label>
+              <label className="field"><span>{id ? "Masa pajak" : "Tax period"}</span><input type="month" value={taxPeriod} onChange={(event) => setTaxPeriod(event.target.value)} /></label>
+              <label className="field"><span>{id ? "Nomor faktur pajak" : "Tax invoice number"}</span><input value={taxInvoiceNumber} onChange={(event) => setTaxInvoiceNumber(event.target.value)} /></label>
+              <label className="field"><span>{id ? "Tanggal faktur" : "Tax invoice date"}</span><input type="date" value={taxInvoiceDate} onChange={(event) => setTaxInvoiceDate(event.target.value)} /></label>
+              <label className="field full"><span>{id ? "Referensi pelaporan" : "Return reference"}</span><input required={reportingStatus === "Reported" || reportingStatus === "Settled"} value={returnReference} onChange={(event) => setReturnReference(event.target.value)} /></label>
+              <label className="field full"><span>{id ? "Catatan" : "Notes"}</span><textarea value={reportingNotes} onChange={(event) => setReportingNotes(event.target.value)} /></label>
+              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setReporting(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit" disabled={saving}><Save size={15} /> {id ? "Simpan pelaporan" : "Save reporting"}</button></div>
+            </form>
+          </section>
+        </div>
+      ) : null}
+      <DocumentPreviewModal open={previewOpen} url="/api/tax/report.pdf" title={id ? "Laporan Pajak" : "Tax Report"} filename={id ? "Laporan-Pajak-PerumNet.pdf" : "PerumNet-Tax-Report.pdf"} onClose={() => setPreviewOpen(false)} />
     </section>
   );
 }
