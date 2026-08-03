@@ -11,8 +11,16 @@ let databasePath;
 let uploadDirectory;
 let cookie = "";
 let mockServer;
+let pageServer;
 let mockMode = "happy";
 let mockRequests = [];
+
+const pageMarker = "PN-PAGE-MARKER-RAP2260-HARGA-1600000";
+const productPageHtml = `<html><head><title>Ruijie RG-RAP2260</title>
+  <style>body { color: red }</style>
+  <script>var tracking = "PN-SCRIPT-NOISE-SHOULD-BE-STRIPPED";</script></head>
+  <body><h1>Ruijie RG-RAP2260 Access Point WiFi 6</h1>
+  <p>${pageMarker} — dijual seharga Rp1.600.000 termasuk PPN.</p></body></html>`;
 
 const happyRecommendation = {
   brand: "Ruijie",
@@ -40,24 +48,6 @@ function researchPayload() {
       content: {
         role: "model",
         parts: [{ text: "Riset pasar: Ruijie RG-RAP2260 dijual sekitar Rp1,6 juta." }],
-      },
-      groundingMetadata: {
-        webSearchQueries: ["harga Ruijie RG-RAP2260"],
-        groundingChunks: [
-          {
-            web: {
-              uri: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc123",
-              title: "tokopedia.com",
-            },
-          },
-          { web: { uri: "https://example.com/produk-rap2260", title: "Contoh Produk" } },
-          {
-            web: {
-              uri: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc123",
-              title: "tokopedia.com",
-            },
-          },
-        ],
       },
     }],
   };
@@ -193,6 +183,11 @@ after(async () => {
     await new Promise((resolve) => mockServer.close(resolve));
     mockServer = undefined;
   }
+  if (pageServer) {
+    pageServer.closeAllConnections?.();
+    await new Promise((resolve) => pageServer.close(resolve));
+    pageServer = undefined;
+  }
 });
 
 test(
@@ -218,7 +213,7 @@ test(
 );
 
 test(
-  "catalog AI on Gemini runs the two-step grounded analysis with failure handling, sweeper, and approval",
+  "catalog AI on Gemini runs the two-step free-tier analysis with page fetch, failure handling, sweeper, and approval",
   { timeout: 240_000 },
   async () => {
     const mockPort = await freePort();
@@ -237,6 +232,7 @@ test(
           apiKey: incoming.headers["x-goog-api-key"],
           hasTools: Array.isArray(body.tools) && body.tools.length > 0,
           responseSchema: body.generationConfig?.responseSchema ?? null,
+          raw,
         });
         if (mockMode === "hang") return;
         if (incoming.headers["x-goog-api-key"] !== "test-gemini-key") {
@@ -250,15 +246,15 @@ test(
           return;
         }
         let payload;
-        if (Array.isArray(body.tools) && body.tools.length > 0) {
-          payload = researchPayload();
-        } else {
+        if (body.generationConfig?.responseSchema) {
           let recommendation = happyRecommendation;
           if (mockMode === "bad") {
             recommendation = { ...happyRecommendation };
             delete recommendation.sku;
           }
           payload = formatPayload(recommendation);
+        } else {
+          payload = researchPayload();
         }
         response.writeHead(200, { "Content-Type": "application/json" });
         response.end(JSON.stringify(payload));
@@ -266,11 +262,22 @@ test(
     });
     await new Promise((resolve) => mockServer.listen(mockPort, "127.0.0.1", resolve));
 
+    const pagePort = await freePort();
+    pageServer = createHttpServer((incoming, response) => {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(productPageHtml);
+    });
+    await new Promise((resolve) => pageServer.listen(pagePort, "127.0.0.1", resolve));
+    const productPageUrl = `http://127.0.0.1:${pagePort}/produk/rap2260`;
+
     await startApp({
       GEMINI_API_KEY: "test-gemini-key",
       GEMINI_BASE_URL: `http://127.0.0.1:${mockPort}`,
       CATALOG_AI_TIMEOUT_MS: "2000",
       CATALOG_AI_STALE_MS: "4000",
+      // Test-only seam: the mock product page server lives on 127.0.0.1, which
+      // the sourceUrl guard would otherwise reject.
+      CATALOG_AI_ALLOW_PRIVATE_SOURCE: "1",
     });
     await login();
 
@@ -289,14 +296,14 @@ test(
       }),
     }, 201);
 
-    // a. Happy path: 202 + Running, poll to Draft, grounded sources persisted.
+    // a. Happy path: 202 + Running, poll to Draft, fetched source page persisted.
     mockMode = "happy";
     mockRequests = [];
     const startedRun = await json("/api/catalog/ai/analyze", {
       method: "POST",
       body: JSON.stringify({
         query: "Ruijie RG-RAP2260 access point WiFi 6",
-        sourceUrl: "https://example.com/rap2260",
+        sourceUrl: productPageUrl,
       }),
     }, 202);
     assert.equal(startedRun.status, "Running");
@@ -311,24 +318,21 @@ test(
     assert.equal(draftRun.recommendation.price2, 2_080_000);
     assert.ok(draftRun.expiresAt);
     assert.deepEqual(
-      draftRun.sources.map((source) => ({ url: source.url, title: source.title }))
-        .sort((left, right) => left.url.localeCompare(right.url)),
-      [
-        { url: "https://example.com/produk-rap2260", title: "Contoh Produk" },
-        {
-          url: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc123",
-          title: "tokopedia.com",
-        },
-      ],
+      draftRun.sources.map((source) => ({ url: source.url, title: source.title })),
+      [{ url: productPageUrl, title: "127.0.0.1" }],
     );
 
-    // The two-step contract: research with google_search first, then schema formatting.
+    // The two-step free-tier contract: plain research first (no tools, page
+    // text inlined), then schema-constrained formatting.
     assert.equal(mockRequests.length, 2);
     assert.ok(mockRequests[0].url.includes("/v1beta/models/gemini-2.5-flash:generateContent"));
     assert.equal(mockRequests[0].apiKey, "test-gemini-key");
-    assert.equal(mockRequests[0].hasTools, true);
+    assert.equal(mockRequests[0].hasTools, false);
     assert.equal(mockRequests[0].responseSchema, null);
+    assert.ok(mockRequests[0].raw.includes(pageMarker));
+    assert.equal(mockRequests[0].raw.includes("PN-SCRIPT-NOISE-SHOULD-BE-STRIPPED"), false);
     assert.equal(mockRequests[1].hasTools, false);
+    assert.equal(mockRequests[1].raw.includes(pageMarker), false);
     assert.equal(mockRequests[1].responseSchema?.type, "object");
     assert.equal("additionalProperties" in mockRequests[1].responseSchema, false);
     assert.deepEqual(
@@ -366,6 +370,8 @@ test(
     assert.equal(secondRun.status, "Running");
     const secondDraft = await pollRun(secondRun.id, ["Draft", "Failed"]);
     assert.equal(secondDraft.status, "Draft");
+    // Without a sourceUrl there is no fetched page, so no sources are stored.
+    assert.deepEqual(secondDraft.sources, []);
 
     // d. Approve with overridden fields creates the catalog item with the overrides.
     const approved = await json(`/api/catalog/ai/runs/${draftRun.id}/approve`, {
@@ -414,5 +420,8 @@ test(
     mockServer.closeAllConnections?.();
     await new Promise((resolve) => mockServer.close(resolve));
     mockServer = undefined;
+    pageServer.closeAllConnections?.();
+    await new Promise((resolve) => pageServer.close(resolve));
+    pageServer = undefined;
   },
 );

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  geminiGroundingSources,
+  fetchSourcePage,
   geminiOutputText,
+  htmlToText,
   toGeminiSchema,
+  validateSourceUrl,
 } from "../server/api/catalog-ai-gemini.ts";
 import { recommendationJsonSchema } from "../server/api/catalog-ai-schema.ts";
 
@@ -107,43 +109,80 @@ test("geminiOutputText returns an empty string when nothing matches", () => {
   assert.equal(geminiOutputText({ candidates: [{ content: { parts: [{ thought: true, text: "x" }] } }] }), "");
 });
 
-test("geminiGroundingSources extracts grounding chunks with dedupe and fallback title", () => {
-  const payload = {
-    candidates: [{
-      groundingMetadata: {
-        webSearchQueries: ["harga access point"],
-        groundingChunks: [
-          { web: { uri: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc", title: "tokopedia.com" } },
-          { web: { uri: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc", title: "tokopedia.com terbaru" } },
-          { web: { uri: "https://toko.example.co.id/produk" } },
-          { web: { uri: "ftp://example.com/file", title: "Bukan http" } },
-          { retrievedContext: { uri: "https://ignored.example.com", title: "Bukan web chunk" } },
-        ],
-      },
-    }],
-  };
-  assert.deepEqual(geminiGroundingSources(payload), [
-    {
-      url: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc",
-      title: "tokopedia.com terbaru",
-    },
-    { url: "https://toko.example.co.id/produk", title: "toko.example.co.id" },
-  ]);
+test("validateSourceUrl accepts normal public http(s) URLs", () => {
+  assert.equal(validateSourceUrl("https://www.tokopedia.com/ruijie/rg-rap2260"), null);
+  assert.equal(validateSourceUrl("http://example.com/produk"), null);
+  // Explicit default ports normalize away and remain acceptable.
+  assert.equal(validateSourceUrl("https://example.com:443/produk"), null);
+  assert.equal(validateSourceUrl("http://example.com:80/produk"), null);
+  // Hosts that merely start with private-looking digits are not private ranges.
+  assert.equal(validateSourceUrl("https://10bet.example.com/produk"), null);
+  assert.equal(validateSourceUrl("http://172.32.0.1/produk"), null);
 });
 
-test("geminiGroundingSources caps at 30 sources and tolerates missing metadata", () => {
-  assert.deepEqual(geminiGroundingSources({}), []);
-  assert.deepEqual(geminiGroundingSources({ candidates: [{}] }), []);
-  const many = geminiGroundingSources({
-    candidates: [{
-      groundingMetadata: {
-        groundingChunks: Array.from({ length: 35 }, (_, index) => ({
-          web: { uri: `https://example.com/item-${index}`, title: `Sumber ${index}` },
-        })),
-      },
-    }],
-  });
-  assert.equal(many.length, 30);
-  assert.equal(many[0].url, "https://example.com/item-0");
-  assert.equal(many[29].url, "https://example.com/item-29");
+test("validateSourceUrl rejects malformed URLs and non-http protocols", () => {
+  assert.ok(validateSourceUrl("bukan sebuah url"));
+  assert.match(validateSourceUrl("ftp://example.com/file"), /http/i);
+  assert.match(validateSourceUrl("javascript:alert(1)"), /http/i);
+  assert.match(validateSourceUrl("file:///etc/passwd"), /http/i);
+});
+
+test("validateSourceUrl rejects non-default ports", () => {
+  assert.ok(validateSourceUrl("https://example.com:8443/produk"));
+  assert.ok(validateSourceUrl("http://example.com:3000/produk"));
+});
+
+test("validateSourceUrl rejects literal private and loopback hosts", () => {
+  for (const url of [
+    "http://localhost/produk",
+    "https://127.0.0.1/produk",
+    "https://127.1.2.3/produk",
+    "http://10.0.0.8/produk",
+    "http://192.168.1.10/produk",
+    "http://172.16.0.1/produk",
+    "http://172.31.255.1/produk",
+    "http://169.254.169.254/latest/meta-data",
+    "http://[::1]/produk",
+    "http://0.0.0.0/produk",
+  ]) {
+    assert.ok(validateSourceUrl(url), `expected rejection for ${url}`);
+  }
+});
+
+test("CATALOG_AI_ALLOW_PRIVATE_SOURCE=1 is a test-only seam that skips the private checks", () => {
+  process.env.CATALOG_AI_ALLOW_PRIVATE_SOURCE = "1";
+  try {
+    assert.equal(validateSourceUrl("http://127.0.0.1:8123/produk"), null);
+    // Protocol validation still applies even with the seam enabled.
+    assert.match(validateSourceUrl("ftp://127.0.0.1/file"), /http/i);
+  } finally {
+    delete process.env.CATALOG_AI_ALLOW_PRIVATE_SOURCE;
+  }
+  assert.ok(validateSourceUrl("http://127.0.0.1:8123/produk"));
+});
+
+test("fetchSourcePage fails closed with a reason and no network for guarded URLs", async () => {
+  for (const url of ["http://192.168.0.1/admin", "ftp://example.com/file", "tidak-valid"]) {
+    const result = await fetchSourcePage(url);
+    assert.equal(result.text, null);
+    assert.ok(result.reason, `expected a reason for ${url}`);
+  }
+});
+
+test("htmlToText strips script and style blocks, tags, and collapses whitespace", () => {
+  const html = `<html><head><style>body { color: red }</style>
+    <script>var rahasia = "MARKER-SCRIPT";</script></head>
+    <body><h1>Ruijie   RG-RAP2260</h1><!-- komentar tersembunyi -->
+    <p>Harga&nbsp;Rp1.600.000 &amp; garansi resmi</p></body></html>`;
+  const text = htmlToText(html);
+  assert.equal(text.includes("MARKER-SCRIPT"), false);
+  assert.equal(text.includes("color: red"), false);
+  assert.equal(text.includes("komentar tersembunyi"), false);
+  assert.match(text, /Ruijie RG-RAP2260/);
+  assert.match(text, /Harga Rp1\.600\.000 & garansi resmi/);
+});
+
+test("htmlToText truncates to 20000 characters", () => {
+  const text = htmlToText(`<p>${"a".repeat(30_000)}</p>`);
+  assert.equal(text.length, 20_000);
 });
