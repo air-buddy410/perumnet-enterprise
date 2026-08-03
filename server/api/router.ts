@@ -2316,6 +2316,17 @@ async function handleQuotations(request: Request, user: AuthUser) {
       !["Rejected", "Void"].includes(String(input.status ?? "")),
     );
     const requestedStatus = String(input.status ?? current?.status ?? "Draft");
+    // rounding_adjustment is dual-purpose: it stores the computed delta for the
+    // Up/Down modes and the user-supplied value for Custom. When the mode
+    // transitions to Custom without an explicit adjustment in the request, the
+    // stale computed delta must never be inherited as a manual adjustment.
+    const currentRoundingMode = current ? String(current.rounding_mode ?? "None") : "None";
+    const nextRoundingMode = input.roundingMode ?? currentRoundingMode;
+    const roundingAdjustmentValue =
+      input.roundingAdjustment ??
+      (nextRoundingMode === "Custom" && currentRoundingMode !== "Custom"
+        ? 0
+        : asNumber(current?.rounding_adjustment));
     if (requestedStatus === "Sent" && current && Number(current.tax_enabled) === 1) {
       const selectedTaxes = await client.execute({
         sql: "SELECT 1 FROM document_taxes WHERE document_type='Quotation' AND document_id=? LIMIT 1",
@@ -2361,7 +2372,7 @@ async function handleQuotations(request: Request, user: AuthUser) {
             0, 0, current.tax_enabled, asNumber(current.tax_revision) + 1,
             input.roundingMode ?? current.rounding_mode,
             input.roundingStep ?? current.rounding_step,
-            input.roundingAdjustment ?? current.rounding_adjustment,
+            roundingAdjustmentValue,
             input.roundingReason === undefined ? current.rounding_reason : input.roundingReason,
             0, timestamp, timestamp,
           ],
@@ -2413,7 +2424,7 @@ async function handleQuotations(request: Request, user: AuthUser) {
           input.discountValue ?? current.discount_value,
           input.roundingMode ?? current.rounding_mode,
           input.roundingStep ?? current.rounding_step,
-          input.roundingAdjustment ?? current.rounding_adjustment,
+          roundingAdjustmentValue,
           input.roundingReason === undefined ? current.rounding_reason : input.roundingReason,
           timestamp,
           quotationId,
@@ -2504,6 +2515,36 @@ async function handleQuotations(request: Request, user: AuthUser) {
   }
 
   throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
+}
+
+async function handleQuotationHistory(request: Request, user: AuthUser) {
+  if (request.method !== "GET") {
+    throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
+  }
+  const { client } = await getDatabase();
+  const searchParams = new URL(request.url).searchParams;
+  const projectId = searchParams.get("projectId");
+  if (!projectId) throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
+  await assertProjectAccess(user, projectId);
+  const packageId = await resolveCommercialPackageId(client, projectId, searchParams.get("packageId"));
+  const result = await client.execute({
+    sql: `SELECT id,number,revision_no,status,total,grand_total,issued_at,
+      created_at,supersedes_id
+      FROM quotations WHERE project_id=? AND package_id=?
+      ORDER BY revision_no DESC,created_at DESC`,
+    args: [projectId, packageId],
+  });
+  return ok(result.rows.map((row) => ({
+    id: String(row.id),
+    number: String(row.number),
+    revisionNo: asNumber(row.revision_no) || 1,
+    status: String(row.status),
+    total: asNumber(row.total),
+    grandTotal: asNumber(row.grand_total) || asNumber(row.total),
+    issuedAt: String(row.issued_at),
+    createdAt: String(row.created_at),
+    supersedesId: row.supersedes_id ? String(row.supersedes_id) : null,
+  })));
 }
 
 function mapInvoice(row: Record<string, unknown>) {
@@ -3454,27 +3495,53 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
     const history = await client.execute({
       sql: `SELECT
         EXISTS(SELECT 1 FROM invoice_payments WHERE invoice_id=?) AS has_payment,
-        EXISTS(SELECT 1 FROM document_taxes
-          WHERE document_type='Invoice' AND document_id=?) AS has_tax`,
+        EXISTS(
+          SELECT 1 FROM tax_obligations o
+          JOIN document_taxes dt ON dt.id=o.document_tax_id
+          WHERE dt.document_type='Invoice' AND dt.document_id=?
+            AND (
+              o.settled_amount>0
+              OR o.status NOT IN ('Outstanding','Void')
+              OR o.reporting_status NOT IN ('Candidate','Void')
+              OR EXISTS(SELECT 1 FROM tax_settlements s WHERE s.obligation_id=o.id)
+            )
+        ) AS tax_committed`,
       args: [invoiceId, invoiceId],
     });
     if (
       Number(history.rows[0]?.has_payment) === 1 ||
-      history.rows[0]?.has_payment === true ||
-      Number(history.rows[0]?.has_tax) === 1 ||
-      history.rows[0]?.has_tax === true
+      history.rows[0]?.has_payment === true
     ) {
       throw new ApiError(
         409,
         "INVOICE_HISTORY_EXISTS",
-        "Invoice dengan histori pembayaran atau pajak tidak dapat dihapus. Gunakan void pada pembayaran.",
+        "Invoice dengan histori pembayaran tidak dapat dihapus. Gunakan void pada pembayaran.",
+      );
+    }
+    if (
+      Number(history.rows[0]?.tax_committed) === 1 ||
+      history.rows[0]?.tax_committed === true
+    ) {
+      throw new ApiError(
+        409,
+        "INVOICE_TAX_COMMITTED",
+        "Invoice dengan kewajiban pajak yang sudah disetor atau dilaporkan tidak dapat dihapus.",
       );
     }
     await detachOrDeleteSystemTransaction(client, "Invoice", invoiceId);
-    await client.execute({
-      sql: "DELETE FROM invoices WHERE id=?",
-      args: [invoiceId],
-    });
+    await client.batch([
+      {
+        sql: `DELETE FROM tax_obligations WHERE document_tax_id IN (
+          SELECT id FROM document_taxes
+          WHERE document_type='Invoice' AND document_id=?)`,
+        args: [invoiceId],
+      },
+      {
+        sql: "DELETE FROM document_taxes WHERE document_type='Invoice' AND document_id=?",
+        args: [invoiceId],
+      },
+      { sql: "DELETE FROM invoices WHERE id=?", args: [invoiceId] },
+    ], "write");
     await writeAuditLog(client, request, user, "delete", "invoice", invoiceId);
     return noContent();
   }
@@ -5991,6 +6058,9 @@ export async function dispatchApi(request: Request, path: string[]) {
   }
   if (resource === "boq") return handleBoq(request, path, user);
   if (resource === "quotations" && path[1]) {
+    if (path[1] === "history" && !path[2]) {
+      return handleQuotationHistory(request, user);
+    }
     if (path[2] === "taxes") {
       return handleDocumentTaxes(
         request,

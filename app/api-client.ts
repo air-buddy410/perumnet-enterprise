@@ -79,6 +79,10 @@ export function messageOf(error: unknown, language: "id" | "en" = "id") {
       AI_RUN_NOT_DRAFT: "Only draft AI recommendations can be processed.",
       AI_RECOMMENDATION_EXPIRED: "The recommendation is older than seven days. Refresh the analysis or provide an override reason.",
       SKU_EXISTS: "This SKU is already used by another item.",
+      INVOICE_HISTORY_EXISTS: "An invoice with payment history cannot be deleted. Void the payment instead.",
+      INVOICE_TAX_COMMITTED: "An invoice whose tax obligations are already settled or reported cannot be deleted.",
+      QUOTATION_IN_USE: "The quotation cannot be deleted because it already has an invoice.",
+      ACCEPTED_QUOTATION_LOCKED: "A client-accepted quotation is locked and cannot be changed or deleted.",
       BRAND_REQUIRED: "Select a brand for Device or Material items.",
       BRAND_CATEGORY_MISMATCH: "The brand does not belong to the selected active category.",
     };

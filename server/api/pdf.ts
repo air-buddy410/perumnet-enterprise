@@ -888,12 +888,12 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
       : []),
     ...quotationTax.taxes.map((tax) => ({
       label: `${language === "en" ? tax.nameEn : tax.name} (${tax.effect === "Add" ? tr(language, "ditagihkan ke klien", "charged to client") : tr(language, "dipotong klien", "withheld by client")})`,
-      value: rupiah(tax.amount, language),
+      value: `${tax.effect === "Withhold" ? "-" : "+"}${rupiah(tax.amount, language)}`,
     })),
     ...(asNumber(quotation?.rounding_adjustment) !== 0
       ? [{
           label: tr(language, "Penyesuaian pembulatan", "Rounding adjustment"),
-          value: rupiah(quotation?.rounding_adjustment, language),
+          value: `${asNumber(quotation?.rounding_adjustment) > 0 ? "+" : ""}${rupiah(quotation?.rounding_adjustment, language)}`,
         }]
       : []),
     {
@@ -1070,10 +1070,10 @@ async function invoicePdf(invoiceId: string, language: PdfLanguage) {
       : []),
     ...invoiceTax.taxes.map((tax) => ({
       label: `${language === "en" ? tax.nameEn : tax.name} (${tax.effect === "Add" ? tr(language, "ditagihkan ke klien", "charged to client") : tr(language, "dipotong klien", "withheld by client")})`,
-      value: rupiah(tax.amount, language),
+      value: `${tax.effect === "Withhold" ? "-" : "+"}${rupiah(tax.amount, language)}`,
     })),
     ...(allocated && asNumber(invoice.rounding_snapshot) !== 0
-      ? [{ label: tr(language, "Penyesuaian pembulatan", "Rounding adjustment"), value: rupiah(invoice.rounding_snapshot, language) }]
+      ? [{ label: tr(language, "Penyesuaian pembulatan", "Rounding adjustment"), value: `${asNumber(invoice.rounding_snapshot) > 0 ? "+" : ""}${rupiah(invoice.rounding_snapshot, language)}` }]
       : []),
     {
       label: tr(language, "Total tagihan klien", "Total billed to client"),

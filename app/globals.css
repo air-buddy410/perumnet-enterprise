@@ -2522,7 +2522,8 @@ h3 {
 .catalog-ai-head .eyebrow { display: inline-flex; align-items: center; gap: 6px; color: #d8fffa; }
 .catalog-ai-head h2 { margin: 6px 0; color: #fff; font-size: 22px; }
 .catalog-ai-head p { max-width: 520px; margin: 0; color: rgba(255,255,255,.8); font-size: 10px; line-height: 1.6; }
-.catalog-ai-head .icon-button { border-color: rgba(255,255,255,.25); color: #fff; }
+.catalog-ai-head .icon-button { border-color: rgba(255,255,255,.25); background: rgba(255,255,255,.14); color: #fff; }
+.catalog-ai-head .icon-button:hover { border-color: rgba(255,255,255,.45); background: rgba(255,255,255,.26); color: #fff; }
 .catalog-ai-input,
 .catalog-ai-result { display: grid; flex: 1; align-content: start; gap: 16px; overflow-y: auto; padding: 24px; }
 .catalog-ai-input textarea { min-height: 112px; }
@@ -2620,6 +2621,18 @@ h3 {
 .document-commercial-totals strong { color: var(--navy); font-size: 11px; }
 .document-commercial-totals .grand { margin-top: 3px; border-top: 2px solid var(--navy); padding-top: 10px; color: var(--navy); font-weight: 800; }
 .document-commercial-totals .grand strong { color: var(--teal-dark); font-size: 16px; }
+.document-commercial-totals .net-cash { border-top: 1px dashed var(--line-strong); padding-top: 8px; color: var(--navy); font-weight: 700; }
+.document-commercial-totals .net-cash strong { color: var(--navy); font-size: 13px; }
+
+.quotation-history summary { display: flex; align-items: center; gap: 8px; color: var(--navy); font-size: 12px; font-weight: 700; cursor: pointer; }
+.quotation-history-list { display: grid; gap: 8px; margin-top: 12px; }
+.quotation-history-row { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; }
+.quotation-history-row > div { display: grid; flex: 1; min-width: 0; gap: 1px; }
+.quotation-history-row > div strong { overflow: hidden; color: var(--navy); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.quotation-history-row > div small { color: var(--muted); font-size: 10px; }
+.quotation-history-row .revision-badge { flex: 0 0 auto; border-radius: 999px; padding: 2px 8px; background: var(--teal-pale); color: var(--teal-dark); font-size: 10px; font-weight: 800; }
+.quotation-history-row > strong { flex: 0 0 auto; color: var(--navy); font-size: 11px; }
+.quotation-history-empty { margin: 10px 0 0; color: var(--muted); font-size: 11px; }
 .client-tax-note { display: flex; align-items: center; gap: 9px; margin: 0 0 16px auto; border: 1px solid #cbe7e2; border-radius: 9px; padding: 10px 12px; background: #f2fbf9; color: var(--teal-dark); }
 .client-tax-note span { display: grid; gap: 2px; }
 .client-tax-note strong { color: var(--navy); font-size: 9px; }

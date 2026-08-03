@@ -67,6 +67,51 @@ interface Quotation {
   taxes?: Array<{ code: string; name?: string; nameEn?: string; amount: number; effect?: "Add" | "Withhold" }>;
 }
 
+interface QuotationRevision {
+  id: string;
+  number: string;
+  revisionNo: number;
+  status: Quotation["status"];
+  total: number;
+  grandTotal: number;
+  issuedAt: string;
+  createdAt: string;
+  supersedesId: string | null;
+}
+
+function parseRoundingAdjustment(value: string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.round(parsed) : 0;
+}
+
+function roundingInputFromQuotation(data: Quotation) {
+  return data.roundingMode === "Custom" && (data.roundingAdjustment ?? 0) !== 0
+    ? String(data.roundingAdjustment)
+    : "";
+}
+
+const quotationStatusBadge: Record<string, string> = {
+  Accepted: "success",
+  Sent: "info",
+  Rejected: "danger",
+  Void: "danger",
+  Superseded: "neutral",
+  Draft: "warning",
+};
+
+function quotationStatusLabel(id: boolean, status: string) {
+  if (!id) return status;
+  const labels: Record<string, string> = {
+    Draft: "Draft",
+    Sent: "Terkirim",
+    Accepted: "Diterima",
+    Rejected: "Ditolak",
+    Void: "Batal",
+    Superseded: "Digantikan",
+  };
+  return labels[status] ?? status;
+}
+
 async function attachmentFromFile(file: File) {
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -112,8 +157,10 @@ export function BillingView({
   const [discountValue, setDiscountValue] = useState(0);
   const [roundingMode, setRoundingMode] = useState<"None" | "Up" | "Down" | "Custom">("None");
   const [roundingStep, setRoundingStep] = useState(0);
-  const [roundingAdjustment, setRoundingAdjustment] = useState(0);
+  const [roundingAdjustmentInput, setRoundingAdjustmentInput] = useState("");
   const [roundingReason, setRoundingReason] = useState("");
+  const [quotationHistory, setQuotationHistory] = useState<QuotationRevision[]>([]);
+  const [reloadKey, setReloadKey] = useState(0);
   const [serverToday, setServerToday] = useState("");
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
   const [paymentDate, setPaymentDate] = useState("");
@@ -142,13 +189,15 @@ export function BillingView({
       api<{ items: BoqItem[] }>(`/api/boq?projectId=${encodeURIComponent(projectId)}${packageQuery}`),
       api<Quotation>(`/api/quotations?projectId=${encodeURIComponent(projectId)}${packageQuery}`),
       api<Project>(`/api/projects/${encodeURIComponent(projectId)}`),
+      api<QuotationRevision[]>(`/api/quotations/history?projectId=${encodeURIComponent(projectId)}${packageQuery}`),
     ])
-      .then(([invoiceData, boq, quotationData, projectData]) => {
+      .then(([invoiceData, boq, quotationData, projectData, historyData]) => {
         if (!active) return;
         setInvoices(invoiceData);
         setQuotationItems(boq.items);
         setQuotation(quotationData);
         setProject(projectData);
+        setQuotationHistory(historyData);
         setQuotationIssuedAt(quotationData.issuedAt);
         setQuotationValidUntil(quotationData.validUntil ?? "");
         setDiscountEnabled(Boolean(quotationData.discountEnabled));
@@ -156,14 +205,14 @@ export function BillingView({
         setDiscountValue(quotationData.discountValue ?? 0);
         setRoundingMode(quotationData.roundingMode ?? "None");
         setRoundingStep(quotationData.roundingStep ?? 0);
-        setRoundingAdjustment(quotationData.roundingAdjustment ?? 0);
+        setRoundingAdjustmentInput(roundingInputFromQuotation(quotationData));
         setRoundingReason(quotationData.roundingReason ?? "");
       })
       .catch((error) => notify(messageOf(error, language)));
     return () => {
       active = false;
     };
-  }, [language, notify, packageId, projectId]);
+  }, [language, notify, packageId, projectId, reloadKey]);
 
   useEffect(() => {
     let active = true;
@@ -226,6 +275,13 @@ export function BillingView({
     setQuotationValidUntil(base.toISOString().slice(0, 10));
   }
 
+  async function refreshQuotationHistory() {
+    const history = await api<QuotationRevision[]>(
+      `/api/quotations/history?projectId=${encodeURIComponent(projectId)}&packageId=${encodeURIComponent(packageId)}`,
+    );
+    setQuotationHistory(history);
+  }
+
   async function updateQuotation(
     input: Partial<Pick<Quotation, "status" | "issuedAt" | "validUntil" | "discountEnabled" | "discountType" | "discountValue" | "roundingMode" | "roundingStep" | "roundingAdjustment" | "roundingReason">>,
   ) {
@@ -241,14 +297,32 @@ export function BillingView({
     setDiscountValue(updated.discountValue ?? 0);
     setRoundingMode(updated.roundingMode ?? "None");
     setRoundingStep(updated.roundingStep ?? 0);
-    setRoundingAdjustment(updated.roundingAdjustment ?? 0);
+    setRoundingAdjustmentInput(roundingInputFromQuotation(updated));
     setRoundingReason(updated.roundingReason ?? "");
+    await refreshQuotationHistory();
     return updated;
   }
 
   async function refreshQuotation() {
     const updated = await api<Quotation>(`/api/quotations?projectId=${encodeURIComponent(projectId)}&packageId=${encodeURIComponent(packageId)}`);
     setQuotation(updated);
+    await refreshQuotationHistory();
+  }
+
+  async function deleteQuotation() {
+    if (!quotation?.id) return;
+    const label = quotation.number ?? "quotation";
+    if (!window.confirm(`${id ? "Hapus quotation" : "Delete quotation"} ${label}?`)) return;
+    try {
+      await api(
+        `/api/quotations?projectId=${encodeURIComponent(projectId)}&packageId=${encodeURIComponent(packageId)}`,
+        { method: "DELETE" },
+      );
+      setReloadKey((key) => key + 1);
+      notify(id ? "Quotation berhasil dihapus." : "Quotation deleted.");
+    } catch (error) {
+      notify(messageOf(error, language));
+    }
   }
 
   async function downloadQuotation() {
@@ -280,7 +354,7 @@ export function BillingView({
         discountValue,
         roundingMode,
         roundingStep,
-        roundingAdjustment,
+        roundingAdjustment: roundingMode === "Custom" ? parseRoundingAdjustment(roundingAdjustmentInput) : 0,
         roundingReason: roundingReason || null,
       });
       setShowQuotationForm(false);
@@ -571,6 +645,11 @@ export function BillingView({
                     <Pencil size={15} /> {id ? "Edit" : "Edit"}
                   </button>
                 )}
+                {canManage && quotation?.id && ["Draft", "Sent", "Rejected"].includes(quotation.status) && (
+                  <button className="button danger small" type="button" onClick={deleteQuotation}>
+                    <Trash2 size={15} /> {id ? "Hapus" : "Delete"}
+                  </button>
+                )}
                 <button className="button primary small" type="button" disabled={!quotationItems.length} onClick={downloadQuotation}>
                   <Download size={15} /> {id ? "Unduh PDF" : "Download PDF"}
                 </button>
@@ -627,9 +706,10 @@ export function BillingView({
                 {(quotation?.discountAmount ?? 0) > 0 && <div><span>{id ? "Diskon" : "Discount"}</span><strong>−{formatCurrency(quotation?.discountAmount ?? 0, language)}</strong></div>}
                 {(quotation?.discountAmount ?? 0) > 0 && <div><span>{id ? "Dasar pengenaan pajak" : "Taxable subtotal"}</span><strong>{formatCurrency(quotation?.taxableBase ?? 0, language)}</strong></div>}
                 {(quotation?.taxes ?? []).filter((tax) => tax.effect !== "Withhold").map((tax) => <div key={`${tax.code}-${tax.amount}`}><span>{tax.code} · {id ? (tax.name ?? "Pajak klien") : (tax.nameEn ?? "Client tax")} <small>{id ? "dibebankan ke klien" : "charged to client"}</small></span><strong>+{formatCurrency(tax.amount, language)}</strong></div>)}
-                {(quotation?.taxes ?? []).filter((tax) => tax.effect === "Withhold").map((tax) => <div key={`${tax.code}-${tax.amount}`}><span>{tax.code} · {id ? (tax.name ?? "Pajak potong") : (tax.nameEn ?? "Withholding tax")}</span><strong>−{formatCurrency(tax.amount, language)}</strong></div>)}
+                {(quotation?.taxes ?? []).filter((tax) => tax.effect === "Withhold").map((tax) => <div key={`${tax.code}-${tax.amount}`}><span>{tax.code} · {id ? (tax.name ?? "Pajak potong") : (tax.nameEn ?? "Withholding tax")} <small>{id ? "(dipotong klien — tidak menambah tagihan)" : "(withheld by client — does not increase the bill)"}</small></span><strong>−{formatCurrency(tax.amount, language)}</strong></div>)}
                 {(quotation?.roundingAdjustment ?? 0) !== 0 && <div><span>{id ? "Pembulatan" : "Rounding"}</span><strong>{(quotation?.roundingAdjustment ?? 0) > 0 ? "+" : ""}{formatCurrency(quotation?.roundingAdjustment ?? 0, language)}</strong></div>}
                 <div className="grand"><span>{id ? "Total tagihan klien" : "Total billed to client"}</span><strong>{formatCurrency(quotationGrossTotal, language)}</strong></div>
+                {(quotation?.taxWithholdings ?? 0) > 0 && <div className="net-cash"><span>{id ? "Kas bersih diterima" : "Net cash received"}</span><strong>{formatCurrency(quotation?.netCashDue ?? Math.max(0, quotationGrossTotal - (quotation?.taxWithholdings ?? 0)), language)}</strong></div>}
               </div>
               {(quotation?.taxAdditions ?? 0) > 0 && <div className="client-tax-note"><ReceiptText size={16} /><span><strong>{id ? "Pajak ditagihkan kepada klien" : "Tax is charged to the client"}</strong><small>{id ? "Pajak tambah bukan biaya proyek PerumNet dan dicatat sebagai utang pajak." : "Added tax is not a PerumNet project cost and is recorded as a tax payable."}</small></span></div>}
               <div className="document-notes">
@@ -652,6 +732,32 @@ export function BillingView({
                   <Send size={16} /> {quotation?.status === "Sent" ? (id ? "Sudah dikirim" : "Sent") : (id ? "Tandai sudah dikirim" : "Mark as sent")}
                 </button>
               )}
+            </section>
+            <section className="panel">
+              <details className="quotation-history">
+                <summary>
+                  <FileText size={15} /> {id ? "Riwayat revisi" : "Revision history"}
+                  <span className="tab-count">{quotationHistory.length}</span>
+                </summary>
+                <div className="quotation-history-list">
+                  {quotationHistory.map((revision) => (
+                    <div className="quotation-history-row" key={revision.id}>
+                      <span className="revision-badge">R{revision.revisionNo}</span>
+                      <div>
+                        <strong>{revision.number}</strong>
+                        <small>{localizedDate(language, revision.issuedAt)}</small>
+                      </div>
+                      <span className={`status-badge ${quotationStatusBadge[revision.status] ?? "neutral"}`}>
+                        {quotationStatusLabel(id, revision.status)}
+                      </span>
+                      <strong>{formatCurrency(revision.grandTotal, language)}</strong>
+                    </div>
+                  ))}
+                  {!quotationHistory.length && (
+                    <p className="quotation-history-empty">{id ? "Belum ada revisi tersimpan untuk paket ini." : "No saved revisions exist for this package yet."}</p>
+                  )}
+                </div>
+              </details>
             </section>
           </aside>
         </section>
@@ -757,9 +863,9 @@ export function BillingView({
               <div className="field full"><span>{id ? "Pilihan cepat masa berlaku" : "Quick validity"}</span><div className="title-actions">{[7, 14, 30, 60].map((days) => <button className="button subtle small" type="button" key={days} onClick={() => setValidityDays(days)}>{days} {id ? "hari" : "days"}</button>)}</div></div>
               <label className="field full check-field"><input type="checkbox" checked={discountEnabled} onChange={(event) => setDiscountEnabled(event.target.checked)} /><span>{id ? "Gunakan diskon" : "Apply discount"}</span></label>
               {discountEnabled && <><label className="field select-field"><span>{id ? "Jenis diskon" : "Discount type"}</span><select value={discountType} onChange={(event) => setDiscountType(event.target.value as "Nominal" | "Percent")}><option value="Nominal">Nominal</option><option value="Percent">%</option></select><ChevronDown size={15} /></label><label className="field"><span>{discountType === "Percent" ? (id ? "Persen diskon" : "Discount percent") : (id ? "Nilai diskon" : "Discount amount")}</span><input type="number" min="0" max={discountType === "Percent" ? 100 : undefined} step={discountType === "Percent" ? .01 : 1} value={discountType === "Percent" ? discountValue / 100 : discountValue} onChange={(event) => setDiscountValue(discountType === "Percent" ? Math.round(Number(event.target.value) * 100) : Number(event.target.value))} /></label></>}
-              <label className="field select-field"><span>{id ? "Pembulatan" : "Rounding"}</span><select value={roundingMode} onChange={(event) => setRoundingMode(event.target.value as typeof roundingMode)}><option value="None">{id ? "Tanpa pembulatan" : "No rounding"}</option><option value="Up">{id ? "Ke atas" : "Round up"}</option><option value="Down">{id ? "Ke bawah" : "Round down"}</option><option value="Custom">Custom</option></select><ChevronDown size={15} /></label>
+              <label className="field select-field"><span>{id ? "Pembulatan" : "Rounding"}</span><select value={roundingMode} onChange={(event) => { const nextMode = event.target.value as typeof roundingMode; setRoundingMode(nextMode); setRoundingAdjustmentInput(""); }}><option value="None">{id ? "Tanpa pembulatan" : "No rounding"}</option><option value="Up">{id ? "Ke atas" : "Round up"}</option><option value="Down">{id ? "Ke bawah" : "Round down"}</option><option value="Custom">Custom</option></select><ChevronDown size={15} /></label>
               {roundingMode !== "None" && roundingMode !== "Custom" && <label className="field select-field"><span>{id ? "Kelipatan" : "Increment"}</span><select value={roundingStep} onChange={(event) => setRoundingStep(Number(event.target.value))}><option value={1000}>Rp1.000</option><option value={10000}>Rp10.000</option><option value={100000}>Rp100.000</option></select><ChevronDown size={15} /></label>}
-              {roundingMode === "Custom" && <><label className="field"><span>{id ? "Penyesuaian (+/-)" : "Adjustment (+/-)"}</span><input type="number" value={roundingAdjustment} onChange={(event) => setRoundingAdjustment(Number(event.target.value))} /></label><label className="field full"><span>{id ? "Alasan wajib" : "Required reason"}</span><textarea required minLength={5} value={roundingReason} onChange={(event) => setRoundingReason(event.target.value)} /></label></>}
+              {roundingMode === "Custom" && <><label className="field"><span>{id ? "Penyesuaian (+/-)" : "Adjustment (+/-)"}</span><input type="text" inputMode="numeric" autoComplete="off" placeholder="0" pattern="-?[0-9]*" value={roundingAdjustmentInput} onChange={(event) => { const raw = event.target.value; if (/^-?\d*$/.test(raw)) setRoundingAdjustmentInput(raw); }} /></label><label className="field full"><span>{id ? "Alasan wajib" : "Required reason"}</span><textarea required minLength={5} value={roundingReason} onChange={(event) => setRoundingReason(event.target.value)} /></label></>}
               <div className="invoice-form-summary full"><span>{id ? "Subtotal BoQ" : "BoQ subtotal"}</span><strong>{formatCurrency(boqTotal, language)}</strong><small>{id ? "Urutan: subtotal − diskon + pajak ± pembulatan." : "Order: subtotal − discount + tax ± rounding."}</small></div>
               <div className="invoice-form-summary full"><span>{id ? "Perkiraan total tagihan klien" : "Estimated total billed to client"}</span><strong>{formatCurrency((() => {
                 const previewDiscount = discountEnabled
@@ -771,7 +877,7 @@ export function BillingView({
                 const beforeRounding = previewBase + (quotation?.taxAdditions ?? 0);
                 const step = [1_000, 10_000, 100_000].includes(roundingStep) ? roundingStep : 0;
                 const adjustment = roundingMode === "Custom"
-                  ? roundingAdjustment
+                  ? parseRoundingAdjustment(roundingAdjustmentInput)
                   : roundingMode === "Up" && step > 0
                     ? Math.ceil(beforeRounding / step) * step - beforeRounding
                     : roundingMode === "Down" && step > 0

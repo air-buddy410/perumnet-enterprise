@@ -221,7 +221,13 @@ export function DocumentTaxEditor({
                   />
                   <span>
                     <strong>{rule.code} · {rule.ratePercent}%</strong>
-                    <small>{id ? rule.name : rule.nameEn} · {rule.effect === "Add" ? (id ? "Tambah" : "Add") : (id ? "Potong" : "Withhold")}</small>
+                    <small>
+                      {id ? rule.name : rule.nameEn} · {rule.effect === "Add" ? (id ? "Tambah" : "Add") : (
+                        <span title={id ? "Mengurangi kas diterima, bukan menambah tagihan" : "Reduces the cash received; does not increase the bill"}>
+                          {id ? "Potong — mengurangi kas diterima, bukan menambah tagihan" : "Withhold — reduces cash received, not the bill"}
+                        </span>
+                      )}
+                    </small>
                   </span>
                 </label>
               ))}

@@ -1205,6 +1205,18 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     },
   );
   assert.equal(acceptedTaxQuotation.status, "Accepted");
+  const taxQuotationHistory = await json(
+    `/api/quotations/history?projectId=${taxProject.id}`,
+  );
+  const taxQuotationRevision = taxQuotationHistory.find(
+    (revision) => revision.id === taxableQuotation.id,
+  );
+  assert.ok(taxQuotationRevision);
+  assert.equal(taxQuotationRevision.status, "Accepted");
+  assert.equal(taxQuotationRevision.revisionNo, 1);
+  assert.equal(taxQuotationRevision.number, taxableQuotation.number);
+  assert.equal(taxQuotationRevision.total, 500_000);
+  assert.equal(taxQuotationRevision.grandTotal, 555_000);
   assert.equal(
     (await json(`/api/projects/${taxProject.id}`)).value,
     555_000,
@@ -1218,6 +1230,157 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     ).status,
     409,
   );
+
+  // Regression: a percent invoice created from a tax-enabled accepted quotation
+  // always carries copied document_taxes rows. It must remain deletable while it
+  // has no payments and its tax obligations are still candidates, and the same
+  // installment must be creatable again afterwards with an identical allocation.
+  const percentInvoiceBody = JSON.stringify({
+    projectId: taxProject.id,
+    quotationId: taxableQuotation.id,
+    type: "DP 50%",
+    issueDate: "2026-08-01",
+    dueDate: "2026-08-15",
+    calculationMode: "Percent",
+    installmentPercent: 50,
+  });
+  const percentTaxInvoice = await json(
+    "/api/invoices",
+    { method: "POST", body: percentInvoiceBody },
+    201,
+  );
+  assert.equal(percentTaxInvoice.calculationMode, "Percent");
+  assert.equal(percentTaxInvoice.amount, 277_500);
+  assert.equal(percentTaxInvoice.taxableBaseSnapshot, 250_000);
+  assert.equal(percentTaxInvoice.taxAdditionsSnapshot, 27_500);
+  assert.equal(percentTaxInvoice.taxAdditions, 27_500);
+  await json(`/api/invoices/${percentTaxInvoice.id}`, { method: "DELETE" }, 204);
+  const recreatedPercentTaxInvoice = await json(
+    "/api/invoices",
+    { method: "POST", body: percentInvoiceBody },
+    201,
+  );
+  assert.equal(recreatedPercentTaxInvoice.calculationMode, "Percent");
+  assert.equal(recreatedPercentTaxInvoice.installmentPercent, 50);
+  assert.equal(recreatedPercentTaxInvoice.amount, 277_500);
+  assert.equal(recreatedPercentTaxInvoice.taxableBaseSnapshot, 250_000);
+  assert.equal(recreatedPercentTaxInvoice.taxAdditionsSnapshot, 27_500);
+  assert.equal(recreatedPercentTaxInvoice.taxAdditions, 27_500);
+  assert.equal(recreatedPercentTaxInvoice.grossTotal, 277_500);
+  await json(
+    `/api/invoices/${recreatedPercentTaxInvoice.id}`,
+    { method: "DELETE" },
+    204,
+  );
+  // Nominal-amount path: legacy invoices also inherit quotation tax rows and
+  // must stay deletable and recreatable as well.
+  const nominalInvoiceBody = JSON.stringify({
+    projectId: taxProject.id,
+    type: "Termin Nominal Pajak",
+    issueDate: "2026-08-01",
+    dueDate: "2026-08-15",
+    amount: 150_000,
+  });
+  const nominalTaxInvoice = await json(
+    "/api/invoices",
+    { method: "POST", body: nominalInvoiceBody },
+    201,
+  );
+  assert.equal(nominalTaxInvoice.taxAdditions, 16_500);
+  await json(`/api/invoices/${nominalTaxInvoice.id}`, { method: "DELETE" }, 204);
+  const recreatedNominalTaxInvoice = await json(
+    "/api/invoices",
+    { method: "POST", body: nominalInvoiceBody },
+    201,
+  );
+  assert.equal(recreatedNominalTaxInvoice.taxAdditions, 16_500);
+  await json(
+    `/api/invoices/${recreatedNominalTaxInvoice.id}`,
+    { method: "DELETE" },
+    204,
+  );
+
+  // Rounding signs and the Up/Down -> Custom transition.
+  const roundingProject = await json(
+    "/api/projects",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Proyek Pembulatan",
+        client: "Klien Pembulatan",
+        location: "Gianyar",
+        status: "Draft",
+        value: 0,
+      }),
+    },
+    201,
+  );
+  await json(
+    `/api/boq/items?projectId=${roundingProject.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        category: "Jasa",
+        description: "Paket uji pembulatan",
+        quantity: 1,
+        unit: "paket",
+        costPrice: 50_000,
+        sellingPrice: 123_456,
+      }),
+    },
+    201,
+  );
+  const roundedUpQuotation = await json(
+    `/api/quotations?projectId=${roundingProject.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ roundingMode: "Up", roundingStep: 1_000 }),
+    },
+  );
+  assert.equal(roundedUpQuotation.roundingAdjustment, 544);
+  assert.equal(roundedUpQuotation.grandTotal, 124_000);
+  const roundedDownQuotation = await json(
+    `/api/quotations?projectId=${roundingProject.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ roundingMode: "Down", roundingStep: 1_000 }),
+    },
+  );
+  assert.equal(roundedDownQuotation.roundingAdjustment, -456);
+  assert.equal(roundedDownQuotation.grandTotal, 123_000);
+  // Regression: switching to Custom without sending an explicit adjustment must
+  // start from 0 instead of silently inheriting the stored -456 delta.
+  const customZeroQuotation = await json(
+    `/api/quotations?projectId=${roundingProject.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        roundingMode: "Custom",
+        roundingReason: "Transisi mode pembulatan khusus.",
+      }),
+    },
+  );
+  assert.equal(customZeroQuotation.roundingAdjustment, 0);
+  assert.equal(customZeroQuotation.grandTotal, 123_456);
+  const customNegativeQuotation = await json(
+    `/api/quotations?projectId=${roundingProject.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        roundingMode: "Custom",
+        roundingAdjustment: -56,
+        roundingReason: "Penyesuaian negosiasi klien.",
+      }),
+    },
+  );
+  assert.equal(customNegativeQuotation.roundingAdjustment, -56);
+  assert.equal(customNegativeQuotation.grandTotal, 123_400);
+  await json(
+    `/api/quotations?projectId=${roundingProject.id}`,
+    { method: "DELETE" },
+    204,
+  );
+  await json(`/api/projects/${roundingProject.id}`, { method: "DELETE" }, 204);
 
   const taxedCatalogProject = await json(
     "/api/projects",
