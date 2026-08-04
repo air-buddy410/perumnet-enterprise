@@ -9,7 +9,7 @@ import { getDatabase, type DatabaseClient } from "../db/client";
 import { claimSequence } from "../db/counters";
 import { notifyProjectStakeholders } from "../email";
 import { documentTaxSummary, lockDocumentTaxes } from "../tax";
-import { ApiError, created, jsonBody, noContent, ok } from "./errors";
+import { ApiError, created, jsonBody, noContent, ok, partialPatchSchema } from "./errors";
 import { renderBusinessPdf } from "./pdf";
 
 const idSchema = z.string().trim().min(1).max(100);
@@ -313,7 +313,9 @@ export async function handleVendorCategories(
   }
 
   if (request.method === "PATCH") {
-    const input = vendorCategorySchema.partial().parse(await jsonBody(request));
+    // A plain `.partial()` re-applied the "Aktif" default, so renaming a
+    // retired vendor category quietly brought it back into circulation.
+    const input = partialPatchSchema(vendorCategorySchema).parse(await jsonBody(request));
     try {
       await client.execute({
         sql: `UPDATE vendor_categories SET name=?,name_en=?,vendor_type=?,

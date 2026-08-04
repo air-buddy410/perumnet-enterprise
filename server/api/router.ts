@@ -19,11 +19,15 @@ import {
 import { snapshotQuotationItems } from "../quotation-snapshot";
 import {
   avatarUrlForUser,
+  createEmailChangeToken,
   createPasswordResetToken,
   createSession,
+  emailChangeTokenMinutes,
   getSessionUser,
   hashResetToken,
   requireUser,
+  revokeAllSessions,
+  revokeOtherSessions,
   revokeSession,
   verifyCredentials,
   withClearedSessionCookie,
@@ -31,6 +35,11 @@ import {
   type AuthUser,
   type UserRole,
 } from "../auth";
+import {
+  assertAuthRateLimit,
+  clearAuthRateLimit,
+  recordAuthFailure,
+} from "../auth-rate-limit";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { claimSequence } from "../db/counters";
 import {
@@ -40,6 +49,9 @@ import {
   notifyProjectStakeholders,
   retryEmailOutbox,
   sendAccountCreatedEmail,
+  sendEmailChangeConfirmationEmail,
+  sendEmailChangedEmail,
+  sendEmailChangeRequestedEmail,
   sendPasswordResetEmail,
   sendTestEmail,
 } from "../email";
@@ -993,7 +1005,23 @@ async function handleAuth(request: Request, path: string[]) {
 
   if (request.method === "POST" && action === "login") {
     const input = loginSchema.parse(await jsonBody(request));
-    const user = await verifyCredentials(input.email, input.password);
+    const { client } = await getDatabase();
+    // Checked before any hashing, so a caller who is already blocked cannot
+    // keep the server busy running bcrypt on their behalf.
+    await assertAuthRateLimit(client, request, "login", input.email);
+    let user: AuthUser;
+    try {
+      user = await verifyCredentials(input.email, input.password);
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        ["INVALID_CREDENTIALS", "ACCOUNT_INACTIVE"].includes(error.code)
+      ) {
+        await recordAuthFailure(client, request, "login", input.email);
+      }
+      throw error;
+    }
+    await clearAuthRateLimit(client, request, "login", input.email);
     const session = await createSession(user.id, input.remember);
     return withSessionCookie(ok({ user }), session.token, session.maxAge);
   }
@@ -1009,6 +1037,12 @@ async function handleAuth(request: Request, path: string[]) {
       surface: z.enum(["admin", "panel"]).optional().default("admin"),
     }).parse(await jsonBody(request));
     const { client } = await getDatabase();
+    // Recovery is throttled on its own bucket, and every request counts —
+    // whether or not an account matched, so the throttle itself cannot be used
+    // to tell registered addresses from unregistered ones, and so a successful
+    // request cannot be repeated into a mail flood at the owner's address.
+    await assertAuthRateLimit(client, request, "forgot-password", input.email);
+    await recordAuthFailure(client, request, "forgot-password", input.email);
     const result = await client.execute({
       sql: `
         SELECT u.id,u.email,u.role,
@@ -1055,12 +1089,20 @@ async function handleAuth(request: Request, path: string[]) {
       .object({ token: z.string().min(32).max(200), password: z.string().min(8).max(128) })
       .parse(await jsonBody(request));
     const { client } = await getDatabase();
+    // Throttled on the IP alone — the reset token is the only identifier the
+    // caller sends, and keying on it would let an attacker who guessed one
+    // token lock out nobody but themselves.
+    await assertAuthRateLimit(client, request, "reset-password");
     const result = await client.execute({
       sql: "SELECT id,user_id FROM password_reset_tokens WHERE token_hash = ? AND used_at IS NULL AND expires_at > ? LIMIT 1",
       args: [hashResetToken(input.token), now()],
     });
     const reset = result.rows[0];
-    if (!reset) throw new ApiError(400, "INVALID_RESET_TOKEN", "Tautan reset tidak valid atau sudah kedaluwarsa.");
+    if (!reset) {
+      await recordAuthFailure(client, request, "reset-password");
+      throw new ApiError(400, "INVALID_RESET_TOKEN", "Tautan reset tidak valid atau sudah kedaluwarsa.");
+    }
+    await clearAuthRateLimit(client, request, "reset-password");
     const passwordHash = await hash(input.password, 12);
     const timestamp = now();
     await client.batch(
@@ -1077,13 +1119,168 @@ async function handleAuth(request: Request, path: string[]) {
           sql: "DELETE FROM sessions WHERE user_id = ?",
           args: [reset.user_id],
         },
+        // Recovering the account also cancels any email change an intruder
+        // asked for while they held the session.
+        {
+          sql: "DELETE FROM email_change_requests WHERE user_id = ?",
+          args: [reset.user_id],
+        },
       ],
       "write",
     );
     return ok({ success: true });
   }
 
+  if (action === "confirm-email-change" && ["GET", "POST"].includes(request.method)) {
+    const landing = (outcome: "confirmed" | "invalid") =>
+      new URL(
+        applicationPath(`/admin?emailChange=${outcome}`),
+        new URL(request.url).origin,
+      ).toString();
+    const token =
+      request.method === "GET"
+        ? new URL(request.url).searchParams.get("token") ?? ""
+        : z
+            .object({ token: z.string().min(32).max(200) })
+            .parse(await jsonBody(request)).token;
+    // The link lands here from a mail client, so a GET has to be able to
+    // complete it. The token is a single-use 32-byte secret that expires, which
+    // is what carries the authority — there is no ambient session to abuse.
+    if (request.method === "GET" && (token.length < 32 || token.length > 200)) {
+      return Response.redirect(landing("invalid"), 302);
+    }
+    try {
+      const result = await confirmEmailChange(token);
+      if (request.method === "GET") return Response.redirect(landing("confirmed"), 302);
+      return ok(result);
+    } catch (error) {
+      if (request.method === "GET" && error instanceof ApiError) {
+        return Response.redirect(landing("invalid"), 302);
+      }
+      throw error;
+    }
+  }
+
   throw new ApiError(404, "NOT_FOUND", "Endpoint autentikasi tidak ditemukan.");
+}
+
+/**
+ * Applies a pending email change once the confirmation link comes back from the
+ * NEW address, then ends every session on the account. A session that was alive
+ * before the address moved has to die with it: otherwise a stolen cookie
+ * survives the very event that was supposed to expose it.
+ */
+async function confirmEmailChange(rawToken: string) {
+  const { client } = await getDatabase();
+  const result = await client.execute({
+    sql: `SELECT id,user_id,current_email,new_email FROM email_change_requests
+      WHERE token_hash = ? AND confirmed_at IS NULL AND expires_at > ? LIMIT 1`,
+    args: [hashResetToken(rawToken), now()],
+  });
+  const pending = result.rows[0];
+  if (!pending) {
+    throw new ApiError(
+      400,
+      "INVALID_EMAIL_CHANGE_TOKEN",
+      "Tautan konfirmasi email tidak valid atau sudah kedaluwarsa.",
+    );
+  }
+  const userId = String(pending.user_id);
+  const newEmail = String(pending.new_email);
+  const duplicate = await client.execute({
+    sql: "SELECT id FROM users WHERE lower(email)=lower(?) AND id<>?",
+    args: [newEmail, userId],
+  });
+  if (duplicate.rows.length) {
+    throw new ApiError(409, "EMAIL_EXISTS", "Email sudah digunakan oleh pengguna lain.");
+  }
+  const account = await client.execute({
+    sql: `SELECT u.email,COALESCE(p.preferred_language,'id') AS preferred_language
+      FROM users u LEFT JOIN user_profiles p ON p.user_id=u.id WHERE u.id=? LIMIT 1`,
+    args: [userId],
+  });
+  const previousEmail = account.rows[0]
+    ? String(account.rows[0].email)
+    : String(pending.current_email);
+  const timestamp = now();
+  await client.batch(
+    [
+      {
+        sql: "UPDATE users SET email=?,updated_at=? WHERE id=?",
+        args: [newEmail, timestamp, userId],
+      },
+      {
+        sql: "UPDATE email_change_requests SET confirmed_at=? WHERE id=?",
+        args: [timestamp, pending.id],
+      },
+      {
+        sql: "DELETE FROM email_change_requests WHERE user_id=? AND id<>?",
+        args: [userId, pending.id],
+      },
+      { sql: "DELETE FROM sessions WHERE user_id=?", args: [userId] },
+      // Reset links issued to the old address stop working the moment the
+      // address stops belonging to the account.
+      { sql: "DELETE FROM password_reset_tokens WHERE user_id=?", args: [userId] },
+    ],
+    "write",
+  );
+  await sendEmailChangedEmail(
+    client,
+    {
+      id: userId,
+      preferredLanguage:
+        String(account.rows[0]?.preferred_language) === "en" ? "en" : "id",
+    },
+    previousEmail,
+    newEmail,
+  );
+  return { success: true, email: newEmail };
+}
+
+/**
+ * Starts a verified email change: the account keeps its current address, the
+ * confirmation link goes to the new one, and the current address is told that
+ * somebody asked. Returns the raw token only outside production without a mail
+ * provider, mirroring how forgot-password exposes its reset token in dev.
+ */
+async function requestEmailChange(
+  client: DatabaseClient,
+  target: { id: string; email: string; preferredLanguage: AuthUser["preferredLanguage"] },
+  newEmail: string,
+  requestedBy: string,
+) {
+  const duplicate = await client.execute({
+    sql: "SELECT id FROM users WHERE lower(email)=lower(?) AND id<>?",
+    args: [newEmail, target.id],
+  });
+  if (duplicate.rows.length) {
+    throw new ApiError(409, "EMAIL_EXISTS", "Email sudah digunakan oleh pengguna lain.");
+  }
+  const token = await createEmailChangeToken(client, {
+    userId: target.id,
+    currentEmail: target.email,
+    newEmail,
+    requestedBy,
+  });
+  await sendEmailChangeConfirmationEmail(
+    client,
+    { id: target.id, email: target.email, preferredLanguage: target.preferredLanguage },
+    newEmail,
+    token,
+    emailChangeTokenMinutes(),
+  );
+  await sendEmailChangeRequestedEmail(
+    client,
+    { id: target.id, email: target.email, preferredLanguage: target.preferredLanguage },
+    newEmail,
+  );
+  return {
+    pendingEmail: newEmail,
+    expiresInMinutes: emailChangeTokenMinutes(),
+    ...(process.env.NODE_ENV !== "production" && !process.env.RESEND_API_KEY
+      ? { confirmationToken: token }
+      : {}),
+  };
 }
 
 async function listProjects(searchParams: URLSearchParams, user: AuthUser) {
@@ -5017,7 +5214,9 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
 
   if (bastId && !action && request.method === "PATCH") {
     if (!mutationRoles("bast").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah BAST.");
-    const input = bastSchema.omit({ projectId: true }).partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(bastSchema.omit({ projectId: true })).parse(
+      await jsonBody(request),
+    );
     if (input.status === "Final") {
       throw new ApiError(409, "FINALIZE_ENDPOINT_REQUIRED", "Gunakan proses finalisasi agar cap, hash, dan QR verifikasi diterapkan.");
     }
@@ -5590,7 +5789,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
   }
 
   if (transactionId && request.method === "PATCH") {
-    const input = transactionSchema.partial().parse(await jsonBody(request));
+    // A plain `.partial()` re-dated the transaction to today and reset its
+    // category whenever the client patched only the description.
+    const input = partialPatchSchema(transactionSchema).parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM transactions WHERE id=?", [transactionId], "Transaksi tidak ditemukan.");
     if (current.project_id) await assertProjectAccess(user, String(current.project_id));
     if (!current.project_id && !hasGlobalProjectScope(user)) {
@@ -5837,7 +6038,10 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
   }
 
   if (userId && request.method === "PATCH") {
-    const input = userSchema.partial().parse(await jsonBody(request));
+    // A plain `.partial()` here materialised every `.default()` the client did
+    // not send, so renaming a user silently rewrote `status` back to "Aktif" —
+    // a rename reactivated a revoked account. See partialPatchSchema().
+    const input = partialPatchSchema(userSchema).parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM users WHERE id=?", [userId], "Pengguna tidak ditemukan.");
     if (userId === user.id && input.status === "Nonaktif") throw new ApiError(409, "SELF_DEACTIVATE", "Anda tidak dapat menonaktifkan akun sendiri.");
     if (input.email) {
@@ -5847,6 +6051,41 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
       });
       if (duplicate.rows.length) throw new ApiError(409, "EMAIL_EXISTS", "Email sudah digunakan oleh pengguna lain.");
     }
+    // Nobody moves their own recovery address without proving they own the new
+    // inbox, Admin included — otherwise this endpoint is a second, unguarded
+    // door to the takeover that /api/profile just closed. An Admin editing
+    // *someone else's* address still applies immediately (that is what account
+    // administration is for), but it ends that person's sessions and tells
+    // their old address, so a silent takeover is impossible either way.
+    const selfEmailChange =
+      userId === user.id &&
+      Boolean(input.email) &&
+      String(input.email).toLowerCase() !== String(current.email).toLowerCase();
+    const adminEmailChange =
+      userId !== user.id &&
+      Boolean(input.email) &&
+      String(input.email).toLowerCase() !== String(current.email).toLowerCase();
+    const currentLanguage = await client.execute({
+      sql: "SELECT preferred_language FROM user_profiles WHERE user_id=? LIMIT 1",
+      args: [userId],
+    });
+    const targetLanguage =
+      String(currentLanguage.rows[0]?.preferred_language) === "en" ? "en" : "id";
+    const pendingEmailChange = selfEmailChange
+      ? await requestEmailChange(
+          client,
+          {
+            id: userId,
+            email: String(current.email),
+            preferredLanguage: targetLanguage,
+          },
+          String(input.email),
+          user.id,
+        )
+      : undefined;
+    const nextEmail = selfEmailChange
+      ? String(current.email)
+      : input.email ?? current.email;
     const passwordHash = input.password ? await hash(input.password, 12) : current.password_hash;
     const nextRole = (input.role ?? current.role) as UserRole;
     const currentPermissionResult = await client.execute({
@@ -5874,7 +6113,7 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
       [
         {
           sql: "UPDATE users SET name=?,email=?,password_hash=?,role=?,status=?,updated_at=? WHERE id=?",
-          args: [input.name ?? current.name, input.email ?? current.email, passwordHash, nextRole, input.status ?? current.status, timestamp, userId],
+          args: [input.name ?? current.name, nextEmail, passwordHash, nextRole, input.status ?? current.status, timestamp, userId],
         },
         {
           sql: `
@@ -5886,16 +6125,37 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
       ],
       "write",
     );
-    if (input.status === "Nonaktif" || input.password) {
-      await client.execute({ sql: "DELETE FROM sessions WHERE user_id=?", args: [userId] });
+    if (input.status === "Nonaktif" || input.password || adminEmailChange) {
+      await revokeAllSessions(client, userId);
     }
-    await writeAuditLog(client, request, user, "update", "user", userId, { ...input, password: input.password ? "[updated]" : undefined });
+    if (adminEmailChange) {
+      // The person who owned the old address has to hear about it from the old
+      // address, or an Admin takeover leaves no trace they can see.
+      await sendEmailChangedEmail(
+        client,
+        { id: userId, preferredLanguage: targetLanguage },
+        String(current.email),
+        String(input.email),
+      );
+      await client.execute({
+        sql: "DELETE FROM password_reset_tokens WHERE user_id=?",
+        args: [userId],
+      });
+    }
+    await writeAuditLog(client, request, user, "update", "user", userId, {
+      ...input,
+      password: input.password ? "[updated]" : undefined,
+      ...(selfEmailChange ? { email: undefined, pendingEmail: input.email } : {}),
+    });
     const updated = await ensureExists(
       "SELECT u.*,up.permissions_json,p.avatar_mime_type,p.updated_at AS profile_updated_at FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id LEFT JOIN user_profiles p ON p.user_id=u.id WHERE u.id=?",
       [userId],
       "Pengguna tidak ditemukan.",
     );
-    return ok(mapUser(updated as Record<string, unknown>, user.preferredLanguage));
+    return ok({
+      ...mapUser(updated as Record<string, unknown>, user.preferredLanguage),
+      ...(pendingEmailChange ? { pendingEmailChange } : {}),
+    });
   }
 
   if (userId && request.method === "DELETE") {
@@ -6059,12 +6319,28 @@ async function handleProfile(request: Request, path: string[], user: AuthUser) {
       args: [input.email, user.id],
     });
     if (duplicate.rows.length) throw new ApiError(409, "EMAIL_EXISTS", "Email sudah digunakan pengguna lain.");
+    // The address stays put until the new one confirms. An unverified change
+    // here was a full account takeover: whoever held the session pointed the
+    // account at their own inbox, ran forgot-password, and owned it for good.
+    const emailChanged = input.email.toLowerCase() !== user.email.toLowerCase();
+    const pendingEmailChange = emailChanged
+      ? await requestEmailChange(
+          client,
+          {
+            id: user.id,
+            email: user.email,
+            preferredLanguage: user.preferredLanguage,
+          },
+          input.email,
+          user.id,
+        )
+      : undefined;
     const timestamp = now();
     await client.batch(
       [
         {
-          sql: "UPDATE users SET name=?,email=?,updated_at=? WHERE id=?",
-          args: [input.name, input.email, timestamp, user.id],
+          sql: "UPDATE users SET name=?,updated_at=? WHERE id=?",
+          args: [input.name, timestamp, user.id],
         },
         {
           sql: `
@@ -6078,8 +6354,14 @@ async function handleProfile(request: Request, path: string[], user: AuthUser) {
       ],
       "write",
     );
-    await writeAuditLog(client, request, user, "update_profile", "user", user.id);
-    return ok(await getProfile(user.id));
+    await writeAuditLog(client, request, user, "update_profile", "user", user.id, {
+      name: input.name,
+      ...(pendingEmailChange ? { pendingEmail: pendingEmailChange.pendingEmail } : {}),
+    });
+    return ok({
+      ...(await getProfile(user.id)),
+      ...(pendingEmailChange ? { pendingEmailChange } : {}),
+    });
   }
 
   if (action === "password" && request.method === "PATCH") {
@@ -6095,8 +6377,12 @@ async function handleProfile(request: Request, path: string[], user: AuthUser) {
       sql: "UPDATE users SET password_hash=?,updated_at=? WHERE id=?",
       args: [await hash(input.newPassword, 12), now(), user.id],
     });
+    // Changing your password is the first thing anyone does after suspecting a
+    // compromise, so it has to evict the intruder. Everything but the session
+    // making this request goes.
+    await revokeOtherSessions(client, request, user.id);
     await writeAuditLog(client, request, user, "change_password", "user", user.id);
-    return ok({ success: true });
+    return ok({ success: true, otherSessionsRevoked: true });
   }
 
   throw new ApiError(404, "NOT_FOUND", "Endpoint profil tidak ditemukan.");

@@ -243,8 +243,12 @@ export const chapterRoles: Chapter = {
           "An Admin cannot deactivate their own account nor lower their own Users & Access permission. This is deliberate so the company can never be locked out of its own system.",
         ],
         [
-          "Mengganti kata sandi seseorang atau menonaktifkan akunnya langsung mengakhiri seluruh sesi aktif orang tersebut.",
-          "Changing someone's password or deactivating their account immediately ends all of that person's active sessions.",
+          "Mengganti kata sandi seseorang, mengganti alamat email orang lain, atau menonaktifkan akunnya langsung mengakhiri seluruh sesi aktif orang tersebut.",
+          "Changing someone's password, changing another person's email address, or deactivating their account immediately ends all of that person's active sessions.",
+        ],
+        [
+          "Admin sekalipun tidak dapat mengganti alamat email akunnya sendiri secara langsung. Permintaan itu selalu menunggu konfirmasi dari alamat baru, persis seperti dari menu Profil Saya, agar sesi yang dicuri tidak pernah bisa memindahkan alamat pemulihan akun.",
+          "Not even an Admin can change the email address of their own account directly. That request always waits for confirmation from the new address, exactly as it does from My Profile, so a stolen session can never move an account's recovery address.",
         ],
       ],
     },
@@ -396,6 +400,10 @@ export const chapterStart: Chapter = {
         [
           "Masuk dengan email dan kata sandi Anda. Centang Ingat Saya hanya pada perangkat pribadi. Tanpa Ingat Saya, sesi berlaku 8 jam; dengan Ingat Saya, sesi perangkat itu berlaku sampai 30 hari.",
           "Sign in with your email and password. Tick Remember Me only on a private device. Without Remember Me a session lasts 8 hours; with it, that device's session lasts up to 30 days.",
+        ],
+        [
+          "Bila kata sandi salah berkali-kali, aplikasi menahan percobaan berikutnya selama beberapa menit dan jedanya memanjang bila percobaan gagal terus. Ini berlaku juga untuk permintaan pemulihan kata sandi. Tunggu sampai jedanya habis, lalu coba lagi dengan kata sandi yang benar atau minta tautan pemulihan; tidak ada akun yang terkunci permanen.",
+          "After several wrong passwords the application holds off the next attempt for a few minutes, and the wait grows if failures continue. The same applies to password recovery requests. Wait for the pause to end, then try again with the correct password or ask for a recovery link; no account is ever locked permanently.",
         ],
         [
           "Buka Pengaturan sekali di awal untuk memilih Bahasa Indonesia atau English. Pilihan ini tersimpan pada akun Anda dan dipakai lagi pada login berikutnya, termasuk untuk bahasa dokumen PDF yang Anda unduh.",
@@ -1582,8 +1590,12 @@ export const chapterAccess: Chapter = {
           "Each person opens My Profile to change their photo (JPG, PNG, or WebP up to 3 MB), name, contact details, and job title.",
         ],
         [
-          "Buka Pengaturan untuk memilih Bahasa Indonesia atau English, mengatur notifikasi email, dan mengganti kata sandi. Mengganti kata sandi sendiri memerlukan kata sandi lama, dan kata sandi baru minimal 10 karakter.",
-          "Open Settings to choose Indonesian or English, set email notifications, and change your password. Changing your own password requires the current password, and the new one must be at least 10 characters.",
+          "Mengganti alamat email sendiri tidak langsung berlaku. Akun tetap memakai alamat lama sampai tautan konfirmasi yang dikirim ke alamat baru dibuka, dan alamat lama menerima pemberitahuan bahwa ada permintaan penggantian. Tautan konfirmasi berlaku 60 menit. Setelah alamat benar-benar berganti, seluruh sesi akun tersebut diakhiri dan pemiliknya masuk kembali dengan alamat baru.",
+          "Changing your own email address does not take effect immediately. The account keeps its old address until the confirmation link sent to the new address is opened, and the old address is notified that a change was requested. The confirmation link is valid for 60 minutes. Once the address really changes, every session on that account ends and the owner signs in again with the new address.",
+        ],
+        [
+          "Buka Pengaturan untuk memilih Bahasa Indonesia atau English, mengatur notifikasi email, dan mengganti kata sandi. Mengganti kata sandi sendiri memerlukan kata sandi lama, dan kata sandi baru minimal 10 karakter. Mengganti kata sandi sendiri juga langsung mengakhiri sesi Anda di seluruh perangkat lain; hanya perangkat yang Anda pakai saat itu tetap masuk.",
+          "Open Settings to choose Indonesian or English, set email notifications, and change your password. Changing your own password requires the current password, and the new one must be at least 10 characters. Changing your own password also immediately ends your sessions on every other device; only the device you are using stays signed in.",
         ],
         [
           "Bila seseorang berhenti, Admin menonaktifkan akunnya, bukan menghapusnya. Menonaktifkan langsung mengakhiri seluruh sesi aktif orang tersebut sekaligus menjaga jejak dokumen yang pernah ia buat.",
@@ -2059,6 +2071,16 @@ export const chapterMessages: Chapter = {
           meaning: ["Pesan pertama berarti sesi Anda sudah berakhir. Pesan kedua berarti hak akses menu Anda belum mencukupi.", "The first message means your session has ended. The second means your menu permissions are not sufficient."],
           action: ["Masuk kembali untuk pesan pertama. Untuk pesan kedua, minta Admin memeriksa hak akses akun Anda di Pengguna & Akses.", "Sign in again for the first message. For the second, ask an Admin to review your permissions in Users & Access."],
         },
+        {
+          message: ["Terlalu banyak percobaan. Tunggu beberapa menit sebelum mencoba lagi.", "Too many attempts. Wait a few minutes before trying again."],
+          meaning: ["Terlalu banyak percobaan masuk atau permintaan pemulihan yang gagal dalam waktu singkat, entah dari perangkat Anda atau terhadap alamat email Anda. Penahanan ini melindungi akun dari penebakan kata sandi.", "Too many failed sign-in attempts or recovery requests in a short time, either from your device or against your email address. The hold protects the account from password guessing."],
+          action: ["Tunggu beberapa menit lalu coba lagi; penahanan berakhir dengan sendirinya dan tidak ada akun yang terkunci permanen. Bila Anda tidak merasa mencoba masuk berkali-kali, segera ganti kata sandi setelah bisa masuk kembali dan beri tahu Admin.", "Wait a few minutes and try again; the hold expires on its own and no account is locked permanently. If those attempts were not yours, change your password as soon as you can sign in again and tell your Admin."],
+        },
+        {
+          message: ["Tautan konfirmasi email tidak valid atau sudah kedaluwarsa.", "This email confirmation link is invalid or has already expired."],
+          meaning: ["Tautan konfirmasi penggantian alamat email hanya berlaku 60 menit dan hanya sekali pakai. Tautan juga hangus bila ada permintaan penggantian yang lebih baru atau bila kata sandi akun telah diatur ulang.", "An email change confirmation link is valid for 60 minutes and only once. It also lapses if a newer change was requested or if the account password was reset."],
+          action: ["Buka Profil Saya dan ajukan penggantian alamat email sekali lagi agar tautan baru dikirim ke alamat yang dituju.", "Open My Profile and request the email address change again so a fresh link is sent to the intended address."],
+        },
       ],
     },
   ],
@@ -2088,12 +2110,24 @@ export const chapterAppendix: Chapter = {
           "A new password must be at least 10 characters. Changing your own password requires the current password.",
         ],
         [
+          "Mengganti kata sandi sendiri langsung mengakhiri sesi Anda di seluruh perangkat lain; hanya perangkat yang sedang Anda pakai tetap masuk. Inilah langkah pertama bila Anda menduga akun Anda dipakai orang lain.",
+          "Changing your own password immediately ends your sessions on every other device; only the device you are using stays signed in. This is the first step to take if you suspect someone else is using your account.",
+        ],
+        [
+          "Percobaan masuk yang gagal berulang kali ditahan beberapa menit, dan jedanya memanjang selama kegagalan berlanjut. Penahanan dihitung terhadap perangkat pemanggil sekaligus alamat email yang dicoba, sehingga daftar kata sandi tidak dapat dijalankan sampai habis. Penahanan selalu berakhir dengan sendirinya; tidak ada akun yang terkunci permanen.",
+          "Repeated failed sign-in attempts are held off for a few minutes, and the wait grows while the failures continue. The hold is counted against both the calling device and the email address being tried, so a password list cannot be run to the end. A hold always expires on its own; no account is ever locked permanently.",
+        ],
+        [
           "Tautan atur ulang kata sandi hanya berlaku 30 menit sejak dikirim.",
           "A password reset link is only valid for 30 minutes after it is sent.",
         ],
         [
-          "Bila Admin mengganti kata sandi seseorang atau menonaktifkan akunnya, seluruh sesi aktif orang tersebut langsung berakhir.",
-          "If an Admin changes someone's password or deactivates their account, all of that person's active sessions end immediately.",
+          "Mengganti alamat email sendiri memerlukan konfirmasi dari alamat baru. Akun tetap memakai alamat lama sampai tautan konfirmasi dibuka, tautan itu berlaku 60 menit, dan alamat lama selalu diberi tahu bahwa ada permintaan penggantian. Begitu alamat berganti, seluruh sesi akun tersebut berakhir dan tautan pemulihan lama berhenti berlaku.",
+          "Changing your own email address requires confirmation from the new address. The account keeps its old address until the confirmation link is opened, that link is valid for 60 minutes, and the old address is always told that a change was requested. Once the address changes, every session on that account ends and older recovery links stop working.",
+        ],
+        [
+          "Bila Admin mengganti kata sandi seseorang, mengganti alamat email orang lain, atau menonaktifkan akunnya, seluruh sesi aktif orang tersebut langsung berakhir. Penggantian alamat email oleh Admin juga dikirimkan pemberitahuannya ke alamat lama.",
+          "If an Admin changes someone's password, changes another person's email address, or deactivates their account, all of that person's active sessions end immediately. An Admin's email address change is also announced to the old address.",
         ],
         [
           "Nomor rekening perusahaan hanya ditampilkan sebagian, dan saldo serta mutasi hanya dapat dilihat Admin dan Finance.",

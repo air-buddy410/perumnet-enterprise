@@ -36,6 +36,32 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 );
 CREATE INDEX IF NOT EXISTS password_reset_user_idx ON password_reset_tokens(user_id);
 
+CREATE TABLE IF NOT EXISTS email_change_requests (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  current_email TEXT NOT NULL,
+  new_email TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  requested_by TEXT,
+  expires_at TEXT NOT NULL,
+  confirmed_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS email_change_requests_user_idx
+  ON email_change_requests(user_id);
+
+CREATE TABLE IF NOT EXISTS auth_rate_limits (
+  scope_key TEXT NOT NULL,
+  route_key TEXT NOT NULL,
+  window_started_at TEXT NOT NULL,
+  failure_count INTEGER NOT NULL DEFAULT 0,
+  blocked_until TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (scope_key, route_key)
+);
+CREATE INDEX IF NOT EXISTS auth_rate_limits_blocked_idx
+  ON auth_rate_limits(route_key, blocked_until);
+
 CREATE TABLE IF NOT EXISTS user_profiles (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   phone TEXT,
@@ -1354,6 +1380,50 @@ async function ensureDocumentCounters(client: DatabaseClient) {
     key TEXT PRIMARY KEY,
     last_value INTEGER NOT NULL DEFAULT 0
   )`);
+}
+
+// Step two of the pattern in server/db/README.md. `schemaSql` covers fresh
+// installations; this covers the databases that already exist in demo and
+// production, which never re-run a CREATE TABLE they have already skipped in a
+// dialect-specific way. Both statements are idempotent.
+async function ensureAuthHardeningSchema(client: DatabaseClient) {
+  await client.execute(`CREATE TABLE IF NOT EXISTS email_change_requests (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    current_email TEXT NOT NULL,
+    new_email TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    requested_by TEXT,
+    expires_at TEXT NOT NULL,
+    confirmed_at TEXT,
+    created_at TEXT NOT NULL
+  )`);
+  await client.execute(
+    "CREATE INDEX IF NOT EXISTS email_change_requests_user_idx ON email_change_requests(user_id)",
+  );
+  await client.execute(`CREATE TABLE IF NOT EXISTS auth_rate_limits (
+    scope_key TEXT NOT NULL,
+    route_key TEXT NOT NULL,
+    window_started_at TEXT NOT NULL,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    blocked_until TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (scope_key, route_key)
+  )`);
+  await client.execute(
+    "CREATE INDEX IF NOT EXISTS auth_rate_limits_blocked_idx ON auth_rate_limits(route_key, blocked_until)",
+  );
+  // The tables are pure scratch state; drop anything that can no longer matter
+  // so neither grows without bound on a long-lived installation.
+  const timestamp = new Date().toISOString();
+  await client.execute({
+    sql: "DELETE FROM email_change_requests WHERE expires_at <= ? OR confirmed_at IS NOT NULL",
+    args: [timestamp],
+  });
+  await client.execute({
+    sql: "DELETE FROM auth_rate_limits WHERE updated_at <= ?",
+    args: [new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString()],
+  });
 }
 
 async function ensureCommercialPackageSchema(client: DatabaseClient) {
@@ -2694,6 +2764,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureCommercialPackageSchema(client);
   await ensureBastVoidStatus(client);
   await ensureDocumentCounters(client);
+  await ensureAuthHardeningSchema(client);
   await ensureTaxAndEmailSchema(client);
   await ensureProjectExpenseSchema(client);
   await ensureItemCatalogSchema(client);

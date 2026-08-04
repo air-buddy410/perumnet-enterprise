@@ -62,6 +62,13 @@ export function messageOf(error: unknown, language: "id" | "en" = "id") {
       NOT_FOUND: "The requested data was not found or is outside your project access.",
       INVALID_CREDENTIALS: "The email address or password is incorrect.",
       ACCOUNT_INACTIVE: "This account is inactive.",
+      AUTH_RATE_LIMITED:
+        "Too many attempts. Wait a few minutes before trying again.",
+      INVALID_RESET_TOKEN: "This recovery link is invalid or has already expired.",
+      INVALID_EMAIL_CHANGE_TOKEN:
+        "This email confirmation link is invalid or has already expired.",
+      EMAIL_EXISTS: "That email address is already used by another account.",
+      INVALID_PASSWORD: "The current password is incorrect.",
       PROJECT_REQUIRED: "Select a project first.",
       EMPTY_BOQ: "Add BoQ items first.",
       VALIDATION_ITEMS_REQUIRED: "The BoQ needs at least one Device or Material item.",

@@ -14,7 +14,7 @@ import {
 } from "../bank-statement";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { asNumber } from "../format";
-import { ApiError, created, jsonBody, noContent, ok } from "./errors";
+import { ApiError, created, jsonBody, noContent, ok, partialPatchSchema } from "./errors";
 
 const accountSchema = z.object({
   bankName: z.string().trim().min(2).max(80),
@@ -1057,7 +1057,10 @@ export async function handleBankAccounts(
       );
     }
     const current = await findAccount(client, accountId);
-    const input = accountSchema.partial().parse(await jsonBody(request));
+    // A plain `.partial()` reinstated every `.default()` the client omitted, so
+    // renaming a rekening wiped its currency back to IDR, its opening balance
+    // to 0, and its API linkage back to Manual.
+    const input = partialPatchSchema(accountSchema).parse(await jsonBody(request));
     const usage = await accountUsage(client, accountId);
     if (
       input.openingBalance !== undefined &&

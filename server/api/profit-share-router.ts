@@ -13,6 +13,7 @@ import {
   jsonBody,
   noContent,
   ok,
+  partialPatchSchema,
 } from "./errors";
 
 const idSchema = z.string().trim().min(1).max(100);
@@ -24,9 +25,11 @@ const allocationSchema = z.object({
   percentage: z.number().positive().max(100),
   notes: z.string().trim().max(500).optional().default(""),
 });
-const allocationUpdateSchema = allocationSchema
-  .omit({ projectId: true })
-  .partial();
+// `notes` carries a `.default("")`, so a plain `.partial()` erased the stored
+// note whenever the client patched only the recipient or the percentage.
+const allocationUpdateSchema = partialPatchSchema(
+  allocationSchema.omit({ projectId: true }),
+);
 const paymentSchema = z.object({
   paidDate: isoDateSchema,
 });
