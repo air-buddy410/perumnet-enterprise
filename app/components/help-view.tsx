@@ -1179,10 +1179,15 @@ export function HelpView({ language }: HelpViewProps) {
             </div>
           </div>
           <section className="help-guide-grid">
-            {visibleWorkflows.map((workflow, index) => {
+            {visibleWorkflows.map((workflow) => {
               const Icon = workflow.icon;
               return (
-                <details className="panel help-guide" key={workflow.key} open={index === 0 && !needle}>
+                // Uncontrolled on purpose. Every section starts closed so the two
+                // columns line up, and because `open` is not a managed prop a
+                // section the reader opens stays open — the previous version
+                // re-applied it on every render, so typing in the search box
+                // slammed shut whatever they had just opened.
+                <details className="panel help-guide" key={workflow.key}>
                   <summary><span className="metric-icon blue"><Icon size={19} /></span><strong>{workflow.title}</strong><ChevronDown size={17} /></summary>
                   <div className="help-guide-body">
                     <p>{workflow.summary}</p>
