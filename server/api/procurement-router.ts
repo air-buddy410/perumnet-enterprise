@@ -1346,11 +1346,14 @@ async function verifyOrder(
   user: AuthUser,
   orderId: string,
 ) {
-  if (!["Project Manager", "Engineer"].includes(user.role)) {
+  // Admin may verify too: the demo/owner account is Admin, and without this the
+  // flow dead-ends after the DP payment (no one can release the next term).
+  // Finance stays payment-only by design.
+  if (!["Admin", "Project Manager", "Engineer"].includes(user.role)) {
     throw new ApiError(
       403,
       "FORBIDDEN",
-      "Verifikasi progres wajib dilakukan Project Manager atau Engineer.",
+      "Verifikasi progres wajib dilakukan Admin, Project Manager, atau Engineer.",
     );
   }
   assertManage(user, "procurement");
@@ -1424,11 +1427,13 @@ async function receiveOrder(
   user: AuthUser,
   orderId: string,
 ) {
-  if (!["Project Manager", "Engineer"].includes(user.role)) {
+  // Mirrors verifyOrder: Admin can record goods receipt so a PO never dead-ends
+  // after the DP payment. Finance stays payment-only by design.
+  if (!["Admin", "Project Manager", "Engineer"].includes(user.role)) {
     throw new ApiError(
       403,
       "FORBIDDEN",
-      "Penerimaan barang wajib dilakukan Project Manager atau Engineer.",
+      "Penerimaan barang wajib dilakukan Admin, Project Manager, atau Engineer.",
     );
   }
   assertManage(user, "procurement");

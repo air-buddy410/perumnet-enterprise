@@ -3031,6 +3031,21 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     ).status,
     409,
   );
+  // Finance stays payment-only: progress verification is rejected on role
+  // grounds (403), before any workflow-status validation.
+  assert.equal(
+    (
+      await request(`/api/procurement-orders/${financeSpk.id}/verifications`, {
+        method: "POST",
+        body: JSON.stringify({
+          termId: editedFinanceSpk.terms[0].id,
+          verifiedAmount: 240_000,
+          progressPercentage: 100,
+        }),
+      })
+    ).status,
+    403,
+  );
   await json("/api/auth/logout", { method: "POST" });
   cookie = "";
   await json("/api/auth/login", {
@@ -3049,6 +3064,63 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
       })
     ).approvalStatus,
     "Approved",
+  );
+
+  // Admin must be able to release the flow itself: verify progress (the demo
+  // account is Admin — without this the SPK dead-ends with availableToPay=0),
+  // then pay the released term and complete the document.
+  const sentFinanceSpk = await json(
+    `/api/procurement-orders/${financeSpk.id}/send`,
+    { method: "POST" },
+  );
+  assert.equal(sentFinanceSpk.workflowStatus, "Dikirim");
+  assert.equal(sentFinanceSpk.availableToPay, 0, "nothing payable before verification");
+  assert.equal(sentFinanceSpk.outstanding, 240_000);
+  const adminVerifiedSpk = await json(
+    `/api/procurement-orders/${financeSpk.id}/verifications`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        termId: sentFinanceSpk.terms[0].id,
+        verifiedAmount: 240_000,
+        progressPercentage: 100,
+        notes: "Progres diverifikasi langsung oleh Admin.",
+      }),
+    },
+    201,
+  );
+  assert.equal(adminVerifiedSpk.workflowStatus, "Dikerjakan");
+  assert.equal(
+    adminVerifiedSpk.availableToPay,
+    240_000,
+    "Admin verification releases the term for payment",
+  );
+  const adminSettledSpk = await json(
+    `/api/procurement-orders/${financeSpk.id}/payments`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        termId: sentFinanceSpk.terms[0].id,
+        amount: 240_000,
+        paidDate: "2026-07-31",
+        vendorInvoiceNumber: "TAG-SPK-ADMIN-001",
+        paymentReference: "BCA-SPK-ADMIN-001",
+        paymentMethod: "Transfer Bank",
+        bankAccountId: bankAccount.id,
+        attachment: paymentEvidence,
+      }),
+    },
+    201,
+  );
+  assert.equal(adminSettledSpk.paymentStatus, "Lunas");
+  assert.equal(adminSettledSpk.outstanding, 0);
+  assert.equal(
+    (
+      await json(`/api/procurement-orders/${financeSpk.id}/complete`, {
+        method: "POST",
+      })
+    ).workflowStatus,
+    "Selesai",
   );
 
   assert.equal(

@@ -27,8 +27,8 @@ const sopSections: SopSection[] = [
       ["Admin menetapkan akses Lihat atau Kelola per modul.", "Admins assign View or Manage access per module."],
     ],
     control: [
-      "Mode demo wajib memakai APP_MODE=demo dan database demo yang berbeda dari production.",
-      "Demo mode must use APP_MODE=demo and a demo database different from production.",
+      "Selalu keluar dari aplikasi saat meninggalkan perangkat bersama; sesi perangkat itu langsung dicabut.",
+      "Always sign out when leaving a shared device; that device session is revoked immediately.",
     ],
   },
   {
@@ -55,10 +55,11 @@ const sopSections: SopSection[] = [
       ["Pilih Harga 1 atau Harga 2; sistem mengambil harga pokok dan menghitung harga jual dari margin tersimpan.", "Choose Price 1 or Price 2; the system reads cost and calculates selling price from the saved margin."],
       ["Periksa margin sebelum menyimpan atau memfinalkan BoQ.", "Review margin before saving or finalizing the BoQ."],
       ["Salin BoQ mandiri ke proyek; gunakan Ganti hanya bila BoQ lama boleh ditimpa.", "Copy the standalone BoQ to a project; use Replace only when the old BoQ may be overwritten."],
+      ["Admin/Finance boleh memakai AI katalog: hasilnya berstatus Draft, wajib ditinjau dan dilengkapi kategori serta merek sebelum disetujui.", "Admin/Finance may use the catalog AI: its result is a Draft that must be reviewed and given a category and brand before approval."],
     ],
     control: [
-      "Perubahan BoQ proyek mereset Quotation menjadi Draft dan validasi perangkat perlu diperbarui.",
-      "A project BoQ change resets the Quotation to Draft and device validation must be updated.",
+      "Mengubah BoQ setelah Quotation dikirim akan membuat revisi Draft baru; kirim ulang ke klien dan perbarui validasi perangkat.",
+      "Changing the BoQ after a Quotation was sent creates a new Draft revision; resend it to the client and refresh device validation.",
     ],
   },
   {
@@ -71,7 +72,7 @@ const sopSections: SopSection[] = [
       ["Admin/Finance membuat kategori dan vendor bertipe Supplier, Jasa, atau Hybrid.", "Admin/Finance creates categories and Supplier, Service, or Hybrid vendors."],
       ["Gunakan SPK untuk Jasa/Mobilitas dan PO untuk Perangkat/Material.", "Use Work Orders for Services/Mobility and POs for Devices/Materials."],
       ["Pilih item dari Quotation Accepted; alokasi aktif tidak boleh melebihi qty BoQ.", "Select items from an Accepted Quotation; active allocations cannot exceed BoQ quantities."],
-      ["PM/Engineer mengajukan draft; Admin/Finance menyetujui. Finance dilarang self-approve.", "PM/Engineer submits a draft; Admin/Finance approves it. Finance self-approval is forbidden."],
+      ["PM/Engineer mengajukan draft; Admin/Finance menyetujui. Finance tidak boleh menyetujui pengajuannya sendiri.", "PM/Engineer submits a draft; Admin/Finance approves it. Finance may not approve its own submission."],
       ["Bayar DP setelah approval. Termin jasa perlu verifikasi progres; PO perlu penerimaan barang.", "Pay a down payment after approval. Service terms need progress verification; POs need goods receipts."],
       ["Catat nominal aktual, tagihan vendor, referensi, rekening, dan bukti pembayaran.", "Record the actual amount, vendor invoice, reference, bank account, and payment proof."],
     ],
@@ -83,14 +84,20 @@ const sopSections: SopSection[] = [
   {
     title: ["5. Quotation, Invoice, validasi, dan BAST", "5. Quotation, Invoice, validation, and handover"],
     intro: [
-      "Dokumen komersial mengikuti proyek dan BoQ aktif agar angka tetap sinkron.",
-      "Commercial documents follow the active project and BoQ to keep amounts synchronized.",
+      "Dokumen komersial mengikuti proyek, paket komersial, dan BoQ aktif agar angka tetap sinkron.",
+      "Commercial documents follow the active project, commercial package, and BoQ so the amounts stay in sync.",
     ],
     steps: [
-      ["Kirim Quotation lalu simpan tanggal dan bukti persetujuan klien untuk status Accepted.", "Send the Quotation, then save the client acceptance date and proof for Accepted status."],
-      ["Pekerjaan tambah wajib memakai BoQ dan Quotation Addendum baru.", "Additional work requires a new BoQ and Quotation Addendum."],
+      ["Atur diskon, pajak, dan pembulatan selagi Draft. Urutannya: subtotal - diskon + pajak Tambah +/- pembulatan = Total tagihan klien.", "Set discount, tax, and rounding while the quotation is a Draft. The order is: subtotal - discount + added tax +/- rounding = total billed to the client."],
+      ["Kirim Quotation, lalu tekan Terima klien dan simpan tanggal serta bukti persetujuan. Diskon, pajak, dan pembulatan langsung dikunci.", "Send the Quotation, then press Client accept and store the acceptance date and proof. Discount, tax, and rounding lock immediately."],
+      ["Pekerjaan tambah wajib memakai Addendum dan Quotation baru; dokumen yang sudah diterima tidak boleh diubah.", "Additional work requires a new Addendum and Quotation; an accepted document may never be altered."],
+      ["Terbitkan Invoice per termin dalam persen dari Total tagihan klien; total seluruh termin maksimal 100%.", "Issue each Invoice as a percentage of the total billed to the client; all installments together are capped at 100%."],
       ["Catat pembayaran Invoice parsial dengan bruto, pajak potong, kas aktual, rekening, referensi, dan bukti.", "Record partial Invoice payments with gross value, withholding, actual cash, account, reference, and proof."],
-      ["Selesaikan checklist perangkat sebelum BAST Final.", "Complete the device checklist before final handover."],
+      ["Selesaikan checklist validasi, kumpulkan dua tanda tangan, lalu finalisasi BAST agar cap perusahaan dan QR pemeriksaan keaslian terpasang.", "Complete the validation checklist, collect both signatures, then finalize the handover so the company seal and authenticity QR code are applied."],
+    ],
+    control: [
+      "Cap pada BAST adalah cap internal PerumNet yang menandai dokumen asli, bukan tanda tangan elektronik tersertifikasi.",
+      "The seal on a handover certificate is PerumNet's internal mark of an original document, not a certified electronic signature.",
     ],
   },
   {
@@ -162,11 +169,11 @@ const sopSections: SopSection[] = [
     ],
     steps: [
       ["Admin mengaktifkan pajak dan mengisi tarif aturan tanpa nilai legal hardcoded.", "An Admin enables tax and enters rule rates without hardcoded legal values."],
-      ["Admin/Finance menyalakan Gunakan Pajak pada Quotation Draft dan memilih aturan; snapshot terkunci saat Accepted lalu diwariskan ke Invoice.", "Admin/Finance enables Use Tax on a Draft Quotation and selects rules; the snapshot locks at Accepted and passes to the Invoice."],
-      ["Pajak tambah klien seperti PPN ditambahkan di atas nilai dasar, bukan menjadi biaya proyek PerumNet, dan dicatat sebagai utang pajak.", "Added client tax such as VAT is charged above the taxable base, is not a PerumNet project cost, and is recorded as tax payable."],
-      ["Finance menyelesaikan utang/piutang pajak dengan referensi, rekening, dan bukti.", "Finance settles tax payables/receivables with a reference, account, and evidence."],
-      ["Produksi mengirim melalui Mailcow-Brevo; demo hanya menyimpan capture.", "Production sends through Mailcow-Brevo; demo stores captures only."],
-      ["Admin meninjau Pending/Failed dan menjalankan retry bila diperlukan.", "An Admin reviews Pending/Failed messages and retries when needed."],
+      ["Admin/Finance menyalakan Gunakan Pajak pada Quotation Draft dan memilih aturan; nilainya terkunci saat diterima klien lalu diwariskan ke Invoice.", "Admin/Finance enables Use Tax on a Draft Quotation and selects rules; the amounts lock on client acceptance and pass to the Invoice."],
+      ["Pajak Tambah seperti PPN menambah tagihan klien dan dicatat sebagai utang pajak. Pajak Potong seperti PPh tidak menambah tagihan, hanya mengurangi kas yang diterima.", "Added tax such as VAT increases the client's bill and is recorded as tax payable. Withheld tax such as income tax does not increase the bill; it only reduces the cash received."],
+      ["Finance menyelesaikan utang/piutang pajak dengan referensi, rekening, dan bukti setor.", "Finance settles tax payables/receivables with a reference, account, and payment evidence."],
+      ["Notifikasi email tersimpan dalam antrean sehingga gangguan pengiriman tidak pernah membatalkan transaksi bisnis.", "Email notifications are queued, so a delivery problem never rolls back a business transaction."],
+      ["Admin meninjau email berstatus Pending atau Failed dan mengirim ulang bila diperlukan.", "An Admin reviews Pending or Failed messages and resends them when needed."],
     ],
     control: [
       "Fitur ini adalah pencatatan operasional; keputusan jenis, tarif, dan perlakuan pajak akhir tetap ditentukan Admin/Finance bersama penasihat pajak.",

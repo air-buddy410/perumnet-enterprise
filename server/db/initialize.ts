@@ -640,8 +640,10 @@ CREATE TABLE IF NOT EXISTS project_expenses (
   total_amount INTEGER NOT NULL CHECK (total_amount > 0),
   currency TEXT NOT NULL DEFAULT 'IDR',
   funding_source TEXT NOT NULL CHECK (funding_source IN ('CompanyAccount','ProjectAdvance','EmployeePaid')),
+  payment_method TEXT NOT NULL DEFAULT 'Tunai' CHECK (payment_method IN ('Tunai','QRIS','Transfer Bank')),
   bank_account_id TEXT REFERENCES bank_accounts(id) ON DELETE RESTRICT,
   advance_id TEXT REFERENCES project_advances(id) ON DELETE RESTRICT,
+  paid_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   notes TEXT,
   item_details_json TEXT NOT NULL DEFAULT '[]',
   workflow_status TEXT NOT NULL DEFAULT 'Draft'
