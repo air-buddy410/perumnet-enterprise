@@ -7253,38 +7253,114 @@ h3 {
   outline: none;
 }
 
+/* The workflow guides used to be `<details>` in this grid, and opening one ran
+   its column far past its neighbour — a two-column grid with one tall cell in
+   it can never look tidy. The cards below never change size; the guide itself
+   opens in the shared `.modal-backdrop`/`.modal-card` dialog. */
 .help-guide-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
-.help-guide {
-  padding: 0;
-  overflow: hidden;
+.help-guide-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 15px;
+  cursor: pointer;
+  text-align: left;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
 }
 
-.help-guide summary {
+.help-guide-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.help-guide-card:focus-visible {
+  outline: 3px solid rgba(4, 169, 159, 0.25);
+  outline-offset: 2px;
+}
+
+.help-guide-card-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 15px;
-  cursor: pointer;
-  list-style: none;
 }
 
-.help-guide summary::-webkit-details-marker {
-  display: none;
-}
-
-.help-guide summary strong {
-  flex: 1;
+.help-guide-card-head strong {
   color: var(--navy);
   font-size: 12px;
+  line-height: 1.45;
 }
 
-.help-guide[open] summary > svg {
-  transform: rotate(180deg);
+.help-guide-card-summary {
+  color: #617174;
+  font-size: 10px;
+  line-height: 1.7;
+}
+
+/* `margin-top: auto` pins the cue to the bottom edge, so the row of cards
+   reads as one band however long each summary runs. */
+.help-guide-card-cue {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: auto;
+  color: var(--teal-dark);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.help-guide-card-cue > svg {
+  transition: transform 160ms ease;
+}
+
+.help-guide-card:hover .help-guide-card-cue > svg {
+  transform: translateX(2px);
+}
+
+/* The dialog takes focus on open so the reader lands inside it rather than
+   behind it, but it is a landing spot, not a control — a browser focus ring
+   drawn round the whole card reads as an error state. The visible focus
+   indicator belongs to the close button and the cards, which keep theirs. */
+.help-guide-modal:focus {
+  outline: none;
+}
+
+/* The dialog opens with the shared `modal-in` every other modal uses. What it
+   adds is the matching exit: the component keeps the dialog mounted, flags it
+   `is-closing`, and drops it when the animation ends — a card that fades in and
+   then vanishes on close reads as a glitch rather than a dismissal. The exit is
+   shorter than the entrance so dismissal feels immediate without cutting. */
+.help-guide-backdrop {
+  animation: help-guide-backdrop-in 180ms ease-out;
+}
+
+.help-guide-backdrop.is-closing {
+  animation: help-guide-backdrop-out 150ms ease-in forwards;
+  pointer-events: none;
+}
+
+.help-guide-backdrop.is-closing .modal-card {
+  animation: help-guide-card-out 150ms ease-in forwards;
+}
+
+@keyframes help-guide-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes help-guide-backdrop-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes help-guide-card-out {
+  from { transform: translateY(0) scale(1); opacity: 1; }
+  to { transform: translateY(10px) scale(.985); opacity: 0; }
 }
 
 .help-section-head {
@@ -7307,10 +7383,12 @@ h3 {
   line-height: 1.65;
 }
 
+/* Lives only inside the guide dialog now, so it sits flush against the card
+   padding instead of indenting itself under a summary row's icon. */
 .help-guide-body {
   display: grid;
   gap: 11px;
-  margin: 0 15px 16px 57px;
+  margin: 0;
   color: #617174;
   font-size: 10px;
   line-height: 1.7;
@@ -8129,10 +8207,6 @@ h3 {
     grid-template-columns: 1fr;
   }
 
-  .help-guide-body {
-    margin-left: 15px;
-  }
-
   .help-guide-body dl > div {
     grid-template-columns: 1fr;
   }
@@ -8836,6 +8910,20 @@ h3 {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  /* The blanket rule above only collapses durations, so a transform still
+     lands — instantly, which is the jump reduced motion is meant to avoid.
+     The guide cards drop their lift and their arrow nudge outright and keep
+     the border and shadow as the hover signal. The guide dialog's own
+     animations are left to the blanket rule: they still have to *end* for the
+     component to unmount, so they are shortened, never removed. */
+  .help-guide-card:hover {
+    transform: none;
+  }
+
+  .help-guide-card:hover .help-guide-card-cue > svg {
+    transform: none;
   }
 }
 

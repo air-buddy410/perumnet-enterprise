@@ -3,7 +3,7 @@
 import {
   BookMarked,
   BookOpenCheck,
-  ChevronDown,
+  ChevronRight,
   CircleHelp,
   ClipboardCheck,
   Coins,
@@ -20,9 +20,10 @@ import {
   Sparkles,
   TriangleAlert,
   WalletCards,
+  X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { downloadApiFile } from "../api-client";
 import type { AppLanguage } from "../i18n";
 
@@ -1122,8 +1123,23 @@ function matches(needle: string, ...fields: Array<string | string[]>) {
     .includes(needle);
 }
 
+// How long `.help-guide-backdrop.is-closing` runs, plus a frame of slack. The
+// exit normally ends on `animationend`; this is the safety net for the cases
+// that never fire one — a background tab, or a browser that honours
+// `prefers-reduced-motion` by dropping the animation rather than shortening it.
+const GUIDE_EXIT_FALLBACK_MS = 320;
+
 export function HelpView({ language }: HelpViewProps) {
   const [query, setQuery] = useState("");
+  // The guide opens in the shared modal rather than expanding in place: an
+  // open `<details>` made its grid column run far past its neighbour, and no
+  // amount of tidying fixes a two-column grid with one tall cell in it.
+  const [activeGuide, setActiveGuide] = useState<WorkflowGuide | null>(null);
+  const [closingGuide, setClosingGuide] = useState(false);
+  // The card that opened the dialog, so focus can go back to it on close
+  // instead of falling to the top of the document.
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
   const id = language === "id";
   const needle = query.trim().toLowerCase();
   const { workflows, messages, glossary } = content[language];
@@ -1145,6 +1161,45 @@ export function HelpView({ language }: HelpViewProps) {
   );
   const anyResult =
     visibleWorkflows.length > 0 || visibleMessages.length > 0 || visibleGlossary.length > 0;
+
+  // Closing is a two-step: flag the dialog so the exit animation can play, then
+  // drop it once the animation reports it is finished. Unmounting on the click
+  // would make a dialog that fades in vanish on the way out.
+  const closeGuide = useCallback(() => setClosingGuide(true), []);
+  const dropGuide = useCallback(() => {
+    setActiveGuide(null);
+    setClosingGuide(false);
+    triggerRef.current?.focus();
+    triggerRef.current = null;
+  }, []);
+
+  function openGuide(workflow: WorkflowGuide, trigger: HTMLButtonElement) {
+    triggerRef.current = trigger;
+    setClosingGuide(false);
+    setActiveGuide(workflow);
+  }
+
+  // Escape closes it, like every other modal in the app.
+  useEffect(() => {
+    if (!activeGuide) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") closeGuide();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeGuide, closeGuide]);
+
+  // Move focus into the dialog so Tab walks the guide, not the page behind it.
+  useEffect(() => {
+    if (!activeGuide) return;
+    dialogRef.current?.focus();
+  }, [activeGuide]);
+
+  useEffect(() => {
+    if (!closingGuide) return;
+    const timer = window.setTimeout(dropGuide, GUIDE_EXIT_FALLBACK_MS);
+    return () => window.clearTimeout(timer);
+  }, [closingGuide, dropGuide]);
 
   async function downloadSop() {
     await downloadApiFile(
@@ -1182,26 +1237,22 @@ export function HelpView({ language }: HelpViewProps) {
             {visibleWorkflows.map((workflow) => {
               const Icon = workflow.icon;
               return (
-                // Uncontrolled on purpose. Every section starts closed so the two
-                // columns line up, and because `open` is not a managed prop a
-                // section the reader opens stays open — the previous version
-                // re-applied it on every render, so typing in the search box
-                // slammed shut whatever they had just opened.
-                <details className="panel help-guide" key={workflow.key}>
-                  <summary><span className="metric-icon blue"><Icon size={19} /></span><strong>{workflow.title}</strong><ChevronDown size={17} /></summary>
-                  <div className="help-guide-body">
-                    <p>{workflow.summary}</p>
-                    <dl>
-                      <div><dt>{id ? "Siapa" : "Who"}</dt><dd>{workflow.who}</dd></div>
-                      <div><dt>{id ? "Di mana" : "Where"}</dt><dd>{workflow.where}</dd></div>
-                      <div><dt>{id ? "Siapkan" : "Prepare"}</dt><dd>{workflow.prepare}</dd></div>
-                    </dl>
-                    <ol>
-                      {workflow.steps.map((step) => <li key={step}>{step}</li>)}
-                    </ol>
-                    <p className="help-outcome"><ShieldCheck size={15} /><span><strong>{id ? "Setelah itu: " : "Afterwards: "}</strong>{workflow.after}</span></p>
-                  </div>
-                </details>
+                // Every card is the same shape and the same height whatever the
+                // reader has open, because nothing expands here any more.
+                <button
+                  className="panel help-guide-card"
+                  type="button"
+                  key={workflow.key}
+                  aria-haspopup="dialog"
+                  onClick={(event) => openGuide(workflow, event.currentTarget)}
+                >
+                  <span className="help-guide-card-head">
+                    <span className="metric-icon blue"><Icon size={19} /></span>
+                    <strong>{workflow.title}</strong>
+                  </span>
+                  <span className="help-guide-card-summary">{workflow.summary}</span>
+                  <span className="help-guide-card-cue">{id ? "Buka panduan" : "Open guide"}<ChevronRight size={15} /></span>
+                </button>
               );
             })}
           </section>
@@ -1270,6 +1321,50 @@ export function HelpView({ language }: HelpViewProps) {
           <a className="button secondary" href="mailto:it@perumnet.id">{id ? "Email dukungan" : "Email support"}</a>
         </div>
       </section>
+
+      {activeGuide && (
+        <div
+          className={`modal-backdrop help-guide-backdrop${closingGuide ? " is-closing" : ""}`}
+          role="presentation"
+          onMouseDown={closeGuide}
+          // The exit ends here rather than on a timer, so the dialog leaves the
+          // tree the moment the animation is actually done. Child animations
+          // bubble, so only the backdrop's own run counts.
+          onAnimationEnd={(event) => {
+            if (closingGuide && event.target === event.currentTarget) dropGuide();
+          }}
+        >
+          <section
+            className="modal-card wide help-guide-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="help-guide-title"
+            tabIndex={-1}
+            ref={dialogRef}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <div>
+                <span className="eyebrow">{id ? "ALUR KERJA" : "WORKFLOW"}</span>
+                <h2 id="help-guide-title">{activeGuide.title}</h2>
+              </div>
+              <button className="icon-button" type="button" aria-label={id ? "Tutup" : "Close"} onClick={closeGuide}><X size={18} /></button>
+            </div>
+            <div className="help-guide-body">
+              <p>{activeGuide.summary}</p>
+              <dl>
+                <div><dt>{id ? "Siapa" : "Who"}</dt><dd>{activeGuide.who}</dd></div>
+                <div><dt>{id ? "Di mana" : "Where"}</dt><dd>{activeGuide.where}</dd></div>
+                <div><dt>{id ? "Siapkan" : "Prepare"}</dt><dd>{activeGuide.prepare}</dd></div>
+              </dl>
+              <ol>
+                {activeGuide.steps.map((step) => <li key={step}>{step}</li>)}
+              </ol>
+              <p className="help-outcome"><ShieldCheck size={15} /><span><strong>{id ? "Setelah itu: " : "Afterwards: "}</strong>{activeGuide.after}</span></p>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
