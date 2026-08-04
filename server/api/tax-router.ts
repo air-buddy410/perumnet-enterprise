@@ -7,6 +7,7 @@ import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
 import { calculateQuotationCommercialTotals } from "../commercial";
 import { getDatabase, type DatabaseClient } from "../db/client";
+import { csvCell } from "../spreadsheet";
 import {
   calculateTaxAmount,
   documentTaxSummary,
@@ -1020,11 +1021,6 @@ export async function handleTaxSettlements(
     return ok({ id: settlementId, status: "Void", reversalTransactionId: reversalId });
   }
   throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
-}
-
-function csvCell(value: unknown) {
-  const text = String(value ?? "");
-  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 async function handleTaxReport(request: Request, section: string, user: AuthUser) {

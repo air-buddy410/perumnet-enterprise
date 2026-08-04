@@ -7583,6 +7583,20 @@ h3 {
   background: #fdebea;
 }
 
+/* The internal edition of a vendor document. Amber rather than the neutral
+   PDF button on purpose: the two files sit side by side and only one of them
+   may ever reach the contractor. */
+.button.internal {
+  border-color: #e8cf9a;
+  background: #fdf6e6;
+  color: #8a6318;
+}
+
+.button.internal:hover {
+  border-color: #d9ba75;
+  background: #f9edd4;
+}
+
 .table-row-actions,
 .boq-form-actions {
   display: flex;

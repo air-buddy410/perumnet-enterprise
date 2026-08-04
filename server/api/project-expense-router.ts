@@ -9,6 +9,7 @@ import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { claimSequence } from "../db/counters";
 import { asNumber } from "../format";
+import { csvCell } from "../spreadsheet";
 import {
   deleteStoredFile,
   readStoredFile,
@@ -102,21 +103,40 @@ function bool(value: unknown) {
   return value === true || Number(value) === 1;
 }
 
+// Project Expenses used to open for `projects` OR `finance`, which meant no
+// administrator could grant one without the other and nobody could describe the
+// rule in one sentence. It is its own module now, so the answer to "may this
+// person open Belanja Proyek" is a single stored value an Admin can see and
+// change on the Users & Access page.
 function assertExpenseView(user: AuthUser) {
-  if (
-    !canAccess(user.permissions, "projects", "view") &&
-    !canAccess(user.permissions, "finance", "view")
-  ) {
+  if (!canAccess(user.permissions, "expenses", "view")) {
     throw new ApiError(403, "FORBIDDEN", "Akun tidak memiliki akses belanja proyek.");
   }
 }
 
 function assertExpenseCreate(user: AuthUser) {
-  if (
-    !canAccess(user.permissions, "projects", "manage") &&
-    !canAccess(user.permissions, "finance", "manage")
-  ) {
+  if (!canAccess(user.permissions, "expenses", "manage")) {
     throw new ApiError(403, "FORBIDDEN", "Akun tidak dapat mencatat belanja proyek.");
+  }
+}
+
+/**
+ * The bulk export is a finance artefact, not a field one.
+ *
+ * Recording a receipt needs the receipt in front of you; the CSV and the PDF
+ * are every receipt on every project the account can reach, carrying the
+ * company account that paid, who is still owed their own money, and how much.
+ * An Engineer records receipts all day and never needs that sheet, so the
+ * download asks for Pembukuan on top of Belanja Proyek. An Admin who genuinely
+ * wants an Engineer to have it raises that one permission deliberately.
+ */
+function assertExpenseReport(user: AuthUser) {
+  if (!canAccess(user.permissions, "finance", "view")) {
+    throw new ApiError(
+      403,
+      "EXPENSE_REPORT_FORBIDDEN",
+      "Laporan belanja proyek memuat rekening perusahaan dan utang reimbursement, sehingga memerlukan izin Pembukuan minimal Lihat. Mintakan izin itu kepada Admin bila Anda memang perlu mengunduhnya.",
+    );
   }
 }
 
@@ -802,7 +822,6 @@ async function expenseReports(
   const rows = await listRows(client, user, request);
   const english = user.preferredLanguage === "en";
   if (format === "csv") {
-    const cell = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
     const lines = [
       [
         english ? "Number" : "Nomor",
@@ -819,7 +838,7 @@ async function expenseReports(
         english ? "Settlement status" : "Status penyelesaian",
         "Amount (IDR)",
         english ? "Reimbursement payable (IDR)" : "Utang reimbursement (IDR)",
-      ].map(cell).join(","),
+      ].map(csvCell).join(","),
       ...rows.map((row) => [
         row.number,
         row.purchaseDate,
@@ -835,7 +854,7 @@ async function expenseReports(
         row.settlementStatus,
         row.totalAmount,
         row.reimbursementOutstanding,
-      ].map(cell).join(",")),
+      ].map(csvCell).join(",")),
     ];
     return new Response(`\uFEFF${lines.join("\r\n")}`, {
       headers: {
@@ -911,8 +930,15 @@ export async function handleProjectExpenses(
   assertExpenseView(user);
   const expenseId = path[1];
   const action = path[2];
-  if (expenseId === "report.csv") return expenseReports(request, user, "csv");
-  if (expenseId === "report.pdf") return expenseReports(request, user, "pdf");
+  // Both reports dispatched before any method test, so a POST or a DELETE to
+  // /api/project-expenses/report.csv returned the whole export.
+  if (expenseId === "report.csv" || expenseId === "report.pdf") {
+    if (request.method !== "GET") {
+      throw new ApiError(405, "METHOD_NOT_ALLOWED", "Laporan belanja proyek hanya dapat diunduh.");
+    }
+    assertExpenseReport(user);
+    return expenseReports(request, user, expenseId === "report.csv" ? "csv" : "pdf");
+  }
   if (expenseId && action === "attachments") {
     return handleAttachment(request, path, user);
   }

@@ -52,10 +52,26 @@ function limits() {
   };
 }
 
+/**
+ * `CF-Connecting-IP` is only worth anything when Cloudflare actually set it.
+ * Cloudflare overwrites that header on every request it proxies and always adds
+ * `CF-Ray`, so a request carrying `CF-Connecting-IP` without a `CF-Ray` reached
+ * the origin some other way and the address in it is whatever the caller typed.
+ *
+ * Taking it at face value handed an attacker a fresh IP bucket per request. The
+ * identifier bucket still caught a grind against one account, but a spray of
+ * one password across many accounts from a single host was not caught at all —
+ * every attempt looked like a different machine. Same check the public lead
+ * form already applies.
+ */
 export function authClientIp(request: Request) {
+  const viaCloudflare = Boolean(request.headers.get("cf-ray"));
+  const cloudflareIp = viaCloudflare
+    ? request.headers.get("cf-connecting-ip")?.trim()
+    : undefined;
   return (
-    request.headers.get("cf-connecting-ip") ??
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    cloudflareIp ||
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
     "unknown"
   );
 }

@@ -2,6 +2,7 @@ import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
 import { hash } from "bcryptjs";
+import { isProductionRuntime } from "../runtime-env";
 import type { DatabaseClient, DatabaseStatement } from "./client";
 
 const schemaSql = `
@@ -2857,7 +2858,12 @@ export async function initializeDatabase(client: DatabaseClient) {
   const existing = await client.execute("SELECT id FROM users LIMIT 1");
   if (existing.rows.length) return;
 
-  const production = process.env.NODE_ENV === "production";
+  // The runtime reading, not the compile-time literal. This flag decides
+  // whether a first boot may fall back to the well-known "perumnet123" seed
+  // password and whether SEED_ADMIN_PASSWORD has to be twelve characters — both
+  // of which quietly relaxed inside a `NODE_ENV=production next dev` process.
+  // See server/runtime-env.ts.
+  const production = isProductionRuntime();
   const demoMode = process.env.APP_MODE === "demo";
   const bootstrapPassword = demoMode
     ? process.env.DEMO_ACCOUNT_PASSWORD ?? (production ? "" : "perumnet123")

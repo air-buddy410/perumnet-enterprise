@@ -59,6 +59,8 @@ export function messageOf(error: unknown, language: "id" | "en" = "id") {
     const messages: Record<string, string> = {
       UNAUTHENTICATED: "Your eight-hour session has expired. Please sign in again.",
       FORBIDDEN: "Your account is not authorized to perform this action.",
+      EXPENSE_REPORT_FORBIDDEN:
+        "The project expense report carries the company account that paid and the reimbursement owed to each person, so downloading it needs at least View on Finance. Ask an Admin for that permission if you genuinely need the file.",
       NOT_FOUND: "The requested data was not found or is outside your project access.",
       INVALID_CREDENTIALS: "The email address or password is incorrect.",
       ACCOUNT_INACTIVE: "This account is inactive.",
@@ -99,6 +101,14 @@ export function messageOf(error: unknown, language: "id" | "en" = "id") {
       VALIDATION_ERROR: "The submitted data is not valid. Check the highlighted fields and try again.",
       BRAND_REQUIRED: "Select a brand for Device or Material items.",
       BRAND_CATEGORY_MISMATCH: "The brand does not belong to the selected active category.",
+      CATEGORY_NOT_FOUND:
+        "That catalog category no longer exists — someone may have just deleted it. Reload the catalog and pick another one.",
+      CATEGORY_IN_USE:
+        "This category is still used by catalog items, so it cannot be deleted. Deactivate it instead so the history stays intact.",
+      BRAND_IN_USE:
+        "This brand is still used by catalog items, so it cannot be deleted. Deactivate it instead so the history stays intact.",
+      ITEM_IN_USE:
+        "This item is already used in a BoQ or a BoQ template, so it cannot be deleted. Deactivate it instead so the history stays intact.",
       EXPENSE_BANK_ACCOUNT_REQUIRED:
         "Select an active company account for a purchase paid by bank transfer.",
       ADVANCE_UNAVAILABLE:
@@ -142,6 +152,25 @@ export function messageOf(error: unknown, language: "id" | "en" = "id") {
         "This entry is already matched to a bank statement line. Release the reconciliation first.",
       LEGACY_INVOICE_PAYMENT_RETIRED:
         "The old payment-confirmation endpoint has been retired. Record the payment from the invoice payment history so its reference, method, and proof are complete.",
+      TURNSTILE_NOT_CONFIGURED:
+        "Form security verification is switched off on this server, so the message could not be sent. Reach us on WhatsApp or by email in the meantime.",
+      TURNSTILE_ACTION_MISMATCH:
+        "That security check did not come from this form. Reload the page and try again.",
+      TURNSTILE_REQUIRED: "Complete the security check first.",
+      TURNSTILE_FAILED:
+        "The security check failed or has expired. Please try again.",
+      TURNSTILE_HOST_MISMATCH:
+        "The security check does not match this site.",
+      RATE_LIMITED: "Too many requests. Please try again later.",
+      METHOD_NOT_ALLOWED: "That action is not supported on this endpoint.",
+      EMAIL_BODY_PURGED:
+        "This message was cleared after its delivery attempts ran out, so it cannot be resent. Repeat the original action to generate a fresh email.",
+      EMAIL_NOT_RETRYABLE:
+        "That email was not found, or its status does not allow another attempt.",
+      IMAGE_TYPE_MISMATCH: "The file type does not match the actual image contents.",
+      INVALID_IMAGE: "That file is not a valid image.",
+      IMAGE_DIMENSIONS: "The image may be at most 4096 × 4096 pixels.",
+      IMAGE_PROCESSING_FAILED: "The image could not be processed.",
     };
     return error.code && messages[error.code]
       ? messages[error.code]

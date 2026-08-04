@@ -60,11 +60,18 @@ const roleMatrix: Bilingual[][] = [
     ["Lihat", "View"],
   ],
   [
-    ["Manajemen Proyek (termasuk Belanja Proyek)", "Project Management (includes Project Expenses)"],
+    ["Manajemen Proyek", "Project Management"],
     ["Kelola", "Manage"],
     ["Kelola", "Manage"],
     ["Kelola", "Manage"],
     ["Lihat", "View"],
+  ],
+  [
+    ["Belanja Proyek", "Project Expenses"],
+    ["Kelola", "Manage"],
+    ["Kelola", "Manage"],
+    ["Kelola", "Manage"],
+    ["Kelola", "Manage"],
   ],
   [
     ["BoQ Generator (termasuk Database Item)", "BoQ Generator (includes Item Database)"],
@@ -98,6 +105,13 @@ const roleMatrix: Bilingual[][] = [
     ["Pembukuan", "Finance"],
     ["Kelola", "Manage"],
     ["Lihat", "View"],
+    ["Tidak ada", "No access"],
+    ["Kelola", "Manage"],
+  ],
+  [
+    ["Laba & Bagi Hasil", "Profit & Profit Sharing"],
+    ["Kelola", "Manage"],
+    ["Tidak ada", "No access"],
     ["Tidak ada", "No access"],
     ["Kelola", "Manage"],
   ],
@@ -153,6 +167,10 @@ const specialActions: Bilingual[][] = [
   [
     ["Mengatur cap perusahaan dan mencabut BAST final", "Configuring the company seal and revoking a final handover certificate"],
     ["Hanya Admin", "Admin only"],
+  ],
+  [
+    ["Membuka angka laba proyek dan pembagian keuntungan", "Opening the project profit figures and profit sharing"],
+    ["Izin Laba & Bagi Hasil minimal Lihat. Menyusun alokasi memerlukan Kelola pada Laba & Bagi Hasil sekaligus Kelola pada Pembukuan, dan tetap terbatas pada peran Admin atau Finance.", "At least View on Profit & Profit Sharing. Preparing an allocation requires Manage on both Profit & Profit Sharing and Finance, and is still limited to the Admin or Finance role."],
   ],
   [
     ["Menyetujui pembagian keuntungan", "Approving a profit share"],
@@ -231,8 +249,12 @@ export const chapterRoles: Chapter = {
           "Changing someone's role resets all of their module permissions to the new role's defaults. Re-check the Users & Access page after every role change.",
         ],
         [
-          "Menu Belanja Proyek mengikuti izin Manajemen Proyek, bukan izin Pembukuan. Jika seseorang tidak dapat mencatat nota, periksa izin Manajemen Proyek-nya.",
-          "The Project Expenses menu follows the Project Management permission, not the Finance permission. If someone cannot record a receipt, check their Project Management permission.",
+          "Belanja Proyek adalah modulnya sendiri. Jika seseorang tidak dapat mencatat nota, periksa izin Belanja Proyek-nya, bukan izin Manajemen Proyek maupun Pembukuan. Mengunduh laporan belanja (CSV atau PDF) memerlukan tambahan izin Pembukuan minimal Lihat, karena laporan itu memuat rekening perusahaan yang membayar dan utang reimbursement kepada tiap orang; Engineer bawaan karena itu mencatat nota tetapi tidak mengunduh laporannya.",
+          "Project Expenses is its own module. If someone cannot record a receipt, check their Project Expenses permission — not Project Management and not Finance. Downloading the expense report (CSV or PDF) additionally requires View on Finance, because that report carries the company account that paid and the reimbursement owed to each person; a default Engineer therefore records receipts but does not download the report.",
+        ],
+        [
+          "Angka laba mengikuti izin Laba & Bagi Hasil, bukan izin Pembukuan. Pembukuan Lihat membuka buku kas: kas masuk, kas keluar, dan mutasi proyek yang boleh diakses. Laba Bersih Dasar, Laba Ditahan, dan perbandingan Budget BoQ dengan Komitmen vendor hanya muncul pada laporan bila izin Laba & Bagi Hasil minimal Lihat. Project Manager dan Engineer bawaan tidak memilikinya; laporan kas mereka tetap dapat diunduh, hanya bagian labanya yang tidak ikut.",
+          "The profit figures follow the Profit & Profit Sharing permission, not the Finance permission. View on Finance opens the cash ledger: cash in, cash out, and the entries of the projects the account may reach. Base Net Profit, Retained Profit, and BoQ budget against vendor commitment only appear in the report when Profit & Profit Sharing is at least View. A default Project Manager and Engineer do not have it; their cash report still downloads, only the profit sections are left out of it.",
         ],
         [
           "Menu Database Item hanya muncul untuk Admin dan Finance walaupun izin BoQ Generator sudah Kelola.",
@@ -415,7 +437,7 @@ export const chapterStart: Chapter = {
         ],
         [
           "Bila proyek dijual dalam beberapa lingkup, pilih juga paket komersial di bagian atas BoQ Generator, Quotation & Invoice, Validasi Perangkat, dan BAST Digital. Paket pertama dibuat otomatis dengan kode PKG-01 dan judul Lingkup Utama.",
-          "If the project is sold as several scopes, also choose the commercial package at the top of BoQ Generator, Quotations & Invoices, Device Validation, and Digital Handover. The first package is created automatically with the code PKG-01 and the title Lingkup Utama.",
+          "If the project is sold as several scopes, also choose the commercial package at the top of BoQ Generator, Quotations & Invoices, Device Validation, and Digital Handover. The first package is created automatically with the code PKG-01 and the title Main Scope.",
         ],
         [
           "Kenali tiga kelompok menu di sidebar. UTAMA berisi Dashboard, Manajemen Proyek, BoQ Generator, dan Quotation & Invoice. OPERASIONAL berisi Belanja Proyek, Procurement & Vendor, Validasi Perangkat, BAST Digital, dan Pembukuan. ADMINISTRASI berisi Database Item serta Pengguna & Akses.",
@@ -1150,7 +1172,7 @@ export const chapterExpenses: Chapter = {
         },
         {
           label: ["Di mana", "Where"],
-          value: ["Belanja Proyek. Menu ini mengikuti izin Manajemen Proyek.", "Project Expenses. This menu follows the Project Management permission."],
+          value: ["Belanja Proyek. Menu ini mengikuti izin Belanja Proyek tersendiri; unduhan laporannya juga memerlukan izin Pembukuan minimal Lihat.", "Project Expenses. This menu follows its own Project Expenses permission; downloading its report also requires at least View on Finance."],
         },
         {
           label: ["Prasyarat", "Prerequisites"],
@@ -1458,7 +1480,7 @@ export const chapterProfit: Chapter = {
       rows: [
         {
           label: ["Siapa yang boleh", "Who may do it"],
-          value: ["Admin dan Finance menyusun alokasi. Hanya Admin yang menyetujui dan membatalkan.", "Admin and Finance prepare the allocations. Only an Admin approves or voids them."],
+          value: ["Admin dan Finance menyusun alokasi, dengan izin Laba & Bagi Hasil serta Pembukuan sama-sama Kelola. Hanya Admin yang menyetujui dan membatalkan.", "Admin and Finance prepare the allocations, holding Manage on both Profit & Profit Sharing and Finance. Only an Admin approves or voids them."],
         },
         {
           label: ["Di mana", "Where"],
@@ -2265,6 +2287,10 @@ export const chapterAppendix: Chapter = {
           "A password reset link is only valid for 30 minutes after it is sent.",
         ],
         [
+          "Isi pesan email tidak disimpan selamanya. Begitu sebuah email selesai — terkirim, dilewati, atau habis jatah percobaan ulangnya — badan pesannya dihapus dan yang tersisa hanya penerima, subjek, status, serta pesan kesalahannya. Karena itulah email yang sudah habis percobaannya tidak dapat dikirim ulang: ulangi tindakan aslinya agar pesan baru dibuat. Baris yang sudah selesai pun dibuang seluruhnya setelah 180 hari.",
+          "Message bodies are not kept forever. As soon as an email reaches a final state — sent, skipped, or out of retry attempts — its body is discarded and only the recipient, subject, status, and error message remain. That is why an email that ran out of attempts cannot be resent: repeat the original action so a fresh message is generated. Finished rows are dropped entirely after 180 days.",
+        ],
+        [
           "Mengganti alamat email sendiri memerlukan konfirmasi dari alamat baru. Akun tetap memakai alamat lama sampai tautan konfirmasi dibuka, tautan itu berlaku 60 menit, dan alamat lama selalu diberi tahu bahwa ada permintaan penggantian. Begitu alamat berganti, seluruh sesi akun tersebut berakhir dan tautan pemulihan lama berhenti berlaku.",
           "Changing your own email address requires confirmation from the new address. The account keeps its old address until the confirmation link is opened, that link is valid for 60 minutes, and the old address is always told that a change was requested. Once the address changes, every session on that account ends and older recovery links stop working.",
         ],
@@ -2289,8 +2315,8 @@ export const chapterAppendix: Chapter = {
     {
       kind: "para",
       text: [
-        "Sebagian pemasangan dijalankan sebagai workspace demo untuk pelatihan dan peragaan. Mode demo memakai basis data yang benar-benar terpisah dari data produksi, dan aplikasi menolak berjalan bila keduanya diarahkan ke basis data yang sama. Email keluar tidak dikirim ke penerima, melainkan hanya disimpan, sehingga latihan tidak pernah mengirim pesan ke klien sungguhan. Halaman masuk dan bagian atas aplikasi menampilkan pemberitahuan bahwa workspace ini terisolasi.",
-        "Some installations run as a demo workspace for training and demonstrations. Demo mode uses a database that is genuinely separate from production data, and the application refuses to start if both are pointed at the same database. Outgoing email is not delivered to recipients but only stored, so practice never sends a message to a real client. The sign-in page and the top of the application show a notice that the workspace is isolated.",
+        "Sebagian pemasangan dijalankan sebagai workspace demo untuk pelatihan dan peragaan. Mode demo memakai basis data yang benar-benar terpisah dari data produksi, dan aplikasi menolak berjalan bila keduanya diarahkan ke basis data yang sama. Email keluar tidak dikirim ke penerima: yang tercatat hanya jejak pengirimannya — penerima, subjek, status, dan alasannya — sedangkan isi pesannya tidak pernah disimpan sama sekali, sehingga tautan pemulihan kata sandi hasil latihan tidak pernah tertinggal di disk. Halaman masuk dan bagian atas aplikasi menampilkan pemberitahuan bahwa workspace ini terisolasi.",
+        "Some installations run as a demo workspace for training and demonstrations. Demo mode uses a database that is genuinely separate from production data, and the application refuses to start if both are pointed at the same database. Outgoing email is not delivered to recipients: only the delivery trail is recorded — recipient, subject, status, and reason — while the message body is never stored at all, so a password recovery link produced during practice never lands on disk. The sign-in page and the top of the application show a notice that the workspace is isolated.",
       ],
     },
     {
@@ -2418,8 +2444,8 @@ export const chapterAppendix: Chapter = {
     {
       kind: "para",
       text: [
-        "Panduan ini dihasilkan langsung oleh aplikasi pada saat Anda mengunduhnya, sehingga isinya mengikuti versi yang sedang berjalan. Bila ada langkah yang tidak lagi cocok dengan layar, unduh ulang panduan dari Pusat Bantuan untuk mendapatkan versi terbaru, dan laporkan perbedaannya ke enterprise@perumnet.id. Pusat Bantuan di dalam aplikasi memuat ringkasan yang sama dalam bentuk yang dapat dicari.",
-        "This manual is produced by the application itself at the moment you download it, so its contents follow the version currently running. If a step no longer matches the screen, download the manual again from the Help Center for the latest version, and report the difference to enterprise@perumnet.id. The in-app Help Center carries the same material in a searchable quick-reference form.",
+        "Panduan ini dihasilkan langsung oleh aplikasi pada saat Anda mengunduhnya, sehingga isinya mengikuti versi yang sedang berjalan. Bila ada langkah yang tidak lagi cocok dengan layar, unduh ulang panduan dari Pusat Bantuan untuk mendapatkan versi terbaru, dan laporkan perbedaannya ke it@perumnet.id. Pusat Bantuan di dalam aplikasi memuat ringkasan yang sama dalam bentuk yang dapat dicari.",
+        "This manual is produced by the application itself at the moment you download it, so its contents follow the version currently running. If a step no longer matches the screen, download the manual again from the Help Center for the latest version, and report the difference to it@perumnet.id. The in-app Help Center carries the same material in a searchable quick-reference form.",
       ],
     },
   ],

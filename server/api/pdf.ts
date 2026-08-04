@@ -201,6 +201,26 @@ function localizeValue(value: unknown, language: PdfLanguage) {
   return values[source] ?? source;
 }
 
+// Every project is seeded with one commercial package carrying this exact
+// Indonesian title (server/api/commercial-package-router.ts and
+// server/db/initialize.ts), and the same literal is the fallback for documents
+// that predate packages. Both reach the English edition, which used to print
+// "COMMERCIAL PACKAGE: Lingkup Utama". A title somebody actually typed is a
+// proper noun and is printed untouched; only the untouched seeded default is
+// translated.
+const SEEDED_PACKAGE_TITLE = "Lingkup Utama";
+
+function localizedPackageTitle(
+  value: unknown,
+  language: PdfLanguage,
+  fallback = SEEDED_PACKAGE_TITLE,
+) {
+  const title = cleanText(value, fallback);
+  return title === SEEDED_PACKAGE_TITLE
+    ? tr(language, SEEDED_PACKAGE_TITLE, "Main Scope")
+    : title;
+}
+
 function rupiah(value: unknown, language: PdfLanguage = "id") {
   return new Intl.NumberFormat(language === "en" ? "en-US" : "id-ID", {
     style: "currency",
@@ -824,7 +844,19 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
         args: [quotation.id],
       })
     : { rows: [] as Array<Record<string, unknown>> };
-  const itemResult = snapshotItems.rows.length
+  const sumOf = (rows: Array<Record<string, unknown>>) =>
+    rows.reduce(
+      (sum, item) => sum + asNumber(item.quantity) * asNumber(item.selling_price),
+      0,
+    );
+  // The frozen snapshot may only be printed while it still adds up to the total
+  // this document bills. A quotation whose stored numbers were rewritten under
+  // a snapshot taken earlier would itemise one figure and demand another, so
+  // fall back to the BoQ rows the stored numbers were actually computed from.
+  const storedSubtotal = asNumber(quotation?.total);
+  const snapshotIsCurrent =
+    snapshotItems.rows.length > 0 && sumOf(snapshotItems.rows) === storedSubtotal;
+  const itemResult = snapshotIsCurrent
     ? snapshotItems
     : await client.execute({
         sql: quotation?.scope_id
@@ -839,17 +871,18 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
   if (!itemResult.rows.length) {
     throw new ApiError(409, "EMPTY_BOQ", "BoQ belum memiliki item.");
   }
-  const total = itemResult.rows.reduce(
-    (sum, item) =>
-      sum + asNumber(item.quantity) * asNumber(item.selling_price),
-    0,
-  );
+  const total = sumOf(itemResult.rows);
+  // Discount, taxable base, rounding, and grand total were all derived from
+  // `quotations.total`. If the rows we are about to print do not sum to it,
+  // those stored figures describe a different document: derive the money from
+  // the printed rows instead, so the page always adds up.
+  const storedTotalsMatchRows = quotation?.id ? storedSubtotal === total : false;
   const quotationTax = quotation?.id
     ? await documentTaxSummary(
         client,
         "Quotation",
         String(quotation.id),
-        asNumber(quotation.taxable_base) || total,
+        (storedTotalsMatchRows ? asNumber(quotation.taxable_base) : 0) || total,
       )
     : {
         taxes: [],
@@ -858,6 +891,9 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
         grossTotal: total,
         netCashDue: total,
       };
+  const billedTotal =
+    (storedTotalsMatchRows ? asNumber(quotation?.grand_total) : 0) ||
+    quotationTax.grossTotal;
   const number = quotation
     ? String(quotation.number)
     : `QUO/${String(project.code).replace("PN-", "")}`;
@@ -887,12 +923,12 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
     {
       label: tr(language, "Jenis ruang lingkup", "Scope type"),
       value: quotation?.scope_kind
-        ? `${localizeValue(quotation.scope_kind, language)} · ${String(quotation.scope_title ?? "")}`
+        ? `${localizeValue(quotation.scope_kind, language)} · ${localizedPackageTitle(quotation.scope_title, language, "")}`
         : tr(language, "BoQ Original", "Original BoQ"),
     },
     {
       label: tr(language, "Paket komersial", "Commercial package"),
-      value: String(quotation?.package_title ?? "Lingkup Utama"),
+      value: localizedPackageTitle(quotation?.package_title, language),
     },
     {
       label: tr(language, "Persetujuan klien", "Client acceptance"),
@@ -927,7 +963,7 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
   );
   y = drawTotals(context, y, [
     { label: tr(language, "Subtotal pekerjaan", "Work subtotal"), value: rupiah(total, language) },
-    ...(asNumber(quotation?.discount_amount) > 0
+    ...(storedTotalsMatchRows && asNumber(quotation?.discount_amount) > 0
       ? [
           {
             label: tr(language, "Dikurangi diskon", "Less discount"),
@@ -943,7 +979,7 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
     // tax never reduces the bill: it is deducted by the client when they pay,
     // so its line must sit BELOW the total, next to the amount transferred.
     ...addedTaxRows(quotationTax.taxes, language),
-    ...(asNumber(quotation?.rounding_adjustment) !== 0
+    ...(storedTotalsMatchRows && asNumber(quotation?.rounding_adjustment) !== 0
       ? [{
           label: tr(language, "Pembulatan", "Rounding"),
           value: `${asNumber(quotation?.rounding_adjustment) > 0 ? "+" : ""}${rupiah(quotation?.rounding_adjustment, language)}`,
@@ -951,20 +987,13 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
       : []),
     {
       label: tr(language, "Total tagihan klien", "Total billed to the client"),
-      value: rupiah(
-        asNumber(quotation?.grand_total) || quotationTax.grossTotal,
-        language,
-      ),
+      value: rupiah(billedTotal, language),
     },
     ...withheldTaxRows(quotationTax.taxes, language),
     {
       label: tr(language, "Dibayarkan ke PerumNet", "Payable to PerumNet"),
       value: rupiah(
-        Math.max(
-          0,
-          (asNumber(quotation?.grand_total) || quotationTax.grossTotal) -
-            quotationTax.taxWithholdings,
-        ),
+        Math.max(0, billedTotal - quotationTax.taxWithholdings),
         language,
       ),
       highlight: true,
@@ -1077,7 +1106,7 @@ async function invoicePdf(invoiceId: string, language: PdfLanguage) {
     },
     {
       label: tr(language, "Paket / quotation", "Package / quotation"),
-      value: `${String(invoice.package_title ?? "Lingkup Utama")} · ${String(invoice.quotation_number ?? "-")}`,
+      value: `${localizedPackageTitle(invoice.package_title, language)} · ${String(invoice.quotation_number ?? "-")}`,
     },
     {
       label: tr(language, "Persentase termin", "Installment percentage"),
@@ -1181,7 +1210,21 @@ async function invoicePdf(invoiceId: string, language: PdfLanguage) {
   );
 }
 
-async function spkPdf(spkId: string, language: PdfLanguage) {
+/**
+ * A work order / purchase order is signed by the contractor, so the copy the
+ * vendor receives must not carry PerumNet's own cost budget for the line the
+ * vendor is quoting. The budget column and its caption therefore live in the
+ * `internal` edition only, and `vendor` is the default everywhere: an edition a
+ * caller has to remember to ask for is an edition that leaks the first time
+ * somebody forgets.
+ */
+export type SpkEdition = "vendor" | "internal";
+
+async function spkPdf(
+  spkId: string,
+  language: PdfLanguage,
+  edition: SpkEdition = "vendor",
+) {
   const { client } = await getDatabase();
   const result = await client.execute({
     sql: `SELECT s.*,v.name AS vendor_name,v.category AS vendor_category,
@@ -1201,6 +1244,7 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
     throw new ApiError(404, "NOT_FOUND", "SPK tidak ditemukan.");
   }
   const documentType = String(spk.document_type ?? "SPK");
+  const internal = edition === "internal";
   const spkTax = await documentTaxSummary(
     client,
     documentType === "PO" ? "PO" : "SPK",
@@ -1260,7 +1304,7 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
   y = drawInfoGrid(context, y, [
     {
       label: tr(language, "Vendor / pelaksana", "Vendor / contractor"),
-      value: `${String(spk.vendor_name)} - ${String(spk.vendor_type ?? spk.vendor_category)}`,
+      value: `${String(spk.vendor_name)} - ${localizeValue(spk.vendor_type ?? spk.vendor_category, language)}`,
     },
     {
       label: tr(language, "Kontak vendor", "Vendor contact"),
@@ -1281,7 +1325,11 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
     {
       label: tr(language, "Dasar penerbitan", "Issued against"),
       value: spk.quotation_number
-        ? `${String(spk.quotation_number)} · ${String(spk.scope_kind ?? "")} · ${String(spk.scope_title ?? "")}`
+        ? [
+            String(spk.quotation_number),
+            spk.scope_kind ? localizeValue(spk.scope_kind, language) : "",
+            localizedPackageTitle(spk.scope_title, language, ""),
+          ].join(" · ")
         : tr(language, "Dokumen lama tanpa keterkaitan BoQ", "Older document with no linked BoQ"),
     },
     {
@@ -1289,33 +1337,62 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
       value: localizeValue(spk.approval_status ?? "Draft", language),
     },
   ]);
+  if (internal) {
+    y = drawCallout(
+      context,
+      y,
+      tr(language, "Salinan internal", "Internal copy"),
+      tr(
+        language,
+        "Salinan ini memuat anggaran internal PerumNet per item. Jangan dikirim atau ditandatangani bersama vendor; gunakan salinan vendor untuk itu.",
+        "This copy carries PerumNet's internal per-item budget. Do not send it to the vendor or sign it with them; use the vendor copy for that.",
+      ),
+      "warning",
+    );
+  }
   if (itemsResult.rows.length) {
     y = drawSectionTitle(
       context,
       y,
       tr(language, "Rincian Pekerjaan yang Dikomitmenkan", "Committed Work Details"),
-      tr(
-        language,
-        "Anggaran internal dan harga yang disepakati bersama vendor dicatat terpisah",
-        "The internal budget and the price agreed with the vendor are recorded separately",
-      ),
+      internal
+        ? tr(
+            language,
+            "Anggaran internal dan harga yang disepakati bersama vendor dicatat terpisah",
+            "The internal budget and the price agreed with the vendor are recorded separately",
+          )
+        : tr(
+            language,
+            "Item, harga satuan yang disepakati, dan jumlah untuk pekerjaan di atas",
+            "Line items, agreed unit prices, and amounts for the work stated above",
+          ),
     );
+    // Both column sets sum to CONTENT_WIDTH; dropping the budget column
+    // redistributes its 34 mm rather than leaving a gap on the right edge.
     y = drawTable(
       context,
       y,
-      [
-        { title: "No.", width: 10, align: "center" },
-        { title: tr(language, "Item", "Item"), width: 62 },
-        { title: "Qty", width: 18, align: "center" },
-        { title: tr(language, "Budget", "Budget"), width: 34, align: "right" },
-        { title: tr(language, "Harga Vendor", "Vendor Price"), width: 34, align: "right" },
-        { title: tr(language, "Jumlah", "Total"), width: 24, align: "right" },
-      ],
+      internal
+        ? [
+            { title: "No.", width: 10, align: "center" },
+            { title: tr(language, "Item", "Item"), width: 62 },
+            { title: "Qty", width: 18, align: "center" },
+            { title: tr(language, "Budget", "Budget"), width: 34, align: "right" },
+            { title: tr(language, "Harga Vendor", "Vendor Price"), width: 34, align: "right" },
+            { title: tr(language, "Jumlah", "Total"), width: 24, align: "right" },
+          ]
+        : [
+            { title: "No.", width: 10, align: "center" },
+            { title: tr(language, "Item", "Item"), width: 74 },
+            { title: "Qty", width: 20, align: "center" },
+            { title: tr(language, "Harga Vendor", "Vendor Price"), width: 44, align: "right" },
+            { title: tr(language, "Jumlah", "Total"), width: 34, align: "right" },
+          ],
       itemsResult.rows.map((item, index) => [
         index + 1,
         `${String(item.description_snapshot)}\n${localizeValue(item.category_snapshot, language)}`,
-        `${asNumber(item.quantity)} ${String(item.unit)}`,
-        rupiah(item.budget_unit_cost, language),
+        `${asNumber(item.quantity)} ${localizeValue(item.unit, language)}`,
+        ...(internal ? [rupiah(item.budget_unit_cost, language)] : []),
         rupiah(item.agreed_unit_cost, language),
         rupiah(item.line_total, language),
       ]),
@@ -1518,7 +1595,10 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
       role: tr(language, "Nama, jabatan, dan tanda tangan", "Name, title, and signature"),
     },
   );
-  return response(context, `${String(spk.number).replaceAll("/", "-")}.pdf`);
+  return response(
+    context,
+    `${String(spk.number).replaceAll("/", "-")}${internal ? "-INTERNAL" : ""}.pdf`,
+  );
 }
 
 async function bastPdf(bastId: string, language: PdfLanguage) {
@@ -1556,7 +1636,7 @@ async function bastPdf(bastId: string, language: PdfLanguage) {
     { label: tr(language, "Lokasi pekerjaan", "Work location"), value: String(bast.location) },
     {
       label: tr(language, "Paket / serah terima ke-", "Package / handover no."),
-      value: `${String(bast.package_title ?? "Lingkup Utama")} / ${String(bast.delivery_cycle ?? 1)}`,
+      value: `${localizedPackageTitle(bast.package_title, language)} / ${String(bast.delivery_cycle ?? 1)}`,
     },
     { label: tr(language, "Tanggal serah terima", "Handover date"), value: displayDate(bast.completion_date, language) },
   ]);
@@ -1837,6 +1917,20 @@ export async function renderFinancialReportPdf(
     0,
   );
   const netCash = income - expense;
+  // Everything the page reports as cash is aggregated from `booked`; the ledger
+  // still lists the rest and says, per row, that it was not counted.
+  const uncounted = entries.filter((entry) => entry.countsAsCash === false);
+  const uncountedIncome = uncounted
+    .filter((entry) => entry.type === "Pemasukan")
+    .reduce((sum, entry) => sum + entry.amount, 0);
+  const uncountedExpense = uncounted
+    .filter((entry) => entry.type !== "Pemasukan")
+    .reduce((sum, entry) => sum + entry.amount, 0);
+  const uncountedNote = tr(
+    language,
+    "Belum direkonsiliasi - belum dihitung sebagai kas",
+    "Unreconciled - not counted as cash",
+  );
   const context = await createDocument({
     title: tr(language, "Laporan Arus Kas", "Cash Flow Report"),
     number: `FIN/${reportDate.replaceAll("-", "")}`,
@@ -1847,7 +1941,18 @@ export async function renderFinancialReportPdf(
   y = drawInfoGrid(context, y, [
     { label: tr(language, "Ruang lingkup", "Scope"), value: scopeLabel },
     { label: tr(language, "Periode transaksi", "Transaction period"), value: period },
-    { label: tr(language, "Jumlah transaksi", "Transaction count"), value: `${entries.length} ${tr(language, "transaksi", "transactions")}` },
+    {
+      label: tr(language, "Jumlah transaksi", "Transaction count"),
+      value: `${entries.length} ${tr(language, "transaksi", "transactions")}${
+        uncounted.length
+          ? tr(
+              language,
+              ` (${booked.length} dihitung sebagai kas)`,
+              ` (${booked.length} counted as cash)`,
+            )
+          : ""
+      }`,
+    },
     { label: tr(language, "Tanggal laporan", "Report date"), value: generatedDate(language) },
   ]);
   y = drawMetricCards(context, y, [
@@ -1855,6 +1960,20 @@ export async function renderFinancialReportPdf(
     { label: tr(language, "Kas keluar", "Cash outflow"), value: rupiah(expense, language), tone: "expense" },
     { label: tr(language, "Arus kas bersih", "Net cash flow"), value: rupiah(netCash, language), tone: "profit" },
   ]);
+
+  if (uncounted.length) {
+    y = drawCallout(
+      context,
+      y,
+      tr(language, "Mutasi bank belum direkonsiliasi", "Unreconciled bank entries"),
+      tr(
+        language,
+        `${uncounted.length} mutasi impor belum dicocokkan: ${rupiah(uncountedIncome, language)} masuk dan ${rupiah(uncountedExpense, language)} keluar. Angka itu tetap tercetak pada Buku Kas dan ditandai "${uncountedNote}", tetapi tidak dihitung pada kartu, tabel bulanan, maupun tabel proyek di laporan ini karena hampir selalu menduplikasi invoice, pembayaran vendor, atau setoran pajak yang sudah tercatat.`,
+        `${uncounted.length} imported entries are still unmatched: ${rupiah(uncountedIncome, language)} in and ${rupiah(uncountedExpense, language)} out. They are still printed in the cash ledger and marked "${uncountedNote}", but they are excluded from the cards, the monthly table, and the project table in this report because such a line nearly always duplicates an invoice, a vendor payment, or a tax settlement that was already recorded.`,
+      ),
+      "warning",
+    );
+  }
 
   if (bankAccounts.length) {
     y = drawSectionTitle(
@@ -2039,7 +2158,10 @@ export async function renderFinancialReportPdf(
     string,
     { income: number; expense: number }
   >();
-  for (const entry of entries) {
+  // `booked`, not `entries`: the metric cards above already exclude the
+  // unreconciled imports, and a monthly or per-project table that included them
+  // would report a different net cash figure on the same page.
+  for (const entry of booked) {
     const month = entry.dateIso.slice(0, 7);
     const monthValue = monthly.get(month) ?? { income: 0, expense: 0 };
     const projectValue = projects.get(entry.project) ?? {
@@ -2136,7 +2258,11 @@ export async function renderFinancialReportPdf(
       localizeValue(entry.type, language),
       localizeValue(entry.project, language),
       localizeValue(entry.category, language),
-      `${entry.description}\n${entry.source}`,
+      // An unreconciled import is still printed, it just does not count towards
+      // the reported cash, so the row says so where the reader sees the amount.
+      `${entry.description}\n${entry.source}${
+        entry.countsAsCash === false ? `\n${uncountedNote}` : ""
+      }`,
       rupiah(entry.amount, language),
     ]),
   );
@@ -2151,9 +2277,12 @@ export async function renderBusinessPdf(
   kind: PdfKind,
   id: string,
   language: PdfLanguage = "id",
+  // Only ever "internal" when a caller deliberately asks for the internal
+  // edition. Every existing caller omits it and therefore gets the vendor copy.
+  edition: SpkEdition = "vendor",
 ) {
   if (kind === "quotation") return quotationPdf(id, language);
   if (kind === "invoice") return invoicePdf(id, language);
-  if (kind === "spk") return spkPdf(id, language);
+  if (kind === "spk") return spkPdf(id, language, edition);
   return bastPdf(id, language);
 }

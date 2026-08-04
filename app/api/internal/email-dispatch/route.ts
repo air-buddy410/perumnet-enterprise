@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { getDatabase } from "@/server/db/client";
-import { dispatchEmailOutbox } from "@/server/email";
+import { dispatchEmailOutbox, pruneEmailOutbox } from "@/server/email";
 import { anonymizeExpiredLeads } from "@/server/api/lead-router";
 import { sweepStaleCatalogAiRuns } from "@/server/api/catalog-ai-router";
 import { ApiError, errorResponse, ok } from "@/server/api/errors";
@@ -29,12 +29,18 @@ export async function POST(request: Request) {
     const anonymizedLeads = await anonymizeExpiredLeads(client);
     const sweptAiRuns = await sweepStaleCatalogAiRuns(client);
     const result = await dispatchEmailOutbox(client, 25);
+    // Runs after the dispatch so a row that just reached a terminal state in
+    // this same tick is redacted in this same tick.
+    const outboxRetention = await pruneEmailOutbox(client);
     return ok({
       processed: result.length,
       sent: result.filter((item) => item.status === "sent").length,
       failed: result.filter((item) => item.status === "failed").length,
+      skipped: result.filter((item) => item.status === "skipped").length,
       anonymizedLeads,
       sweptAiRuns,
+      redactedEmailBodies: outboxRetention.redacted,
+      deletedEmailRows: outboxRetention.deleted,
     });
   } catch (error) {
     return errorResponse(error);

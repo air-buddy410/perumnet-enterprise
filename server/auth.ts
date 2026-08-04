@@ -9,6 +9,7 @@ import {
   type EnterpriseRole,
 } from "@/shared/access";
 import { getDatabase } from "./db/client";
+import { isProductionRuntime } from "./runtime-env";
 import type { DatabaseClient } from "./db/client";
 import { ApiError } from "./api/errors";
 
@@ -86,7 +87,11 @@ function parseCookies(header: string | null) {
 }
 
 function serializeCookie(name: string, value: string, maxAge: number) {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  // Read through the runtime helper, not the bare literal: Next inlines
+  // `process.env.NODE_ENV` at compile time, so a server started with
+  // `NODE_ENV=production next dev` would hand out a session cookie without the
+  // Secure flag. See server/runtime-env.ts.
+  const secure = isProductionRuntime() ? "; Secure" : "";
   const configuredBasePath = process.env.NEXT_PUBLIC_BASE_PATH?.trim() ?? "";
   const cookiePath =
     configuredBasePath && configuredBasePath !== "/"

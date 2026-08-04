@@ -1888,7 +1888,15 @@ export async function handleProcurementOrders(
   if (request.method === "GET" && orderId && action === "pdf") {
     const order = await getOrder(client, orderId);
     await assertProjectAccess(client, user, order.projectId);
-    return renderBusinessPdf("spk", orderId, user.preferredLanguage);
+    // The vendor signs this document, so the default edition never carries
+    // PerumNet's internal per-item budget. `?edition=internal` opts into the
+    // desk copy that does; it shows nothing this same caller cannot already
+    // read from the order detail above, and any other value stays on vendor.
+    const edition =
+      new URL(request.url).searchParams.get("edition") === "internal"
+        ? "internal"
+        : "vendor";
+    return renderBusinessPdf("spk", orderId, user.preferredLanguage, edition);
   }
 
   if (request.method === "POST" && orderId && action === "submit") {

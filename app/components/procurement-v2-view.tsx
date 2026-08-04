@@ -10,6 +10,7 @@ import {
   ClipboardCheck,
   Download,
   Eye,
+  FileLock2,
   FilePlus2,
   FileText,
   Filter,
@@ -49,6 +50,8 @@ interface ProcurementViewProps {
   canManageCommercial: boolean;
   canManageVendors: boolean;
   canManagePayments: boolean;
+  /** Tax positions are financial data and now follow the Pembukuan module. */
+  canViewTaxes: boolean;
   userRole: "Admin" | "Project Manager" | "Engineer" | "Finance";
 }
 
@@ -128,6 +131,7 @@ export function ProcurementViewV2({
   canManageCommercial,
   canManageVendors,
   canManagePayments,
+  canViewTaxes,
   userRole,
 }: ProcurementViewProps) {
   const id = language === "id";
@@ -985,7 +989,7 @@ export function ProcurementViewV2({
                   {scope.quotation && <button className="icon-button" type="button" aria-label={id ? "Pratinjau quotation" : "Preview quotation"} onClick={() => setPreview({ url: `/api/quotations/${scope.quotation?.id}/pdf`, title: scope.quotation?.number ?? "Quotation", filename: `${(scope.quotation?.number ?? "Quotation").replaceAll("/", "-")}.pdf` })}><Eye size={15} /></button>}
                   {scope.quotation && <button className="button subtle small" type="button" onClick={() => downloadApiFile(`/api/quotations/${scope.quotation?.id}/pdf`, `${scope.quotation?.number.replaceAll("/", "-")}.pdf`)}><Download size={14} /> PDF</button>}
                   {canManageValidity && scope.quotation && scope.quotation.status !== "Accepted" && <button className="button subtle small" type="button" onClick={() => openScopeValidity(scope)}><Pencil size={14} /> {id ? "Masa berlaku" : "Validity"}</button>}
-                  {scope.quotation && <DocumentTaxEditor language={language} notify={notify} documentType="Quotation" documentId={scope.quotation.id} canManage={["Admin", "Finance"].includes(userRole) && scope.quotation.status === "Draft"} onSaved={load} />}
+                  {canViewTaxes && scope.quotation && <DocumentTaxEditor language={language} notify={notify} documentType="Quotation" documentId={scope.quotation.id} canManage={["Admin", "Finance"].includes(userRole) && scope.quotation.status === "Draft"} onSaved={load} />}
                   {canManageCommercial && scope.quotation?.status === "Draft" && <button className="button secondary small" type="button" onClick={() => scopeAction(scope, "send")}><Send size={14} /> {id ? "Kirim" : "Send"}</button>}
                   {canManageCommercial && scope.quotation?.status === "Sent" && <button className="button primary small" type="button" disabled={Boolean(scope.quotation.validUntil && scope.quotation.validUntil < serverToday)} onClick={() => { setAcceptingScope(scope); setAcceptanceDate(serverToday); setAcceptanceFile(null); }}><BadgeCheck size={14} /> Accept</button>}
                   {canManageCommercial && scope.quotation?.status === "Sent" && <button className="button danger small" type="button" onClick={() => scopeAction(scope, "reject")}><X size={14} /> {id ? "Tolak" : "Reject"}</button>}
@@ -1008,7 +1012,7 @@ export function ProcurementViewV2({
                 <div className="order-values"><span>{id ? "Budget / bruto" : "Budget / gross"}</span><strong>{formatCurrency(order.budgetCost, language)} / {formatCurrency(order.grossTotal ?? order.cost, language)}</strong><small>{id ? "Bruto dibayar" : "Gross paid"} {formatCurrency(order.paidGross ?? order.paid, language)} · {id ? "Kas" : "Cash"} {formatCurrency(order.paidCash ?? order.paid, language)} · {id ? "Sisa" : "Outstanding"} {formatCurrency(order.outstanding, language)}</small></div>
                 <div className="order-statuses"><span className={`status-badge ${statusTone(order.workflowStatus)}`}>{order.workflowStatus}</span><span className={`status-badge ${statusTone(order.paymentStatus)}`}>{order.paymentStatus}</span></div>
                 <div className="order-actions">
-                  {["Admin", "Finance"].includes(userRole) && ["Draft", "Pending"].includes(order.approvalStatus) && <DocumentTaxEditor language={language} notify={notify} documentType={order.documentType} documentId={order.id} canManage onSaved={load} />}
+                  {canViewTaxes && ["Admin", "Finance"].includes(userRole) && ["Draft", "Pending"].includes(order.approvalStatus) && <DocumentTaxEditor language={language} notify={notify} documentType={order.documentType} documentId={order.id} canManage onSaved={load} />}
                   {canManage && !order.legacy && order.workflowStatus === "Draft" && <button className="button secondary small" type="button" onClick={() => orderAction(order, "submit")}><Send size={14} /> {id ? "Ajukan" : "Submit"}</button>}
                   {canManage && order.workflowStatus === "Draft" && !order.legacy && <button className="button subtle small" type="button" onClick={() => openOrderEdit(order)}><Pencil size={14} /> {id ? "Edit" : "Edit"}</button>}
                   {["Admin", "Finance"].includes(userRole) && !order.legacy && order.approvalStatus === "Pending" && <button className="button primary small" type="button" onClick={() => orderAction(order, "approve")}><CheckCircle2 size={14} /> {id ? "Setujui" : "Approve"}</button>}
@@ -1020,6 +1024,11 @@ export function ProcurementViewV2({
                   {["Admin", "Finance"].includes(userRole) && !order.legacy && order.workflowStatus !== "Void" && <button className="button danger small" type="button" onClick={() => orderAction(order, "void")}><X size={14} /> Void</button>}
                   <button className="icon-button" type="button" aria-label={`${id ? "Pratinjau" : "Preview"} ${order.number}`} onClick={() => setPreview({ url: `/api/procurement-orders/${order.id}/pdf`, title: order.number, filename: `${order.number.replaceAll("/", "-")}.pdf` })}><Eye size={15} /></button>
                   <button className="button subtle small" type="button" onClick={() => downloadApiFile(`/api/procurement-orders/${order.id}/pdf`, `${order.number.replaceAll("/", "-")}.pdf`)}><Download size={14} /> PDF</button>
+                  {/* The vendor edition above is the one that gets signed. This
+                      one restores PerumNet's per-item budget column and prints a
+                      "do not send" warning, so it is deliberately not styled
+                      like its neighbour. */}
+                  <button className="button internal small" type="button" title={id ? "Salinan internal memuat kolom budget dan tidak boleh dikirim ke vendor" : "The internal copy carries the budget column and must not be sent to the vendor"} onClick={() => downloadApiFile(`/api/procurement-orders/${order.id}/pdf?edition=internal`, `${order.number.replaceAll("/", "-")}-INTERNAL.pdf`)}><FileLock2 size={14} /> {id ? "Cetak salinan internal" : "Print internal copy"}</button>
                   {canManage && !order.legacy && order.workflowStatus === "Draft" && <button className="icon-button danger" type="button" onClick={() => deleteOrder(order)} aria-label={id ? "Hapus draft" : "Delete draft"}><Trash2 size={14} /></button>}
                 </div>
                 {!order.legacy && order.approvalStatus === "Approved" && order.workflowStatus !== "Void" && order.availableToPay === 0 && order.outstanding > 0 && (

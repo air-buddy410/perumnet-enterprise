@@ -192,7 +192,7 @@ const workflowsId: WorkflowGuide[] = [
     title: "Mencatat belanja proyek",
     summary: "Nota lapangan, uang muka, dan penggantian uang pribadi pegawai.",
     who: "Project Manager atau Engineer mencatat. Admin atau Finance memverifikasi, tetapi tidak pernah pengajuannya sendiri. Pembatalan belanja yang sudah disetujui hanya oleh Admin.",
-    where: "Belanja Proyek.",
+    where: "Belanja Proyek. Menu ini punya izin modulnya sendiri, Belanja Proyek — bukan izin Manajemen Proyek dan bukan izin Pembukuan. Unduhan laporan CSV atau PDF-nya memerlukan tambahan izin Pembukuan minimal Lihat, karena laporan itu memuat rekening perusahaan yang membayar dan utang reimbursement kepada tiap orang.",
     prepare: "Foto atau PDF nota, masing-masing maksimal 10 MB dan paling banyak lima berkas per pengajuan, ditambah nama toko, kategori biaya, dan sumber dana.",
     steps: [
       "Tekan Catat belanja, lalu isi proyek, tanggal, toko, kategori, dan nominal.",
@@ -284,6 +284,7 @@ const workflowsId: WorkflowGuide[] = [
     steps: [
       "Admin membuat akun dengan email dan kata sandi awal, lalu memilih peran: Admin, Project Manager, Engineer, atau Finance.",
       "Untuk setiap menu, pilih Tidak ada, Lihat, atau Kelola. Lihat hanya boleh membaca, Kelola boleh menambah dan mengubah data.",
+      "Dua modul mudah tertukar. Belanja Proyek berdiri sendiri: itulah izin yang menentukan siapa boleh mencatat nota lapangan. Laba & Bagi Hasil memisahkan angka laba dari buku kas: Pembukuan Lihat membuka kas masuk dan kas keluar, sedangkan Laba Bersih Dasar, Laba Ditahan, dan Budget BoQ dibanding Komitmen vendor hanya muncul bila Laba & Bagi Hasil minimal Lihat. Project Manager dan Engineer bawaan tidak memilikinya.",
       "Untuk Project Manager dan Engineer, tentukan proyek mana saja yang boleh dibuka pada bagian Akses Proyek. Admin dan Finance selalu melihat semua proyek.",
       "Setiap orang membuka Profil Saya untuk mengganti foto (JPG, PNG, atau WebP maksimal 3 MB), nama, kontak, dan jabatan.",
       "Mengganti alamat email sendiri tidak langsung berlaku. Akun tetap memakai alamat lama sampai tautan konfirmasi yang dikirim ke alamat baru dibuka, tautan itu berlaku 60 menit, dan alamat lama menerima pemberitahuan bahwa ada permintaan penggantian. Aturan ini berlaku untuk semua peran, Admin sekalipun.",
@@ -427,7 +428,7 @@ const workflowsEn: WorkflowGuide[] = [
     title: "Recording project purchases",
     summary: "Field receipts, cash advances, and reimbursing money staff paid out of pocket.",
     who: "A Project Manager or Engineer records them. Admin or Finance verifies, but never their own submission. Only an Admin may void an approved purchase.",
-    where: "Project Expenses.",
+    where: "Project Expenses. This menu has its own module permission, Project Expenses — not Project Management and not Finance. Downloading its CSV or PDF report additionally requires at least View on Finance, because that report carries the company account that paid and the reimbursement owed to each person.",
     prepare: "Photos or PDFs of the receipts — up to 10 MB each and at most five files per submission — plus the merchant name, expense category, and funding source.",
     steps: [
       "Press Record expense, then fill in the project, date, merchant, category, and amount.",
@@ -519,6 +520,7 @@ const workflowsEn: WorkflowGuide[] = [
     steps: [
       "An Admin creates the account with an email and starting password, then picks the role: Admin, Project Manager, Engineer, or Finance.",
       "For each menu, choose No access, View, or Manage. View is read-only; Manage allows creating and changing data.",
+      "Two modules are easy to confuse. Project Expenses stands on its own: that is the permission deciding who may record a field receipt. Profit & Profit Sharing separates the profit figures from the cash ledger: View on Finance opens cash in and cash out, while Base Net Profit, Retained Profit, and BoQ budget against vendor commitment only appear when Profit & Profit Sharing is at least View. A default Project Manager and Engineer do not have it.",
       "For Project Managers and Engineers, choose which projects they may open in the Project Access section. Admin and Finance always see every project.",
       "Each person opens My Profile to update their photo (JPG, PNG, or WebP up to 3 MB), name, contact details, and job title.",
       "Changing your own email address does not take effect immediately. The account keeps its old address until the confirmation link sent to the new address is opened, that link is valid for 60 minutes, and the old address is notified that a change was requested. This holds for every role, an Admin included.",
@@ -678,6 +680,12 @@ const messagesId: MessageGuide[] = [
     message: "Silakan masuk untuk melanjutkan. / Peran Anda tidak memiliki akses ke fitur ini.",
     meaning: "Pesan pertama berarti sesi 8 jam Anda sudah berakhir. Pesan kedua berarti hak akses menu Anda belum mencukupi.",
     action: "Masuk kembali untuk pesan pertama. Untuk pesan kedua, minta Admin memeriksa hak akses akun Anda di Pengguna & Akses.",
+  },
+  {
+    key: "expense-report",
+    message: "Laporan belanja proyek memuat rekening perusahaan dan utang reimbursement, sehingga memerlukan izin Pembukuan minimal Lihat.",
+    meaning: "Anda boleh membuka Belanja Proyek dan mencatat nota, tetapi unduhan laporannya adalah dokumen keuangan lintas proyek. Izin bawaan Engineer memang tidak mencakupnya.",
+    action: "Minta laporannya kepada Admin atau Finance, atau minta Admin menaikkan izin Pembukuan akun Anda menjadi Lihat bila memang Anda perlu mengunduhnya sendiri.",
   },
   {
     key: "procurement-source",
@@ -939,6 +947,12 @@ const messagesEn: MessageGuide[] = [
     message: "Your eight-hour session has expired. / Your account is not authorized to perform this action.",
     meaning: "The first message means your 8-hour session ended. The second means your menu permissions are not sufficient.",
     action: "Sign in again for the first message. For the second, ask an Admin to review your permissions in Users & Access.",
+  },
+  {
+    key: "expense-report",
+    message: "The project expense report needs at least View on Finance.",
+    meaning: "You may open Project Expenses and record receipts, but downloading its report is a cross-project financial document. A default Engineer's permissions do not cover it.",
+    action: "Ask an Admin or Finance for the report, or ask an Admin to raise your Finance permission to View if you genuinely need to download it yourself.",
   },
   {
     key: "procurement-source",
@@ -1248,7 +1262,7 @@ export function HelpView({ language }: HelpViewProps) {
         <div><span className="metric-icon green"><ShieldCheck size={20} /></span><span><strong>{id ? "Panduan operasional lengkap" : "Complete operations guide"}</strong><small>{id ? "Unduh SOP proyek, dokumen, keuangan, rekonsiliasi, pembagian laba, dan hak akses." : "Download the SOP for projects, documents, finance, reconciliation, profit sharing, and access control."}</small></span></div>
         <div className="title-actions">
           <button className="button primary" type="button" onClick={downloadSop}><Download size={16} /> {id ? "Unduh SOP PDF" : "Download SOP PDF"}</button>
-          <a className="button secondary" href="mailto:enterprise@perumnet.id">{id ? "Email dukungan" : "Email support"}</a>
+          <a className="button secondary" href="mailto:it@perumnet.id">{id ? "Email dukungan" : "Email support"}</a>
         </div>
       </section>
     </div>

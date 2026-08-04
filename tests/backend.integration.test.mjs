@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { after, before, test } from "node:test";
 import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
+import { PDFParse } from "pdf-parse";
 
 let server;
 let baseUrl;
@@ -6356,4 +6357,349 @@ test("M-legacy: the invoice mark-as-paid endpoint is retired and fabricates noth
   );
   assert.equal(paid.status, "Lunas");
   assert.equal(paid.payments[0].paymentReference, "BCA-LAMA-001");
+});
+
+// ---------------------------------------------------------------------------
+// Catalog referential integrity.
+//
+// Every one of these deletes and writes used to reach the driver with a row
+// that was still referenced (or already gone) and came back as a raw 500
+// carrying the SQL constraint name. A user-reachable action must refuse with a
+// friendly ApiError instead, and the usage guard has to run inside the same
+// transaction as the delete so a concurrent write cannot slip between them.
+// ---------------------------------------------------------------------------
+async function makeCatalogCategory(label) {
+  return await json(
+    "/api/catalog/categories",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        boqRole: "Perangkat",
+        name: `${label} ${randomLabel()}`,
+        nameEn: label,
+        defaultMargin1Percent: 20,
+        defaultMargin2Percent: 30,
+        status: "Aktif",
+        sortOrder: 900,
+      }),
+    },
+    201,
+  );
+}
+
+let catalogLabelCounter = 0;
+function randomLabel() {
+  catalogLabelCounter += 1;
+  return `${Date.now()}-${catalogLabelCounter}`;
+}
+
+async function makeCatalogBrand(categoryId, label) {
+  return await json(
+    "/api/catalog/brands",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        categoryId,
+        name: `${label} ${randomLabel()}`,
+        status: "Aktif",
+        sortOrder: 1,
+      }),
+    },
+    201,
+  );
+}
+
+async function makeCatalogItem(categoryId, brandId, costPrice = 1_000_000) {
+  return await json(
+    "/api/catalog/items",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        categoryId,
+        brandId,
+        sku: `SKU-${randomLabel()}`,
+        name: `Item ${randomLabel()}`,
+        nameEn: "",
+        model: "M-1",
+        specifications: "",
+        unit: "unit",
+        costPrice,
+        margin1Percent: 20,
+        margin2Percent: 30,
+        status: "Aktif",
+      }),
+    },
+    201,
+  );
+}
+
+test("catalog deletes and writes refuse cleanly instead of raising a raw constraint 500", async () => {
+  await loginAsAdmin();
+
+  // 1. A brand moved onto a category id that does not exist. The PATCH handler
+  //    never checked the target at all, so the foreign key rejected the UPDATE
+  //    and the driver error escaped as a 500.
+  const homeCategory = await makeCatalogCategory("Kategori Integritas");
+  const homeBrand = await makeCatalogBrand(homeCategory.id, "Merek Integritas");
+  const strayPatch = await request(`/api/catalog/brands/${homeBrand.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ categoryId: "kategori-yang-tidak-ada" }),
+  });
+  assert.equal(strayPatch.status, 404, "a stale category id is a refusal, not a 500");
+  assert.equal((await strayPatch.json()).error.code, "CATEGORY_NOT_FOUND");
+  // The brand kept its real category.
+  assert.equal(
+    (await json("/api/catalog?includeInactive=true")).brands.find(
+      (entry) => entry.id === homeBrand.id,
+    ).categoryId,
+    homeCategory.id,
+  );
+
+  // 2. Deleting a category while another request moves a brand into it. This
+  //    is the window the demo server hit: the guard ran outside the delete's
+  //    transaction, so the brand landed between the check and the delete.
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const donor = await makeCatalogCategory("Kategori Donor");
+    const target = await makeCatalogCategory("Kategori Sasaran");
+    const brand = await makeCatalogBrand(donor.id, "Merek Pindah");
+    const [removal, move] = await Promise.all([
+      request(`/api/catalog/categories/${target.id}`, { method: "DELETE" }),
+      request(`/api/catalog/brands/${brand.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ categoryId: target.id }),
+      }),
+    ]);
+    assert.ok(removal.status < 500, `category delete returned ${removal.status}`);
+    assert.ok(move.status < 500, `brand move returned ${move.status}`);
+    assert.ok([204, 409].includes(removal.status));
+    assert.ok([200, 404].includes(move.status));
+  }
+
+  // 3. Deleting a category while another request creates a brand or an item in
+  //    it. Whoever loses gets a refusal; nobody gets a 500, and nothing is left
+  //    pointing at a category that no longer exists.
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const category = await makeCatalogCategory("Kategori Sibuk");
+    const brand = await makeCatalogBrand(category.id, "Merek Sibuk");
+    const [removal, newBrand, newItem] = await Promise.all([
+      request(`/api/catalog/categories/${category.id}`, { method: "DELETE" }),
+      request("/api/catalog/brands", {
+        method: "POST",
+        body: JSON.stringify({
+          categoryId: category.id,
+          name: `Merek Balapan ${randomLabel()}`,
+          status: "Aktif",
+          sortOrder: 2,
+        }),
+      }),
+      request("/api/catalog/items", {
+        method: "POST",
+        body: JSON.stringify({
+          categoryId: category.id,
+          brandId: brand.id,
+          sku: `SKU-BALAP-${randomLabel()}`,
+          name: "Item Balapan",
+          nameEn: "",
+          model: "",
+          specifications: "",
+          unit: "unit",
+          costPrice: 1_000_000,
+          margin1Percent: 20,
+          margin2Percent: 30,
+          status: "Aktif",
+        }),
+      }),
+    ]);
+    for (const [label, response] of [
+      ["category delete", removal],
+      ["brand create", newBrand],
+      ["item create", newItem],
+    ]) {
+      assert.ok(response.status < 500, `${label} returned ${response.status}`);
+    }
+    assert.ok([204, 409].includes(removal.status));
+  }
+  const sweep = await json("/api/catalog?includeInactive=true");
+  const categoryIds = new Set(sweep.categories.map((entry) => entry.id));
+  const brandIds = new Set(sweep.brands.map((entry) => entry.id));
+  assert.deepEqual(
+    sweep.brands.filter((entry) => !categoryIds.has(entry.categoryId)),
+    [],
+    "no brand may survive its category",
+  );
+  assert.deepEqual(
+    sweep.items.filter(
+      (entry) =>
+        !categoryIds.has(entry.categoryId) ||
+        (entry.brandId && !brandIds.has(entry.brandId)),
+    ),
+    [],
+    "no item may survive its category or brand",
+  );
+
+  // 4. A brand still carrying items is a refusal, not a constraint error.
+  const usedCategory = await makeCatalogCategory("Kategori Terpakai");
+  const usedBrand = await makeCatalogBrand(usedCategory.id, "Merek Terpakai");
+  const usedItem = await makeCatalogItem(usedCategory.id, usedBrand.id);
+  const blockedBrand = await request(`/api/catalog/brands/${usedBrand.id}`, {
+    method: "DELETE",
+  });
+  assert.equal(blockedBrand.status, 409);
+  assert.equal((await blockedBrand.json()).error.code, "BRAND_IN_USE");
+
+  // 5. A catalog item used only by a BoQ template. boq_template_items
+  //    references the item with ON DELETE RESTRICT but was missing from the
+  //    usage guard, so this delete reached the driver and returned a raw 500.
+  await json(
+    "/api/boq/templates",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: `Template Katalog ${randomLabel()}`,
+        items: [
+          {
+            category: "Perangkat",
+            description: "diisi dari katalog",
+            quantity: 1,
+            unit: "unit",
+            costPrice: 1,
+            sellingPrice: 1,
+            catalogItemId: usedItem.id,
+            catalogPriceTier: 2,
+          },
+        ],
+      }),
+    },
+    201,
+  );
+  const blockedItem = await request(`/api/catalog/items/${usedItem.id}`, {
+    method: "DELETE",
+  });
+  assert.equal(blockedItem.status, 409, "a template still references this item");
+  assert.equal((await blockedItem.json()).error.code, "ITEM_IN_USE");
+});
+
+// ---------------------------------------------------------------------------
+// Repricing a catalog item under a quotation the client has already seen.
+//
+// The catalog path used to demote the Sent quotation back to Draft in place and
+// overwrite its totals, leaving the frozen quotation_items snapshot printing
+// pre-edit lines under a post-edit total: the PDF itemised Rp 2.600.000 and
+// billed Rp 5.200.000. It now supersedes and revises like every other writer.
+// ---------------------------------------------------------------------------
+async function quotationPdfFigures(path) {
+  const response = await request(path);
+  assert.equal(response.status, 200);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  assert.equal(bytes.subarray(0, 4).toString(), "%PDF");
+  const parser = new PDFParse({ data: new Uint8Array(bytes) });
+  try {
+    const text = (await parser.getText()).text.replace(/ /g, " ");
+    // The PDF follows the signed-in user's preferred language, and an earlier
+    // test in this file leaves the admin on English.
+    const amountAfter = (...labels) => {
+      const index = labels
+        .map((label) => text.indexOf(label))
+        .find((position) => position >= 0);
+      assert.ok(index !== undefined, `PDF is missing the "${labels[0]}" row`);
+      const matched = text.slice(index, index + 200).match(/(?:Rp|IDR)\s?([\d.,]+)/);
+      assert.ok(matched, `no amount printed next to "${labels[0]}"`);
+      return Number(matched[1].replace(/[.,]/g, ""));
+    };
+    return {
+      text,
+      subtotal: amountAfter("Subtotal pekerjaan", "Work subtotal"),
+      billed: amountAfter("Total tagihan klien", "Total billed to the client"),
+    };
+  } finally {
+    await parser.destroy();
+  }
+}
+
+test("repricing a catalog item revises the sent quotation instead of rewriting it", async () => {
+  await loginAsAdmin();
+
+  const category = await makeCatalogCategory("Kategori Revisi");
+  const brand = await makeCatalogBrand(category.id, "Merek Revisi");
+  const item = await makeCatalogItem(category.id, brand.id, 1_000_000);
+  const project = await json(
+    "/api/projects",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: `Proyek Revisi Katalog ${randomLabel()}`,
+        client: "Klien Revisi",
+        location: "Denpasar",
+        status: "Draft",
+        value: 0,
+      }),
+    },
+    201,
+  );
+  await json(
+    `/api/boq/items?projectId=${project.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        category: "Perangkat",
+        description: "diisi dari katalog",
+        quantity: 2,
+        unit: "unit",
+        costPrice: 1,
+        sellingPrice: 1,
+        catalogItemId: item.id,
+        catalogPriceTier: 2,
+      }),
+    },
+    201,
+  );
+
+  // Tier 2 of a Rp 1.000.000 item at 30% is Rp 1.300.000, twice over.
+  const sent = await json(`/api/quotations?projectId=${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Sent" }),
+  });
+  assert.equal(sent.status, "Sent");
+  assert.equal(sent.total, 2_600_000);
+  const sentPdf = await quotationPdfFigures(`/api/quotations/${sent.id}/pdf`);
+  assert.equal(sentPdf.subtotal, 2_600_000);
+  assert.equal(sentPdf.billed, 2_600_000);
+
+  // Doubling the cost price doubles the BoQ under a quotation already sent.
+  const repriced = await json(`/api/catalog/items/${item.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ costPrice: 2_000_000 }),
+  });
+  assert.equal(repriced.quotationsReset, 1);
+
+  // The document the client saw is frozen as Superseded, and a fresh Draft
+  // revision carries the new numbers.
+  const history = await json(`/api/quotations/history?projectId=${project.id}`);
+  const superseded = history.find((entry) => entry.id === sent.id);
+  assert.equal(superseded.status, "Superseded");
+  assert.equal(superseded.total, 2_600_000);
+  const current = await json(`/api/quotations?projectId=${project.id}`);
+  assert.equal(current.status, "Draft");
+  assert.notEqual(current.id, sent.id, "the sent quotation is never rewritten in place");
+  assert.match(current.number, /-R2$/);
+  assert.equal(current.total, 5_200_000);
+
+  // The PDF a client would receive has to add up to what it bills.
+  const currentPdf = await quotationPdfFigures(`/api/quotations/${current.id}/pdf`);
+  assert.equal(
+    currentPdf.subtotal,
+    currentPdf.billed,
+    "the itemised subtotal must equal the total billed",
+  );
+  assert.equal(currentPdf.billed, 5_200_000);
+  assert.match(
+    currentPdf.text,
+    /(?:Rp\s?2\.600\.000|IDR\s?2,600,000)/,
+    "the revision prints the new unit price",
+  );
+
+  // The superseded revision still prints exactly what was sent.
+  const frozenPdf = await quotationPdfFigures(`/api/quotations/${sent.id}/pdf`);
+  assert.equal(frozenPdf.subtotal, 2_600_000);
+  assert.equal(frozenPdf.billed, 2_600_000);
 });

@@ -5,6 +5,7 @@ import { compare, hash } from "bcryptjs";
 import sharp from "sharp";
 import { z } from "zod";
 import {
+  accessModules,
   canAccess,
   defaultPermissions,
   normalizePermissions,
@@ -55,6 +56,7 @@ import {
   sendEmailChangeRequestedEmail,
   sendPasswordResetEmail,
   sendTestEmail,
+  securityMailUndeliverable,
 } from "../email";
 import {
   countsAsCashCondition,
@@ -69,6 +71,8 @@ import {
   lockDocumentTaxes,
 } from "../tax";
 import { deleteProjectFile, readProjectFile, storeProjectFile } from "../storage";
+import { csvCell } from "../spreadsheet";
+import { isProductionRuntime } from "../runtime-env";
 import {
   ApiError,
   assertSameOrigin,
@@ -366,26 +370,29 @@ const bastSealSchema = z.object({
   sealContentBase64: z.string().max(3_000_000).optional().nullable(),
 });
 
+const accessLevelSchema = z.enum(["none", "view", "manage"]);
+
+// Derived from `accessModules`, never typed out again. This used to be a
+// hand-kept copy of the module list, and zod strips unknown keys: a module
+// added to shared/access.ts was happily submitted by the Users & Access page,
+// silently dropped here, and never stored — so the Admin's choice reverted to
+// the role default on the next read with no error anywhere.
+const permissionsSchema = z
+  .object(
+    Object.fromEntries(
+      accessModules.map((accessModule) => [accessModule, accessLevelSchema]),
+    ) as Record<AccessModule, typeof accessLevelSchema>,
+  )
+  .partial()
+  .optional();
+
 const userSchema = z.object({
   name: z.string().trim().min(2).max(120),
   email: emailSchema,
   role: z.enum(["Admin", "Project Manager", "Engineer", "Finance"]),
   status: z.enum(["Aktif", "Nonaktif"]).default("Aktif"),
   password: z.string().min(10).max(128).optional(),
-  permissions: z
-    .object({
-      dashboard: z.enum(["none", "view", "manage"]),
-      projects: z.enum(["none", "view", "manage"]),
-      boq: z.enum(["none", "view", "manage"]),
-      billing: z.enum(["none", "view", "manage"]),
-      procurement: z.enum(["none", "view", "manage"]),
-      bast: z.enum(["none", "view", "manage"]),
-      finance: z.enum(["none", "view", "manage"]),
-      users: z.enum(["none", "view", "manage"]),
-      settings: z.enum(["none", "view", "manage"]),
-    })
-    .partial()
-    .optional(),
+  permissions: permissionsSchema,
 });
 
 const profileSchema = z.object({
@@ -535,6 +542,11 @@ function mutationRoles(resource: string): UserRole[] {
   return ["Admin", "Project Manager", "Engineer", "Finance"];
 }
 
+// Every resource dispatched below must appear here, or the generic gate in
+// `dispatchApi` never runs for it and the only access check left is whatever
+// the individual router happens to do. `project-expenses` and `tax` were both
+// missing, which is how an Engineer reached the project-expense export and the
+// per-document tax position with no module check at all.
 const resourceModules: Record<string, AccessModule> = {
   projects: "projects",
   boq: "boq",
@@ -546,10 +558,14 @@ const resourceModules: Record<string, AccessModule> = {
   spks: "procurement",
   "procurement-orders": "procurement",
   bast: "bast",
+  "project-expenses": "expenses",
+  "project-expense-categories": "expenses",
+  "project-advances": "expenses",
   transactions: "finance",
   finance: "finance",
+  tax: "finance",
   "bank-accounts": "finance",
-  "profit-shares": "finance",
+  "profit-shares": "margin",
   users: "users",
   "audit-logs": "users",
   notifications: "settings",
@@ -686,6 +702,24 @@ async function detachOrDeleteSystemTransaction(
   );
 }
 
+/**
+ * Whether a raw recovery token may be handed back in an HTTP response.
+ *
+ * A password-reset token in a JSON body is an unauthenticated account takeover:
+ * ask for a reset, read the token out of the reply, reset the password, sign in
+ * as Admin. It exists at all so a developer with no mail provider can finish the
+ * flow locally, and it is allowed only when BOTH of those are true — the process
+ * is not a production one, and no security mail could have been delivered
+ * anyway. Either alone has already failed once: the old test paired NODE_ENV
+ * with `RESEND_API_KEY`, which is permanently empty here because mail goes over
+ * SMTP, so NODE_ENV was carrying the whole thing by itself — and NODE_ENV read
+ * through the compiler-inlined `process.env.NODE_ENV` was not even reading the
+ * operator's value (see server/runtime-env.ts).
+ */
+function developmentTokensAllowed() {
+  return !isProductionRuntime() && securityMailUndeliverable();
+}
+
 async function handleAuth(request: Request, path: string[]) {
   const action = path[1];
   if (request.method === "GET" && action === "session") {
@@ -763,7 +797,11 @@ async function handleAuth(request: Request, path: string[]) {
         token,
         input.surface,
       );
-      if (process.env.NODE_ENV !== "production" && !process.env.RESEND_API_KEY) {
+      // Two independent conditions, both required. The mail state is the real
+      // question — a token only needs handing back when no mail can carry it —
+      // and NODE_ENV is the backstop that keeps the answer from ever mattering
+      // in a production process, whatever the mail configuration says.
+      if (developmentTokensAllowed()) {
         developmentToken = token;
       }
     }
@@ -929,8 +967,8 @@ async function confirmEmailChange(rawToken: string) {
 /**
  * Starts a verified email change: the account keeps its current address, the
  * confirmation link goes to the new one, and the current address is told that
- * somebody asked. Returns the raw token only outside production without a mail
- * provider, mirroring how forgot-password exposes its reset token in dev.
+ * somebody asked. Returns the raw token only when `developmentTokensAllowed()`
+ * agrees, mirroring how forgot-password exposes its reset token in dev.
  */
 async function requestEmailChange(
   client: DatabaseClient,
@@ -966,9 +1004,7 @@ async function requestEmailChange(
   return {
     pendingEmail: newEmail,
     expiresInMinutes: emailChangeTokenMinutes(),
-    ...(process.env.NODE_ENV !== "production" && !process.env.RESEND_API_KEY
-      ? { confirmationToken: token }
-      : {}),
+    ...(developmentTokensAllowed() ? { confirmationToken: token } : {}),
   };
 }
 
@@ -2089,6 +2125,7 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
 async function quotationResponse(
   client: Awaited<ReturnType<typeof getDatabase>>["client"],
   row: Record<string, unknown>,
+  language: "id" | "en" = "id",
 ) {
   const taxableBase = asNumber(row.taxable_base) || asNumber(row.total);
   const tax = await documentTaxSummary(client, "Quotation", String(row.id), taxableBase);
@@ -2109,7 +2146,9 @@ async function quotationResponse(
     id: String(row.id),
     projectId: String(row.project_id),
     packageId: row.package_id ? String(row.package_id) : null,
-    packageTitle: row.package_title ? String(row.package_title) : null,
+    packageTitle: row.package_title
+      ? localizedPackageTitle(row.package_title, language)
+      : null,
     scopeId: row.scope_id ? String(row.scope_id) : null,
     number: String(row.number),
     status: String(row.status),
@@ -2146,6 +2185,7 @@ async function quotationResponse(
 async function refreshQuotationCommercialSnapshot(
   client: Awaited<ReturnType<typeof getDatabase>>["client"],
   quotationId: string,
+  language: "id" | "en" = "id",
 ) {
   const result = await client.execute({
     sql: "SELECT * FROM quotations WHERE id=? LIMIT 1",
@@ -2210,7 +2250,24 @@ async function refreshQuotationCommercialSnapshot(
       WHERE q.id=? LIMIT 1`,
     args: [quotationId],
   });
-  return quotationResponse(client, refreshed.rows[0]);
+  return quotationResponse(client, refreshed.rows[0], language);
+}
+
+// Every project is seeded with one commercial package carrying this exact
+// Indonesian title (server/api/commercial-package-router.ts and
+// server/db/initialize.ts), and the same literal is the fallback for a project
+// whose package row predates the feature. Both reached the English UI verbatim.
+// A title somebody actually typed is a proper noun and is returned untouched;
+// only the untouched seeded default is translated. Mirrors
+// `localizedPackageTitle` in server/api/pdf.ts, which solved this for the
+// printed documents.
+const SEEDED_PACKAGE_TITLE = "Lingkup Utama";
+
+function localizedPackageTitle(value: unknown, language: "id" | "en") {
+  const title = String(value ?? "").trim() || SEEDED_PACKAGE_TITLE;
+  return title === SEEDED_PACKAGE_TITLE && language === "en"
+    ? "Main Scope"
+    : title;
 }
 
 async function handleQuotations(request: Request, user: AuthUser) {
@@ -2234,13 +2291,20 @@ async function handleQuotations(request: Request, user: AuthUser) {
         ORDER BY q.revision_no DESC,q.created_at DESC LIMIT 1`,
       args: [projectId, packageId],
     });
-    if (result.rows[0]) return ok(await quotationResponse(client, result.rows[0]));
+    if (result.rows[0]) {
+      return ok(
+        await quotationResponse(client, result.rows[0], user.preferredLanguage),
+      );
+    }
     const boq = await getBoq(projectId, packageId);
     return ok({
       id: null,
       projectId,
       packageId,
-      packageTitle: boq.package?.title ?? "Lingkup Utama",
+      packageTitle: localizedPackageTitle(
+        boq.package?.title,
+        user.preferredLanguage,
+      ),
       number: null,
       status: "Draft",
       revisionNo: 1,
@@ -2508,7 +2572,11 @@ async function handleQuotations(request: Request, user: AuthUser) {
       });
     }
 
-    let response = await refreshQuotationCommercialSnapshot(client, quotationId);
+    let response = await refreshQuotationCommercialSnapshot(
+      client,
+      quotationId,
+      user.preferredLanguage,
+    );
     if (response.status === "Sent" && response.taxEnabled && !response.taxes.length) {
       throw new ApiError(409, "TAX_RULE_REQUIRED", "Pilih minimal satu aturan pajak sebelum mengirim Quotation.");
     }
@@ -4955,7 +5023,17 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       profitConditions.push(profitScope.sql);
       profitArgs.push(...profitScope.args);
     }
-    const profitResult = await client.execute({
+    // Opening the cash ledger and reading the company's margin are two
+    // different questions, so they are two different permissions. `finance:
+    // view` answers the first: what money moved, on the projects this account
+    // can already see. The blocks below answer the second — base net profit,
+    // retained profit, and BoQ budget against vendor commitment — which is the
+    // margin on the job and follows `margin`. Withheld exactly the way the bank
+    // balances above are: the report still downloads, the section simply is not
+    // in it, so a Project Manager exporting their own ledger is never met with
+    // a refusal for a report they are entitled to.
+    const canSeeMargin = canAccess(user.permissions, "margin", "view");
+    const profitRows = canSeeMargin ? (await client.execute({
       sql: `
         SELECT p.id,p.code,p.name,
           COALESCE((
@@ -5024,8 +5102,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         ORDER BY p.code
       `,
       args: profitArgs as never[],
-    });
-    const profitRows = profitResult.rows
+    })).rows
       .map((row) => {
         const netProfit = asNumber(row.net_profit);
         const allocatedAmount = asNumber(row.allocated_amount);
@@ -5063,7 +5140,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           row.committedVendorCost !== 0 ||
           row.outstandingReimbursement !== 0 ||
           row.acceptedAddenda !== 0,
-      );
+      ) : [];
     const taxResult = await client.execute({
       sql: `SELECT p.code,p.name,dt.rule_name,dt.rule_name_en,o.direction,
         o.amount,o.settled_amount,o.status
@@ -5139,7 +5216,6 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     }));
     if (transactionId === "report.csv") {
       const en = user.preferredLanguage === "en";
-      const csvCell = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
       const headers = en
         ? ["Date", "Type", "Project", "Category", "Description", "Source", "Amount (IDR)"]
         : ["Tanggal", "Jenis", "Proyek", "Kategori", "Deskripsi", "Sumber", "Nominal (IDR)"];
@@ -6093,11 +6169,18 @@ async function handleNotifications(
       throw new ApiError(403, "FORBIDDEN", "Hanya Admin yang dapat mencoba ulang email.");
     }
     const retry = await retryEmailOutbox(client, path[2]);
-    if (!retry) {
+    if (retry === "not-found") {
       throw new ApiError(
         409,
         "EMAIL_NOT_RETRYABLE",
         "Email tidak ditemukan atau statusnya tidak dapat dicoba ulang.",
+      );
+    }
+    if (retry === "body-purged") {
+      throw new ApiError(
+        409,
+        "EMAIL_BODY_PURGED",
+        "Isi email ini sudah dihapus setelah percobaan pengiriman habis, jadi tidak dapat dikirim ulang. Ulangi tindakan aslinya agar email baru dibuat.",
       );
     }
     await writeAuditLog(
