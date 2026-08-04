@@ -4869,6 +4869,22 @@ h3 {
   line-height: 1.5;
 }
 
+/* Money the books deliberately leave out has to read as something to act on,
+   not as reassurance, so the same note carries the amber of a pending item. */
+.security-note.attention {
+  border-color: #f1d88c;
+  background: #fff9df;
+  color: #775317;
+}
+
+.security-note.attention strong {
+  color: #6a4a14;
+}
+
+.security-note.attention span {
+  color: #7d5f22;
+}
+
 /* Finance */
 .finance-kpi-grid {
   display: grid;
@@ -5445,6 +5461,18 @@ h3 {
 
 .transaction-table {
   min-width: 830px;
+}
+
+/* The exclusion badge spells out why the row is not cash, so it wraps inside a
+   bounded width instead of stretching the table for everyone else. */
+.transaction-name .status-badge {
+  min-height: 0;
+  max-width: 220px;
+  padding: 3px 8px;
+  font-size: 8px;
+  line-height: 1.35;
+  text-align: left;
+  white-space: normal;
 }
 
 .transaction-icon.income {
@@ -6752,6 +6780,10 @@ h3 {
 .profile-form-card,
 .settings-card {
   padding: 22px;
+}
+
+.profile-email-pending {
+  margin-bottom: 18px;
 }
 
 .profile-summary-card {
@@ -8816,6 +8848,10 @@ html.document-preview-open { overflow: hidden; }
 .commercial-package-control > label > svg { position: absolute; right: 0; bottom: 3px; color: #7a9197; pointer-events: none; }
 .commercial-package-popover { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; width: min(340px, calc(100vw - 32px)); padding: 16px; border: 1px solid #d7e6e4; border-radius: 18px; background: #fff; box-shadow: 0 22px 55px rgba(23,59,70,.2); }
 .commercial-package-popover .field { margin-top: 12px; }
+.commercial-package-popover .package-status-hint { margin-top: 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+/* The switcher strips its own select down to a bare label; a select inside the
+   popover is an ordinary form field and has to look like every other one. */
+.commercial-package-popover .field select { height: 42px; padding: 0 34px 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: #fff; color: var(--ink); font-weight: 600; }
 @media (max-width: 620px) {
   .commercial-package-control { width: 100%; }
   .commercial-package-control > label { min-width: 0; flex: 1; }

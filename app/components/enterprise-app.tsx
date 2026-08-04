@@ -483,6 +483,7 @@ export function EnterpriseApp() {
               projectId={selectedProjectId}
               projects={projects}
               canManage={canManage("finance")}
+              isAdmin={user.role === "Admin"}
               canUseBanking={user.role === "Admin" || user.role === "Finance"}
               canConfigureBanking={
                 user.role === "Admin" && canManage("finance")

@@ -8,6 +8,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  ShieldAlert,
   X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
@@ -58,7 +59,31 @@ interface TaxPanelProps {
   notify: (message: string) => void;
   canManage: boolean;
   canConfigure: boolean;
+  isAdmin: boolean;
   serverToday: string;
+}
+
+// Mirrors the server's transition guard. Reporting only moves forward, because
+// walking it back re-opens an invoice whose VAT was already filed; voiding is
+// free only while nothing has been filed yet. A backward move needs an Admin
+// and a written reason, so the dialog has to know which moves count as one.
+const REPORTING_ORDER = ["Candidate", "Ready", "Reported", "Settled"] as const;
+
+function isReportingDowngrade(
+  currentStatus: TaxObligation["reportingStatus"],
+  nextStatus: TaxObligation["reportingStatus"],
+) {
+  if (currentStatus === nextStatus) return false;
+  const currentIndex = REPORTING_ORDER.indexOf(
+    currentStatus as (typeof REPORTING_ORDER)[number],
+  );
+  const nextIndex = REPORTING_ORDER.indexOf(
+    nextStatus as (typeof REPORTING_ORDER)[number],
+  );
+  const forward = currentIndex >= 0 && nextIndex >= 0 && nextIndex > currentIndex;
+  const voidBeforeFiling =
+    nextStatus === "Void" && currentIndex >= 0 && currentIndex <= 1;
+  return !forward && !voidBeforeFiling;
 }
 
 function fileToAttachment(file: File) {
@@ -84,6 +109,7 @@ export function TaxPanel({
   notify,
   canManage,
   canConfigure,
+  isAdmin,
   serverToday,
 }: TaxPanelProps) {
   const id = language === "id";
@@ -106,6 +132,7 @@ export function TaxPanel({
   const [taxInvoiceDate, setTaxInvoiceDate] = useState("");
   const [returnReference, setReturnReference] = useState("");
   const [reportingNotes, setReportingNotes] = useState("");
+  const [overrideReason, setOverrideReason] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -147,6 +174,16 @@ export function TaxPanel({
       ),
     [obligations],
   );
+
+  const downgradesReporting = Boolean(
+    reporting &&
+      isReportingDowngrade(
+        reporting.reportingStatus ?? "Candidate",
+        reportingStatus,
+      ),
+  );
+  const overrideReasonMissing =
+    downgradesReporting && isAdmin && overrideReason.trim().length < 10;
 
   async function toggleTax() {
     if (!canConfigure) return;
@@ -285,6 +322,7 @@ export function TaxPanel({
     setTaxInvoiceDate(obligation.taxInvoiceDate ?? "");
     setReturnReference(obligation.returnReference ?? "");
     setReportingNotes(obligation.reportingNotes ?? "");
+    setOverrideReason("");
   }
 
   async function saveReporting(event: FormEvent<HTMLFormElement>) {
@@ -301,6 +339,9 @@ export function TaxPanel({
           taxInvoiceDate: taxInvoiceDate || null,
           returnReference: returnReference || null,
           notes: reportingNotes || null,
+          ...(downgradesReporting && overrideReason.trim()
+            ? { overrideReason: overrideReason.trim() }
+            : {}),
         }),
       });
       setReporting(null);
@@ -445,7 +486,30 @@ export function TaxPanel({
               <label className="field"><span>{id ? "Tanggal faktur" : "Tax invoice date"}</span><input type="date" value={taxInvoiceDate} onChange={(event) => setTaxInvoiceDate(event.target.value)} /></label>
               <label className="field full"><span>{id ? "Referensi pelaporan" : "Return reference"}</span><input required={reportingStatus === "Reported" || reportingStatus === "Settled"} value={returnReference} onChange={(event) => setReturnReference(event.target.value)} /></label>
               <label className="field full"><span>{id ? "Catatan" : "Notes"}</span><textarea value={reportingNotes} onChange={(event) => setReportingNotes(event.target.value)} /></label>
-              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setReporting(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit" disabled={saving}><Save size={15} /> {id ? "Simpan pelaporan" : "Save reporting"}</button></div>
+              {downgradesReporting && isAdmin ? (
+                <label className="field full">
+                  <span>{id ? "Alasan penurunan status (wajib, minimal 10 karakter)" : "Reason for lowering the status (required, at least 10 characters)"}</span>
+                  <textarea
+                    rows={2}
+                    required
+                    minLength={10}
+                    value={overrideReason}
+                    onChange={(event) => setOverrideReason(event.target.value)}
+                    placeholder={id ? "Contoh: SPT masa yang sama dikoreksi." : "Example: the return for the same period is being corrected."}
+                  />
+                  <small>{id ? "Status pelaporan hanya bergerak maju. Alasan ini tercatat di jejak audit, dan tanggal serta identitas pelapor tidak pernah dihapus." : "Reporting only moves forward. This reason lands in the audit trail, and the filing date and filer are never erased."}</small>
+                </label>
+              ) : null}
+              {downgradesReporting && !isAdmin ? (
+                <div className="security-note attention full">
+                  <ShieldAlert size={19} />
+                  <div>
+                    <strong>{id ? "Hanya Admin yang dapat menurunkan status" : "Only an Admin can lower this status"}</strong>
+                    <span>{id ? "Status pelaporan pajak hanya bergerak maju: Candidate, Ready, Reported, lalu Settled. Minta Admin menurunkannya sambil menuliskan alasannya." : "Tax reporting only moves forward: Candidate, Ready, Reported, then Settled. Ask an Admin to lower it while stating a reason."}</span>
+                  </div>
+                </div>
+              ) : null}
+              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setReporting(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit" disabled={saving || overrideReasonMissing || (downgradesReporting && !isAdmin)}><Save size={15} /> {id ? "Simpan pelaporan" : "Save reporting"}</button></div>
             </form>
           </section>
         </div>
