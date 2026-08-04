@@ -64,6 +64,21 @@ const securityHeaders = [
   },
 ];
 
+// Keeps every authenticated surface out of the search index.
+//
+// The obvious place for this is robots.txt, and `app/robots.ts` does disallow
+// /admin, /panel and /api — but that file is never what a crawler reads.
+// Cloudflare serves its own managed robots.txt on enterprise.perumnet.id, and
+// it carries `User-agent: * / Allow: /` with no Disallow lines at all. The
+// origin's version is replaced at the edge.
+//
+// A response header is written by the origin per request, so the edge does not
+// substitute it. The pages themselves also carry `<meta name="robots">` via the
+// Metadata API; this covers what a meta tag cannot — /api responses are JSON
+// with no document head, and any future sub-route under /admin or /panel gets
+// it without having to remember to export metadata.
+const noIndexHeaders = [{ key: "X-Robots-Tag", value: "noindex, nofollow" }];
+
 const nextConfig: NextConfig = {
   basePath,
   poweredByHeader: false,
@@ -71,6 +86,11 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },
+      // `:path*` matches zero segments too, so these cover the bare /admin,
+      // /panel and /api paths as well as everything beneath them.
+      { source: "/admin/:path*", headers: noIndexHeaders },
+      { source: "/panel/:path*", headers: noIndexHeaders },
+      { source: "/api/:path*", headers: noIndexHeaders },
       // The two endpoints that hand back operator-uploaded bytes. New uploads
       // are validated and rasterised, but rows written before that landed can
       // still be an SVG — a document with <script> in it. They are served as an

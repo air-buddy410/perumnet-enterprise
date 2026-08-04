@@ -798,3 +798,90 @@ test("every response carries a CSP and refuses to be framed", async () => {
     assert.match(csp, /script-src[^;]*https:\/\/challenges\.cloudflare\.com/, path);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Finding 9 — the ERP was indexable
+// ---------------------------------------------------------------------------
+//
+// `app/robots.ts` disallows /admin, /panel and /api, but nothing a crawler
+// reads ever sees it: Cloudflare serves its own managed robots.txt on
+// enterprise.perumnet.id, with `User-agent: * / Allow: /` and no Disallow
+// lines. /admin exported no metadata at all, so it answered with the public
+// marketing title and no robots directive whatsoever.
+//
+// Both assertions below are origin-rendered and cannot be replaced at the
+// edge. They must not leak onto the marketing pages, which is the other half
+// of the test.
+
+test("every authenticated surface refuses indexing without relying on robots.txt", async () => {
+  for (const path of ["/admin", "/panel"]) {
+    const response = await fetch(`${baseUrl}${path}`);
+    assert.equal(response.status, 200, path);
+    assert.equal(
+      response.headers.get("x-robots-tag"),
+      "noindex, nofollow",
+      `${path} has no X-Robots-Tag`,
+    );
+    const html = await response.text();
+    const head = html.slice(0, html.indexOf("</head>"));
+    assert.match(
+      head,
+      /<meta name="robots" content="noindex, nofollow"\/?>/,
+      `${path} has no robots meta tag`,
+    );
+  }
+  // JSON has no document head, so the header is the only control there.
+  const api = await fetch(`${baseUrl}/api/health`);
+  assert.equal(api.headers.get("x-robots-tag"), "noindex, nofollow");
+});
+
+test("no public marketing page is told to stay out of the index", async () => {
+  for (const path of ["/", "/en", "/services", "/en/services", "/contact"]) {
+    const response = await fetch(`${baseUrl}${path}`);
+    assert.equal(response.status, 200, path);
+    assert.equal(response.headers.get("x-robots-tag"), null, `${path} is noindex by header`);
+    const html = await response.text();
+    const head = html.slice(0, html.indexOf("</head>"));
+    assert.doesNotMatch(head, /name="robots"[^>]*noindex/, `${path} is noindex by meta`);
+  }
+});
+
+test("each bilingual page points hreflang at its own pair, reciprocally", async () => {
+  const origin = "https://enterprise.perumnet.id";
+  for (const [path, id, en] of [
+    ["/", `${origin}`, `${origin}/en`],
+    ["/en", `${origin}`, `${origin}/en`],
+    ["/services", `${origin}/services`, `${origin}/en/services`],
+    ["/en/services", `${origin}/services`, `${origin}/en/services`],
+    ["/contact", `${origin}/contact`, `${origin}/en/contact`],
+    ["/en/contact", `${origin}/contact`, `${origin}/en/contact`],
+  ]) {
+    const head = (await (await fetch(`${baseUrl}${path}`)).text()).split("</head>")[0];
+    // React serialises the attribute as hrefLang; the browser and Googlebot
+    // both read it back as hreflang.
+    const alternates = Object.fromEntries(
+      [...head.matchAll(/<link rel="alternate" hrefLang="([^"]+)" href="([^"]+)"/g)].map(
+        (match) => [match[1], match[2]],
+      ),
+    );
+    // A one-way hreflang is ignored, so both directions must name both pages.
+    assert.equal(alternates["id-ID"], id, `${path} id-ID`);
+    // Plain "en", not "en-ID" — the English pages are for owners searching
+    // from outside Indonesia, and a region tag would hide them.
+    assert.equal(alternates.en, en, `${path} en`);
+    assert.equal(alternates["x-default"], id, `${path} x-default`);
+  }
+});
+
+test("a page away from home gets its own social card, not the site-wide one", async () => {
+  const head = (await (await fetch(`${baseUrl}/services`)).text()).split("</head>")[0];
+  const ogTitle = head.match(/<meta property="og:title" content="([^"]*)"/)?.[1];
+  const homeHead = (await (await fetch(`${baseUrl}/`)).text()).split("</head>")[0];
+  const homeOgTitle = homeHead.match(/<meta property="og:title" content="([^"]*)"/)?.[1];
+  assert.ok(ogTitle, "/services has no og:title");
+  assert.notEqual(
+    ogTitle,
+    homeOgTitle,
+    "/services shares the home page's og:title, so every share looks identical",
+  );
+});
