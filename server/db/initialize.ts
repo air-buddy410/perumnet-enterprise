@@ -609,6 +609,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   source TEXT NOT NULL,
   reference_id TEXT,
   category TEXT NOT NULL DEFAULT 'Lainnya',
+  origin TEXT NOT NULL DEFAULT 'system',
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -931,6 +932,7 @@ CREATE TABLE IF NOT EXISTS bank_statement_entries (
   bank_account_id TEXT NOT NULL REFERENCES bank_accounts(id) ON DELETE CASCADE,
   import_id TEXT REFERENCES bank_statement_imports(id) ON DELETE SET NULL,
   transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+  excluded_transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
   date TEXT NOT NULL,
   description TEXT NOT NULL,
   type TEXT NOT NULL CHECK (type IN ('Pemasukan', 'Pengeluaran')),
@@ -2481,6 +2483,56 @@ async function ensureProcurementSchema(client: DatabaseClient) {
   }
 }
 
+// Step two of the pattern in server/db/README.md for the reconciliation memory
+// added with the exclude/restore fix: excluding a mutasi has to remember which
+// transaction it was booked against, otherwise restoring it invents a second
+// `Bank:` transaction next to the one that already recorded the same cash.
+async function ensureBankReconciliationSchema(client: DatabaseClient) {
+  await ensureColumn(
+    client,
+    "bank_statement_entries",
+    "excluded_transaction_id",
+    "TEXT",
+  );
+}
+
+// Manual transaction CRUD used to be gated by a denylist of source prefixes, so
+// every new system source was tamperable until somebody remembered to add it.
+// `origin` inverts that into an allowlist: only rows a human typed in are
+// editable. The classification of pre-existing rows runs exactly once, right
+// after the column is created — never again, so a row can not be silently
+// re-classified later by a source string that happens not to match.
+async function ensureTransactionOriginColumn(client: DatabaseClient) {
+  try {
+    await client.execute("SELECT origin FROM transactions LIMIT 1");
+    return;
+  } catch {
+    // The column does not exist yet.
+  }
+  try {
+    await client.execute(
+      "ALTER TABLE transactions ADD COLUMN origin TEXT NOT NULL DEFAULT 'system'",
+    );
+  } catch {
+    await client.execute("SELECT origin FROM transactions LIMIT 1");
+    return;
+  }
+  await client.execute(`
+    UPDATE transactions SET origin='manual'
+    WHERE NOT (
+      source IN ('Invoice','SPK')
+      OR source LIKE 'Bank:%'
+      OR source LIKE 'Profit Share%'
+      OR source LIKE 'Procurement %'
+      OR source LIKE 'Invoice Payment%'
+      OR source LIKE 'Tax Settlement%'
+      OR source LIKE 'Project Expense%'
+      OR source LIKE 'Project Advance%'
+      OR category='Bagi Hasil'
+    )
+  `);
+}
+
 async function ensureTaxAndEmailSchema(client: DatabaseClient) {
   const timestamp = new Date().toISOString();
 
@@ -2763,6 +2815,8 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureProcurementSchema(client);
   await ensureCommercialPackageSchema(client);
   await ensureBastVoidStatus(client);
+  await ensureBankReconciliationSchema(client);
+  await ensureTransactionOriginColumn(client);
   await ensureDocumentCounters(client);
   await ensureAuthHardeningSchema(client);
   await ensureTaxAndEmailSchema(client);
@@ -2917,16 +2971,22 @@ export async function initializeDatabase(client: DatabaseClient) {
     ));
   }
 
-  const transactionRows = [
-    ["trx-1", "project-1", "2026-07-18", "Pengeluaran", "Pembelian access point tahap 2", 29400000, "Material"],
-    ["trx-2", "project-2", "2026-07-15", "Pemasukan", "Pembayaran invoice DP 30%", 29040000, "Invoice"],
-    ["trx-3", "project-1", "2026-07-10", "Pemasukan", "Pembayaran invoice DP 50%", 93725000, "Invoice"],
-    ["trx-4", "project-1", "2026-07-09", "Pengeluaran", "Termin awal teknisi jaringan", 6250000, "SPK"],
-    ["trx-5", "project-2", "2026-07-04", "Pengeluaran", "Pembelian kamera dan NVR", 41750000, "Material"],
-  ];
+  // Demo cash movements. They exist so a development or demo install has a
+  // populated Keuangan page; a production install must never open its books
+  // with roughly Rp 200 juta of fictitious movements, so they are gated on the
+  // same condition that deactivates the demo user accounts.
+  const transactionRows = production
+    ? []
+    : [
+        ["trx-1", "project-1", "2026-07-18", "Pengeluaran", "Pembelian access point tahap 2", 29400000, "Material", "manual"],
+        ["trx-2", "project-2", "2026-07-15", "Pemasukan", "Pembayaran invoice DP 30%", 29040000, "Invoice", "system"],
+        ["trx-3", "project-1", "2026-07-10", "Pemasukan", "Pembayaran invoice DP 50%", 93725000, "Invoice", "system"],
+        ["trx-4", "project-1", "2026-07-09", "Pengeluaran", "Termin awal teknisi jaringan", 6250000, "SPK", "system"],
+        ["trx-5", "project-2", "2026-07-04", "Pengeluaran", "Pembelian kamera dan NVR", 41750000, "Material", "manual"],
+      ];
   for (const row of transactionRows) {
     statements.push(statement(
-      "INSERT INTO transactions (id,project_id,date,type,description,amount,source,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO transactions (id,project_id,date,type,description,amount,source,origin,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
       [...row, "user-1", now, now],
     ));
   }

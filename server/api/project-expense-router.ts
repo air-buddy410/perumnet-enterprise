@@ -534,8 +534,8 @@ async function createSettlement(
     transactionId = randomUUID();
     await client.execute({
       sql: `INSERT INTO transactions
-        (id,project_id,date,type,description,amount,source,reference_id,category,created_by,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        (id,project_id,date,type,description,amount,source,reference_id,category,origin,created_by,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
       args: [
         transactionId,
         input.projectId,
@@ -1543,8 +1543,8 @@ export async function handleProjectAdvances(
     await client.transaction(async (tx) => {
       await tx.execute({
         sql: `INSERT INTO transactions
-          (id,project_id,date,type,description,amount,source,reference_id,category,created_by,created_at,updated_at)
-          VALUES (?,? ,?,'Pengeluaran',?,?,'Project Advance',?,'Operasional',?,?,?)`,
+          (id,project_id,date,type,description,amount,source,reference_id,category,origin,created_by,created_at,updated_at)
+          VALUES (?,? ,?,'Pengeluaran',?,?,'Project Advance',?,'Operasional','system',?,?,?)`,
         args: [transactionId, input.projectId, input.disbursedDate, `Uang muka proyek ${number}`, input.amount, id, user.id, now(), now()],
       });
       await tx.execute({

@@ -67,7 +67,51 @@ const reportingSchema = z.object({
   taxInvoiceDate: isoDateSchema.optional().nullable(),
   returnReference: z.string().trim().max(160).optional().nullable(),
   notes: z.string().trim().max(1_000).optional().nullable(),
+  overrideReason: z.string().trim().min(10).max(500).optional(),
 });
+
+// The invoice edit and delete locks read `reporting_status NOT IN
+// ('Candidate','Void')`, so a downgrade is a way to unlock an invoice whose VAT
+// was already filed with DJP. Reporting therefore only moves forward on its own;
+// walking it back is an Admin action that has to state a reason, and the
+// evidence of the filing (`reported_at` / `reported_by`) is never erased.
+const REPORTING_ORDER = ["Candidate", "Ready", "Reported", "Settled"] as const;
+
+function assertReportingTransition(
+  user: AuthUser,
+  currentStatus: string,
+  nextStatus: string,
+  overrideReason?: string,
+) {
+  if (currentStatus === nextStatus) return false;
+  const currentIndex = REPORTING_ORDER.indexOf(
+    currentStatus as (typeof REPORTING_ORDER)[number],
+  );
+  const nextIndex = REPORTING_ORDER.indexOf(
+    nextStatus as (typeof REPORTING_ORDER)[number],
+  );
+  const forward =
+    currentIndex >= 0 && nextIndex >= 0 && nextIndex > currentIndex;
+  // Voiding is only free while nothing has been filed yet.
+  const voidBeforeFiling =
+    nextStatus === "Void" && currentIndex >= 0 && currentIndex <= 1;
+  if (forward || voidBeforeFiling) return false;
+  if (user.role !== "Admin") {
+    throw new ApiError(
+      403,
+      "REPORTING_DOWNGRADE_FORBIDDEN",
+      `Status pelaporan hanya dapat maju (${REPORTING_ORDER.join(" → ")}). Hanya Admin yang dapat menurunkan status pajak yang sudah dilaporkan, dengan alasan tercatat.`,
+    );
+  }
+  if (!overrideReason?.trim()) {
+    throw new ApiError(
+      422,
+      "REPORTING_REASON_REQUIRED",
+      "Isi alasan penurunan status pelaporan pajak agar tercatat di jejak audit.",
+    );
+  }
+  return true;
+}
 
 function now() {
   return new Date().toISOString();
@@ -665,7 +709,15 @@ export async function handleTaxObligations(
     if (input.reportingStatus === "Reported" && !input.returnReference?.trim()) {
       throw new ApiError(422, "REPORT_REFERENCE_REQUIRED", "Referensi pelaporan pajak wajib diisi.");
     }
+    const currentStatus = String(row.reporting_status ?? "Candidate");
+    const downgraded = assertReportingTransition(
+      user,
+      currentStatus,
+      input.reportingStatus,
+      input.overrideReason,
+    );
     const timestamp = now();
+    const filing = ["Reported", "Settled"].includes(input.reportingStatus);
     await client.execute({
       sql: `UPDATE tax_obligations SET reporting_status=?,tax_period=?,
         tax_invoice_number=?,tax_invoice_date=?,return_reference=?,
@@ -677,17 +729,17 @@ export async function handleTaxObligations(
         input.taxInvoiceDate ?? row.tax_invoice_date,
         input.returnReference ?? row.return_reference,
         input.notes ?? row.reporting_notes,
-        ["Reported", "Settled"].includes(input.reportingStatus)
-          ? row.reported_at ?? timestamp
-          : null,
-        ["Reported", "Settled"].includes(input.reportingStatus)
-          ? user.id
-          : null,
+        row.reported_at ?? (filing ? timestamp : null),
+        row.reported_by ?? (filing ? user.id : null),
         timestamp,
         obligationId,
       ],
     });
-    await writeAuditLog(client, request, user, "reporting", "tax_obligation", obligationId, input);
+    await writeAuditLog(client, request, user, "reporting", "tax_obligation", obligationId, {
+      ...input,
+      previousReportingStatus: currentStatus,
+      downgraded,
+    });
     return ok({ id: obligationId, ...input });
   }
   if (request.method !== "GET" || obligationId) {
@@ -822,8 +874,8 @@ export async function handleTaxSettlements(
       await tx.execute({
         sql: `INSERT INTO transactions
           (id,project_id,date,type,description,amount,source,reference_id,category,
-           created_by,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+           origin,created_by,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
         args: [
           transactionId,
           obligation.project_id ?? null,
@@ -918,8 +970,8 @@ export async function handleTaxSettlements(
       await tx.execute({
         sql: `INSERT INTO transactions
           (id,project_id,date,type,description,amount,source,reference_id,category,
-           created_by,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+           origin,created_by,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
         args: [
           reversalId,
           settlement.project_id ?? null,

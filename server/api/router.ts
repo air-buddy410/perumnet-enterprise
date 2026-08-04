@@ -55,6 +55,10 @@ import {
   sendPasswordResetEmail,
   sendTestEmail,
 } from "../email";
+import {
+  countsAsCashCondition,
+  unreconciledImportCondition,
+} from "../cash-ledger";
 import { asNumber, formatDate, initials, parseJson } from "../format";
 import {
   calculateTaxAmount,
@@ -83,6 +87,11 @@ import {
   handleCommercialPackages,
   resolveCommercialPackageId,
 } from "./commercial-package-router";
+import {
+  assertBoqTotalCoversInvoices,
+  resetProjectValidation,
+  syncCommercialValues,
+} from "./commercial-sync";
 import {
   assertQuotationTransition,
   handleBoqScopes,
@@ -297,16 +306,6 @@ const vendorSchema = z.object({
   address: z.string().trim().max(300).optional(),
   rate: nonNegativeMoney.optional(),
   status: z.enum(["Aktif", "Nonaktif"]).default("Aktif"),
-});
-
-const spkSchema = z.object({
-  vendorId: idSchema,
-  projectId: idSchema,
-  scope: z.string().trim().min(5).max(2_000),
-  cost: positiveMoney,
-  status: z.enum(["Draft", "Dikirim", "Dikerjakan", "Selesai"]).default("Draft"),
-  startDate: isoDateSchema.optional(),
-  endDate: isoDateSchema.optional(),
 });
 
 const transactionSchema = z.object({
@@ -611,31 +610,6 @@ function projectScopeCondition(user: AuthUser, projectAlias = "p") {
   };
 }
 
-async function resetProjectValidation(
-  client: Awaited<ReturnType<typeof getDatabase>>["client"],
-  projectId: string,
-  packageId?: string,
-) {
-  const timestamp = now();
-  const packageFilter = packageId ? " AND package_id=?" : "";
-  const args = packageId ? [projectId, packageId] : [projectId];
-  await client.batch(
-    [
-      {
-        sql: `DELETE FROM project_validation_items WHERE validation_id IN
-          (SELECT id FROM project_validations WHERE project_id=?${packageFilter})`,
-        args,
-      },
-      {
-        sql: `UPDATE project_validations SET status='Draft',validated_by=NULL,
-          completed_at=NULL,updated_at=? WHERE project_id=?${packageFilter}`,
-        args: [timestamp, ...args],
-      },
-    ],
-    "write",
-  );
-}
-
 async function assertProjectAccess(user: AuthUser, projectId: string) {
   const { client } = await getDatabase();
   const scope = projectScopeCondition(user, "p");
@@ -647,158 +621,6 @@ async function assertProjectAccess(user: AuthUser, projectId: string) {
     // Return the same response for a missing and an inaccessible project so an
     // account cannot enumerate project IDs that belong to another team.
     throw new ApiError(404, "NOT_FOUND", "Proyek tidak ditemukan.");
-  }
-}
-
-async function syncCommercialValues(
-  client: Awaited<ReturnType<typeof getDatabase>>["client"],
-  projectId: string,
-  auditContext?: { request: Request; user: AuthUser },
-) {
-  const sentChanges = await client.execute({
-    sql: `SELECT q.*,
-      COALESCE((SELECT SUM(i.quantity*i.selling_price) FROM boq_items i
-        WHERE i.scope_id=q.scope_id),0) AS live_total
-      FROM quotations q
-      WHERE q.project_id=? AND q.status='Sent'
-        AND COALESCE((SELECT SUM(i.quantity*i.selling_price) FROM boq_items i
-          WHERE i.scope_id=q.scope_id),0)<>q.total`,
-    args: [projectId],
-  });
-  for (const oldQuote of sentChanges.rows) {
-    const timestamp = now();
-    const quotationId = randomUUID();
-    const revisionNo = asNumber(oldQuote.revision_no) + 1;
-    await snapshotQuotationItems(client, String(oldQuote.id));
-    await client.transaction(async (tx) => {
-      await tx.execute({
-        sql: "UPDATE quotations SET status='Superseded',updated_at=? WHERE id=? AND status='Sent'",
-        args: [timestamp, oldQuote.id],
-      });
-      await tx.execute({
-        sql: `INSERT INTO quotations
-          (id,project_id,package_id,scope_id,number,status,issued_at,valid_until,
-           total,revision_no,supersedes_id,discount_enabled,discount_type,
-           discount_value,discount_amount,taxable_base,tax_enabled,tax_revision,
-           rounding_mode,rounding_step,rounding_adjustment,rounding_reason,
-           grand_total,created_at,updated_at)
-          VALUES (?,?,?,?,?,'Draft',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        args: [
-          quotationId, oldQuote.project_id, oldQuote.package_id, oldQuote.scope_id,
-          `${String(oldQuote.number).replace(/-R\d+$/, "")}-R${revisionNo}`,
-          oldQuote.issued_at, oldQuote.valid_until, asNumber(oldQuote.live_total), revisionNo,
-          oldQuote.id, oldQuote.discount_enabled, oldQuote.discount_type,
-          oldQuote.discount_value, 0, 0, oldQuote.tax_enabled,
-          asNumber(oldQuote.tax_revision) + 1, oldQuote.rounding_mode,
-          oldQuote.rounding_step, oldQuote.rounding_adjustment, oldQuote.rounding_reason,
-          0, timestamp, timestamp,
-        ],
-      });
-      const taxes = await tx.execute({
-        sql: "SELECT * FROM document_taxes WHERE document_type='Quotation' AND document_id=?",
-        args: [oldQuote.id],
-      });
-      for (const tax of taxes.rows) {
-        await tx.execute({
-          sql: `INSERT INTO document_taxes
-            (id,document_type,document_id,project_id,rule_id,rule_code,rule_name,
-             rule_name_en,scope,effect,accounting_treatment,rate_bps,taxable_base,
-             amount,locked,created_by,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)`,
-          args: [
-            `document-tax-${randomUUID()}`, "Quotation", quotationId, oldQuote.project_id,
-            tax.rule_id, tax.rule_code, tax.rule_name, tax.rule_name_en, tax.scope,
-            tax.effect, tax.accounting_treatment, tax.rate_bps, 0, 0,
-            auditContext?.user.id ?? null, timestamp, timestamp,
-          ],
-        });
-      }
-    });
-    if (auditContext) {
-      await writeAuditLog(
-        client,
-        auditContext.request,
-        auditContext.user,
-        "revise",
-        "quotation",
-        quotationId,
-        { supersedesId: oldQuote.id, revisionNo, reason: "BoQ changed after quotation was sent" },
-      );
-    }
-  }
-  const totalResult = await client.execute({
-    sql: `
-      SELECT
-        COALESCE(SUM(i.quantity * i.selling_price), 0) AS boq_total,
-        COALESCE((
-          SELECT SUM(CASE WHEN q.grand_total>0 THEN q.grand_total ELSE q.total END)
-          FROM quotations q
-          WHERE q.project_id=? AND q.status='Accepted'
-        ),0) AS accepted_total
-      FROM boq_items i
-      JOIN boqs b ON b.id = i.boq_id
-      WHERE b.project_id = ?
-    `,
-    args: [projectId, projectId],
-  });
-  const acceptedTotal = asNumber(totalResult.rows[0]?.accepted_total);
-  const total =
-    acceptedTotal > 0
-      ? acceptedTotal
-      : asNumber(totalResult.rows[0]?.boq_total);
-  const timestamp = now();
-  await client.batch(
-    [
-      {
-        sql: "UPDATE projects SET value=?,updated_at=? WHERE id=?",
-        args: [total, timestamp, projectId],
-      },
-      {
-        sql: `UPDATE quotations SET total=COALESCE((
-          SELECT SUM(i.quantity*i.selling_price)
-          FROM boq_items i WHERE i.scope_id=quotations.scope_id
-        ),0),updated_at=? WHERE project_id=? AND status='Draft'`,
-        args: [timestamp, projectId],
-      },
-      {
-        sql: `UPDATE boq_scopes SET status='Draft',updated_at=?
-          WHERE id IN (
-            SELECT q.scope_id FROM quotations q
-            WHERE q.project_id=? AND q.status='Draft'
-          )`,
-        args: [timestamp, projectId],
-      },
-    ],
-    "write",
-  );
-  const draftQuotations = await client.execute({
-    sql: "SELECT id FROM quotations WHERE project_id=? AND status='Draft'",
-    args: [projectId],
-  });
-  for (const quotation of draftQuotations.rows) {
-    await refreshQuotationCommercialSnapshot(client, String(quotation.id));
-  }
-  return total;
-}
-
-async function assertBoqTotalCoversInvoices(
-  client: Awaited<ReturnType<typeof getDatabase>>["client"],
-  projectId: string,
-  proposedTotal: number,
-  packageId?: string,
-) {
-  const result = await client.execute({
-    sql: `SELECT COALESCE(SUM(amount),0) AS total FROM invoices
-      WHERE project_id=?${packageId ? " AND package_id=?" : ""}`,
-    args: packageId ? [projectId, packageId] : [projectId],
-  });
-  const invoicedTotal = asNumber(result.rows[0]?.total);
-  if (proposedTotal < invoicedTotal) {
-    throw new ApiError(
-      409,
-      "BOQ_BELOW_INVOICED_TOTAL",
-      `Nilai BoQ tidak boleh lebih kecil dari total Invoice yang sudah diterbitkan (${invoicedTotal}). Edit atau hapus Invoice terlebih dahulu.`,
-    );
   }
 }
 
@@ -859,142 +681,6 @@ async function detachOrDeleteSystemTransaction(
     ],
     "write",
   );
-}
-
-async function reattachImportedBankTransaction(
-  client: Awaited<ReturnType<typeof getDatabase>>["client"],
-  input: {
-    projectId: string;
-    date: string;
-    type: "Pemasukan" | "Pengeluaran";
-    amount: number;
-    source: "Invoice" | "SPK";
-    referenceId: string;
-    description: string;
-    category: string;
-  },
-) {
-  const result = await client.execute({
-    sql: `
-      SELECT t.id,e.id AS entry_id,e.date AS entry_date
-      FROM transactions t
-      JOIN bank_statement_entries e ON e.transaction_id=t.id
-      WHERE t.project_id=? AND t.type=? AND t.amount=?
-        AND t.source LIKE 'Bank:%'
-        AND e.reconciliation_status='Imported'
-      ORDER BY e.date DESC,e.created_at DESC
-      LIMIT 50
-    `,
-    args: [input.projectId, input.type, input.amount],
-  });
-  const candidates = result.rows.filter((candidate) => {
-    const left = Date.parse(`${input.date}T00:00:00.000Z`);
-    const right = Date.parse(`${String(candidate.entry_date)}T00:00:00.000Z`);
-    return Math.abs(left - right) / 86_400_000 <= 14;
-  });
-  if (candidates.length !== 1) return false;
-  const candidate = candidates[0];
-  await client.batch(
-    [
-      {
-        sql: `
-          UPDATE transactions SET
-            project_id=?,date=?,type=?,description=?,amount=?,source=?,
-            reference_id=?,category=?,updated_at=?
-          WHERE id=?
-        `,
-        args: [
-          input.projectId,
-          input.date,
-          input.type,
-          input.description,
-          input.amount,
-          input.source,
-          input.referenceId,
-          input.category,
-          now(),
-          candidate.id,
-        ],
-      },
-      {
-        sql: `
-          UPDATE bank_statement_entries
-          SET reconciliation_status='Matched'
-          WHERE id=?
-        `,
-        args: [candidate.entry_id],
-      },
-    ],
-    "write",
-  );
-  return true;
-}
-
-async function syncSpkTransaction(
-  client: Awaited<ReturnType<typeof getDatabase>>["client"],
-  spkId: string,
-  userId: string,
-) {
-  const spk = await ensureExists(
-    "SELECT * FROM spks WHERE id=?",
-    [spkId],
-    "SPK tidak ditemukan.",
-  );
-  if (spk.payment_status !== "Dibayar") {
-    await detachOrDeleteSystemTransaction(client, "SPK", spkId);
-    return;
-  }
-  const timestamp = now();
-  const transactionDate = spk.paid_date ?? timestamp.slice(0, 10);
-  const existing = await client.execute({
-    sql: "SELECT id FROM transactions WHERE source='SPK' AND reference_id=? LIMIT 1",
-    args: [spkId],
-  });
-  if (existing.rows[0]) {
-    await client.execute({
-      sql: "UPDATE transactions SET project_id=?,date=?,type='Pengeluaran',description=?,amount=?,category='Vendor',updated_at=? WHERE id=?",
-      args: [
-        spk.project_id,
-        transactionDate,
-        `Pembayaran vendor ${spk.number}`,
-        spk.cost,
-        timestamp,
-        existing.rows[0].id,
-      ],
-    });
-    return;
-  }
-  if (
-    await reattachImportedBankTransaction(client, {
-      projectId: String(spk.project_id),
-      date: String(transactionDate),
-      type: "Pengeluaran",
-      amount: asNumber(spk.cost),
-      source: "SPK",
-      referenceId: spkId,
-      description: `Pembayaran vendor ${String(spk.number)}`,
-      category: "Vendor",
-    })
-  ) {
-    return;
-  }
-  await client.execute({
-    sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,reference_id,category,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-    args: [
-      randomUUID(),
-      spk.project_id,
-      transactionDate,
-      "Pengeluaran",
-      `Pembayaran vendor ${spk.number}`,
-      spk.cost,
-      "SPK",
-      spkId,
-      "Vendor",
-      userId,
-      timestamp,
-      timestamp,
-    ],
-  });
 }
 
 async function handleAuth(request: Request, path: string[]) {
@@ -2128,7 +1814,12 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
     throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
   }
   await assertProjectAccess(user, projectId);
-  const selectedPackageId = await resolveCommercialPackageId(client, projectId, packageId);
+  const selectedPackageId = await resolveCommercialPackageId(
+    client,
+    projectId,
+    packageId,
+    { requireActive: request.method !== "GET" },
+  );
 
   if (request.method === "GET" && !child) {
     return ok(await getBoq(projectId, selectedPackageId));
@@ -2506,7 +2197,12 @@ async function handleQuotations(request: Request, user: AuthUser) {
   const projectId = searchParams.get("projectId");
   if (!projectId) throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
   await assertProjectAccess(user, projectId);
-  const packageId = await resolveCommercialPackageId(client, projectId, searchParams.get("packageId"));
+  const packageId = await resolveCommercialPackageId(
+    client,
+    projectId,
+    searchParams.get("packageId"),
+    { requireActive: request.method !== "GET" },
+  );
 
   if (request.method === "GET") {
     const result = await client.execute({
@@ -3071,9 +2767,12 @@ async function invoiceQuotationSource(
   input: { projectId: string; packageId?: string; quotationId?: string },
   requireAccepted: boolean,
 ) {
-  const packageId = input.packageId
-    ? await resolveCommercialPackageId(client, input.projectId, input.packageId)
-    : await resolveCommercialPackageId(client, input.projectId, null);
+  const packageId = await resolveCommercialPackageId(
+    client,
+    input.projectId,
+    input.packageId ?? null,
+    { requireActive: true },
+  );
   const result = await client.execute({
     sql: input.quotationId
       ? `SELECT q.*,cp.title AS package_title FROM quotations q
@@ -3429,8 +3128,8 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
         await tx.execute({
           sql: `INSERT INTO transactions
             (id,project_id,date,type,description,amount,source,reference_id,
-             category,created_by,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+             category,origin,created_by,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
           args: [
             transactionId,
             invoice.project_id,
@@ -3557,8 +3256,8 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
         await tx.execute({
           sql: `INSERT INTO transactions
             (id,project_id,date,type,description,amount,source,reference_id,
-             category,created_by,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+             category,origin,created_by,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
           args: [
             randomUUID(),
             payment.project_id,
@@ -3657,8 +3356,8 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
           await tx.execute({
             sql: `INSERT INTO transactions
               (id,project_id,date,type,description,amount,source,reference_id,
-               category,created_by,created_at,updated_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+               category,origin,created_by,created_at,updated_at)
+              VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
             args: [
               transactionId,
               invoice.project_id,
@@ -4264,16 +3963,21 @@ async function getSpk(id: string) {
   return mapSpk(result.rows[0] as Record<string, unknown>);
 }
 
+// The legacy /api/spks surface is read-only. Its mutation handlers used to post
+// a `source='SPK'` outflow of the entire contract value whenever
+// `spks.payment_status` read 'Dibayar' — a flag the modern procurement flow also
+// sets once every spk_payment is posted — so marking a work order "Selesai"
+// after paying it through /api/procurement-orders booked the same money twice,
+// and voiding the real payment left the phantom outflow behind. Creating,
+// editing, paying, and deleting a work order all live in
+// /api/procurement-orders, where approval, verification, payment evidence, and
+// the audit trail are complete.
 async function handleSpks(request: Request, path: string[], user: AuthUser) {
   const { client } = await getDatabase();
   const spkId = path[1];
   const action = path[2];
 
-  if (
-    request.method !== "GET" &&
-    process.env.NODE_ENV === "production" &&
-    process.env.ALLOW_LEGACY_SPK_MUTATIONS !== "true"
-  ) {
+  if (request.method !== "GET") {
     throw new ApiError(
       410,
       "LEGACY_ENDPOINT_READ_ONLY",
@@ -4281,7 +3985,7 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
     );
   }
 
-  if (request.method === "GET" && !spkId) {
+  if (!spkId) {
     const projectId = new URL(request.url).searchParams.get("projectId");
     if (projectId) await assertProjectAccess(user, projectId);
     const scope = projectScopeCondition(user, "p");
@@ -4307,197 +4011,16 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
     return ok(result.rows.map((row) => mapSpk(row as Record<string, unknown>)));
   }
 
-  if (request.method === "POST" && !spkId) {
-    if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat membuat SPK.");
-    const input = spkSchema.parse(await jsonBody(request));
-    assertDateOrder(input.startDate, input.endDate);
-    await ensureExists("SELECT id FROM vendors WHERE id=? AND status='Aktif'", [input.vendorId], "Vendor aktif tidak ditemukan.");
-    await assertProjectAccess(user, input.projectId);
-    const sequence = await claimSequence(client, "spks", "SELECT number AS value FROM spks");
-    const id = randomUUID();
-    const number = makeSequence("SPK", sequence);
-    const timestamp = now();
-    await client.execute({
-      sql: "INSERT INTO spks (id,number,vendor_id,project_id,scope,cost,status,start_date,end_date,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-      args: [id, number, input.vendorId, input.projectId, input.scope, input.cost, input.status, input.startDate ?? null, input.endDate ?? null, timestamp, timestamp],
-    });
-    await writeAuditLog(client, request, user, "create", "spk", id, input);
-    await notifyProjectStakeholders(client, {
-      projectId: input.projectId,
-      eventType: "spk_created",
-      subject: `SPK ${number} dibuat`,
-      message: `SPK ${number} untuk vendor telah dibuat dengan nilai Rp ${input.cost.toLocaleString("id-ID")}.`,
-      subjectEn: `Work Order ${number} created`,
-      messageEn: `Work Order ${number} was created for a vendor with a value of IDR ${input.cost.toLocaleString("en-US")}.`,
-      includeFinance: true,
-    });
-    return created(await getSpk(id));
-  }
-
-  if (spkId && action === "pdf" && request.method === "GET") {
+  if (action === "pdf") {
     const spk = await ensureExists("SELECT project_id,status,number FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
     await assertProjectAccess(user, String(spk.project_id));
     return renderBusinessPdf("spk", spkId, user.preferredLanguage);
   }
 
-  if (spkId && action === "payment" && request.method === "PATCH") {
-    if (!mutationRoles("procurement").includes(user.role)) {
-      throw new ApiError(
-        403,
-        "FORBIDDEN",
-        "Anda tidak dapat mengubah status pembayaran SPK.",
-      );
-    }
-    assertAccess(user, "finance", "manage");
-    const input = z
-      .object({
-        status: z.enum(["Belum Dibayar", "Dibayar"]),
-        paidDate: isoDateSchema.optional(),
-      })
-      .parse(await jsonBody(request));
-    const spk = await ensureExists(
-      "SELECT project_id,number,cost,payment_status FROM spks WHERE id=?",
-      [spkId],
-      "SPK tidak ditemukan.",
-    );
-    await assertProjectAccess(user, String(spk.project_id));
-    const paidDate =
-      input.status === "Dibayar"
-        ? input.paidDate ?? now().slice(0, 10)
-        : null;
-    await client.execute({
-      sql: "UPDATE spks SET payment_status=?,paid_date=?,updated_at=? WHERE id=?",
-      args: [input.status, paidDate, now(), spkId],
-    });
-    await syncSpkTransaction(client, spkId, user.id);
-    await writeAuditLog(
-      client,
-      request,
-      user,
-      input.status === "Dibayar" ? "confirm_payment" : "cancel_payment",
-      "spk",
-      spkId,
-      { status: input.status, paidDate },
-    );
-    if (
-      input.status === "Dibayar" &&
-      String(spk.payment_status) !== "Dibayar"
-    ) {
-      await notifyProjectStakeholders(client, {
-        projectId: String(spk.project_id),
-        eventType: "spk_paid",
-        subject: `Pembayaran SPK ${String(spk.number)} dikonfirmasi`,
-        message: `pembayaran vendor sebesar Rp ${asNumber(spk.cost).toLocaleString("id-ID")} untuk SPK ${String(spk.number)} telah dicatat.`,
-        subjectEn: `Work Order ${String(spk.number)} payment confirmed`,
-        messageEn: `vendor payment of IDR ${asNumber(spk.cost).toLocaleString("en-US")} for Work Order ${String(spk.number)} was recorded.`,
-        includeFinance: true,
-      });
-    }
-    return ok(await getSpk(spkId));
-  }
-
-  if (spkId && action === "status" && request.method === "PATCH") {
-    if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah status SPK.");
-    const input = z.object({ status: z.enum(["Draft", "Dikirim", "Dikerjakan", "Selesai"]) }).parse(await jsonBody(request));
-    const spk = await ensureExists(
-      "SELECT project_id,status,number FROM spks WHERE id=?",
-      [spkId],
-      "SPK tidak ditemukan.",
-    );
-    await assertProjectAccess(user, String(spk.project_id));
-    await client.execute({ sql: "UPDATE spks SET status=?,updated_at=? WHERE id=?", args: [input.status, now(), spkId] });
-    await syncSpkTransaction(client, spkId, user.id);
-    await writeAuditLog(client, request, user, "update_status", "spk", spkId, input);
-    if (
-      input.status !== String(spk.status) &&
-      ["Dikirim", "Selesai"].includes(input.status)
-    ) {
-      await notifyProjectStakeholders(client, {
-        projectId: String(spk.project_id),
-        eventType: input.status === "Selesai" ? "spk_completed" : "spk_sent",
-        subject:
-          input.status === "Selesai"
-            ? `SPK ${String(spk.number)} selesai`
-            : `SPK ${String(spk.number)} dikirim`,
-        message:
-          input.status === "Selesai"
-            ? `pekerjaan pada SPK ${String(spk.number)} telah ditandai selesai.`
-            : `SPK ${String(spk.number)} telah dikirim untuk pelaksanaan.`,
-        subjectEn:
-          input.status === "Selesai"
-            ? `Work Order ${String(spk.number)} completed`
-            : `Work Order ${String(spk.number)} sent`,
-        messageEn:
-          input.status === "Selesai"
-            ? `the work in Work Order ${String(spk.number)} has been marked completed.`
-            : `Work Order ${String(spk.number)} has been sent for execution.`,
-        includeFinance: true,
-      });
-    }
-    return ok(await getSpk(spkId));
-  }
-
-  if (spkId && !action && request.method === "GET") {
+  if (!action) {
     const spk = await ensureExists("SELECT project_id FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
     await assertProjectAccess(user, String(spk.project_id));
     return ok(await getSpk(spkId));
-  }
-
-  if (spkId && !action && request.method === "PATCH") {
-    if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah SPK.");
-    const input = partialPatchSchema(spkSchema).parse(await jsonBody(request));
-    const current = await ensureExists("SELECT * FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
-    if (current.payment_status === "Dibayar") {
-      assertAccess(user, "finance", "manage");
-    }
-    await assertProjectAccess(user, String(current.project_id));
-    assertDateOrder(
-      input.startDate === undefined ? current.start_date : input.startDate,
-      input.endDate === undefined ? current.end_date : input.endDate,
-    );
-    if (input.projectId && input.projectId !== current.project_id) {
-      await assertProjectAccess(user, input.projectId);
-    }
-    if (input.vendorId) {
-      await ensureExists(
-        "SELECT id FROM vendors WHERE id=? AND status='Aktif'",
-        [input.vendorId],
-        "Vendor aktif tidak ditemukan.",
-      );
-    }
-    await client.execute({
-      sql: "UPDATE spks SET vendor_id=?,project_id=?,scope=?,cost=?,status=?,start_date=?,end_date=?,updated_at=? WHERE id=?",
-      args: [
-        input.vendorId ?? current.vendor_id,
-        input.projectId ?? current.project_id,
-        input.scope ?? current.scope,
-        input.cost ?? current.cost,
-        input.status ?? current.status,
-        input.startDate === undefined ? current.start_date : input.startDate,
-        input.endDate === undefined ? current.end_date : input.endDate,
-        now(),
-        spkId,
-      ],
-    });
-    await syncSpkTransaction(client, spkId, user.id);
-    await writeAuditLog(client, request, user, "update", "spk", spkId, input);
-    return ok(await getSpk(spkId));
-  }
-
-  if (spkId && !action && request.method === "DELETE") {
-    if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menghapus SPK.");
-    const spk = await ensureExists("SELECT project_id,payment_status FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
-    if (spk.payment_status === "Dibayar") {
-      assertAccess(user, "finance", "manage");
-    }
-    await assertProjectAccess(user, String(spk.project_id));
-    await detachOrDeleteSystemTransaction(client, "SPK", spkId);
-    await client.execute({
-      sql: "DELETE FROM spks WHERE id=?",
-      args: [spkId],
-    });
-    await writeAuditLog(client, request, user, "delete", "spk", spkId);
-    return noContent();
   }
 
   throw new ApiError(404, "NOT_FOUND", "Endpoint SPK tidak ditemukan.");
@@ -4649,10 +4172,21 @@ async function ensureValidation(
   const missing = boqItems.filter((item) => !known.has(String(item.id)));
   if (missing.length) {
     await client.batch(
-      missing.map((item) => ({
-        sql: "INSERT INTO project_validation_items (id,validation_id,boq_item_id,category,description,quantity,unit,checked,notes,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        args: [randomUUID(), validationId, item.id, item.category, item.description, item.quantity, item.unit, 0, "", item.sort_order, timestamp, timestamp],
-      })),
+      [
+        ...missing.map((item) => ({
+          sql: "INSERT INTO project_validation_items (id,validation_id,boq_item_id,category,description,quantity,unit,checked,notes,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+          args: [randomUUID(), validationId, item.id, item.category, item.description, item.quantity, item.unit, 0, "", item.sort_order, timestamp, timestamp],
+        })),
+        // New rows always land unchecked. A checklist that still reported
+        // 'Completed' would satisfy the BAST guard while carrying items nobody
+        // ever verified, so re-syncing an already-completed checklist sends it
+        // back to Draft.
+        {
+          sql: `UPDATE project_validations SET status='Draft',validated_by=NULL,
+            completed_at=NULL,updated_at=? WHERE id=? AND status<>'Draft'`,
+          args: [timestamp, validationId],
+        },
+      ],
       "write",
     );
   }
@@ -4732,6 +4266,29 @@ async function assertCompletedValidation(
       "Selesaikan checklist validasi Perangkat dan Material sebelum BAST diterbitkan.",
     );
   }
+  // 'Completed' alone only says the checklist was signed off at some point. An
+  // addendum accepted afterwards adds Perangkat/Material rows the checklist
+  // never covered, so the live BoQ of the package is compared against it.
+  const uncovered = await client.execute({
+    sql: `SELECT COUNT(*) AS count
+      FROM boq_items i
+      JOIN boqs b ON b.id=i.boq_id
+      JOIN boq_scopes s ON s.id=i.scope_id
+      WHERE b.project_id=? AND s.package_id=?
+        AND i.category IN ('Perangkat','Material')
+        AND NOT EXISTS (
+          SELECT 1 FROM project_validation_items vi
+          WHERE vi.validation_id=? AND vi.boq_item_id=i.id AND vi.checked=1
+        )`,
+    args: [projectId, packageId, String(result.rows[0].id)],
+  });
+  if (asNumber(uncovered.rows[0]?.count) > 0) {
+    throw new ApiError(
+      409,
+      "VALIDATION_STALE",
+      "BoQ paket ini berubah setelah checklist validasi diselesaikan. Sinkronkan dan centang ulang seluruh Perangkat dan Material sebelum BAST diterbitkan.",
+    );
+  }
 }
 
 async function handleValidations(request: Request, path: string[], user: AuthUser) {
@@ -4753,7 +4310,12 @@ async function handleValidations(request: Request, path: string[], user: AuthUse
     assertAccess(user, "bast", "manage");
     if (!projectId) throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
     await assertProjectAccess(user, projectId);
-    const packageId = await resolveCommercialPackageId(client, projectId, searchParams.get("packageId"));
+    const packageId = await resolveCommercialPackageId(
+      client,
+      projectId,
+      searchParams.get("packageId"),
+      { requireActive: true },
+    );
     const validation = await ensureValidation(projectId, packageId, deliveryCycle, user.id);
     await writeAuditLog(client, request, user, "create_or_sync", "project_validation", String(validation.id), { projectId, packageId, deliveryCycle });
     return created(validation);
@@ -5004,7 +4566,12 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
       throw new ApiError(409, "FINALIZE_ENDPOINT_REQUIRED", "Simpan BAST sebagai Draft, lalu gunakan proses finalisasi agar cap, hash, dan QR verifikasi diterapkan.");
     }
     await assertProjectAccess(user, input.projectId);
-    const packageId = await resolveCommercialPackageId(client, input.projectId, input.packageId ?? null);
+    const packageId = await resolveCommercialPackageId(
+      client,
+      input.projectId,
+      input.packageId ?? null,
+      { requireActive: true },
+    );
     await assertCompletedValidation(input.projectId, packageId, input.deliveryCycle);
     const existing = await client.execute({
       sql: `SELECT id FROM basts WHERE project_id=? AND package_id=?
@@ -5261,23 +4828,38 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
   throw new ApiError(404, "NOT_FOUND", "Endpoint BAST tidak ditemukan.");
 }
 
+// A transaction is manual only when it was typed in through POST
+// /api/transactions. Everything the system posts on behalf of a document carries
+// origin='system' and is off limits to manual CRUD, whatever its source string
+// happens to be.
+function isManualTransaction(row: Record<string, unknown>) {
+  return String(row.origin ?? "system") === "manual";
+}
+
+async function assertManualTransaction(
+  client: DatabaseClient,
+  row: Record<string, unknown>,
+  systemMessage: string,
+  reconciledMessage: string,
+) {
+  if (!isManualTransaction(row)) {
+    throw new ApiError(409, "SYSTEM_TRANSACTION", systemMessage);
+  }
+  // Even a manual row becomes evidence once a bank mutasi points at it:
+  // rewriting or deleting it silently breaks the reconciliation.
+  const reconciled = await client.execute({
+    sql: "SELECT id FROM bank_statement_entries WHERE transaction_id=? LIMIT 1",
+    args: [String(row.id)],
+  });
+  if (reconciled.rows.length) {
+    throw new ApiError(409, "TRANSACTION_RECONCILED", reconciledMessage);
+  }
+}
+
 function mapTransaction(
   row: Record<string, unknown>,
   language: AuthUser["preferredLanguage"] = "id",
 ) {
-  const source = String(row.source);
-  const isSystemTransaction =
-    source.startsWith("Bank:") ||
-    source === "Profit Share" ||
-    source === "Profit Share Reversal" ||
-    source === "Procurement Payment" ||
-    source === "Procurement Reversal" ||
-    source === "Invoice Payment" ||
-    source === "Invoice Payment Reversal" ||
-    source === "Tax Settlement" ||
-    source === "Tax Settlement Reversal" ||
-    (Boolean(row.reference_id) &&
-      (source === "Invoice" || source === "SPK"));
   return {
     id: String(row.id),
     date: localizedApiDate(row.date, language),
@@ -5287,10 +4869,14 @@ function mapTransaction(
     project: row.project_name ? String(row.project_name) : "Umum",
     description: localizedTransactionDescription(row.description, language),
     amount: asNumber(row.amount),
-    source,
+    source: String(row.source),
     categoryKey: String(row.category ?? "Lainnya"),
     category: localizedTransactionCategory(row.category, language),
-    editable: !isSystemTransaction,
+    editable: isManualTransaction(row),
+    // False while an imported bank mutasi has not been reconciled yet: the row
+    // is shown, but it must not be counted as cash (it usually duplicates a
+    // source-document transaction that already booked the same money).
+    countsAsCash: !Boolean(row.unreconciled_import),
   };
 }
 
@@ -5330,7 +4916,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       args.push(to);
     }
     const result = await client.execute({
-      sql: `SELECT t.*,p.name AS project_name FROM transactions t LEFT JOIN projects p ON p.id=t.project_id ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY t.date DESC,t.created_at DESC`,
+      sql: `SELECT t.*,p.name AS project_name,
+        CASE WHEN ${unreconciledImportCondition("t")} THEN 1 ELSE 0 END AS unreconciled_import
+        FROM transactions t LEFT JOIN projects p ON p.id=t.project_id ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY t.date DESC,t.created_at DESC`,
       args: args as never[],
     });
     const transactions = result.rows.map((row) =>
@@ -5378,7 +4966,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
               WHEN t.type='Pengeluaran' THEN -t.amount
               ELSE 0 END)
             FROM transactions t
-            WHERE t.project_id=p.id
+            WHERE t.project_id=p.id AND ${countsAsCashCondition("t")}
           ),0) AS net_profit,
           COALESCE((
             SELECT SUM(s.amount)
@@ -5730,6 +5318,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           amount: transaction.amount,
           source: transaction.source,
           category: transaction.category,
+          countsAsCash: transaction.countsAsCash,
         })),
         scopeLabel,
         user.preferredLanguage,
@@ -5780,7 +5369,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     const id = randomUUID();
     const timestamp = now();
     await client.execute({
-      sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,category,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,category,origin,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,'manual',?,?,?)",
       args: [id, input.projectId ?? null, input.date, input.type, input.description, input.amount, input.source, input.category, user.id, timestamp, timestamp],
     });
     await writeAuditLog(client, request, user, "create", "transaction", id, input);
@@ -5815,23 +5404,15 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         "Sumber Invoice, SPK, dan Bank hanya dibuat oleh sistem.",
       );
     }
-    if (
-      (current.reference_id &&
-        (current.source === "Invoice" || current.source === "SPK")) ||
-      String(current.source).startsWith("Bank:") ||
-      String(current.source).startsWith("Profit Share") ||
-      String(current.source).startsWith("Procurement ") ||
-      String(current.source).startsWith("Invoice Payment") ||
-      String(current.source).startsWith("Tax Settlement") ||
-      String(current.source).startsWith("Project Expense") ||
-      String(current.source).startsWith("Project Advance")
-    ) {
-      throw new ApiError(
-        409,
-        "SYSTEM_TRANSACTION",
-        "Transaksi otomatis harus diperbarui dari dokumen asal atau rekonsiliasi bank.",
-      );
-    }
+    // Allowlist, not denylist: only a row a human typed in through this very
+    // endpoint is editable. A denylist of source prefixes left every new system
+    // source tamperable until somebody remembered to extend it.
+    await assertManualTransaction(
+      client,
+      current,
+      "Transaksi otomatis harus diperbarui dari dokumen asal atau rekonsiliasi bank.",
+      "Transaksi ini sudah dicocokkan dengan mutasi bank. Lepaskan rekonsiliasinya terlebih dahulu.",
+    );
     if (input.projectId) await assertProjectAccess(user, input.projectId);
     await client.execute({
       sql: "UPDATE transactions SET project_id=?,date=?,type=?,description=?,amount=?,source=?,category=?,updated_at=? WHERE id=?",
@@ -5858,23 +5439,12 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     if (!current.project_id && !hasGlobalProjectScope(user)) {
       throw new ApiError(404, "NOT_FOUND", "Transaksi tidak ditemukan.");
     }
-    if (
-      (current.reference_id &&
-        (current.source === "Invoice" || current.source === "SPK")) ||
-      String(current.source).startsWith("Bank:") ||
-      String(current.source).startsWith("Profit Share") ||
-      String(current.source).startsWith("Procurement ") ||
-      String(current.source).startsWith("Invoice Payment") ||
-      String(current.source).startsWith("Tax Settlement") ||
-      String(current.source).startsWith("Project Expense") ||
-      String(current.source).startsWith("Project Advance")
-    ) {
-      throw new ApiError(
-        409,
-        "SYSTEM_TRANSACTION",
-        "Transaksi otomatis hanya dapat dihapus dari dokumen asal atau rekonsiliasi bank.",
-      );
-    }
+    await assertManualTransaction(
+      client,
+      current,
+      "Transaksi otomatis hanya dapat dihapus dari dokumen asal atau rekonsiliasi bank.",
+      "Transaksi ini sudah dicocokkan dengan mutasi bank. Lepaskan rekonsiliasinya terlebih dahulu.",
+    );
     await client.execute({ sql: "DELETE FROM transactions WHERE id=?", args: [transactionId] });
     await writeAuditLog(client, request, user, "delete", "transaction", transactionId);
     return noContent();
@@ -5913,13 +5483,24 @@ async function handleFinance(request: Request, user: AuthUser) {
     conditions.push("date<=?");
     args.push(to);
   }
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  // Reported cash never includes a bank line that has not been reconciled yet;
+  // that figure is returned separately so it stays visible instead of hidden.
+  const reportedWhere = conditions.length
+    ? `WHERE ${[...conditions, countsAsCashCondition()].join(" AND ")}`
+    : `WHERE ${countsAsCashCondition()}`;
+  const pendingWhere = conditions.length
+    ? `WHERE ${[...conditions, unreconciledImportCondition()].join(" AND ")}`
+    : `WHERE ${unreconciledImportCondition()}`;
   const totals = await client.execute({
-    sql: `SELECT COALESCE(SUM(CASE WHEN type='Pemasukan' THEN amount ELSE 0 END),0) AS income,COALESCE(SUM(CASE WHEN type='Pengeluaran' THEN amount ELSE 0 END),0) AS expense FROM transactions ${where}`,
+    sql: `SELECT COALESCE(SUM(CASE WHEN type='Pemasukan' THEN amount ELSE 0 END),0) AS income,COALESCE(SUM(CASE WHEN type='Pengeluaran' THEN amount ELSE 0 END),0) AS expense FROM transactions ${reportedWhere}`,
+    args: args as never[],
+  });
+  const pending = await client.execute({
+    sql: `SELECT COUNT(*) AS entries,COALESCE(SUM(CASE WHEN type='Pemasukan' THEN amount ELSE 0 END),0) AS income,COALESCE(SUM(CASE WHEN type='Pengeluaran' THEN amount ELSE 0 END),0) AS expense FROM transactions ${pendingWhere}`,
     args: args as never[],
   });
   const monthly = await client.execute({
-    sql: `SELECT substr(date,1,7) AS month,COALESCE(SUM(CASE WHEN type='Pemasukan' THEN amount ELSE 0 END),0) AS income,COALESCE(SUM(CASE WHEN type='Pengeluaran' THEN amount ELSE 0 END),0) AS expense FROM transactions ${where} GROUP BY substr(date,1,7) ORDER BY month`,
+    sql: `SELECT substr(date,1,7) AS month,COALESCE(SUM(CASE WHEN type='Pemasukan' THEN amount ELSE 0 END),0) AS income,COALESCE(SUM(CASE WHEN type='Pengeluaran' THEN amount ELSE 0 END),0) AS expense FROM transactions ${reportedWhere} GROUP BY substr(date,1,7) ORDER BY month`,
     args: args as never[],
   });
   const income = asNumber(totals.rows[0]?.income);
@@ -5929,6 +5510,11 @@ async function handleFinance(request: Request, user: AuthUser) {
     expense,
     netCash: income - expense,
     cashRatio: income ? ((income - expense) / income) * 100 : 0,
+    unreconciled: {
+      entries: asNumber(pending.rows[0]?.entries),
+      income: asNumber(pending.rows[0]?.income),
+      expense: asNumber(pending.rows[0]?.expense),
+    },
     monthly: monthly.rows.map((row) => ({
       month: String(row.month),
       income: asNumber(row.income),

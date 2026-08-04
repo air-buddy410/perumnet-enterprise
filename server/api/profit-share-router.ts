@@ -5,6 +5,7 @@ import { canAccess } from "@/shared/access";
 import { z } from "zod";
 import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
+import { countsAsCashCondition } from "../cash-ledger";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { asNumber } from "../format";
 import {
@@ -73,7 +74,7 @@ async function operatingProfit(client: DatabaseClient, projectId: string) {
           WHEN type='Pengeluaran' AND source NOT IN ('Profit Share','Profit Share Reversal')
           THEN amount ELSE 0 END),0) AS expense
       FROM transactions
-      WHERE project_id=?
+      WHERE project_id=? AND ${countsAsCashCondition()}
     `,
     args: [projectId],
   });
@@ -472,8 +473,8 @@ export async function handleProfitShares(
         {
           sql: `
             INSERT INTO transactions
-              (id,project_id,date,type,description,amount,source,reference_id,category,created_by,created_at,updated_at)
-            VALUES (?,? ,?,'Pengeluaran',?,?,'Profit Share',?,'Bagi Hasil',?,?,?)
+              (id,project_id,date,type,description,amount,source,reference_id,category,origin,created_by,created_at,updated_at)
+            VALUES (?,? ,?,'Pengeluaran',?,?,'Profit Share',?,'Bagi Hasil','system',?,?,?)
           `,
           args: [
             transactionId,
@@ -548,8 +549,8 @@ export async function handleProfitShares(
               {
                 sql: `
                   INSERT INTO transactions
-                    (id,project_id,date,type,description,amount,source,reference_id,category,created_by,created_at,updated_at)
-                  VALUES (?,?,?,'Pemasukan',?,?,'Profit Share Reversal',?,'Bagi Hasil',?,?,?)
+                    (id,project_id,date,type,description,amount,source,reference_id,category,origin,created_by,created_at,updated_at)
+                  VALUES (?,?,?,'Pemasukan',?,?,'Profit Share Reversal',?,'Bagi Hasil','system',?,?,?)
                 `,
                 args: [
                   reversalId,

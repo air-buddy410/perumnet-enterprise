@@ -49,6 +49,9 @@ export type FinancialReportEntry = {
   amount: number;
   source: string;
   category: string;
+  // False for an imported bank line nobody has reconciled yet. The line is
+  // still printed, it just does not count towards the reported cash.
+  countsAsCash?: boolean;
 };
 
 export type FinancialReportBankAccount = {
@@ -1820,10 +1823,11 @@ export async function renderFinancialReportPdf(
       ? `${displayDate(sortedDates[0], language)} ${tr(language, "s.d.", "to")} ${displayDate(sortedDates.at(-1), language)}`
       : tr(language, "Belum ada transaksi", "No transactions yet");
   const reportDate = localIsoDate();
-  const income = entries
+  const booked = entries.filter((entry) => entry.countsAsCash !== false);
+  const income = booked
     .filter((entry) => entry.type === "Pemasukan")
     .reduce((sum, entry) => sum + entry.amount, 0);
-  const expense = entries
+  const expense = booked
     .filter((entry) => entry.type === "Pengeluaran")
     .reduce((sum, entry) => sum + entry.amount, 0);
   const netCash = income - expense;

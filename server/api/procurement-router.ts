@@ -1615,8 +1615,8 @@ async function payOrder(
       await tx.execute({
         sql: `INSERT INTO transactions
           (id,project_id,date,type,description,amount,source,reference_id,category,
-           created_by,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+           origin,created_by,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
         args: [
           transactionId,
           current.projectId,
@@ -1729,8 +1729,8 @@ async function voidPayment(
       await tx.execute({
         sql: `INSERT INTO transactions
         (id,project_id,date,type,description,amount,source,reference_id,category,
-         created_by,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+         origin,created_by,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
         args: [
           randomUUID(),
           order.projectId,

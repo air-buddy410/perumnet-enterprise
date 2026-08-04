@@ -109,6 +109,27 @@ export function messageOf(error: unknown, language: "id" | "en" = "id") {
         "Finance cannot approve a document it created, submitted, or paid for itself. Ask another approver.",
       OVERRIDE_REASON_REQUIRED:
         "An administrator must state a reason when approving their own submission.",
+      LEGACY_ENDPOINT_READ_ONLY:
+        "Work orders can only be read here. Create, pay, and close them in Procurement so approval, verification, payment evidence, and the audit trail stay complete.",
+      PACKAGE_NOT_ACTIVE:
+        "This commercial package is no longer active, so it cannot take new documents. Reactivate it or pick another package.",
+      INVALID_PACKAGE_STATUS:
+        "That package status change does not follow the workflow. A cancelled (Void) package cannot be reactivated.",
+      REPORTING_DOWNGRADE_FORBIDDEN:
+        "Tax reporting only moves forward. Only an administrator can walk back a status that was already reported, and only with a recorded reason.",
+      REPORTING_REASON_REQUIRED:
+        "State a reason for lowering the tax reporting status so it lands in the audit trail.",
+      REPORT_REFERENCE_REQUIRED:
+        "Enter the tax return reference before marking the obligation as reported.",
+      SYSTEM_TRANSACTION:
+        "This cash entry was posted by a source document. Change it there, not in the ledger.",
+      TRANSACTION_RECONCILED:
+        "This entry is already matched to a bank statement line. Release the reconciliation first.",
+      VALIDATION_STALE:
+        "The BoQ of this package changed after the checklist was completed. Re-sync and re-check every Device and Material before issuing the handover certificate.",
+      BOQ_BELOW_INVOICED_TOTAL:
+        "The BoQ cannot fall below the invoices already issued for this package. Edit or delete those invoices first.",
+      PACKAGE_NOT_FOUND: "That commercial package was not found in this project.",
     };
     return error.code && messages[error.code]
       ? messages[error.code]

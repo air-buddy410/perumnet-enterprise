@@ -1067,7 +1067,7 @@ test("scenario D1: an addendum created in a second package stays inside that pac
     `/api/projects/${project.id}/packages`,
     {
       method: "POST",
-      body: JSON.stringify({ title: "Paket Kosong", status: "Draft", sortOrder: 2 }),
+      body: JSON.stringify({ title: "Paket Kosong", status: "Active", sortOrder: 2 }),
     },
     201,
   );

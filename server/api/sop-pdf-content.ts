@@ -436,6 +436,14 @@ export const chapterStart: Chapter = {
     },
     {
       kind: "note",
+      title: ["Status paket komersial", "The commercial package lifecycle"],
+      text: [
+        "Paket baru langsung berstatus Aktif dan hanya paket Aktif yang menerima dokumen baru — BoQ, Quotation, Invoice, Validasi Perangkat, BAST, dan Addendum. Paket yang pekerjaannya sudah tuntas dapat diubah menjadi Selesai, dan paket yang batal dijual diubah menjadi Batal (Void). Keduanya menolak dokumen baru, tetapi seluruh dokumen lamanya tetap dapat dibaca, diunduh, dan dicetak seperti biasa. Paket Selesai masih dapat diaktifkan kembali bila ada pekerjaan susulan; Batal bersifat final dan tidak dapat dihidupkan lagi. Paket yang sudah memiliki dokumen memang tidak dapat dihapus — mengubah statusnya menjadi Batal adalah cara mempensiunkannya.",
+        "A new package starts as Active, and only an Active package accepts new documents — BoQ, quotation, invoice, device validation, handover certificate, and addendum. A package whose work is finished can be set to Completed, and one that was called off can be set to Void. Both refuse new documents, while every document already on them stays readable, downloadable, and printable as before. A Completed package can still be reactivated when late work arrives; Void is final and can never be revived. A package that already carries documents cannot be deleted — setting it to Void is how it is retired.",
+      ],
+    },
+    {
+      kind: "note",
       title: ["Menghapus proyek", "Deleting a project"],
       text: [
         "Menghapus proyek hanya dapat dilakukan Admin, dan hanya selama proyek itu belum memiliki riwayat kas sama sekali. Begitu ada pembayaran invoice, pembayaran vendor, penyelesaian belanja proyek, setoran pajak, atau satu pun transaksi di Pembukuan, penghapusan ditolak — uang yang sudah tercatat tidak boleh hilang bersama proyeknya. Proyek seperti itu ditutup atau diarsipkan: ubah statusnya menjadi Selesai dan biarkan dokumen serta pembukuannya tetap utuh. Proyek yang benar-benar salah buat dan belum menyentuh uang tetap dapat dihapus seperti biasa; saat itu terjadi, jumlah dokumen yang ikut terhapus dicatat di audit log.",
@@ -869,6 +877,10 @@ export const chapterAddendum: Chapter = {
           "Menghapus addendum yang sudah dipakai dokumen procurement atau sudah diterima klien. Keduanya ditolak; addendum yang diterima bersifat final seperti penawaran biasa.",
           "Deleting an addendum that a procurement document already uses or that the client has accepted. Both are refused; an accepted addendum is final just like an ordinary quotation.",
         ],
+        [
+          "Mengira mengubah item sebuah lingkup akan menulis ulang penawaran yang sudah terkirim. Tidak. Penawaran yang sudah Terkirim digantikan revisi baru berstatus Draft yang memuat angka barunya, sementara revisi lama tersimpan sebagai Digantikan lengkap dengan rincian yang dulu dikirim ke klien. Nilai lingkup juga tidak boleh turun di bawah total Invoice yang sudah terbit untuk paket itu.",
+          "Assuming that changing a scope's items rewrites the quotation that was already sent. It does not. A Sent quotation is superseded by a new Draft revision carrying the new figures, while the old revision is kept as Superseded with exactly the lines the client received. The scope value may also never fall below the invoices already issued for that package.",
+        ],
       ],
     },
   ],
@@ -908,6 +920,10 @@ export const chapterProcurement: Chapter = {
         [
           "Siapkan master vendor lebih dulu. Buat kategori vendor, lalu vendor bertipe Supplier, Jasa, atau Hybrid, dan pastikan statusnya Aktif.",
           "Set up the vendor master first. Create a vendor category, then a vendor typed Supplier, Jasa (services), or Hybrid, and make sure its status is Aktif (active).",
+        ],
+        [
+          "Seluruh siklus SPK dan PO — membuat, mengubah, menyetujui, memverifikasi, membayar, dan menutup — berjalan di layar Procurement & Vendor. Tidak ada jalur lain: dokumen vendor hanya dapat dibaca dari luar layar itu.",
+          "The whole Work Order and PO cycle — creating, editing, approving, verifying, paying, and closing — runs on the Procurement & Vendors screen. There is no second route: from anywhere else a vendor document can only be read.",
         ],
         [
           "Pilih jenis dokumen. SPK untuk pekerjaan Jasa atau Mobilitas, PO untuk Perangkat atau Material. SPK memerlukan vendor bertipe Jasa atau Hybrid; PO memerlukan vendor bertipe Supplier atau Hybrid. Jenis dokumen tidak dapat diubah setelah dokumen dibuat.",
@@ -1026,6 +1042,10 @@ export const chapterHandover: Chapter = {
           "Press Complete validation. The button only becomes active once every item is ticked.",
         ],
         [
+          "Bila BoQ paket ini berubah setelah validasi diselesaikan — misalnya sebuah Addendum menambah Perangkat atau Material — daftar pemeriksaan otomatis kembali menjadi Draft dan seluruh centangnya hilang. Buka lagi Validasi Perangkat, sinkronkan daftarnya, periksa item yang baru di lokasi, lalu selesaikan validasi sekali lagi sebelum BAST dibuat.",
+          "If this package's BoQ changes after the checklist was completed — an Addendum adding a Device or Material, for instance — the checklist automatically returns to Draft and every tick is cleared. Open Device Validation again, re-sync the list, inspect the new items on site, and complete the validation once more before creating the certificate.",
+        ],
+        [
           "Buka BAST Digital, buat dokumen serah terima untuk paket dan siklus tersebut, lalu lengkapi datanya.",
           "Open Digital Handover, create the handover certificate for that package and cycle, then complete its details.",
         ],
@@ -1068,6 +1088,10 @@ export const chapterHandover: Chapter = {
         [
           "Membuat BAST sebelum validasi diselesaikan. Aplikasi menolak pada saat pembuatan dan sekali lagi pada saat finalisasi.",
           "Creating a certificate before validation is complete. The application refuses at creation and again at finalization.",
+        ],
+        [
+          "Menerbitkan BAST atas validasi lama sesudah Addendum diterima. Aplikasi menolak karena daftar pemeriksaan itu tidak pernah mencakup item tambahannya; validasi harus disinkronkan dan dicentang ulang.",
+          "Issuing a certificate against an old validation after an Addendum was accepted. The application refuses because that checklist never covered the extra items; the validation has to be re-synced and re-checked.",
         ],
         [
           "Mengedit BoQ setelah checklist diselesaikan. Setiap perubahan item BoQ mengembalikan checklist ke status Draft dan menghapus centangnya, sehingga pemeriksaan harus diulang.",
@@ -1250,16 +1274,24 @@ export const chapterBank: Chapter = {
           "For entries that are still unmatched, open the candidate list and press Match. Here the application offers records with the same direction and amount within a 14-day window.",
         ],
         [
-          "Mutasi yang bukan urusan proyek, misalnya biaya administrasi bank atau mutasi pribadi, dapat dikecualikan dari pembukuan. Mutasi yang dikecualikan dapat dikembalikan sewaktu-waktu.",
-          "Entries that have nothing to do with the projects, such as bank charges or personal movements, can be excluded from the books. An excluded entry can be restored at any time.",
+          "Mutasi yang bukan urusan proyek, misalnya biaya administrasi bank atau mutasi pribadi, dapat dikecualikan dari pembukuan. Mutasi yang dikecualikan dapat dikembalikan sewaktu-waktu, dan saat dikembalikan ia menempel lagi ke catatan yang sama seperti sebelum dikecualikan, bukan membuat catatan bank baru.",
+          "Entries that have nothing to do with the projects, such as bank charges or personal movements, can be excluded from the books. An excluded entry can be restored at any time, and on restore it re-attaches to the very record it was booked against before, rather than creating a fresh bank record.",
         ],
       ],
     },
     {
       kind: "locked",
       text: [
-        "Pencocokan menghapus catatan bank yang menduplikasi, bukan catatan Invoice atau SPK yang menjadi sumbernya. Pembayaran yang sudah dicocokkan harus dilepas pencocokannya sebelum dapat di-void, baik itu pembayaran invoice, pembayaran vendor, belanja proyek, settlement pajak, maupun bagi hasil.",
-        "Matching removes the duplicating bank record, never the Invoice or Work Order record that is its source. A payment that has been matched must be unmatched before it can be voided, whether it is an invoice payment, a vendor payment, a project expense, a tax settlement, or a profit share.",
+        "Pencocokan menghapus catatan bank yang menduplikasi, bukan catatan Invoice atau SPK yang menjadi sumbernya. Pembayaran yang sudah dicocokkan harus dilepas pencocokannya sebelum dapat di-void, baik itu pembayaran invoice, pembayaran vendor, belanja proyek, settlement pajak, maupun bagi hasil. Transaksi manual yang sudah dicocokkan pun ikut terkunci: ia tidak dapat diedit maupun dihapus sebelum pencocokannya dilepas.",
+        "Matching removes the duplicating bank record, never the Invoice or Work Order record that is its source. A payment that has been matched must be unmatched before it can be voided, whether it is an invoice payment, a vendor payment, a project expense, a tax settlement, or a profit share. A manual entry that has been matched locks in the same way: it can be neither edited nor deleted until the reconciliation is released.",
+      ],
+    },
+    {
+      kind: "note",
+      title: ["Mutasi yang belum dicocokkan tidak dihitung sebagai kas", "An unreconciled entry is not counted as cash"],
+      text: [
+        "Baris mutasi yang tidak memiliki pasangan tunggal saat impor tetap masuk daftar, tetapi tidak ikut dihitung dalam Kas masuk, Kas keluar, Kas bersih, grafik bulanan, laba proyek, maupun laba yang aman dibagikan. Alasannya sederhana: baris itu hampir selalu adalah uang yang sudah tercatat lewat invoice, pembayaran vendor, atau setoran pajak, sehingga menghitungnya berarti menghitung uang yang sama dua kali. Ringkasan Pembukuan menampilkan jumlah mutasi yang belum dicocokkan secara terpisah supaya angkanya terlihat, bukan tersembunyi. Begitu mutasi itu dicocokkan, ia langsung ikut terhitung melalui catatan sumbernya.",
+        "A statement line that had no single counterpart at import still appears in the list, but it is left out of Cash in, Cash out, Net cash, the monthly chart, project profit, and the profit that is safe to distribute. The reason is simple: such a line is nearly always money that an invoice, a vendor payment, or a tax settlement already recorded, so counting it would count the same money twice. The Finance summary reports the unreconciled figure separately so it stays visible rather than hidden. As soon as the entry is matched it counts again, through its source record.",
       ],
     },
     {
@@ -1270,8 +1302,8 @@ export const chapterBank: Chapter = {
           "Uploading a scan or a screenshot. Use the original e-statement whose text can be selected; an image file cannot be read by the application.",
         ],
         [
-          "Membuat transaksi manual di Buku Kas untuk kas yang sudah berasal dari mutasi, invoice, atau SPK. Inilah cara paling cepat merusak angka laporan.",
-          "Creating a manual entry in the Cash Ledger for cash that already came from a statement, an invoice, or a Work Order. This is the fastest way to break the report figures.",
+          "Membuat transaksi manual di Buku Kas untuk kas yang sudah berasal dari mutasi, invoice, atau SPK. Inilah cara paling cepat merusak angka laporan. Catatan yang dibuat aplikasi sendiri memang tidak dapat diedit atau dihapus dari Buku Kas; perbaikannya selalu lewat dokumen sumbernya.",
+          "Creating a manual entry in the Cash Ledger for cash that already came from a statement, an invoice, or a Work Order. This is the fastest way to break the report figures. Entries the application posts itself cannot be edited or deleted from the Cash Ledger at all; they are always corrected through their source document.",
         ],
         [
           "Menghapus rekening yang pernah dipakai. Aplikasi menolak; nonaktifkan rekeningnya agar histori tetap utuh.",
@@ -1330,6 +1362,10 @@ export const chapterTax: Chapter = {
           "Press Report to record the tax period, tax invoice number, invoice date, and reporting reference. To mark the status as Reported, the reporting reference is mandatory.",
         ],
         [
+          "Status pelaporan hanya bergerak maju: Kandidat, Siap, Dilaporkan, lalu Selesai. Membatalkan (Void) masih bebas selama posisi itu belum dilaporkan. Setelah dilaporkan, hanya Admin yang dapat menurunkan statusnya dan wajib menuliskan alasannya; tanggal serta identitas pelapor tidak pernah dihapus, sehingga bukti bahwa laporan pernah dikirim tetap ada.",
+          "The reporting status only moves forward: Candidate, Ready, Reported, then Settled. Voiding is still free while the position has not been reported. Once it has, only an Admin may lower the status and must state a reason; the filing date and the identity of whoever filed it are never erased, so the evidence that a return was submitted always survives.",
+        ],
+        [
           "Tekan Settlement untuk mencatat penyetoran: nominal, tanggal, referensi pembayaran, metode, dan rekening perusahaan bila metodenya Transfer Bank. Unggah bukti setornya, karena lampiran ini wajib.",
           "Press Settlement to record the payment: amount, date, payment reference, method, and the company bank account when the method is a bank transfer. Upload the payment receipt, as this attachment is mandatory.",
         ],
@@ -1364,6 +1400,10 @@ export const chapterTax: Chapter = {
         [
           "Mengubah tarif master lalu berharap dokumen lama ikut berubah. Tidak akan. Bila dokumen lama memang keliru dan belum diterima klien, perbaiki dokumennya, bukan tarif masternya.",
           "Changing a master rate and expecting older documents to follow. They will not. If an older document really is wrong and has not been accepted yet, fix the document, not the master rate.",
+        ],
+        [
+          "Menurunkan status pelaporan agar invoice-nya bisa dihapus. Itu menghapus jejak pelaporan yang sudah dikirim ke DJP. Bila invoice memang keliru, koreksi lewat pembatalan setoran dan penerbitan dokumen pengganti, bukan lewat mengubah status pelaporan.",
+          "Lowering the reporting status just to unlock an invoice for deletion. That erases the trail of a return already filed with the tax office. If an invoice really is wrong, correct it by voiding the settlement and issuing a replacement document, not by moving the reporting status.",
         ],
         [
           "Menghapus invoice yang kewajiban pajaknya sudah dilaporkan atau disetor. Aplikasi menolak agar pelaporan pajak tetap konsisten.",
@@ -1945,6 +1985,51 @@ export const chapterMessages: Chapter = {
           message: ["Quotation ini tidak dapat dibatalkan karena Invoice-nya sudah menerima pembayaran.", "The quotation cannot be voided because its invoice has already received a payment."],
           meaning: ["Uang klien sudah masuk atas dasar penawaran ini, jadi membatalkannya akan menghapus dasar penagihannya.", "Client money has already come in on the strength of this quotation, so voiding it would remove the basis of the billing."],
           action: ["Buka jendela pembayaran invoice, tekan Void pada pembayarannya dan isi alasannya, hapus invoicenya bila memang keliru, baru batalkan penawarannya. Bila invoicenya masih terbit tanpa pembayaran, aplikasi tetap menolak dengan pesan bahwa penawaran sudah memiliki Invoice.", "Open the invoice payment window, press Void on the payment and give a reason, delete the invoice if it really is wrong, and only then void the quotation. While the invoice still exists without a payment, the application still refuses with the message that the quotation already has an invoice."],
+        },
+        {
+          message: ["Endpoint SPK lama hanya dapat dibaca. Gunakan /api/procurement-orders.", "Work orders can only be read here; use the Procurement screen."],
+          meaning: ["Sebuah layar atau integrasi lama mencoba membuat, mengubah, membayar, atau menghapus SPK di luar layar Procurement & Vendor. Jalur lama itu pernah mencatat pembayaran vendor dua kali.", "An old screen or integration tried to create, change, pay, or delete a Work Order outside the Procurement & Vendors screen. That old route used to record vendor payments twice."],
+          action: ["Kerjakan seluruh siklusnya di Procurement & Vendor: Buat, Ajukan, Setujui, Kirim, Verifikasi, Bayar, lalu Selesai. Membaca dan mengunduh PDF SPK tetap dapat dilakukan dari mana pun.", "Do the whole cycle on the Procurement & Vendors screen: Create, Submit, Approve, Send, Verify, Pay, then Complete. Reading a Work Order and downloading its PDF still works from anywhere."],
+        },
+        {
+          message: ["Paket berstatus Selesai atau Batal sehingga tidak dapat menerima dokumen baru.", "The package is Completed or Void, so it cannot take new documents."],
+          meaning: ["Paket komersial yang dipilih sudah dipensiunkan. Hanya paket Aktif yang menerima BoQ, Quotation, Invoice, validasi, BAST, dan Addendum baru.", "The selected commercial package has been retired. Only an Active package accepts a new BoQ, quotation, invoice, validation, certificate, or addendum."],
+          action: ["Pilih paket lain di bagian atas layar, atau minta paket Selesai diaktifkan kembali. Paket Batal tidak dapat dihidupkan lagi — buat paket baru bila pekerjaannya memang berlanjut. Dokumen lama pada paket itu tetap dapat dibaca dan diunduh.", "Choose another package at the top of the screen, or ask for a Completed package to be reactivated. A Void package can never be revived — create a new package if the work really continues. The documents already on it stay readable and downloadable."],
+        },
+        {
+          message: ["Perubahan status paket tidak sesuai urutan workflow.", "That package status change does not follow the workflow."],
+          meaning: ["Anda mencoba mengaktifkan kembali paket yang sudah Batal. Batal adalah status akhir.", "You are trying to reactivate a package that is already Void. Void is terminal."],
+          action: ["Buat paket komersial baru untuk pekerjaan itu. Paket lama tetap tersimpan lengkap dengan dokumennya sebagai riwayat.", "Create a new commercial package for that work. The old one stays with all of its documents as history."],
+        },
+        {
+          message: ["Status pelaporan hanya dapat maju. Hanya Admin yang dapat menurunkannya, dengan alasan tercatat.", "Tax reporting only moves forward; only an Admin can walk it back, with a recorded reason."],
+          meaning: ["Posisi pajak ini sudah dilaporkan, dan Anda mencoba mengembalikannya ke status sebelumnya atau membatalkannya.", "This tax position has already been reported and you are trying to return it to an earlier status or void it."],
+          action: ["Bila laporan memang perlu dikoreksi, minta Admin menurunkan statusnya sambil menuliskan alasannya; tanggal dan identitas pelapor tetap tersimpan. Bila hanya ingin menghapus invoicenya, jangan lakukan ini — terbitkan dokumen pengganti.", "If the return genuinely needs correcting, ask an Admin to lower the status while stating a reason; the filing date and filer are kept either way. If the goal is merely to delete the invoice, do not do this — issue a replacement document instead."],
+        },
+        {
+          message: ["Isi alasan penurunan status pelaporan pajak.", "State a reason for lowering the tax reporting status."],
+          meaning: ["Admin menurunkan status pelaporan tanpa menuliskan alasan.", "An Admin is lowering a reporting status without writing a reason."],
+          action: ["Tulis alasan yang bermakna, minimal 10 karakter, misalnya SPT dikoreksi untuk masa yang sama. Alasan itu masuk ke jejak audit.", "Write a meaningful reason of at least 10 characters, for example that the return is being corrected for the same period. The reason lands in the audit trail."],
+        },
+        {
+          message: ["Transaksi otomatis harus diperbarui dari dokumen asal atau rekonsiliasi bank.", "This cash entry was posted by a source document; change it there."],
+          meaning: ["Baris ini dicatat aplikasi dari invoice, pembayaran vendor, belanja proyek, setoran pajak, bagi hasil, atau mutasi bank. Buku Kas hanya menyunting baris yang memang diketik manusia.", "The application posted this line from an invoice, a vendor payment, a project expense, a tax settlement, a profit share, or a bank statement. The Cash Ledger only edits lines a human typed in."],
+          action: ["Buka dokumen sumbernya dan perbaiki di sana — void pembayarannya, lalu catat ulang dengan angka yang benar.", "Open the source document and fix it there — void the payment, then record it again with the correct figures."],
+        },
+        {
+          message: ["Transaksi ini sudah dicocokkan dengan mutasi bank. Lepaskan rekonsiliasinya terlebih dahulu.", "This entry is already matched to a bank statement line; release the reconciliation first."],
+          meaning: ["Sebuah baris mutasi menunjuk transaksi ini sebagai pasangannya, jadi mengubah atau menghapusnya akan merusak rekonsiliasi.", "A statement line points at this transaction as its counterpart, so changing or deleting it would break the reconciliation."],
+          action: ["Buka Pembukuan, bagian Rekening perusahaan, kecualikan atau cocokkan ulang mutasinya, baru sunting transaksinya.", "Open Finance, the Company banking section, exclude or re-match that entry, and only then edit the transaction."],
+        },
+        {
+          message: ["BoQ paket ini berubah setelah checklist validasi diselesaikan.", "This package's BoQ changed after the checklist was completed."],
+          meaning: ["Ada item Perangkat atau Material baru, biasanya dari Addendum, yang tidak pernah tercakup dalam daftar pemeriksaan yang sudah ditandatangani.", "New Device or Material items, usually from an Addendum, were never covered by the checklist that was signed off."],
+          action: ["Buka Validasi Perangkat, sinkronkan daftarnya, periksa item baru di lokasi, centang seluruhnya, lalu selesaikan validasi sekali lagi sebelum menerbitkan BAST.", "Open Device Validation, re-sync the list, inspect the new items on site, tick them all, and complete the validation once more before issuing the certificate."],
+        },
+        {
+          message: ["Nilai BoQ tidak boleh lebih kecil dari total Invoice yang sudah diterbitkan.", "The BoQ may not fall below the invoices already issued."],
+          meaning: ["Perubahan yang Anda simpan akan membuat nilai paket lebih kecil daripada jumlah yang sudah ditagihkan ke klien.", "The change you are saving would make the package worth less than what has already been billed to the client."],
+          action: ["Hapus atau perbaiki dulu invoice terminnya selama belum ada pembayaran, baru turunkan nilai BoQ-nya.", "Delete or correct the installment invoices first while they still have no payments, and only then reduce the BoQ value."],
         },
         {
           message: ["Perubahan status Quotation tidak sesuai urutan workflow.", "That quotation status change does not follow the workflow."],

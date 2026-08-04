@@ -763,56 +763,32 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     },
     201,
   );
-  const spk = await json(
-    "/api/spks",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        vendorId: vendor.id,
-        projectId: project.id,
-        scope: "Pekerjaan integrasi jaringan",
-        cost: 500_000,
-        status: "Draft",
-      }),
-    },
-    201,
-  );
+  // The legacy /api/spks write surface is gone. It posted a `source='SPK'`
+  // outflow of the whole contract whenever `payment_status` read 'Dibayar' — the
+  // very flag the modern procurement flow sets once its payments are posted — so
+  // an ordinary "Selesai" click booked the same vendor cash a second time.
+  // Everything except reading now answers 410; see the dedicated regression
+  // test at the bottom of this file for the money proof.
+  for (const [path, method, body] of [
+    ["/api/spks", "POST", { vendorId: vendor.id, projectId: project.id, scope: "Pekerjaan integrasi jaringan", cost: 500_000, status: "Draft" }],
+    ["/api/spks/spk-1", "PATCH", { cost: 1 }],
+    ["/api/spks/spk-1/status", "PATCH", { status: "Selesai" }],
+    ["/api/spks/spk-1/payment", "PATCH", { status: "Dibayar", paidDate: "2026-07-29" }],
+    ["/api/spks/spk-1", "DELETE", undefined],
+  ]) {
+    const refused = await request(path, {
+      method,
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    assert.equal(refused.status, 410, `${method} ${path}`);
+    assert.equal((await refused.json()).error.code, "LEGACY_ENDPOINT_READ_ONLY");
+  }
   assert.equal(
-    (await json(`/api/spks/${spk.id}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({ status: "Dikerjakan" }),
-    })).status,
-    "Dikerjakan",
-  );
-  const editedSpk = await json(`/api/spks/${spk.id}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      scope: "Pekerjaan integrasi jaringan dan dokumentasi",
-      cost: 600_000,
-      status: "Selesai",
-      endDate: "2026-07-29",
-    }),
-  });
-  assert.equal(editedSpk.cost, 600_000);
-  let spkTransactions = await json(`/api/transactions?projectId=${project.id}`);
-  assert.equal(editedSpk.paymentStatus, "Belum Dibayar");
-  assert.equal(
-    spkTransactions.some((entry) => entry.source === "SPK"),
+    (await json(`/api/transactions?projectId=${project.id}`)).some(
+      (entry) => entry.source === "SPK",
+    ),
     false,
-  );
-  const paidSpk = await json(`/api/spks/${spk.id}/payment`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      status: "Dibayar",
-      paidDate: "2026-07-29",
-    }),
-  });
-  assert.equal(paidSpk.paymentStatus, "Dibayar");
-  assert.equal(paidSpk.paidDate, "2026-07-29");
-  spkTransactions = await json(`/api/transactions?projectId=${project.id}`);
-  assert.equal(
-    spkTransactions.find((entry) => entry.source === "SPK")?.amount,
-    600_000,
+    "a refused legacy call books nothing",
   );
   const financialPdf = await request(
     `/api/transactions/report.pdf?projectId=${project.id}`,
@@ -820,52 +796,6 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   assert.equal(financialPdf.status, 200);
   assert.equal(financialPdf.headers.get("content-type"), "application/pdf");
   assert.ok((await financialPdf.arrayBuffer()).byteLength > 5_000);
-  await json(`/api/spks/${spk.id}/status`, {
-    method: "PATCH",
-    body: JSON.stringify({ status: "Dikerjakan" }),
-  });
-  spkTransactions = await json(`/api/transactions?projectId=${project.id}`);
-  assert.equal(
-    spkTransactions.some((entry) => entry.source === "SPK"),
-    true,
-  );
-  const unpaidSpk = await json(`/api/spks/${spk.id}/payment`, {
-    method: "PATCH",
-    body: JSON.stringify({ status: "Belum Dibayar" }),
-  });
-  assert.equal(unpaidSpk.paymentStatus, "Belum Dibayar");
-  spkTransactions = await json(`/api/transactions?projectId=${project.id}`);
-  assert.equal(spkTransactions.some((entry) => entry.source === "SPK"), false);
-  await json(`/api/spks/${spk.id}/status`, {
-    method: "PATCH",
-    body: JSON.stringify({ status: "Selesai" }),
-  });
-  const completedSpkDeliveries = (
-    await json("/api/notifications/email")
-  ).filter((delivery) => delivery.eventType === "spk_completed");
-  assert.ok(completedSpkDeliveries.length > 0);
-  assert.ok(
-    completedSpkDeliveries.every(
-      (delivery) =>
-        delivery.subject.includes(spk.number) &&
-        !delivery.subject.includes("undefined"),
-    ),
-  );
-  await json(`/api/spks/${spk.id}/status`, {
-    method: "PATCH",
-    body: JSON.stringify({ status: "Selesai" }),
-  });
-  assert.equal(
-    (await json("/api/notifications/email")).filter(
-      (delivery) => delivery.eventType === "spk_completed",
-    ).length,
-    completedSpkDeliveries.length,
-  );
-  await json(`/api/spks/${spk.id}/payment`, {
-    method: "PATCH",
-    body: JSON.stringify({ status: "Dibayar", paidDate: "2026-07-29" }),
-  });
-  assert.equal((await request(`/api/spks/${spk.id}/pdf`)).status, 200);
 
   const blockedBast = await request("/api/bast", {
     method: "POST",
@@ -1000,8 +930,11 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   assert.equal(transaction.category, "Operasional");
   const finance = await json(`/api/finance/summary?projectId=${project.id}`);
   assert.equal(finance.income, 1_600_000);
-  assert.equal(finance.expense, 1_525_000);
-  assert.equal(finance.netCash, 75_000);
+  // 600.000 lower than before: the legacy SPK endpoint no longer conjures a
+  // vendor outflow out of a status change.
+  assert.equal(finance.expense, 925_000);
+  assert.equal(finance.netCash, 675_000);
+  assert.deepEqual(finance.unreconciled, { entries: 0, income: 0, expense: 0 });
 
   const incorrectBonus = await json(
     "/api/transactions",
@@ -1048,7 +981,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     { method: "POST" },
   );
   assert.equal(approvedAllocation.status, "Approved");
-  assert.equal(approvedAllocation.amount, 12_500);
+  assert.equal(approvedAllocation.amount, 162_500);
   const paidAllocation = await json(
     `/api/profit-shares/${allocation.id}/pay`,
     {
@@ -1060,10 +993,10 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   const profitSummary = await json(
     `/api/profit-shares?projectId=${project.id}`,
   );
-  assert.equal(profitSummary.netProfit, 50_000);
-  assert.equal(profitSummary.allocatedAmount, 12_500);
-  assert.equal(profitSummary.paidAmount, 12_500);
-  assert.equal(profitSummary.retainedProfit, 37_500);
+  assert.equal(profitSummary.netProfit, 650_000);
+  assert.equal(profitSummary.allocatedAmount, 162_500);
+  assert.equal(profitSummary.paidAmount, 162_500);
+  assert.equal(profitSummary.retainedProfit, 487_500);
   assert.equal(
     (
       await request("/api/profit-shares", {
@@ -1080,7 +1013,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   const financeAfterDistribution = await json(
     `/api/finance/summary?projectId=${project.id}`,
   );
-  assert.equal(financeAfterDistribution.netCash, 37_500);
+  assert.equal(financeAfterDistribution.netCash, 487_500);
 
   const bankAccount = await json(
     "/api/bank-accounts",
@@ -2098,6 +2031,10 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   ).find((entry) => entry.id === ambiguousEntry.id);
   assert.equal(reconciledEntry.reconciliationStatus, "Excluded");
   assert.equal(reconciledEntry.transactionId, undefined);
+  // Restoring re-attaches the mutasi to the transaction it was booked against.
+  // Minting a fresh `Bank:` row here used to leave the ledger carrying both the
+  // original transaction and its duplicate for the same rupiah, permanently.
+  const ledgerBeforeRestore = await json("/api/transactions");
   await json(
     `/api/bank-accounts/${bankAccount.id}/entries/${ambiguousEntry.id}/reconcile`,
     {
@@ -2108,68 +2045,18 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   reconciledEntry = (
     await json(`/api/bank-accounts/${bankAccount.id}/entries`)
   ).find((entry) => entry.id === ambiguousEntry.id);
-  assert.equal(reconciledEntry.reconciliationStatus, "Imported");
-  assert.ok(reconciledEntry.transactionId);
-
-  const paidSpkStatementForm = new FormData();
-  paidSpkStatementForm.set(
-    "file",
-    new File(
-      [
-        [
-          "Tanggal,Keterangan,Mutasi,Saldo,Referensi",
-          "30/07/2026,PEMBAYARAN VENDOR SPK,600000 DB,647500,TRX-SPK",
-        ].join("\r\n"),
-      ],
-      "Mutasi-SPK.csv",
-      { type: "text/csv" },
-    ),
-  );
-  paidSpkStatementForm.set("statementMonth", "2026-07");
-  const paidSpkImport = await json(
-    `/api/bank-accounts/${bankAccount.id}/import`,
-    { method: "POST", body: paidSpkStatementForm },
-    201,
-  );
-  assert.equal(paidSpkImport.matchedCount, 1);
-  let paidSpkEntry = (
-    await json(`/api/bank-accounts/${bankAccount.id}/entries`)
-  ).find((entry) => entry.reference === "TRX-SPK");
-  assert.equal(paidSpkEntry.reconciliationStatus, "Matched");
-  await json(`/api/spks/${spk.id}/payment`, {
-    method: "PATCH",
-    body: JSON.stringify({ status: "Belum Dibayar" }),
-  });
-  paidSpkEntry = (
-    await json(`/api/bank-accounts/${bankAccount.id}/entries`)
-  ).find((entry) => entry.reference === "TRX-SPK");
-  assert.equal(paidSpkEntry.reconciliationStatus, "Imported");
-  assert.ok(
-    (await json("/api/transactions")).some(
-      (entry) =>
-        entry.id === paidSpkEntry.transactionId &&
-        entry.source === "Bank: BCA",
-    ),
-  );
-  await json(`/api/spks/${spk.id}/payment`, {
-    method: "PATCH",
-    body: JSON.stringify({ status: "Dibayar", paidDate: "2026-07-29" }),
-  });
-  paidSpkEntry = (
-    await json(`/api/bank-accounts/${bankAccount.id}/entries`)
-  ).find((entry) => entry.reference === "TRX-SPK");
-  assert.equal(paidSpkEntry.reconciliationStatus, "Matched");
+  assert.equal(reconciledEntry.reconciliationStatus, "Matched");
+  assert.equal(reconciledEntry.transactionId, ambiguousTransactions[0].id);
+  const ledgerAfterRestore = await json("/api/transactions");
   assert.equal(
-    (await json("/api/transactions")).filter(
-      (entry) => entry.source === "SPK" && entry.amount === 600_000,
-    ).length,
-    1,
+    ledgerAfterRestore.length,
+    ledgerBeforeRestore.length,
+    "restore re-attaches instead of inventing a second transaction",
   );
   assert.equal(
-    (await json("/api/transactions")).filter(
-      (entry) => entry.source.startsWith("Bank:") && entry.amount === 600_000,
-    ).length,
-    0,
+    ledgerAfterRestore.filter((entry) => entry.amount === 444_123).length,
+    2,
+    "still only the two manual candidates carry this amount",
   );
 
   const acceptanceAttachment = {
@@ -2204,10 +2091,6 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   );
   assert.equal(acceptedOriginal.status, "Accepted");
   assert.equal(acceptedOriginal.quotation.status, "Accepted");
-  assert.equal(
-    (await request(`/api/vendors/${vendor.id}`, { method: "DELETE" })).status,
-    409,
-  );
   const disposableVendor = await json("/api/vendors", {
     method: "POST",
     body: JSON.stringify({
@@ -3354,6 +3237,11 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     },
   );
   assert.equal(editedFinanceSpk.cost, 240_000);
+  // A vendor that carries a procurement document can never be deleted.
+  assert.equal(
+    (await request(`/api/vendors/${vendor.id}`, { method: "DELETE" })).status,
+    409,
+  );
   await json(`/api/procurement-orders/${financeSpk.id}/submit`, {
     method: "POST",
   });
@@ -3640,9 +3528,10 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     ).status,
     403,
   );
+  // The legacy vendor-payment endpoint is gone for every role, not just this one.
   assert.equal(
     (
-      await request(`/api/spks/${spk.id}/payment`, {
+      await request(`/api/spks/${financeSpk.id}/payment`, {
         method: "PATCH",
         body: JSON.stringify({
           status: "Dibayar",
@@ -3650,7 +3539,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
         }),
       })
     ).status,
-    403,
+    410,
   );
   assert.equal(
     (
@@ -3671,20 +3560,20 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   );
   assert.equal(
     (
-      await request(`/api/spks/${spk.id}`, {
+      await request(`/api/spks/${financeSpk.id}`, {
         method: "PATCH",
         body: JSON.stringify({ scope: "Tidak boleh mengubah kas" }),
       })
     ).status,
-    403,
+    410,
   );
   assert.equal(
     (
-      await request(`/api/spks/${spk.id}`, {
+      await request(`/api/spks/${financeSpk.id}`, {
         method: "DELETE",
       })
     ).status,
-    403,
+    410,
   );
   const projectManagerProject = await json("/api/projects", {
     method: "POST",
@@ -3802,7 +3691,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     403,
   );
   assert.equal((await request(`/api/boq?projectId=${project.id}`)).status, 404);
-  assert.equal((await request(`/api/spks/${spk.id}/pdf`)).status, 404);
+  assert.equal((await request(`/api/spks/${financeSpk.id}/pdf`)).status, 404);
 
   await json("/api/auth/logout", { method: "POST" });
   cookie = "";
@@ -3899,7 +3788,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   await json(`/api/projects/${numberingSecond.id}`, { method: "DELETE" }, 204);
   // The refused deletions above left every document and every rupiah in place.
   assert.equal((await request(`/api/invoices/${invoice.id}`)).status, 200);
-  assert.equal((await request(`/api/spks/${spk.id}`)).status, 200);
+  assert.equal((await request(`/api/spks/${financeSpk.id}`)).status, 200);
   assert.equal((await request(`/api/bast/${bast.id}`)).status, 200);
   assert.equal(
     (await json("/api/transactions")).some(
@@ -4762,4 +4651,916 @@ test("voiding a paid profit share posts a reversal instead of deleting the payou
     422,
     "the reserved source cannot be created by hand",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Regression: eight money-integrity defects found in the August 2026 audit.
+// Each of these fails on the code that shipped before the fix.
+// ---------------------------------------------------------------------------
+
+async function regressionBankAccount(label, openingBalance = 5_000_000) {
+  return await json(
+    "/api/bank-accounts",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        bankName: label,
+        accountName: `PerumNet ${label}`,
+        accountNumber: `${Date.now()}`.slice(-10),
+        openingBalance,
+        syncMode: "Manual",
+      }),
+    },
+    201,
+  );
+}
+
+test("H4: a work order paid through procurement-orders books vendor cash once, and the legacy SPK routes cannot double it", async () => {
+  await loginAsAdmin();
+  const project = await createRegressionProject("Proyek Kas Vendor Ganda");
+  await addRegressionBoqItem(project.id, null, "Jasa", 4_000_000, "Instalasi vendor ganda");
+  const accepted = await acceptRegressionQuotation(project.id, null, "kas-vendor-ganda");
+  const serviceItem = accepted.scope.items.find((item) => item.category === "Jasa");
+  const vendor = await json(
+    "/api/vendors",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Vendor Kas Ganda",
+        vendorType: "Jasa",
+        category: "Teknisi Jaringan",
+        contact: "081200003333",
+        rate: 0,
+        status: "Aktif",
+      }),
+    },
+    201,
+  );
+  const bankAccount = await regressionBankAccount("BNI Vendor");
+  const order = await json(
+    "/api/procurement-orders",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        documentType: "SPK",
+        vendorId: vendor.id,
+        projectId: project.id,
+        quotationId: accepted.quotationId,
+        items: [{ boqItemId: serviceItem.id, quantity: 1, agreedUnitCost: 2_000_000 }],
+        terms: [{ label: "Pelunasan", type: "Final", percentage: 100 }],
+      }),
+    },
+    201,
+  );
+  await json(`/api/procurement-orders/${order.id}/submit`, { method: "POST" });
+  await json(`/api/procurement-orders/${order.id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ overrideReason: "Persetujuan Admin untuk pengujian regresi kas." }),
+  });
+  const sent = await json(`/api/procurement-orders/${order.id}/send`, { method: "POST" });
+  await json(
+    `/api/procurement-orders/${order.id}/verifications`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        termId: sent.terms[0].id,
+        verifiedAmount: 2_000_000,
+        progressPercentage: 100,
+        notes: "Progres lapangan diverifikasi.",
+      }),
+    },
+    201,
+  );
+  const paid = await json(
+    `/api/procurement-orders/${order.id}/payments`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        termId: sent.terms[0].id,
+        amount: 2_000_000,
+        paidDate: fieldToday,
+        vendorInvoiceNumber: "TAG-VND-001",
+        paymentReference: "BNI-VND-001",
+        paymentMethod: "Transfer Bank",
+        bankAccountId: bankAccount.id,
+        attachment: fieldAttachment("bukti-vendor"),
+      }),
+    },
+    201,
+  );
+  assert.equal(paid.paymentStatus, "Lunas");
+
+  const outflow = async () =>
+    (await json(`/api/transactions?projectId=${project.id}`))
+      .filter((entry) => entry.type === "Pengeluaran")
+      .reduce((sum, entry) => sum + entry.amount, 0);
+  assert.equal(await outflow(), 2_000_000, "one payment, one outflow");
+
+  // The paid order now reads payment_status='Dibayar'. Marking the work order
+  // "Selesai" through the legacy endpoint used to post a second outflow of the
+  // whole contract on top of the real payment.
+  for (const [path, method, body] of [
+    [`/api/spks/${order.id}/status`, "PATCH", { status: "Selesai" }],
+    [`/api/spks/${order.id}/payment`, "PATCH", { status: "Dibayar", paidDate: fieldToday }],
+    [`/api/spks/${order.id}`, "PATCH", { cost: 9_000_000 }],
+    [`/api/spks/${order.id}`, "DELETE", undefined],
+  ]) {
+    const refused = await request(path, {
+      method,
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    assert.equal(refused.status, 410, `${method} ${path}`);
+    assert.equal((await refused.json()).error.code, "LEGACY_ENDPOINT_READ_ONLY");
+  }
+  const ledger = await json(`/api/transactions?projectId=${project.id}`);
+  assert.equal(ledger.some((entry) => entry.source === "SPK"), false);
+  assert.equal(await outflow(), 2_000_000, "no phantom vendor outflow");
+  // Reading a work order stays available.
+  assert.equal((await request(`/api/spks/${order.id}`)).status, 200);
+
+  // Voiding the real payment must leave nothing behind.
+  await json(
+    `/api/procurement-orders/${order.id}/payments/${paid.payments[0].id}/void`,
+    {
+      method: "POST",
+      body: JSON.stringify({ reason: "Pembayaran vendor dicatat ulang." }),
+    },
+  );
+  const afterVoid = await json(`/api/transactions?projectId=${project.id}`);
+  const netVendorCash = afterVoid.reduce(
+    (sum, entry) =>
+      entry.category === "Vendor"
+        ? sum + (entry.type === "Pengeluaran" ? entry.amount : -entry.amount)
+        : sum,
+    0,
+  );
+  assert.equal(netVendorCash, 0, "the reversal cancels the payment exactly");
+  assert.equal(afterVoid.some((entry) => entry.source === "SPK"), false);
+});
+
+test("H2: an unreconciled imported mutasi is visible but is never counted as cash", async () => {
+  await loginAsAdmin();
+  const project = await createRegressionProject("Proyek Impor Mutasi");
+  const bankAccount = await regressionBankAccount("BRI Impor");
+  // Two candidates of the same direction and amount inside the settlement
+  // window, so the importer cannot auto-match and the mutasi lands 'Imported'
+  // with a `Bank:` transaction of its own next to real, already-booked cash.
+  for (const date of ["2027-03-05", "2027-03-06"]) {
+    await json(
+      "/api/transactions",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          projectId: project.id,
+          date,
+          type: "Pemasukan",
+          description: `Pelunasan klien ${date}`,
+          amount: 250_000,
+          source: "Manual",
+          category: "Penjualan",
+        }),
+      },
+      201,
+    );
+  }
+  const windowQuery = "from=2027-03-01&to=2027-03-31";
+  const before = await json(`/api/finance/summary?${windowQuery}`);
+  assert.equal(before.income, 500_000);
+
+  const statement = new FormData();
+  statement.set(
+    "file",
+    new File(
+      [
+        [
+          "Tanggal,Keterangan,Mutasi,Saldo,Referensi",
+          "05/03/2027,PELUNASAN KLIEN,250000 CR,5250000,TRX-IMPOR",
+        ].join("\r\n"),
+      ],
+      "Mutasi-Impor.csv",
+      { type: "text/csv" },
+    ),
+  );
+  statement.set("statementMonth", "2027-03");
+  const imported = await json(
+    `/api/bank-accounts/${bankAccount.id}/import`,
+    { method: "POST", body: statement },
+    201,
+  );
+  assert.equal(imported.matchedCount, 0, "ambiguous, so no auto-match");
+  assert.equal(imported.createdCount, 1);
+
+  const after = await json(`/api/finance/summary?${windowQuery}`);
+  assert.equal(after.income, 500_000, "reported cash never doubles on import");
+  assert.equal(after.netCash, 500_000);
+  assert.deepEqual(after.unreconciled, {
+    entries: 1,
+    income: 250_000,
+    expense: 0,
+  });
+  const bankRow = (await json("/api/transactions")).find(
+    (entry) => entry.source.startsWith("Bank:") && entry.amount === 250_000,
+  );
+  assert.ok(bankRow, "the mutasi is still listed, never hidden");
+  assert.equal(bankRow.countsAsCash, false);
+  assert.equal(after.monthly.find((row) => row.month === "2027-03").income, 500_000);
+
+  // Reconciling it to the transaction it really belongs to keeps the total the
+  // same and clears the pending figure.
+  const entry = (
+    await json(`/api/bank-accounts/${bankAccount.id}/entries`)
+  ).find((row) => row.reference === "TRX-IMPOR");
+  const candidates = await json(
+    `/api/bank-accounts/${bankAccount.id}/entries/${entry.id}/candidates`,
+  );
+  await json(
+    `/api/bank-accounts/${bankAccount.id}/entries/${entry.id}/reconcile`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ action: "match", transactionId: candidates[0].id }),
+    },
+  );
+  const reconciled = await json(`/api/finance/summary?${windowQuery}`);
+  assert.equal(reconciled.income, 500_000);
+  assert.deepEqual(reconciled.unreconciled, { entries: 0, income: 0, expense: 0 });
+});
+
+test("H1: excluding and restoring a matched mutasi re-attaches it instead of booking the cash twice", async () => {
+  await loginAsAdmin();
+  const project = await createRegressionProject("Proyek Kecualikan Mutasi");
+  const bankAccount = await regressionBankAccount("Mandiri Kecuali");
+  const booked = await json(
+    "/api/transactions",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        date: "2027-04-10",
+        type: "Pemasukan",
+        description: "Pelunasan proyek kecualikan",
+        amount: 777_000,
+        source: "Manual",
+        category: "Penjualan",
+      }),
+    },
+    201,
+  );
+  const statement = new FormData();
+  statement.set(
+    "file",
+    new File(
+      [
+        [
+          "Tanggal,Keterangan,Mutasi,Saldo,Referensi",
+          "10/04/2027,PELUNASAN PROYEK,777000 CR,5777000,TRX-KEC",
+        ].join("\r\n"),
+      ],
+      "Mutasi-Kecualikan.csv",
+      { type: "text/csv" },
+    ),
+  );
+  statement.set("statementMonth", "2027-04");
+  const imported = await json(
+    `/api/bank-accounts/${bankAccount.id}/import`,
+    { method: "POST", body: statement },
+    201,
+  );
+  assert.equal(imported.matchedCount, 1);
+  const entry = (
+    await json(`/api/bank-accounts/${bankAccount.id}/entries`)
+  ).find((row) => row.reference === "TRX-KEC");
+  assert.equal(entry.transactionId, booked.id);
+
+  const windowQuery = "from=2027-04-01&to=2027-04-30";
+  assert.equal((await json(`/api/finance/summary?${windowQuery}`)).income, 777_000);
+
+  await json(
+    `/api/bank-accounts/${bankAccount.id}/entries/${entry.id}/reconcile`,
+    { method: "PATCH", body: JSON.stringify({ action: "exclude" }) },
+  );
+  assert.equal(
+    (await json(`/api/finance/summary?${windowQuery}`)).income,
+    777_000,
+    "excluding the mutasi keeps the source-document transaction",
+  );
+
+  const restored = await json(
+    `/api/bank-accounts/${bankAccount.id}/entries/${entry.id}/reconcile`,
+    { method: "PATCH", body: JSON.stringify({ action: "restore" }) },
+  );
+  assert.equal(restored.reconciliationStatus, "Matched");
+  const restoredEntry = (
+    await json(`/api/bank-accounts/${bankAccount.id}/entries`)
+  ).find((row) => row.id === entry.id);
+  assert.equal(
+    restoredEntry.transactionId,
+    booked.id,
+    "the mutasi returns to the very transaction it was booked against",
+  );
+  const summary = await json(`/api/finance/summary?${windowQuery}`);
+  assert.equal(summary.income, 777_000, "777.000 of cash, booked once");
+  assert.deepEqual(summary.unreconciled, { entries: 0, income: 0, expense: 0 });
+  assert.equal(
+    (await json("/api/transactions")).filter((row) => row.amount === 777_000).length,
+    1,
+  );
+});
+
+test("H6: manual transaction CRUD only reaches rows a human typed in", async () => {
+  await loginAsAdmin();
+  const ledger = await json("/api/transactions");
+  // Bootstrap rows carry a system source with no reference_id. The old
+  // denylist let both through because its Invoice/SPK clause required a
+  // reference_id.
+  const seededSystemRow = ledger.find(
+    (entry) => entry.id === "trx-2" || entry.source === "Invoice",
+  );
+  assert.ok(seededSystemRow, "the seeded Invoice row is present in dev mode");
+  assert.equal(seededSystemRow.editable, false);
+  const rewritten = await request(`/api/transactions/${seededSystemRow.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ amount: 1 }),
+  });
+  assert.equal(rewritten.status, 409);
+  assert.equal((await rewritten.json()).error.code, "SYSTEM_TRANSACTION");
+  const seededVendorRow = ledger.find((entry) => entry.source === "SPK");
+  assert.ok(seededVendorRow);
+  assert.equal(seededVendorRow.editable, false);
+  assert.equal(
+    (await request(`/api/transactions/${seededVendorRow.id}`, { method: "DELETE" })).status,
+    409,
+  );
+  assert.equal(
+    (await json("/api/transactions")).find((entry) => entry.id === seededSystemRow.id).amount,
+    seededSystemRow.amount,
+    "the refused edit changed nothing",
+  );
+
+  // A genuinely manual row stays editable until a bank mutasi points at it.
+  const project = await createRegressionProject("Proyek Transaksi Manual");
+  const bankAccount = await regressionBankAccount("BSI Manual");
+  const manual = await json(
+    "/api/transactions",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        date: "2027-05-12",
+        type: "Pengeluaran",
+        description: "Biaya operasional manual",
+        amount: 123_000,
+        source: "Operasional",
+        category: "Operasional",
+      }),
+    },
+    201,
+  );
+  assert.equal(manual.editable, true);
+  assert.equal(
+    (
+      await json(`/api/transactions/${manual.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ amount: 124_000 }),
+      })
+    ).amount,
+    124_000,
+  );
+  const statement = new FormData();
+  statement.set(
+    "file",
+    new File(
+      [
+        [
+          "Tanggal,Keterangan,Mutasi,Saldo,Referensi",
+          "12/05/2027,BIAYA OPERASIONAL MANUAL,124000 DB,4876000,TRX-MAN",
+        ].join("\r\n"),
+      ],
+      "Mutasi-Manual.csv",
+      { type: "text/csv" },
+    ),
+  );
+  statement.set("statementMonth", "2027-05");
+  assert.equal(
+    (
+      await json(
+        `/api/bank-accounts/${bankAccount.id}/import`,
+        { method: "POST", body: statement },
+        201,
+      )
+    ).matchedCount,
+    1,
+  );
+  const locked = await request(`/api/transactions/${manual.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ amount: 999_000 }),
+  });
+  assert.equal(locked.status, 409);
+  assert.equal((await locked.json()).error.code, "TRANSACTION_RECONCILED");
+  assert.equal(
+    (await request(`/api/transactions/${manual.id}`, { method: "DELETE" })).status,
+    409,
+  );
+});
+
+test("H3: tax reporting only moves forward, and walking it back needs an Admin and a reason", async () => {
+  await loginAsAdmin();
+  await json("/api/tax/settings", {
+    method: "PATCH",
+    body: JSON.stringify({ enabled: true }),
+  });
+  const rules = await json("/api/tax/rules");
+  const ppn = rules.find((rule) => rule.code === "PPN");
+  await json(`/api/tax/rules/${ppn.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ rateBps: 1_100, status: "Active" }),
+  });
+  const project = await createRegressionProject("Proyek Pelaporan Pajak");
+  await addRegressionBoqItem(project.id, null, "Jasa", 1_000_000, "Jasa pelaporan pajak");
+  const draftQuotation = await json(`/api/quotations?projectId=${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status: "Draft",
+      issuedAt: "2027-06-01",
+      validUntil: "2027-12-31",
+    }),
+  });
+  await json(`/api/quotations/${draftQuotation.id}/tax-mode`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled: true }),
+  });
+  await json(`/api/quotations/${draftQuotation.id}/taxes`, {
+    method: "PUT",
+    body: JSON.stringify({ ruleIds: [ppn.id] }),
+  });
+  const taxQuotation = await acceptRegressionQuotation(project.id, null, "pelaporan-pajak");
+  const invoice = await json(
+    "/api/invoices",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        quotationId: taxQuotation.quotationId,
+        type: "Termin Pajak Regresi",
+        issueDate: "2027-06-01",
+        dueDate: "2027-06-15",
+        calculationMode: "Percent",
+        installmentPercent: 50,
+      }),
+    },
+    201,
+  );
+  const obligation = (await json("/api/tax/obligations")).find(
+    (row) => row.documentId === invoice.id && row.ruleCode === "PPN",
+  );
+  assert.ok(obligation, "issuing the invoice created the VAT obligation");
+  assert.equal(obligation.reportingStatus, "Candidate");
+
+  // Forward is free for Finance-manage.
+  await json(`/api/tax/obligations/${obligation.id}/reporting`, {
+    method: "PATCH",
+    body: JSON.stringify({ reportingStatus: "Ready", taxPeriod: "2027-06" }),
+  });
+  await json(`/api/tax/obligations/${obligation.id}/reporting`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      reportingStatus: "Reported",
+      taxPeriod: "2027-06",
+      returnReference: "SPT-2027-06-0001",
+    }),
+  });
+  const reported = (await json("/api/tax/obligations")).find(
+    (row) => row.id === obligation.id,
+  );
+  assert.equal(reported.reportingStatus, "Reported");
+  // A reported invoice is locked for deletion.
+  assert.equal(
+    (await request(`/api/invoices/${invoice.id}`, { method: "DELETE" })).status,
+    409,
+  );
+
+  // Admin without a reason cannot walk it back.
+  const noReason = await request(`/api/tax/obligations/${obligation.id}/reporting`, {
+    method: "PATCH",
+    body: JSON.stringify({ reportingStatus: "Candidate" }),
+  });
+  assert.equal(noReason.status, 422);
+  assert.equal((await noReason.json()).error.code, "REPORTING_REASON_REQUIRED");
+  const voidAfterFiling = await request(
+    `/api/tax/obligations/${obligation.id}/reporting`,
+    { method: "PATCH", body: JSON.stringify({ reportingStatus: "Void" }) },
+  );
+  assert.equal(voidAfterFiling.status, 422);
+  assert.equal(
+    (await json("/api/tax/obligations")).find((row) => row.id === obligation.id)
+      .reportingStatus,
+    "Reported",
+    "the refused downgrade changed nothing",
+  );
+  assert.equal(
+    (await request(`/api/invoices/${invoice.id}`, { method: "DELETE" })).status,
+    409,
+    "and the invoice stays locked",
+  );
+
+  // Finance may never downgrade, reason or not.
+  const financeUser = await json(
+    "/api/users",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Finance Pelaporan Regresi",
+        email: "finance.pelaporan@perumnet.id",
+        password: "Finance-Pelaporan-2027",
+        role: "Finance",
+        status: "Aktif",
+      }),
+    },
+    201,
+  );
+  assert.equal(financeUser.role, "Finance");
+  await request("/api/auth/logout", { method: "POST" });
+  cookie = "";
+  await json("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "finance.pelaporan@perumnet.id",
+      password: "Finance-Pelaporan-2027",
+      remember: false,
+    }),
+  });
+  const financeDowngrade = await request(
+    `/api/tax/obligations/${obligation.id}/reporting`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        reportingStatus: "Candidate",
+        overrideReason: "Finance mencoba membuka kunci pelaporan pajak.",
+      }),
+    },
+  );
+  assert.equal(financeDowngrade.status, 403);
+  assert.equal(
+    (await financeDowngrade.json()).error.code,
+    "REPORTING_DOWNGRADE_FORBIDDEN",
+  );
+
+  // Admin with an audited reason may, and the filing evidence survives.
+  await loginAsAdmin();
+  await json(`/api/tax/obligations/${obligation.id}/reporting`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      reportingStatus: "Candidate",
+      overrideReason: "SPT dikoreksi, pelaporan diulang untuk masa yang sama.",
+    }),
+  });
+  const downgraded = (await json("/api/tax/obligations")).find(
+    (row) => row.id === obligation.id,
+  );
+  assert.equal(downgraded.reportingStatus, "Candidate");
+  assert.ok(downgraded.reportedAt, "reported_at is never cleared");
+  assert.equal(downgraded.returnReference, "SPT-2027-06-0001");
+});
+
+test("H5: a retired commercial package refuses new documents and cannot be revived", async () => {
+  await loginAsAdmin();
+  const project = await createRegressionProject("Proyek Paket Pensiun");
+  const packages = await json(`/api/projects/${project.id}/packages`);
+  const main = packages[0];
+  assert.equal(main.status, "Active");
+  const retired = await json(
+    `/api/projects/${project.id}/packages`,
+    {
+      method: "POST",
+      body: JSON.stringify({ title: "Paket Pensiun", status: "Active", sortOrder: 1 }),
+    },
+    201,
+  );
+  await addRegressionBoqItem(project.id, retired.id, "Perangkat", 1_000_000, "Perangkat pensiun");
+  const voided = await json(`/api/projects/${project.id}/packages/${retired.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Void" }),
+  });
+  assert.equal(voided.status, "Void");
+
+  const refusals = [
+    [`/api/boq/items?projectId=${project.id}&packageId=${retired.id}`, "POST", {
+      category: "Perangkat",
+      description: "Perangkat setelah void",
+      quantity: 1,
+      unit: "unit",
+      costPrice: 1,
+      sellingPrice: 2,
+    }],
+    [`/api/quotations?projectId=${project.id}&packageId=${retired.id}`, "PATCH", { status: "Sent" }],
+    [`/api/boq/scopes?projectId=${project.id}&packageId=${retired.id}`, "POST", {
+      title: "Addendum setelah void",
+      items: [{
+        category: "Jasa",
+        description: "Pekerjaan setelah void",
+        quantity: 1,
+        unit: "paket",
+        costPrice: 1,
+        sellingPrice: 2,
+      }],
+    }],
+    ["/api/invoices", "POST", {
+      projectId: project.id,
+      packageId: retired.id,
+      type: "Tagihan setelah void",
+      issueDate: "2027-07-01",
+      dueDate: "2027-07-15",
+      amount: 1_000,
+    }],
+    [`/api/validations?projectId=${project.id}&packageId=${retired.id}`, "POST", undefined],
+    ["/api/bast", "POST", {
+      projectId: project.id,
+      packageId: retired.id,
+      completionDate: fieldToday,
+      notes: "Serah terima pada paket yang sudah dibatalkan.",
+      installedItems: [{ name: "Perangkat", quantity: "1 unit", status: "Terpasang" }],
+      clientName: "Klien Regresi",
+      clientRole: "Manager",
+      engineerName: "Dewa Mahardika",
+      engineerRole: "Engineer",
+      status: "Draft",
+    }],
+  ];
+  for (const [path, method, body] of refusals) {
+    const refused = await request(path, {
+      method,
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    assert.equal(refused.status, 409, `${method} ${path}`);
+    assert.equal(
+      (await refused.json()).error.code,
+      "PACKAGE_NOT_ACTIVE",
+      `${method} ${path}`,
+    );
+  }
+
+  // History on the retired package stays readable.
+  assert.equal(
+    (await json(`/api/boq?projectId=${project.id}&packageId=${retired.id}`)).items.length,
+    1,
+  );
+  assert.equal(
+    (await json(`/api/boq/scopes?projectId=${project.id}&packageId=${retired.id}`)).length,
+    1,
+  );
+  assert.equal(
+    (await request(`/api/quotations?projectId=${project.id}&packageId=${retired.id}`)).status,
+    200,
+  );
+
+  // Void is terminal.
+  const revived = await request(`/api/projects/${project.id}/packages/${retired.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Active" }),
+  });
+  assert.equal(revived.status, 409);
+  assert.equal((await revived.json()).error.code, "INVALID_PACKAGE_STATUS");
+  // Renaming a Void package is still allowed — the status simply does not move.
+  assert.equal(
+    (
+      await json(`/api/projects/${project.id}/packages/${retired.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ title: "Paket Pensiun (arsip)" }),
+      })
+    ).status,
+    "Void",
+  );
+  // The untouched package keeps working.
+  await addRegressionBoqItem(project.id, main.id, "Perangkat", 2_000_000, "Perangkat utama");
+
+  // The package switcher creates a package without sending a status. That
+  // package has to be usable, otherwise the only reachable status would be one
+  // that refuses every document.
+  const fromSwitcher = await json(
+    `/api/projects/${project.id}/packages`,
+    { method: "POST", body: JSON.stringify({ title: "Paket Dari Switcher" }) },
+    201,
+  );
+  assert.equal(fromSwitcher.status, "Active");
+  await addRegressionBoqItem(
+    project.id,
+    fromSwitcher.id,
+    "Perangkat",
+    500_000,
+    "Perangkat paket switcher",
+  );
+});
+
+test("H7: an addendum sends the handover checklist back to Draft before a BAST can be issued", async () => {
+  await loginAsAdmin();
+  const project = await createRegressionProject("Proyek Addendum Validasi");
+  const packages = await json(`/api/projects/${project.id}/packages`);
+  const mainPackage = packages[0];
+  await addRegressionBoqItem(project.id, mainPackage.id, "Perangkat", 1_000_000, "Perangkat asli");
+  await acceptRegressionQuotation(project.id, mainPackage.id, "addendum-validasi");
+  const validation = await json(
+    `/api/validations?projectId=${project.id}&packageId=${mainPackage.id}`,
+    { method: "POST" },
+    201,
+  );
+  const completed = await json(`/api/validations/${validation.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status: "Completed",
+      notes: "Perangkat asli lulus pengujian.",
+      items: validation.items.map((item) => ({ ...item, checked: true })),
+    }),
+  });
+  assert.equal(completed.status, "Completed");
+
+  await json(
+    `/api/boq/scopes?projectId=${project.id}&packageId=${mainPackage.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Addendum Perangkat Tambahan",
+        items: [{
+          category: "Perangkat",
+          description: "Perangkat tambahan addendum",
+          quantity: 1,
+          unit: "unit",
+          costPrice: 200_000,
+          sellingPrice: 400_000,
+        }],
+      }),
+    },
+    201,
+  );
+  const afterAddendum = await json(
+    `/api/validations?projectId=${project.id}&packageId=${mainPackage.id}`,
+  );
+  assert.equal(
+    afterAddendum.status,
+    "Draft",
+    "the checklist no longer covers the delivered scope",
+  );
+
+  const bastBody = JSON.stringify({
+    projectId: project.id,
+    packageId: mainPackage.id,
+    completionDate: fieldToday,
+    notes: "Serah terima sebelum addendum divalidasi ulang.",
+    installedItems: [{ name: "Perangkat", quantity: "1 unit", status: "Terpasang" }],
+    clientName: "Klien Regresi",
+    clientRole: "Manager",
+    engineerName: "Dewa Mahardika",
+    engineerRole: "Engineer",
+    status: "Draft",
+  });
+  const blocked = await request("/api/bast", { method: "POST", body: bastBody });
+  assert.equal(blocked.status, 409);
+  assert.equal((await blocked.json()).error.code, "VALIDATION_REQUIRED");
+
+  // Re-syncing the checklist pulls in the addendum item, unchecked.
+  const resynced = await json(
+    `/api/validations?projectId=${project.id}&packageId=${mainPackage.id}`,
+    { method: "POST" },
+    201,
+  );
+  assert.equal(resynced.items.length, 2);
+  assert.equal(resynced.status, "Draft");
+  assert.equal(
+    (
+      await request(`/api/validations/${resynced.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: "Completed",
+          notes: "Percobaan menyelesaikan validasi dengan item belum dicentang.",
+          items: resynced.items.map((item) => ({
+            ...item,
+            checked: item.description === "Perangkat asli",
+          })),
+        }),
+      })
+    ).status,
+    409,
+  );
+  await json(`/api/validations/${resynced.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status: "Completed",
+      notes: "Perangkat asli dan addendum lulus pengujian.",
+      items: resynced.items.map((item) => ({ ...item, checked: true })),
+    }),
+  });
+  assert.equal(
+    (await request("/api/bast", { method: "POST", body: bastBody })).status,
+    201,
+  );
+});
+
+test("H8: editing a scope supersedes the sent quotation and never drops the BoQ below the invoiced total", async () => {
+  await loginAsAdmin();
+  const project = await createRegressionProject("Proyek Edit Scope");
+  const packages = await json(`/api/projects/${project.id}/packages`);
+  const mainPackage = packages[0];
+  await addRegressionBoqItem(project.id, mainPackage.id, "Jasa", 1_000_000, "Pekerjaan awal");
+  const sent = await json(`/api/quotations?projectId=${project.id}&packageId=${mainPackage.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Sent" }),
+  });
+  assert.equal(sent.status, "Sent");
+  const scopes = await json(
+    `/api/boq/scopes?projectId=${project.id}&packageId=${mainPackage.id}`,
+  );
+  const original = scopes[0];
+  assert.equal(original.kind, "Original");
+
+  // Editing only the validity must not demote a Sent quotation.
+  const datesOnly = await json(`/api/boq/scopes/${original.id}?projectId=${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ issuedAt: "2027-08-01", validUntil: "2027-09-01" }),
+  });
+  assert.equal(datesOnly.quotation.status, "Sent");
+  assert.equal(datesOnly.quotation.id, sent.id);
+  assert.equal(datesOnly.quotation.validUntil, "2027-09-01");
+
+  // Changing the items supersedes the sent revision instead of rewriting it, so
+  // the frozen PDF snapshot can never sit under a different total.
+  const edited = await json(`/api/boq/scopes/${original.id}?projectId=${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      items: [{
+        category: "Jasa",
+        description: "Pekerjaan awal diperluas",
+        quantity: 1,
+        unit: "paket",
+        costPrice: 600_000,
+        sellingPrice: 1_400_000,
+      }],
+    }),
+  });
+  assert.notEqual(edited.quotation.id, sent.id, "a new revision carries the new numbers");
+  assert.equal(edited.quotation.status, "Draft");
+  assert.equal(edited.quotation.total, 1_400_000);
+  const history = await json(
+    `/api/quotations/history?projectId=${project.id}&packageId=${mainPackage.id}`,
+  );
+  const superseded = history.find((revision) => revision.id === sent.id);
+  assert.equal(superseded.status, "Superseded");
+  assert.equal(superseded.total, 1_000_000, "the superseded revision keeps its own numbers");
+
+  // With an invoice issued, the scope can no longer be shrunk below it.
+  await json(`/api/quotations?projectId=${project.id}&packageId=${mainPackage.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Sent" }),
+  });
+  await json(
+    "/api/invoices",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        packageId: mainPackage.id,
+        type: "Termin Edit Scope",
+        issueDate: "2027-08-05",
+        dueDate: "2027-08-20",
+        amount: 1_200_000,
+      }),
+    },
+    201,
+  );
+  const shrunk = await request(`/api/boq/scopes/${original.id}?projectId=${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      items: [{
+        category: "Jasa",
+        description: "Pekerjaan dipangkas",
+        quantity: 1,
+        unit: "paket",
+        costPrice: 100_000,
+        sellingPrice: 300_000,
+      }],
+    }),
+  });
+  assert.equal(shrunk.status, 409);
+  assert.equal((await shrunk.json()).error.code, "BOQ_BELOW_INVOICED_TOTAL");
+  assert.equal(
+    (await json(`/api/boq?projectId=${project.id}&packageId=${mainPackage.id}`)).totals.selling,
+    1_400_000,
+    "the refused edit left the BoQ untouched",
+  );
+
+  // A terminal quotation is never revived by a scope edit.
+  const secondProject = await createRegressionProject("Proyek Scope Void");
+  await addRegressionBoqItem(secondProject.id, null, "Jasa", 500_000, "Pekerjaan dibatalkan");
+  const voidTarget = await json(`/api/quotations?projectId=${secondProject.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Sent" }),
+  });
+  await json(`/api/quotations/${voidTarget.id}/void`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  const voidScope = (await json(`/api/boq/scopes?projectId=${secondProject.id}`))[0];
+  const revived = await request(`/api/boq/scopes/${voidScope.id}?projectId=${secondProject.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title: "Lingkup dihidupkan kembali" }),
+  });
+  assert.equal(revived.status, 409);
+  assert.equal((await revived.json()).error.code, "INVALID_QUOTATION_STATUS");
 });
