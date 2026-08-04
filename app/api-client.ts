@@ -88,6 +88,12 @@ export function messageOf(error: unknown, language: "id" | "en" = "id") {
       VALIDATION_ERROR: "The submitted data is not valid. Check the highlighted fields and try again.",
       BRAND_REQUIRED: "Select a brand for Device or Material items.",
       BRAND_CATEGORY_MISMATCH: "The brand does not belong to the selected active category.",
+      EXPENSE_BANK_ACCOUNT_REQUIRED:
+        "Select an active company account for a purchase paid by bank transfer.",
+      ADVANCE_UNAVAILABLE:
+        "This project has no active advance yet. Disburse an advance from the Advance menu first.",
+      INVALID_EXPENSE_PAYER:
+        "The personal funds owner must be the submitter or an active project member.",
     };
     return error.code && messages[error.code]
       ? messages[error.code]

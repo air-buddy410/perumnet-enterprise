@@ -2505,6 +2505,14 @@ async function ensureProjectExpenseSchema(client: DatabaseClient) {
       WHERE dt.document_type='Quotation' AND dt.document_id=quotations.id
     )
   `);
+  const expenseColumns: Array<[string, string, string]> = [
+    ["project_expenses", "payment_method", "TEXT NOT NULL DEFAULT 'Tunai'"],
+    ["project_expenses", "bank_account_id", "TEXT REFERENCES bank_accounts(id) ON DELETE SET NULL"],
+    ["project_expenses", "paid_by_user_id", "TEXT REFERENCES users(id) ON DELETE SET NULL"],
+  ];
+  for (const [table, column, definition] of expenseColumns) {
+    await ensureColumn(client, table, column, definition);
+  }
   const categories = [
     ["expense-category-material", "Material", "Material", 10],
     ["expense-category-device", "Perangkat", "Equipment", 20],

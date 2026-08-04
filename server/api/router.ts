@@ -5121,7 +5121,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     }));
     const expenseReportResult = await client.execute({
       sql: `SELECT e.number,e.purchase_date,p.code,p.name,c.name AS category_name,
-        c.name_en AS category_name_en,u.name AS submitter,e.merchant,e.funding_source,
+        c.name_en AS category_name_en,u.name AS submitter,
+        COALESCE(payer.name,u.name) AS paid_by,e.payment_method,
+        e.merchant,e.funding_source,
         e.workflow_status,e.settlement_status,e.total_amount,
         CASE WHEN e.workflow_status='Approved'
           AND e.funding_source IN ('EmployeePaid','ProjectAdvance')
@@ -5132,6 +5134,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         JOIN projects p ON p.id=e.project_id
         JOIN project_expense_categories c ON c.id=e.category_id
         JOIN users u ON u.id=e.created_by
+        LEFT JOIN users payer ON payer.id=e.paid_by_user_id
         LEFT JOIN (
           SELECT expense_id,
             SUM(CASE WHEN settlement_type='AdvanceAllocation' AND status='Posted' THEN amount ELSE 0 END) AS allocated,
@@ -5150,6 +5153,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         ? String(row.category_name_en)
         : String(row.category_name),
       submitter: String(row.submitter),
+      // Old rows have no paid_by_user_id, so the creditor falls back to the submitter.
+      paidBy: String(row.paid_by),
+      paymentMethod: String(row.payment_method ?? "Tunai"),
       merchant: String(row.merchant),
       fundingSource: String(row.funding_source),
       workflowStatus: String(row.workflow_status),
@@ -5277,6 +5283,8 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
             en ? "Merchant" : "Toko",
             en ? "Category" : "Kategori",
             en ? "Funding source" : "Sumber dana",
+            en ? "Payment method" : "Metode pembayaran",
+            en ? "Reimbursement owed to" : "Utang reimbursement kepada",
             en ? "Workflow status" : "Status pengajuan",
             en ? "Settlement status" : "Status keuangan",
             "Amount (IDR)",
@@ -5290,6 +5298,8 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
             row.merchant,
             row.category,
             row.fundingSource,
+            row.paymentMethod,
+            row.reimbursementOutstanding > 0 ? row.paidBy : "",
             row.workflowStatus,
             row.settlementStatus,
             row.amount,

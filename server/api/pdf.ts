@@ -95,6 +95,8 @@ export type FinancialReportExpenseRow = {
   project: string;
   category: string;
   submitter: string;
+  paidBy: string;
+  paymentMethod: string;
   merchant: string;
   fundingSource: string;
   workflowStatus: string;
@@ -1999,8 +2001,8 @@ export async function renderFinancialReportPdf(
         `${row.number}\n${displayDate(row.date, language)}`,
         `${row.project}\n${row.merchant}`,
         `${row.category}\n${row.submitter}`,
-        `${localizeValue(row.fundingSource, language)}\n${localizeValue(row.workflowStatus, language)} / ${localizeValue(row.settlementStatus, language)}`,
-        `${rupiah(row.amount, language)}${row.reimbursementOutstanding > 0 ? `\n${tr(language, "Utang", "Payable")}: ${rupiah(row.reimbursementOutstanding, language)}` : ""}`,
+        `${localizeValue(row.fundingSource, language)} · ${row.paymentMethod}\n${localizeValue(row.workflowStatus, language)} / ${localizeValue(row.settlementStatus, language)}`,
+        `${rupiah(row.amount, language)}${row.reimbursementOutstanding > 0 ? `\n${tr(language, "Utang", "Payable")} ${row.paidBy}: ${rupiah(row.reimbursementOutstanding, language)}` : ""}`,
       ]),
     );
   }

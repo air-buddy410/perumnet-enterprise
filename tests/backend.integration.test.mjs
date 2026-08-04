@@ -2911,11 +2911,317 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     `/api/profit-shares?projectId=${project.id}`,
   );
   assert.equal(protectedProfitWithReimbursements.outstandingReimbursement, 140_000);
+
+  // A company purchase paid by bank transfer must name the account it left.
+  const transferWithoutAccount = await request("/api/project-expenses", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId: project.id,
+      purchaseDate: "2026-08-03",
+      merchant: "Toko Transfer Tanpa Rekening",
+      categoryId: materialExpenseCategory.id,
+      totalAmount: 60_000,
+      fundingSource: "CompanyAccount",
+      paymentMethod: "Transfer Bank",
+      notes: "",
+      itemDetails: [],
+    }),
+  });
+  assert.equal(transferWithoutAccount.status, 422);
+  assert.equal(
+    (await transferWithoutAccount.json()).error.code,
+    "EXPENSE_BANK_ACCOUNT_REQUIRED",
+  );
+  const transferExpense = await json(
+    "/api/project-expenses",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        purchaseDate: "2026-08-03",
+        merchant: "Toko Transfer Bank",
+        categoryId: materialExpenseCategory.id,
+        totalAmount: 60_000,
+        fundingSource: "CompanyAccount",
+        paymentMethod: "Transfer Bank",
+        bankAccountId: bankAccount.id,
+        notes: "Pembelian ditransfer dari rekening perusahaan.",
+        itemDetails: [],
+      }),
+    },
+    201,
+  );
+  assert.equal(transferExpense.paymentMethod, "Transfer Bank");
+  assert.equal(transferExpense.bankAccountId, bankAccount.id);
+  // A partial PATCH must not reset the funding data captured with the receipt.
+  const patchedTransferExpense = await json(
+    `/api/project-expenses/${transferExpense.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ merchant: "Toko Transfer Bank Utama" }),
+    },
+  );
+  assert.equal(patchedTransferExpense.merchant, "Toko Transfer Bank Utama");
+  assert.equal(patchedTransferExpense.paymentMethod, "Transfer Bank");
+  assert.equal(patchedTransferExpense.bankAccountId, bankAccount.id);
+  assert.equal(patchedTransferExpense.fundingSource, "CompanyAccount");
+  assert.equal(patchedTransferExpense.totalAmount, 60_000);
+  const transferReceiptForm = new FormData();
+  transferReceiptForm.set(
+    "file",
+    new File(
+      [Buffer.from("%PDF-1.6\n7 0 obj<</Type/Catalog>>endobj\n%%EOF")],
+      "nota-transfer.pdf",
+      { type: "application/pdf" },
+    ),
+  );
+  await json(
+    `/api/project-expenses/${transferExpense.id}/attachments`,
+    { method: "POST", body: transferReceiptForm },
+    201,
+  );
+  await json(`/api/project-expenses/${transferExpense.id}/submit`, {
+    method: "POST",
+    body: JSON.stringify({ duplicateAcknowledged: false }),
+  });
+  // Approval deliberately omits bankAccountId: the capture-time account wins.
+  const approvedTransferExpense = await json(
+    `/api/project-expenses/${transferExpense.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        settlementDate: "2026-08-03",
+        paymentReference: "BCA-BLJ-TRF-001",
+        duplicateAcknowledged: false,
+      }),
+    },
+  );
+  assert.equal(approvedTransferExpense.settlementStatus, "Posted");
+  assert.equal(approvedTransferExpense.bankAccountId, bankAccount.id);
+  const transferSettlement = approvedTransferExpense.settlements.find(
+    (settlement) => settlement.type === "CompanyPayment",
+  );
+  assert.equal(transferSettlement.bankAccountId, bankAccount.id);
+  assert.ok(transferSettlement.transactionId);
+  const transferTransaction = (
+    await json(`/api/transactions?projectId=${project.id}`)
+  ).find((entry) => entry.id === transferSettlement.transactionId);
+  assert.equal(transferTransaction.source, "Project Expense");
+  assert.equal(transferTransaction.amount, 60_000);
+
+  // Personal funds may belong to a teammate, and the payable follows them.
+  const teammatePaidExpense = await json(
+    "/api/project-expenses",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        purchaseDate: "2026-08-03",
+        merchant: "Toko Talangan Rekan",
+        categoryId: materialExpenseCategory.id,
+        totalAmount: 90_000,
+        fundingSource: "EmployeePaid",
+        paymentMethod: "Tunai",
+        paidByUserId: receivingEngineer.id,
+        notes: "Ditalangi rekan satu proyek.",
+        itemDetails: [],
+      }),
+    },
+    201,
+  );
+  assert.equal(teammatePaidExpense.paidByUserId, receivingEngineer.id);
+  assert.equal(teammatePaidExpense.paidByName, receivingEngineer.name);
+  assert.notEqual(
+    teammatePaidExpense.paidByUserId,
+    teammatePaidExpense.createdBy,
+  );
+  const teammateReceiptForm = new FormData();
+  teammateReceiptForm.set(
+    "file",
+    new File(
+      [Buffer.from("%PDF-1.7\n8 0 obj<</Type/Catalog>>endobj\n%%EOF")],
+      "nota-talangan-rekan.pdf",
+      { type: "application/pdf" },
+    ),
+  );
+  await json(
+    `/api/project-expenses/${teammatePaidExpense.id}/attachments`,
+    { method: "POST", body: teammateReceiptForm },
+    201,
+  );
+  await json(`/api/project-expenses/${teammatePaidExpense.id}/submit`, {
+    method: "POST",
+    body: JSON.stringify({ duplicateAcknowledged: false }),
+  });
+  const approvedTeammateExpense = await json(
+    `/api/project-expenses/${teammatePaidExpense.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        settlementDate: "2026-08-03",
+        duplicateAcknowledged: false,
+        paymentReference: "",
+      }),
+    },
+  );
+  assert.equal(approvedTeammateExpense.settlementStatus, "AwaitingReimbursement");
+  assert.equal(approvedTeammateExpense.reimbursementOutstanding, 90_000);
+  assert.equal(approvedTeammateExpense.paidByName, receivingEngineer.name);
+  await json(`/api/project-expenses/${teammatePaidExpense.id}/reimburse`, {
+    method: "POST",
+    body: JSON.stringify({
+      amount: 40_000,
+      settlementDate: "2026-08-03",
+      bankAccountId: bankAccount.id,
+      paymentReference: "BCA-REIMB-REKAN-001",
+    }),
+  });
+  const teammateReimbursement = (
+    await json(`/api/transactions?projectId=${project.id}`)
+  ).find(
+    (entry) =>
+      entry.source === "Project Expense Reimbursement" &&
+      entry.amount === 40_000,
+  );
+  assert.match(
+    teammateReimbursement.description,
+    new RegExp(receivingEngineer.name),
+  );
+  assert.doesNotMatch(teammateReimbursement.description, /Dewa Mahardika/);
+
+  // Advance funding is gated on a real unsettled advance balance for the project.
+  const advanceExpensePayload = {
+    projectId: project.id,
+    purchaseDate: "2026-08-04",
+    merchant: "Toko Tanpa Uang Muka",
+    categoryId: materialExpenseCategory.id,
+    totalAmount: 45_000,
+    fundingSource: "ProjectAdvance",
+    paymentMethod: "Tunai",
+    notes: "Menunggu uang muka aktif.",
+    itemDetails: [],
+  };
+  const blockedAdvanceExpense = await request("/api/project-expenses", {
+    method: "POST",
+    body: JSON.stringify(advanceExpensePayload),
+  });
+  assert.equal(blockedAdvanceExpense.status, 422);
+  const blockedAdvanceError = (await blockedAdvanceExpense.json()).error;
+  assert.equal(blockedAdvanceError.code, "ADVANCE_UNAVAILABLE");
+  assert.match(blockedAdvanceError.message, /Cairkan uang muka melalui menu Uang Muka/);
+  const secondAdvance = await json(
+    "/api/project-advances",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        recipientUserId: receivingEngineer.id,
+        amount: 120_000,
+        disbursedDate: "2026-08-04",
+        bankAccountId: bankAccount.id,
+        paymentReference: "BCA-UM-002",
+        notes: "Uang muka lanjutan.",
+      }),
+    },
+    201,
+  );
+  assert.equal(secondAdvance.outstanding, 120_000);
+  const allowedAdvanceExpense = await json(
+    "/api/project-expenses",
+    { method: "POST", body: JSON.stringify(advanceExpensePayload) },
+    201,
+  );
+  const allowedAdvanceForm = new FormData();
+  allowedAdvanceForm.set(
+    "file",
+    new File(
+      [Buffer.from("%PDF-1.3\n9 0 obj<</Type/Catalog>>endobj\n%%EOF")],
+      "nota-uang-muka-lanjutan.pdf",
+      { type: "application/pdf" },
+    ),
+  );
+  await json(
+    `/api/project-expenses/${allowedAdvanceExpense.id}/attachments`,
+    { method: "POST", body: allowedAdvanceForm },
+    201,
+  );
+  assert.equal(
+    (
+      await json(`/api/project-expenses/${allowedAdvanceExpense.id}/submit`, {
+        method: "POST",
+        body: JSON.stringify({ duplicateAcknowledged: false }),
+      })
+    ).workflowStatus,
+    "Submitted",
+  );
+  // A draft captured while the advance was open is re-checked on submit.
+  const staleAdvanceExpense = await json(
+    "/api/project-expenses",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ...advanceExpensePayload,
+        merchant: "Toko Uang Muka Kedaluwarsa",
+        totalAmount: 35_000,
+      }),
+    },
+    201,
+  );
+  const staleAdvanceForm = new FormData();
+  staleAdvanceForm.set(
+    "file",
+    new File(
+      [Buffer.from("%PDF-1.2\n10 0 obj<</Type/Catalog>>endobj\n%%EOF")],
+      "nota-uang-muka-kedaluwarsa.pdf",
+      { type: "application/pdf" },
+    ),
+  );
+  await json(
+    `/api/project-expenses/${staleAdvanceExpense.id}/attachments`,
+    { method: "POST", body: staleAdvanceForm },
+    201,
+  );
+  await json(`/api/project-advances/${secondAdvance.id}/return`, {
+    method: "POST",
+    body: JSON.stringify({
+      amount: 120_000,
+      returnDate: "2026-08-04",
+      bankAccountId: bankAccount.id,
+      paymentReference: "BCA-RET-UM-002",
+    }),
+  });
+  const staleAdvanceSubmit = await request(
+    `/api/project-expenses/${staleAdvanceExpense.id}/submit`,
+    {
+      method: "POST",
+      body: JSON.stringify({ duplicateAcknowledged: false }),
+    },
+  );
+  assert.equal(staleAdvanceSubmit.status, 422);
+  assert.equal(
+    (await staleAdvanceSubmit.json()).error.code,
+    "ADVANCE_UNAVAILABLE",
+  );
+  // Invoice cash is decision context for disbursement, never a gate.
+  const advanceContext = await json(
+    `/api/project-advances/eligible-users?projectId=${project.id}`,
+  );
+  assert.ok(advanceContext.users.some((person) => person.id === receivingEngineer.id));
+  assert.equal(typeof advanceContext.invoiceCashReceived, "number");
+  assert.equal(advanceContext.outstandingAdvance, 0);
+  const expensePayers = await json(
+    `/api/project-expenses/payers?projectId=${project.id}`,
+  );
+  assert.ok(expensePayers.some((person) => person.id === receivingEngineer.id));
+
   const expenseCsv = await request(
     `/api/project-expenses/report.csv?projectId=${project.id}`,
   );
   assert.equal(expenseCsv.status, 200);
-  assert.match(await expenseCsv.text(), /Toko Material Integrasi/);
+  const expenseCsvText = await expenseCsv.text();
+  assert.match(expenseCsvText, /Toko Material Integrasi/);
+  assert.match(expenseCsvText, /Transfer Bank/);
+  assert.match(expenseCsvText, new RegExp(receivingEngineer.name));
   const expensePdf = await request(
     `/api/project-expenses/report.pdf?projectId=${project.id}`,
   );
@@ -3167,6 +3473,17 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   assert.match(csvText, /PROJECT PROFIT DISTRIBUTION - LIFETIME/);
   assert.match(csvText, /COMPANY BANK POSITION/);
   assert.match(csvText, /VENDOR COMMITMENTS/);
+  // Reimbursement payables name the person who actually spent the money.
+  assert.match(csvText, /"Reimbursement owed to"/);
+  assert.match(csvText, new RegExp(`"${receivingEngineer.name}"`));
+  const financePdf = await request(
+    `/api/transactions/report.pdf?projectId=${project.id}`,
+  );
+  assert.equal(financePdf.status, 200);
+  assert.equal(
+    Buffer.from(await financePdf.arrayBuffer()).subarray(0, 4).toString(),
+    "%PDF",
+  );
   const sopPdf = await request("/api/help/sop.pdf?language=en");
   assert.equal(sopPdf.status, 200);
   assert.equal(sopPdf.headers.get("content-type"), "application/pdf");
