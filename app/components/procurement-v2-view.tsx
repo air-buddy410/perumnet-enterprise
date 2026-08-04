@@ -64,6 +64,37 @@ type ReasonPrompt =
 
 const REASON_MIN_LENGTH = 5;
 
+// Mirrors the positive allowlists the endpoints now enforce. `Disetujui` means
+// approved internally but never sent to the vendor, so neither money nor
+// closure may leave from there — Kirim comes first. `Selesai` stays payable
+// because retention and final settlement land after sign-off, but it is
+// terminal, so a finished document cannot be completed a second time.
+const PAYABLE_WORKFLOW_STATUSES = [
+  "Dikirim",
+  "Dikerjakan",
+  "Diterima Sebagian",
+  "Diterima",
+  "Selesai",
+];
+const COMPLETABLE_WORKFLOW_STATUSES = [
+  "Dikirim",
+  "Dikerjakan",
+  "Diterima Sebagian",
+  "Diterima",
+];
+
+function termStatusTone(status: string) {
+  if (status === "Paid") return "success";
+  if (status === "Partial") return "warning";
+  return "neutral";
+}
+
+function termStatusLabel(id: boolean, status: string) {
+  if (status === "Paid") return id ? "Lunas" : "Paid";
+  if (status === "Partial") return id ? "Dibayar Sebagian" : "Partial";
+  return id ? "Belum Dibayar" : "Pending";
+}
+
 async function attachmentFromFile(file: File): Promise<Attachment> {
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -984,8 +1015,8 @@ export function ProcurementViewV2({
                   {["Admin", "Finance"].includes(userRole) && !order.legacy && order.approvalStatus === "Pending" && <button className="button danger small" type="button" onClick={() => orderAction(order, "reject")}><X size={14} /> {id ? "Tolak" : "Reject"}</button>}
                   {canManage && !order.legacy && order.approvalStatus === "Approved" && order.workflowStatus === "Disetujui" && <button className="button secondary small" type="button" onClick={() => orderAction(order, "send")}><Send size={14} /> {id ? "Kirim" : "Send"}</button>}
                   {["Admin", "Project Manager", "Engineer"].includes(userRole) && !order.legacy && order.approvalStatus === "Approved" && ["Dikirim", "Dikerjakan", "Diterima Sebagian"].includes(order.workflowStatus) && <button className="button secondary small" type="button" onClick={() => { setVerificationOrder(order); if (order.documentType === "SPK") { const term = order.terms.find((item) => item.type !== "DP"); setVerificationTermId(term?.id ?? ""); setVerificationAmount(term?.plannedAmount ?? 0); setVerificationProgress(100); } }}><PackageCheck size={14} /> {order.documentType === "PO" ? (id ? "Terima barang" : "Receive") : (id ? "Verifikasi" : "Verify")}</button>}
-                  {canManagePayments && !order.legacy && order.approvalStatus === "Approved" && order.availableToPay > 0 && <button className="button secondary small" type="button" onClick={() => openPayment(order)}><CircleDollarSign size={14} /> {id ? "Bayar" : "Pay"}</button>}
-                  {canManage && !order.legacy && order.approvalStatus === "Approved" && !["Disetujui", "Selesai", "Void"].includes(order.workflowStatus) && <button className="button subtle small" type="button" onClick={() => orderAction(order, "complete")}><BadgeCheck size={14} /> {id ? "Selesaikan" : "Complete"}</button>}
+                  {canManagePayments && !order.legacy && order.approvalStatus === "Approved" && PAYABLE_WORKFLOW_STATUSES.includes(order.workflowStatus) && order.availableToPay > 0 && <button className="button secondary small" type="button" onClick={() => openPayment(order)}><CircleDollarSign size={14} /> {id ? "Bayar" : "Pay"}</button>}
+                  {canManage && !order.legacy && order.approvalStatus === "Approved" && COMPLETABLE_WORKFLOW_STATUSES.includes(order.workflowStatus) && <button className="button subtle small" type="button" onClick={() => orderAction(order, "complete")}><BadgeCheck size={14} /> {id ? "Selesaikan" : "Complete"}</button>}
                   {["Admin", "Finance"].includes(userRole) && !order.legacy && order.workflowStatus !== "Void" && <button className="button danger small" type="button" onClick={() => orderAction(order, "void")}><X size={14} /> Void</button>}
                   <button className="icon-button" type="button" aria-label={`${id ? "Pratinjau" : "Preview"} ${order.number}`} onClick={() => setPreview({ url: `/api/procurement-orders/${order.id}/pdf`, title: order.number, filename: `${order.number.replaceAll("/", "-")}.pdf` })}><Eye size={15} /></button>
                   <button className="button subtle small" type="button" onClick={() => downloadApiFile(`/api/procurement-orders/${order.id}/pdf`, `${order.number.replaceAll("/", "-")}.pdf`)}><Download size={14} /> PDF</button>
@@ -999,8 +1030,8 @@ export function ProcurementViewV2({
                       : (id ? "Menunggu verifikasi progres sebelum termin berikutnya dapat dibayar." : "Awaiting progress verification before the next payment term can be paid.")}</span>
                   </div>
                 )}
-                {order.payments.length > 0 && (
-                  <details className="order-history"><summary>{id ? "Termin & histori pembayaran" : "Terms & payment history"}</summary><div className="order-payment-list">{order.payments.map((payment) => <div key={payment.id}><span>{payment.paidDate} · {payment.vendorInvoiceNumber}<small>{payment.paymentReference} · {payment.status} · {id ? "kas" : "cash"} {formatCurrency(payment.cashAmount ?? payment.amount, language)}</small></span><strong>{formatCurrency(payment.grossAmount ?? payment.amount, language)}</strong>{userRole === "Admin" && payment.status === "Posted" && <button className="button danger small" type="button" onClick={() => voidPayment(order, payment.id)}>Void</button>}</div>)}</div></details>
+                {(order.terms.length > 0 || order.payments.length > 0) && (
+                  <details className="order-history"><summary>{id ? "Termin & histori pembayaran" : "Terms & payment history"}</summary>{order.terms.length > 0 && <div className="order-term-list">{order.terms.map((term) => <div key={term.id}><span>{term.label}<small>{term.type}{term.percentage ? ` · ${term.percentage}%` : ""} · {term.requiresVerification ? (id ? "perlu verifikasi" : "needs verification") : (id ? "tanpa verifikasi" : "no verification")}</small></span><strong>{formatCurrency(term.plannedAmount, language)}</strong><span className={`status-badge ${termStatusTone(term.status)}`}>{termStatusLabel(id, term.status)}</span></div>)}</div>}{order.payments.length > 0 && <div className="order-payment-list">{order.payments.map((payment) => <div key={payment.id}><span>{payment.paidDate} · {payment.vendorInvoiceNumber}<small>{payment.paymentReference} · {payment.status} · {id ? "kas" : "cash"} {formatCurrency(payment.cashAmount ?? payment.amount, language)}</small></span><strong>{formatCurrency(payment.grossAmount ?? payment.amount, language)}</strong>{userRole === "Admin" && payment.status === "Posted" && <button className="button danger small" type="button" onClick={() => voidPayment(order, payment.id)}>Void</button>}</div>)}</div>}</details>
                 )}
               </article>
             ))}

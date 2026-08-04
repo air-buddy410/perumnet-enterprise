@@ -3429,6 +3429,14 @@ h3 {
   line-height: 1.6;
 }
 
+/* A hint that has become a refusal-in-waiting: the same note, in the amber
+   this app already uses for something the reader has to act on. */
+.form-hint.attention {
+  border-left-color: #e8b23a;
+  background: #fff9df;
+  color: #775317;
+}
+
 /* Project details */
 .project-hero {
   display: grid;
@@ -4265,6 +4273,47 @@ h3 {
 .order-payment-list strong {
   color: var(--navy);
   font-size: 9px;
+}
+
+/* Payment terms carry a real Pending/Partial/Paid status now, so they list
+   alongside the payment history with the same three-column rhythm. */
+.order-term-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.order-term-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.order-term-list > div > span:first-child,
+.order-term-list small {
+  display: block;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.order-term-list > div > span:first-child {
+  color: var(--navy);
+  font-weight: 700;
+}
+
+.order-term-list strong {
+  color: var(--navy);
+  font-size: 9px;
+}
+
+.order-term-list .status-badge {
+  min-height: 18px;
+  padding: 3px 7px;
+  font-size: 8px;
 }
 
 .category-picker {
@@ -6550,7 +6599,32 @@ h3 {
 .expense-advance-list strong { color: var(--navy); font-size: 12px; }
 .expense-category-list small,
 .expense-advance-list small { color: var(--muted); font-size: 9px; }
-.expense-advance-list > div > span:last-child { text-align: right; }
+.expense-advance-list > div { flex-wrap: wrap; }
+.expense-advance-list > div > span:nth-child(2) { margin-left: auto; text-align: right; }
+/* The row's own `span { display: grid }` would flatten the badge, which is an
+   inline pill everywhere else in the app. */
+.expense-advance-list .status-badge {
+  display: inline-flex;
+  min-height: 20px;
+  padding: 3px 8px;
+  font-size: 9px;
+}
+/* A voided advance still has to read as a record, not as a live balance. */
+.expense-advance-list > div.voided { border-style: dashed; background: var(--surface-soft); }
+.expense-advance-list > div.voided > span:nth-child(2) strong { color: var(--muted); text-decoration: line-through; }
+
+.expense-advance-void-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--surface-soft);
+}
+.expense-advance-void-summary > div { display: grid; gap: 3px; min-width: 0; }
+.expense-advance-void-summary span { color: var(--muted); font-size: 9px; }
+.expense-advance-void-summary strong { color: var(--navy); font-size: 12px; }
 
 .tax-mode-row {
   display: flex;

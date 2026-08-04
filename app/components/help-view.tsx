@@ -160,11 +160,12 @@ const workflowsId: WorkflowGuide[] = [
       "Pilih item dari penawaran yang sudah diterima klien, lalu isi kuantitas dan harga vendor. Total alokasi tidak boleh melebihi kuantitas pada BoQ.",
       "Atur termin. Isi DP dalam persen bila ada, sisanya menjadi Pelunasan. Jumlah seluruh termin harus persis sama dengan nilai kontrak vendor.",
       "Ajukan dokumen, lalu Admin atau Finance menyetujuinya. Finance tidak boleh menyetujui pengajuannya sendiri, dan Admin yang menyetujui pengajuan sendiri wajib menulis alasan.",
+      "Persetujuan belum berarti boleh dibayar. Persetujuan adalah keputusan internal; Kirim adalah saat dokumen benar-benar berlaku bagi vendor, dan karena itu pembayaran maupun penyelesaian baru terbuka setelah dokumen dikirim. Selama status dokumen masih Disetujui, tombol Bayar dan Selesaikan memang tidak muncul, dan aplikasi menolak keduanya bila tetap dicoba. Tekan Kirim lebih dulu.",
       "Kirim dokumen ke vendor, lalu bayar DP.",
       "Sebelum termin berikutnya dibayar, pekerjaan harus dibuktikan lebih dulu. Untuk SPK, Project Manager atau Engineer mencatat Verifikasi progres. Untuk PO, mereka mencatat Penerimaan barang beserta nomor surat jalan.",
       "Catat pembayaran: isi bruto, pajak dipotong, kas aktual, tanggal bayar, nomor tagihan vendor, referensi, rekening perusahaan, lalu unggah bukti transfer.",
     ],
-    after: "Dokumen yang sudah disetujui terkunci dan nilainya menjadi komitmen. Hanya kas nyata yang masuk Buku Kas. Sisa komitmen yang belum dibayar mengurangi laba yang aman dibagikan. Seluruh perubahan SPK dan PO hanya terjadi di layar ini; di layar lain dokumen kerja bersifat baca saja.",
+    after: "Dokumen yang sudah disetujui terkunci dan nilainya menjadi komitmen. Hanya kas nyata yang masuk Buku Kas. Sisa komitmen yang belum dibayar mengurangi laba yang aman dibagikan. Selesai bersifat final: dokumen yang sudah Selesai tidak dapat diselesaikan lagi, tetapi pelunasan terakhirnya tetap boleh dicatat sesudah itu, karena retensi dan pelunasan memang mendarat setelah pekerjaan ditandatangani. Seluruh perubahan SPK dan PO hanya terjadi di layar ini; di layar lain dokumen kerja bersifat baca saja.",
   },
   {
     key: "handover",
@@ -201,7 +202,7 @@ const workflowsId: WorkflowGuide[] = [
       "Untuk uang muka, Finance mencatat pencairannya lebih dulu lewat tombol Uang muka. Nota yang memakai uang muka tidak membuat kas keluar untuk kedua kalinya.",
       "Belanja yang memakai uang pribadi menjadi utang reimbursement dan boleh dibayar bertahap.",
     ],
-    after: "Belanja yang disetujui terkunci. Rekening perusahaan mencatat kas keluar, sedangkan uang muka hanya mengurangi saldo uang muka. Koreksi dilakukan Admin lewat pembatalan yang membuat catatan pembalik, bukan penghapusan data.",
+    after: "Belanja yang disetujui terkunci. Rekening perusahaan mencatat kas keluar, sedangkan uang muka hanya mengurangi saldo uang muka. Koreksi dilakukan Admin lewat pembatalan yang membuat catatan pembalik, bukan penghapusan data. Uang muka yang terpakai habis otomatis berstatus Selesai; bila belanja yang memakainya kemudian di-void oleh Admin, saldonya kembali dan uang muka itu kembali menjadi Terbuka, sehingga saldo tersebut benar-benar dapat dipakai lagi untuk nota berikutnya. Untuk pencairan yang memang salah catat dan belum tersentuh sama sekali, Admin dapat membatalkan uang mukanya langsung lewat tombol Batalkan pada daftar uang muka di jendela Uang muka; aplikasi mencatat pembalik kasnya dan uang muka itu berstatus Dibatalkan berikut alasannya. Bila sebagian sudah dipakai atau sudah dikembalikan, atau pencairannya sudah cocok dengan mutasi bank, pembatalan ditolak — gunakan pengembalian uang muka, karena uangnya memang sudah keluar.",
   },
   {
     key: "bank",
@@ -394,11 +395,12 @@ const workflowsEn: WorkflowGuide[] = [
       "Select items from the accepted quotation, then enter quantities and vendor prices. Total allocations may not exceed the BoQ quantities.",
       "Set the payment terms. Enter the down payment as a percentage if there is one; the rest becomes the final payment. All terms together must match the vendor contract value exactly.",
       "Submit the document, then an Admin or Finance user approves it. Finance may never approve its own submission, and an Admin approving their own submission must give a reason.",
+      "Approval does not yet mean payable. Approval is an internal decision; Send is the moment the document actually binds the vendor, so payment and completion only open once it has been sent. While the document still reads Approved, the Pay and Complete buttons are deliberately absent, and the application refuses both if they are attempted anyway. Press Send first.",
       "Send the document to the vendor, then pay the down payment.",
       "Before any later term is paid, the work must be evidenced first. For a Work Order, a Project Manager or Engineer records Progress verification. For a PO, they record a Goods receipt with the delivery note number.",
       "Record the payment: gross amount, tax withheld, actual cash, payment date, vendor invoice number, reference, company bank account, and the transfer receipt.",
     ],
-    after: "An approved document is locked and its value becomes a commitment. Only real cash enters the Cash Ledger. Unpaid commitments reduce the profit that is safe to distribute. Every change to a Work Order or PO happens on this screen alone; everywhere else those documents are read-only.",
+    after: "An approved document is locked and its value becomes a commitment. Only real cash enters the Cash Ledger. Unpaid commitments reduce the profit that is safe to distribute. Completion is final: a document already Completed cannot be completed again, though its final settlement may still be recorded afterwards, because retention and final payment land after the work is signed off. Every change to a Work Order or PO happens on this screen alone; everywhere else those documents are read-only.",
   },
   {
     key: "handover",
@@ -435,7 +437,7 @@ const workflowsEn: WorkflowGuide[] = [
       "For advances, Finance records the disbursement first using the Advance button. A receipt charged to an advance never posts cash out a second time.",
       "Purchases paid with an employee's own money become a reimbursement payable and may be paid in stages.",
     ],
-    after: "An approved purchase is locked. A company account posts cash out, while an advance only reduces the advance balance. Corrections are made by an Admin through a void that posts a reversing entry, never by deleting data.",
+    after: "An approved purchase is locked. A company account posts cash out, while an advance only reduces the advance balance. Corrections are made by an Admin through a void that posts a reversing entry, never by deleting data. An advance drawn down to zero closes as Settled; if the purchase that consumed it is later voided by an Admin, the balance comes back and the advance returns to Open, so that restored balance really can fund the next receipt. For a disbursement that was simply recorded in error and never touched, an Admin can void the advance itself using the Void button on the advance list in the Advance window; the application posts the reversing cash entry and the advance then reads Voided together with its reason. If any of it has been spent or returned, or the disbursement is already matched to a bank entry, the void is refused — record an advance return instead, because the money genuinely left.",
   },
   {
     key: "bank",
@@ -749,6 +751,42 @@ const messagesId: MessageGuide[] = [
     meaning: "Tautan konfirmasi penggantian alamat email hanya berlaku 60 menit dan hanya sekali pakai. Tautan juga hangus bila ada permintaan penggantian yang lebih baru atau bila kata sandi akun telah diatur ulang.",
     action: "Buka Profil Saya dan ajukan penggantian alamat email sekali lagi agar tautan baru dikirim ke alamat yang dituju. Selama tautannya belum dibuka, akun tetap memakai alamat lama dan alamat lama itu sudah diberi tahu bahwa ada permintaan penggantian.",
   },
+  {
+    key: "rounding-too-large",
+    message: "Pembulatan khusus maksimal Rp ... untuk nilai ini.",
+    meaning: "Selisih pembulatan yang Anda ketik lebih besar daripada yang masih masuk akal disebut pembulatan: batasnya Rp 100.000 atau 1% dari nilai sebelum pembulatan, mana yang lebih besar.",
+    action: "Bila memang bermaksud memotong harga, isi kolom Diskon; bila menambah biaya, gunakan aturan pajak Tambah. Keduanya tercetak apa adanya di PDF dan ikut terbawa ke invoice, sedangkan pembulatan tidak dimaksudkan untuk itu.",
+  },
+  {
+    key: "project-value-derived",
+    message: "Nilai proyek ini mengikuti Quotation yang sudah diterima klien dan tidak dapat diketik manual.",
+    meaning: "Proyek ini sudah punya penawaran berstatus Diterima, jadi nilainya diturunkan dari kontrak dan bukan lagi angka yang diketik.",
+    action: "Kosongkan kembali kolom Nilai ke angka semula. Bila nilai kontraknya memang berubah, buat Addendum; nilai proyek akan menyesuaikan sendiri begitu addendum itu diterima klien.",
+  },
+  {
+    key: "validation-locked-by-bast",
+    message: "Checklist ini sudah menjadi dasar BAST yang diterbitkan.",
+    meaning: "Daftar pemeriksaan Perangkat dan Material ini sudah dipakai untuk memfinalisasi BAST, jadi centang dan statusnya terkunci.",
+    action: "Bila daftarnya memang perlu diperiksa ulang, minta Admin mencabut BAST-nya lebih dulu, lalu sinkronkan dan centang ulang daftar pemeriksaannya.",
+  },
+  {
+    key: "approval-required",
+    message: "Dokumen harus sudah disetujui dan dikirim ke vendor sebelum dibayar.",
+    meaning: "Dokumen masih berstatus Disetujui: keputusan internal sudah selesai, tetapi vendor belum menerima dokumennya.",
+    action: "Tekan Kirim pada dokumen tersebut, lalu ulangi pembayarannya. Pesan senada muncul pada Selesaikan, dan dokumen yang sudah Selesai tidak dapat diselesaikan untuk kedua kalinya.",
+  },
+  {
+    key: "advance-already-used",
+    message: "Uang muka ini sudah terpakai atau sebagian sudah dikembalikan, jadi tidak dapat dibatalkan.",
+    meaning: "Pembatalan uang muka hanya untuk pencairan yang murni salah catat dan belum tersentuh. Uang muka ini sudah punya catatan penyelesaian.",
+    action: "Gunakan Pengembalian uang muka untuk menutup sisa saldonya. Bila pencairannya sudah cocok dengan mutasi bank, pengembalian memang satu-satunya jalan, karena uangnya benar-benar keluar.",
+  },
+  {
+    key: "legacy-invoice-payment",
+    message: "Endpoint konfirmasi pembayaran lama sudah tidak berlaku.",
+    meaning: "Sebuah alat atau integrasi lama masih memanggil jalur penandaan Lunas versi lawas, yang menandai invoice lunas tanpa referensi dan tanpa bukti pembayaran yang sesungguhnya.",
+    action: "Catat pembayarannya lewat histori pembayaran pada invoice, yang meminta nominal, tanggal, referensi, metode, dan bukti transfer. Pembatalannya juga ada di sana dan otomatis mencatat pembalik kasnya.",
+  },
 ];
 
 const messagesEn: MessageGuide[] = [
@@ -973,6 +1011,42 @@ const messagesEn: MessageGuide[] = [
     message: "This email confirmation link is invalid or has already expired.",
     meaning: "An email change confirmation link is valid for 60 minutes and only once. It also lapses if a newer change was requested or if the account password was reset.",
     action: "Open My Profile and request the email address change again so a fresh link is sent to the intended address. Until the link is opened the account keeps its old address, and that old address has already been notified that a change was requested.",
+  },
+  {
+    key: "rounding-too-large",
+    message: "The message names the maximum custom rounding allowed for this value.",
+    meaning: "The adjustment you typed is larger than anything that could still be called a rounding: the limit is Rp 100,000 or 1% of the value before rounding, whichever is larger.",
+    action: "If you meant to reduce the price, use the Discount field; if you meant to add a charge, use an Add-effect tax rule. Both print for what they are on the PDF and carry through to the invoices, which is not what rounding is for.",
+  },
+  {
+    key: "project-value-derived",
+    message: "This project's value follows its client-accepted quotation and cannot be typed in by hand.",
+    meaning: "This project already has an Accepted quotation, so its value is derived from the contract instead of typed.",
+    action: "Put the Value field back to its previous figure. If the contract value genuinely changed, create an Addendum; the project value updates itself once the client accepts it.",
+  },
+  {
+    key: "validation-locked-by-bast",
+    message: "This checklist is the evidence behind an issued handover certificate.",
+    meaning: "This Device and Material checklist was used to finalize a handover certificate, so its ticks and its status are locked.",
+    action: "If the checklist genuinely needs redoing, ask an Admin to revoke the certificate first, then re-sync and re-check the list.",
+  },
+  {
+    key: "approval-required",
+    message: "The document must be approved and sent to the vendor before it can be paid.",
+    meaning: "The document is still at Approved: the internal decision is done, but the vendor has not received the document.",
+    action: "Press Send on the document, then repeat the payment. A matching message appears for Complete, and a document already Completed cannot be completed a second time.",
+  },
+  {
+    key: "advance-already-used",
+    message: "This advance has already been spent or partly returned, so it cannot be voided.",
+    meaning: "Voiding an advance is only for a disbursement recorded purely in error and never touched. This one already has settlement records.",
+    action: "Use Advance return to close the remaining balance. If the disbursement is already matched to a bank entry, a return is the only route, because the money genuinely left.",
+  },
+  {
+    key: "legacy-invoice-payment",
+    message: "The old payment-confirmation endpoint has been retired.",
+    meaning: "An old tool or integration is still calling the legacy mark-as-paid route, which marked an invoice paid with no reference and no real payment evidence.",
+    action: "Record the payment through the invoice payment history, which asks for the amount, date, reference, method, and transfer proof. Its void action lives there too and posts the reversing cash entry automatically.",
   },
 ];
 
