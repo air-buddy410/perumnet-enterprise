@@ -427,6 +427,14 @@ export const chapterStart: Chapter = {
       ],
     },
     {
+      kind: "note",
+      title: ["Menghapus proyek", "Deleting a project"],
+      text: [
+        "Menghapus proyek hanya dapat dilakukan Admin, dan hanya selama proyek itu belum memiliki riwayat kas sama sekali. Begitu ada pembayaran invoice, pembayaran vendor, penyelesaian belanja proyek, setoran pajak, atau satu pun transaksi di Pembukuan, penghapusan ditolak — uang yang sudah tercatat tidak boleh hilang bersama proyeknya. Proyek seperti itu ditutup atau diarsipkan: ubah statusnya menjadi Selesai dan biarkan dokumen serta pembukuannya tetap utuh. Proyek yang benar-benar salah buat dan belum menyentuh uang tetap dapat dihapus seperti biasa; saat itu terjadi, jumlah dokumen yang ikut terhapus dicatat di audit log.",
+        "Only an Admin may delete a project, and only while that project has no cash history at all. As soon as there is an invoice payment, a vendor payment, a project-expense settlement, a tax settlement, or a single Finance transaction, the deletion is refused — recorded money must never disappear with its project. Such a project is closed or archived instead: set its status to Completed and leave its documents and books intact. A project that was genuinely created by mistake and has never touched money can still be deleted as before; when that happens, the number of documents removed is recorded in the audit log.",
+      ],
+    },
+    {
       kind: "pitfalls",
       items: [
         [
@@ -540,6 +548,14 @@ export const chapterQuotation: Chapter = {
       text: [
         "Selama sebuah revisi belum diterima klien dan belum punya invoice maupun dokumen procurement, revisi itu boleh dihapus. Saat dihapus, revisi sebelumnya otomatis dikembalikan menjadi Draft yang dapat diedit lagi, lengkap dengan pajaknya yang ikut terbuka kembali. Ini jalan keluar yang aman bila sebuah revisi terlanjur dibuat karena salah klik.",
         "As long as a revision has not been accepted by the client and has no invoice or procurement document attached, it may be deleted. When it is deleted, the previous revision is automatically returned to an editable Draft, with its tax figures unlocked again. This is the safe way out when a revision was created by mistake.",
+      ],
+    },
+    {
+      kind: "note",
+      title: ["Membatalkan penawaran, dan mengapa Batal bersifat final", "Voiding a quotation, and why Void is final"],
+      text: [
+        "Alur status penawaran berjalan satu arah: Draft menjadi Terkirim, Terkirim menjadi Diterima, Ditolak, atau Batal, dan mengubah penawaran yang sudah Terkirim membuat revisi baru sementara versi lamanya menjadi Digantikan. Batal, Ditolak, dan Digantikan adalah status akhir. Penawaran berstatus tersebut tidak dapat dikembalikan menjadi Draft atau Terkirim, baik lewat tombol status maupun lewat penyuntingan biasa; bila pekerjaannya kembali berjalan, buat penawaran baru. Membatalkan penawaran juga ditolak selama masih ada dokumen yang bergantung padanya: SPK atau PO yang belum di-void, invoice yang masih terbit, dan terutama invoice yang sudah menerima pembayaran. Urutan koreksinya selalu dari uang ke dokumen: void pembayarannya, hapus invoicenya, void dokumen procurementnya, baru penawarannya dapat dibatalkan.",
+        "The quotation status flow runs one way: Draft becomes Sent; Sent becomes Accepted, Rejected, or Void; and changing an already-Sent quotation issues a new revision while the older one becomes Superseded. Void, Rejected, and Superseded are terminal. A quotation in one of those states cannot be returned to Draft or Sent, neither through the status buttons nor through an ordinary edit; if the work restarts, raise a new quotation. Voiding is also refused while any document still depends on it: an unvoided Work Order or PO, an invoice that still exists, and above all an invoice that has already received a payment. The correction order always runs from the money back to the document: void the payment, delete the invoice, void the procurement document, and only then can the quotation be voided.",
       ],
     },
     {
@@ -1024,6 +1040,14 @@ export const chapterHandover: Chapter = {
     },
     {
       kind: "note",
+      title: ["Mencabut BAST final dan menerbitkannya ulang", "Revoking a final certificate and re-issuing it"],
+      text: [
+        "Hanya Admin yang dapat mencabut BAST final, dan alasannya wajib ditulis. Dokumen yang dicabut tidak pernah dihapus: statusnya menjadi Batal, alasan serta waktu pencabutannya tersimpan, dan halaman pemeriksaan QR akan menyatakan dokumen itu sudah tidak berlaku. Karena serah terima itulah yang menutup proyek, pencabutan juga membuka kembali proyeknya: bila setelah pencabutan masih ada paket yang penawarannya diterima klien tetapi belum punya BAST aktif, status proyek kembali menjadi Aktif. Setelah itu tim membuat BAST baru untuk paket dan siklus yang sama; dokumen baru tersebut tercatat sebagai revisi berikutnya (Revisi 2, 3, dan seterusnya), sementara dokumen yang dicabut tetap tersimpan sebagai riwayat.",
+        "Only an Admin may revoke a final certificate, and a written reason is mandatory. A revoked document is never deleted: its status becomes Void, the reason and the moment of revocation are stored, and the QR verification page reports the document as no longer valid. Because it is the handover that closes the project, revoking one re-opens it: if any package with a client-accepted quotation is left without an active certificate, the project status returns to Active. The team then creates a new certificate for the same package and cycle; that new document is recorded as the next revision (Revision 2, 3, and so on) while the revoked one is kept as history.",
+      ],
+    },
+    {
+      kind: "note",
       title: ["Status hukum cap digital", "The legal standing of the digital seal"],
       text: [
         "Cap dan QR pada BAST adalah segel internal PerumNet yang membuat pemalsuan mudah terdeteksi: berkasnya dikunci, sidik jari digitalnya disimpan, dan halaman pemeriksaan akan menolak berkas yang isinya sudah diubah. Fitur ini bukan Tanda Tangan Elektronik Tersertifikasi dan PerumNet bukan Penyelenggara Sertifikasi Elektronik (PSrE). Bila sebuah dokumen memerlukan tanda tangan elektronik tersertifikasi menurut hukum, gunakan penyedia PSrE terdaftar di luar aplikasi ini.",
@@ -1394,8 +1418,8 @@ export const chapterProfit: Chapter = {
     {
       kind: "locked",
       text: [
-        "Pembayaran masuk Buku Kas sebagai kas keluar dan menunggu dicocokkan dengan mutasi bank. Alokasi yang sudah disetujui tidak dapat diedit maupun dihapus; Admin membatalkannya lalu tim membuat alokasi baru. Pembatalan ditolak bila pembayarannya sudah dicocokkan dengan mutasi bank.",
-        "The payment enters the Cash Ledger as cash out and waits to be matched against the bank statement. An approved allocation can be neither edited nor deleted; an Admin voids it and the team creates a new one. Voiding is refused if the payment has already been matched to a bank entry.",
+        "Pembayaran masuk Buku Kas sebagai kas keluar dan menunggu dicocokkan dengan mutasi bank. Alokasi yang sudah disetujui tidak dapat diedit maupun dihapus; Admin membatalkannya lalu tim membuat alokasi baru. Pembatalan tidak menghapus pembayarannya: catatan kas keluar yang asli tetap ada dan aplikasi menambahkan satu catatan pembalik bertanggal hari pembatalan, sehingga posisi kas proyek kembali seperti sebelum pembagian dibayarkan dan kedua baris tetap terlihat saat audit. Pembatalan ditolak bila pembayarannya sudah dicocokkan dengan mutasi bank.",
+        "The payment enters the Cash Ledger as cash out and waits to be matched against the bank statement. An approved allocation can be neither edited nor deleted; an Admin voids it and the team creates a new one. Voiding does not erase the payment: the original cash-out entry stays and the application posts a reversing entry dated on the day of the cancellation, so the project's cash position returns to where it was before the share was paid while both lines remain visible for audit. Voiding is refused if the payment has already been matched to a bank entry.",
       ],
     },
     {
@@ -1904,6 +1928,21 @@ export const chapterMessages: Chapter = {
           message: ["Quotation tidak dapat dihapus karena sudah dirujuk dokumen procurement (SPK/PO).", "The quotation cannot be deleted because a procurement document still references it."],
           meaning: ["Sebuah SPK atau PO mengambil itemnya dari penawaran ini.", "A Work Order or PO draws its items from this quotation."],
           action: ["Hapus atau void dokumen procurement tersebut lebih dulu, baru penawarannya dapat dihapus.", "Delete or void that procurement document first, and only then can the quotation be deleted."],
+        },
+        {
+          message: ["Quotation ini tidak dapat dibatalkan karena Invoice-nya sudah menerima pembayaran.", "The quotation cannot be voided because its invoice has already received a payment."],
+          meaning: ["Uang klien sudah masuk atas dasar penawaran ini, jadi membatalkannya akan menghapus dasar penagihannya.", "Client money has already come in on the strength of this quotation, so voiding it would remove the basis of the billing."],
+          action: ["Buka jendela pembayaran invoice, tekan Void pada pembayarannya dan isi alasannya, hapus invoicenya bila memang keliru, baru batalkan penawarannya. Bila invoicenya masih terbit tanpa pembayaran, aplikasi tetap menolak dengan pesan bahwa penawaran sudah memiliki Invoice.", "Open the invoice payment window, press Void on the payment and give a reason, delete the invoice if it really is wrong, and only then void the quotation. While the invoice still exists without a payment, the application still refuses with the message that the quotation already has an invoice."],
+        },
+        {
+          message: ["Perubahan status Quotation tidak sesuai urutan workflow.", "That quotation status change does not follow the workflow."],
+          meaning: ["Anda mencoba mengaktifkan kembali penawaran yang sudah Batal, Ditolak, atau Digantikan. Ketiganya adalah status akhir.", "You are trying to reactivate a quotation that is already Void, Rejected, or Superseded. All three are terminal."],
+          action: ["Buat penawaran baru untuk pekerjaan itu. Penawaran lama tetap tersimpan sebagai riwayat dan tidak dapat dikembalikan menjadi Draft atau Terkirim.", "Raise a new quotation for that work. The old one stays as history and cannot be returned to Draft or Sent."],
+        },
+        {
+          message: ["Proyek ini sudah memiliki riwayat kas yang tercatat sehingga tidak dapat dihapus.", "This project already has recorded cash, so it cannot be deleted."],
+          meaning: ["Ada pembayaran, penyelesaian, setoran pajak, atau transaksi Pembukuan yang melekat pada proyek ini.", "A payment, a settlement, a tax settlement, or a Finance transaction is attached to this project."],
+          action: ["Jangan hapus proyeknya. Tutup atau arsipkan: ubah statusnya menjadi Selesai dan biarkan dokumen serta pembukuannya utuh. Penghapusan hanya tersedia untuk proyek yang belum pernah menyentuh uang.", "Do not delete the project. Close or archive it: set its status to Completed and leave its documents and books intact. Deletion is only available for a project that has never touched money."],
         },
         {
           message: ["Nominal melebihi nilai yang sudah berhak dibayar. Verifikasi progres atau penerimaan barang terlebih dahulu.", "The amount exceeds what has been earned; record progress verification or a goods receipt first."],

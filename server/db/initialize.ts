@@ -502,7 +502,7 @@ CREATE TABLE IF NOT EXISTS basts (
   engineer_name TEXT NOT NULL,
   engineer_role TEXT NOT NULL DEFAULT 'Project Manager',
   engineer_signature TEXT,
-  status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Final')),
+  status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Final', 'Void')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -2029,6 +2029,63 @@ async function ensureBastEngineerRoleColumn(client: DatabaseClient) {
   }
 }
 
+// The BAST void endpoint writes status='Void', but the original table declared
+// CHECK (status IN ('Draft','Final')) — every revocation failed with a raw
+// constraint error surfaced as a 500. Fresh databases now declare 'Void' in the
+// schema; databases created before this fix are relaxed here. Idempotent: it
+// inspects the live constraint first and does nothing once 'Void' is allowed.
+async function ensureBastVoidStatus(client: DatabaseClient) {
+  let tableSql: string | null = null;
+  let sqlite = true;
+  try {
+    const result = await client.execute(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='basts' LIMIT 1",
+    );
+    tableSql = result.rows[0]?.sql ? String(result.rows[0].sql) : null;
+  } catch {
+    sqlite = false;
+  }
+  if (!sqlite) {
+    // PostgreSQL names the inline CHECK `basts_status_check`, so it can be
+    // replaced in place. Dropping and re-adding in ONE statement keeps the
+    // migration both re-runnable and atomic: a failure can never leave the
+    // column with no constraint at all.
+    try {
+      await client.execute(
+        `ALTER TABLE basts
+          DROP CONSTRAINT IF EXISTS basts_status_check,
+          ADD CONSTRAINT basts_status_check CHECK (status IN ('Draft', 'Final', 'Void'))`,
+      );
+    } catch {
+      // Another dialect, or the constraint was never declared — nothing to relax.
+    }
+    return;
+  }
+  if (!tableSql) return;
+  const checkPattern = /CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i;
+  const declaredCheck = tableSql.match(checkPattern);
+  if (!declaredCheck || /'Void'/i.test(declaredCheck[0])) return;
+  // SQLite cannot alter a CHECK constraint, so rebuild the table from its own
+  // stored DDL. Deriving the new DDL from sqlite_master (instead of restating
+  // it here) preserves every column and default added by later migrations.
+  const indexes = await client.execute(
+    "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='basts' AND sql IS NOT NULL",
+  );
+  const rebuiltSql = tableSql.replace(
+    checkPattern,
+    "CHECK (status IN ('Draft', 'Final', 'Void'))",
+  );
+  await client.execute("DROP TABLE IF EXISTS basts_status_migration");
+  await client.execute("ALTER TABLE basts RENAME TO basts_status_migration");
+  await client.execute(rebuiltSql);
+  await client.execute("INSERT INTO basts SELECT * FROM basts_status_migration");
+  // Dropping the old table also drops the indexes that travelled with it.
+  await client.execute("DROP TABLE basts_status_migration");
+  for (const row of indexes.rows) {
+    await client.execute(String(row.sql));
+  }
+}
+
 async function ensureTransactionCategoryColumn(client: DatabaseClient) {
   try {
     await client.execute("SELECT category FROM transactions LIMIT 1");
@@ -2635,6 +2692,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureSpkPaymentColumns(client);
   await ensureProcurementSchema(client);
   await ensureCommercialPackageSchema(client);
+  await ensureBastVoidStatus(client);
   await ensureDocumentCounters(client);
   await ensureTaxAndEmailSchema(client);
   await ensureProjectExpenseSchema(client);

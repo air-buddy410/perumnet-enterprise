@@ -3842,10 +3842,29 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
       remember: false,
     }),
   });
-  await json(`/api/projects/${project.id}`, { method: "DELETE" }, 204);
-  await json(`/api/projects/${taxProject.id}`, { method: "DELETE" }, 204);
+  // Posted cash outlives the project record: deleting a project that carries
+  // payments, settlements, or transactions is refused with a friendly 409
+  // instead of silently wiping the ledger.
+  const blockedProjectDelete = await request(`/api/projects/${project.id}`, {
+    method: "DELETE",
+  });
+  assert.equal(blockedProjectDelete.status, 409);
+  assert.equal(
+    (await blockedProjectDelete.json()).error.code,
+    "PROJECT_HAS_FINANCIAL_HISTORY",
+  );
+  const blockedTaxProjectDelete = await request(`/api/projects/${taxProject.id}`, {
+    method: "DELETE",
+  });
+  assert.equal(blockedTaxProjectDelete.status, 409);
+  assert.equal(
+    (await blockedTaxProjectDelete.json()).error.code,
+    "PROJECT_HAS_FINANCIAL_HISTORY",
+  );
+  // A project without any posted cash still deletes exactly as before.
   await json(`/api/projects/${projectManagerProject.id}`, { method: "DELETE" }, 204);
-  assert.equal((await request(`/api/projects/${project.id}`)).status, 404);
+  assert.equal((await request(`/api/projects/${projectManagerProject.id}`)).status, 404);
+  assert.equal((await request(`/api/projects/${project.id}`)).status, 200);
 
   const numberingFirst = await json(
     "/api/projects",
@@ -3878,14 +3897,15 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   );
   assert.notEqual(numberingSecond.code, numberingFirst.code);
   await json(`/api/projects/${numberingSecond.id}`, { method: "DELETE" }, 204);
-  assert.equal((await request(`/api/invoices/${invoice.id}`)).status, 404);
-  assert.equal((await request(`/api/spks/${spk.id}`)).status, 404);
-  assert.equal((await request(`/api/bast/${bast.id}`)).status, 404);
+  // The refused deletions above left every document and every rupiah in place.
+  assert.equal((await request(`/api/invoices/${invoice.id}`)).status, 200);
+  assert.equal((await request(`/api/spks/${spk.id}`)).status, 200);
+  assert.equal((await request(`/api/bast/${bast.id}`)).status, 200);
   assert.equal(
     (await json("/api/transactions")).some(
       (entry) => entry.projectId === project.id,
     ),
-    false,
+    true,
   );
 }, { timeout: 45_000 });
 
@@ -4458,3 +4478,288 @@ test("Finance cannot approve an expense it submitted, but an Admin can with a re
     "Tidak ada verifikator lain yang tersedia hari ini.",
   );
 }, { timeout: 45_000 });
+
+// ---------------------------------------------------------------------------
+// Regression: revoking a handover certificate must be possible, and must undo
+// the project closure it caused so the package can be handed over again.
+// ---------------------------------------------------------------------------
+test("a revoked BAST reopens the project and the same package can be handed over again", async () => {
+  await loginAsAdmin();
+  await json("/api/bast/settings/seal", {
+    method: "PUT",
+    body: JSON.stringify({
+      enabled: true,
+      signerName: "Direktur PerumNet",
+      signerRole: "Direktur",
+      sealMimeType: "image/png",
+      sealContentBase64: FIELD_PNG,
+    }),
+  });
+  const signature = `data:image/png;base64,${FIELD_PNG}`;
+  const project = await createRegressionProject("Proyek Pencabutan BAST");
+  const packages = await json(`/api/projects/${project.id}/packages`);
+  const commercialPackage = packages[0];
+  await addRegressionBoqItem(
+    project.id,
+    commercialPackage.id,
+    "Perangkat",
+    1_500_000,
+    "Perangkat serah terima",
+  );
+  await acceptRegressionQuotation(project.id, commercialPackage.id, "pencabutan-bast");
+  const validation = await json(
+    `/api/validations?projectId=${project.id}&packageId=${commercialPackage.id}`,
+    { method: "POST" },
+    201,
+  );
+  await json(`/api/validations/${validation.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status: "Completed",
+      notes: "Seluruh perangkat lulus pengujian bersama klien.",
+      items: validation.items.map((item) => ({ ...item, checked: true })),
+    }),
+  });
+
+  async function issueBast(notes) {
+    return await json(
+      "/api/bast",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          projectId: project.id,
+          packageId: commercialPackage.id,
+          completionDate: fieldToday,
+          notes,
+          installedItems: [
+            { name: "Perangkat serah terima", quantity: "1 unit", status: "Terpasang" },
+          ],
+          clientName: "Klien Regresi",
+          clientRole: "Manager",
+          clientSignature: signature,
+          engineerName: "Dewa Mahardika",
+          engineerRole: "Engineer",
+          engineerSignature: signature,
+          status: "Draft",
+        }),
+      },
+      201,
+    );
+  }
+
+  const first = await issueBast("Serah terima pertama telah diuji bersama klien.");
+  assert.equal(first.revisionNo, 1);
+  assert.equal((await json(`/api/bast/${first.id}/finalize`, { method: "POST" })).status, "Final");
+  assert.equal((await json(`/api/projects/${project.id}`)).status, "Selesai");
+
+  // The void used to die on a CHECK constraint that never listed 'Void'.
+  const voided = await json(`/api/bast/${first.id}/void`, {
+    method: "POST",
+    body: JSON.stringify({
+      reason: "Dokumen serah terima keliru dan harus diterbitkan ulang.",
+    }),
+  });
+  assert.equal(voided.status, "Void");
+  assert.ok(voided.revokedAt, "the revocation is stamped");
+  assert.equal(
+    (await json(`/api/projects/${project.id}`)).status,
+    "Aktif",
+    "revoking the only handover puts the project back into delivery",
+  );
+
+  // Re-issuing on the same package and cycle must not collide with the revoked
+  // revision's UNIQUE(package_id, delivery_cycle, revision_no).
+  const reissued = await issueBast("Serah terima ulang telah diuji bersama klien.");
+  assert.equal(reissued.revisionNo, 2);
+  assert.equal(
+    (await json(`/api/bast/${reissued.id}/finalize`, { method: "POST" })).status,
+    "Final",
+  );
+  assert.equal(
+    (await json(`/api/projects/${project.id}`)).status,
+    "Selesai",
+    "the replacement handover closes the project again",
+  );
+  const documents = await json(`/api/bast?projectId=${project.id}`);
+  assert.equal(documents.length, 2, "the revoked document is kept, not replaced");
+});
+
+// ---------------------------------------------------------------------------
+// Regression: a project that has recorded cash can never be deleted; one that
+// has none still cascades away exactly as before.
+// ---------------------------------------------------------------------------
+test("a project with posted cash refuses deletion, a clean project still cascades away", async () => {
+  await loginAsAdmin();
+
+  async function billableProject(name, label) {
+    const project = await createRegressionProject(name);
+    const packages = await json(`/api/projects/${project.id}/packages`);
+    await addRegressionBoqItem(
+      project.id,
+      packages[0].id,
+      "Jasa",
+      2_000_000,
+      `Pekerjaan ${label}`,
+    );
+    const { quotationId } = await acceptRegressionQuotation(
+      project.id,
+      packages[0].id,
+      label,
+    );
+    const invoice = await json(
+      "/api/invoices",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          projectId: project.id,
+          quotationId,
+          type: "DP 50%",
+          issueDate: fieldToday,
+          dueDate: fieldToday,
+          calculationMode: "Percent",
+          installmentPercent: 50,
+        }),
+      },
+      201,
+    );
+    return { project, invoice };
+  }
+
+  // 1. No cash recorded anywhere -> deletion still cascades.
+  const clean = await billableProject("Proyek Hapus Tanpa Kas", "hapus-tanpa-kas");
+  await json(`/api/projects/${clean.project.id}`, { method: "DELETE" }, 204);
+  assert.equal((await request(`/api/projects/${clean.project.id}`)).status, 404);
+  assert.equal((await request(`/api/invoices/${clean.invoice.id}`)).status, 404);
+  const cleanAudit = (await json("/api/audit-logs")).find(
+    (entry) => entry.entityId === clean.project.id && entry.action === "delete",
+  );
+  assert.ok(cleanAudit, "the deletion is written to the audit log");
+  assert.equal(cleanAudit.metadata.removed.invoices, 1);
+  assert.equal(cleanAudit.metadata.removed.quotations, 1);
+  assert.equal(cleanAudit.metadata.financialHistory.transactions, 0);
+
+  // 2. One posted invoice payment is enough to lock the project forever.
+  const paid = await billableProject("Proyek Hapus Dengan Kas", "hapus-dengan-kas");
+  await json(
+    `/api/invoices/${paid.invoice.id}/payments`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        grossAmount: paid.invoice.grossTotal,
+        cashAmount: paid.invoice.grossTotal,
+        withholdingAmount: 0,
+        paidDate: fieldToday,
+        paymentReference: "BCA-HAPUS-001",
+        paymentMethod: "Tunai",
+        attachment: fieldAttachment("bukti-hapus"),
+      }),
+    },
+    201,
+  );
+  const refused = await request(`/api/projects/${paid.project.id}`, { method: "DELETE" });
+  assert.equal(refused.status, 409);
+  const refusedPayload = await refused.json();
+  assert.equal(refusedPayload.error.code, "PROJECT_HAS_FINANCIAL_HISTORY");
+  assert.ok(refusedPayload.error.message.length > 10);
+  assert.equal(refusedPayload.error.details.invoicePayments, 1);
+  assert.equal((await request(`/api/projects/${paid.project.id}`)).status, 200);
+  assert.equal((await request(`/api/invoices/${paid.invoice.id}`)).status, 200);
+  assert.equal(
+    (await json(`/api/transactions?projectId=${paid.project.id}`)).length > 0,
+    true,
+    "the cash trail survives the refused deletion",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Regression: voiding a profit share must reverse the payout, not erase it.
+// ---------------------------------------------------------------------------
+test("voiding a paid profit share posts a reversal instead of deleting the payout", async () => {
+  await loginAsAdmin();
+  const project = await createRegressionProject("Proyek Bagi Hasil Pembatalan");
+  await json(
+    "/api/transactions",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        date: fieldToday,
+        type: "Pemasukan",
+        description: "Pembayaran termin proyek bagi hasil",
+        amount: 4_000_000,
+        source: "Manual",
+        category: "Penjualan",
+      }),
+    },
+    201,
+  );
+  const before = await json(`/api/finance/summary?projectId=${project.id}`);
+  const allocation = await json(
+    "/api/profit-shares",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        recipientName: "Partner Pembatalan",
+        percentage: 25,
+        notes: "Alokasi untuk diuji pembatalannya.",
+      }),
+    },
+    201,
+  );
+  await json(`/api/profit-shares/${allocation.id}/approve`, { method: "POST" });
+  const paid = await json(`/api/profit-shares/${allocation.id}/pay`, {
+    method: "POST",
+    body: JSON.stringify({ paidDate: fieldToday }),
+  });
+  assert.equal(paid.status, "Paid");
+  assert.ok(paid.amount > 0);
+  const afterPay = await json(`/api/finance/summary?projectId=${project.id}`);
+  assert.equal(afterPay.netCash, before.netCash - paid.amount);
+
+  const voided = await json(`/api/profit-shares/${allocation.id}/void`, { method: "POST" });
+  assert.equal(voided.status, "Void");
+  const ledger = await json(`/api/transactions?projectId=${project.id}`);
+  const payout = ledger.filter((entry) => entry.source === "Profit Share");
+  const reversal = ledger.filter((entry) => entry.source === "Profit Share Reversal");
+  assert.equal(payout.length, 1, "the original payout stays on the ledger");
+  assert.equal(reversal.length, 1, "a contra entry cancels it");
+  assert.equal(payout[0].type, "Pengeluaran");
+  assert.equal(reversal[0].type, "Pemasukan");
+  assert.equal(reversal[0].amount, paid.amount);
+  assert.equal(
+    (await json(`/api/finance/summary?projectId=${project.id}`)).netCash,
+    before.netCash,
+    "net cash returns to the pre-payout position",
+  );
+  assert.equal(
+    (await json(`/api/profit-shares?projectId=${project.id}`)).netProfit,
+    before.netCash,
+    "profit-share reporting ignores its own payout and reversal",
+  );
+
+  // The reversal is a system entry: nobody can hand-edit or delete it.
+  assert.equal(reversal[0].editable, false);
+  assert.equal(
+    (await request(`/api/transactions/${reversal[0].id}`, { method: "DELETE" })).status,
+    409,
+  );
+  assert.equal(
+    (
+      await request("/api/transactions", {
+        method: "POST",
+        body: JSON.stringify({
+          projectId: project.id,
+          date: fieldToday,
+          type: "Pemasukan",
+          description: "Pembalikan bagi hasil buatan tangan",
+          amount: 1_000,
+          source: "Profit Share Reversal",
+          category: "Lainnya",
+        }),
+      })
+    ).status,
+    422,
+    "the reserved source cannot be created by hand",
+  );
+});

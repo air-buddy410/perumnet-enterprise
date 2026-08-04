@@ -73,7 +73,7 @@ const workflowsId: WorkflowGuide[] = [
       "Bila proyek dijual dalam beberapa lingkup, pilih juga Paket komersial di bagian atas BoQ Generator, Quotation & Invoice, Validasi Perangkat, dan BAST Digital. Setiap paket punya BoQ, penawaran, invoice, dan BAST sendiri.",
       "Menu sidebar dibagi tiga: Utama berisi Dashboard, Manajemen Proyek, BoQ Generator, dan Quotation & Invoice; Operasional berisi Belanja Proyek, Procurement & Vendor, Validasi Perangkat, BAST Digital, dan Pembukuan; Administrasi berisi Database Item serta Pengguna & Akses.",
     ],
-    after: "Pilihan proyek dan paket diingat aplikasi, jadi Anda tidak perlu memilih ulang setiap berpindah menu.",
+    after: "Pilihan proyek dan paket diingat aplikasi, jadi Anda tidak perlu memilih ulang setiap berpindah menu. Menghapus proyek hanya mungkin selama proyek itu belum menyentuh uang sama sekali: begitu ada pembayaran, penyelesaian belanja, setoran pajak, atau transaksi Pembukuan, proyek tidak dapat dihapus dan harus ditutup atau diarsipkan dengan status Selesai.",
   },
   {
     key: "quotation",
@@ -92,7 +92,7 @@ const workflowsId: WorkflowGuide[] = [
       "Tekan Unduh PDF, kirim penawaran ke klien, lalu tekan Tandai sudah dikirim.",
       "Setelah klien setuju, tekan Terima klien, isi tanggal persetujuan, unggah buktinya, lalu tekan Terima & kunci.",
     ],
-    after: "Penawaran berstatus Diterima. Item BoQ, diskon, pajak, dan pembulatan terkunci permanen. Sejak saat itu Anda dapat membuat invoice termin dan dokumen SPK/PO. Perubahan pekerjaan sesudahnya harus lewat Addendum.",
+    after: "Penawaran berstatus Diterima. Item BoQ, diskon, pajak, dan pembulatan terkunci permanen. Sejak saat itu Anda dapat membuat invoice termin dan dokumen SPK/PO. Perubahan pekerjaan sesudahnya harus lewat Addendum. Status Batal, Ditolak, dan Digantikan bersifat akhir: penawaran seperti itu tidak dapat dikembalikan menjadi Draft atau Terkirim — buat penawaran baru. Membatalkan penawaran juga ditolak selama masih ada SPK/PO aktif, invoice yang masih terbit, atau invoice yang sudah menerima pembayaran.",
   },
   {
     key: "installment",
@@ -179,7 +179,7 @@ const workflowsId: WorkflowGuide[] = [
       "Minta perwakilan klien menandatangani di layar pada kolom Pihak Klien, lalu wakil PerumNet menandatangani pada kolom Pihak PerumNet.",
       "Tekan finalisasi. Aplikasi membubuhkan cap perusahaan, mengunci berkasnya, dan menempelkan QR pemeriksaan keaslian.",
     ],
-    after: "BAST menjadi Final dan tidak dapat diubah. Status proyek berubah menjadi Selesai hanya setelah seluruh paket yang penawarannya sudah diterima klien memiliki BAST final yang aktif; selama masih ada paket berjalan, proyek tetap Aktif. Siapa pun yang memindai QR pada PDF dapat memeriksa apakah dokumen itu asli dan masih berlaku. Bila ada kekeliruan, Admin mencabut dokumennya dan tim membuat revisi baru.",
+    after: "BAST menjadi Final dan tidak dapat diubah. Status proyek berubah menjadi Selesai hanya setelah seluruh paket yang penawarannya sudah diterima klien memiliki BAST final yang aktif; selama masih ada paket berjalan, proyek tetap Aktif. Siapa pun yang memindai QR pada PDF dapat memeriksa apakah dokumen itu asli dan masih berlaku. Bila ada kekeliruan, Admin mencabut dokumennya dengan alasan tertulis. Dokumen yang dicabut tidak dihapus: statusnya menjadi Batal dan QR-nya menyatakan dokumen tidak berlaku. Karena serah terima itulah yang menutup proyek, pencabutan mengembalikan status proyek menjadi Aktif bila masih ada paket yang belum diserahterimakan. Tim lalu membuat BAST baru untuk paket dan siklus yang sama, dan dokumen itu tercatat sebagai revisi berikutnya.",
   },
   {
     key: "expenses",
@@ -247,7 +247,7 @@ const workflowsId: WorkflowGuide[] = [
       "Admin menekan Setujui. Nominal rupiahnya dikunci pada saat itu juga.",
       "Tekan Bayar dan isi tanggal pembayaran.",
     ],
-    after: "Pembayaran masuk Buku Kas sebagai kas keluar dan menunggu dicocokkan dengan mutasi bank. Alokasi yang sudah disetujui tidak dapat diedit; Admin membatalkannya lalu tim membuat alokasi baru.",
+    after: "Pembayaran masuk Buku Kas sebagai kas keluar dan menunggu dicocokkan dengan mutasi bank. Alokasi yang sudah disetujui tidak dapat diedit; Admin membatalkannya lalu tim membuat alokasi baru. Pembatalan tidak menghapus pembayarannya: catatan kas keluar yang asli tetap ada dan aplikasi menambahkan catatan pembalik bertanggal hari ini, sehingga kas proyek kembali seperti sebelum pembagian dibayarkan dan kedua baris tetap terlihat.",
   },
   {
     key: "catalog-ai",
@@ -300,7 +300,7 @@ const workflowsEn: WorkflowGuide[] = [
       "If a project is sold as several separate scopes, also choose a Commercial package at the top of BoQ Generator, Quotations & Invoices, Device Validation, and Digital Handover. Each package has its own BoQ, quotation, invoices, and handover certificate.",
       "The sidebar has three groups. Main holds Dashboard, Project Management, BoQ Generator, and Quotations & Invoices. Operations holds Project Expenses, Procurement & Vendors, Device Validation, Digital Handover, and Finance. Administration holds Item Database and Users & Access.",
     ],
-    after: "The app remembers your project and package, so you do not have to pick them again each time you switch menus.",
+    after: "The app remembers your project and package, so you do not have to pick them again each time you switch menus. A project can only be deleted while it has never touched money: once a payment, an expense settlement, a tax settlement, or a Finance transaction exists, deletion is refused and the project must be closed or archived with the status Completed instead.",
   },
   {
     key: "quotation",
@@ -319,7 +319,7 @@ const workflowsEn: WorkflowGuide[] = [
       "Press Download PDF, send the quotation to the client, then press Mark as sent.",
       "Once the client agrees, press Client accept, enter the acceptance date, upload the proof, and press Accept & lock.",
     ],
-    after: "The quotation becomes Accepted. BoQ items, discount, tax, and rounding are locked permanently. From then on you can raise installment invoices and procurement documents. Later changes to the work must go through an Addendum.",
+    after: "The quotation becomes Accepted. BoQ items, discount, tax, and rounding are locked permanently. From then on you can raise installment invoices and procurement documents. Later changes to the work must go through an Addendum. Void, Rejected, and Superseded are terminal: such a quotation cannot be returned to Draft or Sent — raise a new one instead. Voiding is also refused while an active Work Order or PO, an existing invoice, or a paid invoice still references it.",
   },
   {
     key: "installment",
@@ -406,7 +406,7 @@ const workflowsEn: WorkflowGuide[] = [
       "Ask the client's representative to sign on screen in the Client panel, then have the PerumNet representative sign in the PerumNet panel.",
       "Press finalize. The app applies the company seal, locks the file, and attaches a QR code for checking authenticity.",
     ],
-    after: "The certificate becomes Final and can no longer be edited. The project status changes to Completed only once every package with a client-accepted quotation has an active final certificate; while another package is still running, the project stays Active. Anyone who scans the QR code on the PDF can check whether the document is genuine and still valid. If something is wrong, an Admin revokes it and the team issues a new revision.",
+    after: "The certificate becomes Final and can no longer be edited. The project status changes to Completed only once every package with a client-accepted quotation has an active final certificate; while another package is still running, the project stays Active. Anyone who scans the QR code on the PDF can check whether the document is genuine and still valid. If something is wrong, an Admin revokes it with a written reason. A revoked document is not deleted: its status becomes Void and its QR reports it as no longer valid. Because it is the handover that closes the project, revoking one returns the project to Active while any package is left without a certificate. The team then issues a new certificate for the same package and cycle, recorded as the next revision.",
   },
   {
     key: "expenses",
@@ -474,7 +474,7 @@ const workflowsEn: WorkflowGuide[] = [
       "An Admin presses Approve. The rupiah amount is locked at that moment.",
       "Press Pay and enter the payment date.",
     ],
-    after: "The payment enters the Cash Ledger as cash out and waits to be matched against the bank statement. An approved allocation cannot be edited; an Admin voids it and the team creates a new one.",
+    after: "The payment enters the Cash Ledger as cash out and waits to be matched against the bank statement. An approved allocation cannot be edited; an Admin voids it and the team creates a new one. Voiding does not erase the payout: the original cash-out entry stays and a reversing entry dated today cancels it, so the project's cash returns to its pre-payout position with both lines still visible.",
   },
   {
     key: "catalog-ai",
@@ -608,6 +608,24 @@ const messagesId: MessageGuide[] = [
     message: "Invoice dengan histori pembayaran tidak dapat dihapus. Gunakan void pada pembayaran.",
     meaning: "Invoice sudah pernah dibayar, jadi menghapusnya akan merusak pembukuan.",
     action: "Buka jendela pembayaran invoice, tekan Void pembayaran terakhir, dan isi alasannya. Setelah tidak ada pembayaran tersisa, invoice baru dapat diedit atau dihapus.",
+  },
+  {
+    key: "quotation-terminal",
+    message: "Perubahan status Quotation tidak sesuai urutan workflow.",
+    meaning: "Anda mencoba mengaktifkan kembali penawaran yang sudah Batal, Ditolak, atau Digantikan. Ketiganya status akhir.",
+    action: "Buat penawaran baru untuk pekerjaan itu. Penawaran lama tetap tersimpan sebagai riwayat dan tidak dapat dikembalikan menjadi Draft atau Terkirim.",
+  },
+  {
+    key: "quotation-paid-invoice",
+    message: "Quotation ini tidak dapat dibatalkan karena Invoice-nya sudah menerima pembayaran.",
+    meaning: "Uang klien sudah masuk atas dasar penawaran ini, sehingga membatalkannya akan menghapus dasar penagihannya.",
+    action: "Void pembayarannya lebih dulu, hapus invoicenya bila memang keliru, baru batalkan penawarannya. Selama invoicenya masih terbit, aplikasi tetap menolak dengan pesan bahwa penawaran sudah memiliki Invoice.",
+  },
+  {
+    key: "project-financial-history",
+    message: "Proyek ini sudah memiliki riwayat kas yang tercatat sehingga tidak dapat dihapus.",
+    meaning: "Ada pembayaran, penyelesaian belanja, setoran pajak, atau transaksi Pembukuan yang melekat pada proyek ini.",
+    action: "Jangan hapus proyeknya. Tutup atau arsipkan: ubah statusnya menjadi Selesai dan biarkan dokumen serta pembukuannya utuh. Penghapusan hanya tersedia untuk proyek yang belum pernah menyentuh uang.",
   },
   {
     key: "reconciled",
@@ -749,6 +767,24 @@ const messagesEn: MessageGuide[] = [
     message: "An invoice with payment history cannot be deleted. Void the payment instead.",
     meaning: "The invoice has already been paid, so deleting it would corrupt the books.",
     action: "Open the invoice payment window, press Void latest payment, and give a reason. Once no payments remain, the invoice can be edited or deleted.",
+  },
+  {
+    key: "quotation-terminal",
+    message: "That quotation status change does not follow the workflow.",
+    meaning: "You are trying to reactivate a quotation that is already Void, Rejected, or Superseded. All three are terminal.",
+    action: "Raise a new quotation for that work. The old one stays as history and cannot be returned to Draft or Sent.",
+  },
+  {
+    key: "quotation-paid-invoice",
+    message: "The quotation cannot be voided because its invoice has already received a payment.",
+    meaning: "Client money has already arrived on the strength of this quotation, so voiding it would remove the basis of the billing.",
+    action: "Void the payment first, delete the invoice if it really is wrong, and only then void the quotation. While the invoice still exists, the application refuses with the message that the quotation already has an invoice.",
+  },
+  {
+    key: "project-financial-history",
+    message: "This project already has recorded cash, so it cannot be deleted.",
+    meaning: "A payment, an expense settlement, a tax settlement, or a Finance transaction is attached to this project.",
+    action: "Do not delete the project. Close or archive it: set its status to Completed and leave its documents and books intact. Deletion is only available for a project that has never touched money.",
   },
   {
     key: "reconciled",

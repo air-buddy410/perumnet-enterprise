@@ -72,6 +72,7 @@ import {
   resolveCommercialPackageId,
 } from "./commercial-package-router";
 import {
+  assertQuotationTransition,
   handleBoqScopes,
   handleQuotationLifecycle,
 } from "./commercial-scope-router";
@@ -1496,6 +1497,45 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
       throw new ApiError(403, "FORBIDDEN", "Hanya Admin yang dapat menghapus proyek.");
     }
     await assertProjectAccess(user, projectId);
+    // Deleting a project used to hard-wipe its cash: transactions, invoice and
+    // vendor payments, expense and tax settlements all disappeared with no
+    // trace beyond a bare audit line. Recorded money is never deletable — such
+    // a project is closed or archived, not removed.
+    const financialHistory = await client.execute({
+      sql: `SELECT
+        (SELECT COUNT(*) FROM invoice_payments ip
+          JOIN invoices i ON i.id=ip.invoice_id
+          WHERE i.project_id=? AND ip.status='Posted') AS invoice_payments,
+        (SELECT COUNT(*) FROM spk_payments sp
+          JOIN spks s ON s.id=sp.spk_id
+          WHERE s.project_id=? AND sp.status='Posted') AS spk_payments,
+        (SELECT COUNT(*) FROM project_expense_settlements
+          WHERE expense_id IN (SELECT id FROM project_expenses WHERE project_id=?)
+             OR advance_id IN (SELECT id FROM project_advances WHERE project_id=?)
+        ) AS expense_settlements,
+        (SELECT COUNT(*) FROM tax_settlements WHERE obligation_id IN (
+          SELECT o.id FROM tax_obligations o
+          JOIN document_taxes dt ON dt.id=o.document_tax_id
+          WHERE dt.project_id=?
+        )) AS tax_settlements,
+        (SELECT COUNT(*) FROM transactions WHERE project_id=?) AS transactions`,
+      args: [projectId, projectId, projectId, projectId, projectId, projectId],
+    });
+    const posted = {
+      invoicePayments: asNumber(financialHistory.rows[0]?.invoice_payments),
+      spkPayments: asNumber(financialHistory.rows[0]?.spk_payments),
+      expenseSettlements: asNumber(financialHistory.rows[0]?.expense_settlements),
+      taxSettlements: asNumber(financialHistory.rows[0]?.tax_settlements),
+      transactions: asNumber(financialHistory.rows[0]?.transactions),
+    };
+    if (Object.values(posted).some((count) => count > 0)) {
+      throw new ApiError(
+        409,
+        "PROJECT_HAS_FINANCIAL_HISTORY",
+        "Proyek ini sudah memiliki riwayat kas yang tercatat (pembayaran, penyelesaian, atau transaksi) sehingga tidak dapat dihapus. Tutup atau arsipkan proyek agar catatan keuangannya tetap utuh.",
+        posted,
+      );
+    }
     const documents = await client.execute({
       sql: "SELECT storage_url FROM project_documents WHERE project_id=?",
       args: [projectId],
@@ -1505,8 +1545,33 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         JOIN project_expenses e ON e.id=a.expense_id WHERE e.project_id=?`,
       args: [projectId],
     });
+    // What the deletion actually removes, recorded for the audit trail — a bare
+    // "delete project" line cannot be reconciled against later.
+    const removedCounts = await client.execute({
+      sql: `SELECT
+        (SELECT COUNT(*) FROM invoices WHERE project_id=?) AS invoices,
+        (SELECT COUNT(*) FROM spks WHERE project_id=?) AS spks,
+        (SELECT COUNT(*) FROM basts WHERE project_id=?) AS basts,
+        (SELECT COUNT(*) FROM quotations WHERE project_id=?) AS quotations,
+        (SELECT COUNT(*) FROM project_validations WHERE project_id=?) AS validations,
+        (SELECT COUNT(*) FROM project_expenses WHERE project_id=?) AS expenses,
+        (SELECT COUNT(*) FROM project_advances WHERE project_id=?) AS advances,
+        (SELECT COUNT(*) FROM project_documents WHERE project_id=?) AS documents,
+        (SELECT COUNT(*) FROM project_commercial_packages WHERE project_id=?) AS packages,
+        (SELECT COUNT(*) FROM document_taxes WHERE project_id=?) AS document_taxes`,
+      args: Array.from({ length: 10 }, () => projectId),
+    });
     await client.batch(
       [
+        // bank_statement_entries.transaction_id is ON DELETE SET NULL, but the
+        // reconciliation flag is not — an entry would stay 'Matched' while
+        // pointing at nothing. Release it back to the unmatched pool instead.
+        {
+          sql: `UPDATE bank_statement_entries
+            SET reconciliation_status='Imported',transaction_id=NULL
+            WHERE transaction_id IN (SELECT id FROM transactions WHERE project_id=?)`,
+          args: [projectId],
+        },
         {
           sql: `DELETE FROM tax_settlements WHERE obligation_id IN (
             SELECT o.id FROM tax_obligations o
@@ -1608,7 +1673,15 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         deleteProjectFile(document.storage_url ? String(document.storage_url) : null),
       ),
     );
-    await writeAuditLog(client, request, user, "delete", "project", projectId);
+    await writeAuditLog(client, request, user, "delete", "project", projectId, {
+      removed: Object.fromEntries(
+        Object.entries(removedCounts.rows[0] ?? {}).map(([key, value]) => [
+          key,
+          asNumber(value),
+        ]),
+      ),
+      financialHistory: posted,
+    });
     return noContent();
   }
 
@@ -2321,6 +2394,14 @@ async function handleQuotations(request: Request, user: AuthUser) {
       !["Rejected", "Void"].includes(String(input.status ?? "")),
     );
     const requestedStatus = String(input.status ?? current?.status ?? "Draft");
+    // One lifecycle rule for both writers. Without it this endpoint accepted
+    // any enum value behind a lone "Accepted" guard, so PATCH {status:"Sent"}
+    // resurrected a Void or Rejected quotation and re-notified the client.
+    assertQuotationTransition(
+      current ? String(current.status) : null,
+      requestedStatus,
+      { allowSameStatus: true },
+    );
     // rounding_adjustment is dual-purpose: it stores the computed delta for the
     // Up/Down modes and the user-supplied value for Custom. When the mode
     // transitions to Custom without an explicit adjustment in the request, the
@@ -4414,6 +4495,28 @@ async function projectHandoverComplete(
   return delivering === 0 || handedOver >= delivering;
 }
 
+// Revoking a BAST undoes the handover that closed the project. Re-evaluate the
+// same rule finalization uses and re-open the project when a package is back in
+// delivery — leaving it on 'Selesai' would report work as delivered against a
+// document that no longer exists.
+async function reopenProjectIfHandoverIncomplete(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  projectId: string,
+  timestamp: string,
+) {
+  if (await projectHandoverComplete(client, projectId)) return false;
+  const project = await client.execute({
+    sql: "SELECT status FROM projects WHERE id=? LIMIT 1",
+    args: [projectId],
+  });
+  if (String(project.rows[0]?.status ?? "") !== "Selesai") return false;
+  await client.execute({
+    sql: "UPDATE projects SET status='Aktif',updated_at=? WHERE id=?",
+    args: [timestamp, projectId],
+  });
+  return true;
+}
+
 async function assertCompletedValidation(
   projectId: string,
   packageId: string,
@@ -4722,15 +4825,24 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
     const id = randomUUID();
     const number = makeSequence("BAST", sequence);
     const timestamp = now();
+    // Never hardcode revision_no=1: re-issuing after a void leaves the revoked
+    // document in place, so a fresh revision 1 would collide with
+    // UNIQUE(package_id,delivery_cycle,revision_no) and surface as a raw 500.
+    const maxRevision = await client.execute({
+      sql: `SELECT COALESCE(MAX(revision_no),0) AS max_revision FROM basts
+        WHERE package_id=? AND delivery_cycle=?`,
+      args: [packageId, input.deliveryCycle],
+    });
+    const revisionNo = asNumber(maxRevision.rows[0]?.max_revision) + 1;
     await client.execute({
       sql: `INSERT INTO basts
         (id,number,project_id,package_id,delivery_cycle,revision_no,completion_date,
          notes,installed_items_json,client_name,client_role,client_signature,
          engineer_name,engineer_role,engineer_signature,status,created_at,updated_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      args: [id, number, input.projectId, packageId, input.deliveryCycle, 1, input.completionDate, input.notes, JSON.stringify(input.installedItems), input.clientName, input.clientRole, input.clientSignature ?? null, input.engineerName, input.engineerRole ?? "Project Manager", input.engineerSignature ?? null, input.status, timestamp, timestamp],
+      args: [id, number, input.projectId, packageId, input.deliveryCycle, revisionNo, input.completionDate, input.notes, JSON.stringify(input.installedItems), input.clientName, input.clientRole, input.clientSignature ?? null, input.engineerName, input.engineerRole ?? "Project Manager", input.engineerSignature ?? null, input.status, timestamp, timestamp],
     });
-    await writeAuditLog(client, request, user, "create", "bast", id, { projectId: input.projectId, packageId, deliveryCycle: input.deliveryCycle, status: input.status });
+    await writeAuditLog(client, request, user, "create", "bast", id, { projectId: input.projectId, packageId, deliveryCycle: input.deliveryCycle, revisionNo, status: input.status });
     return created(await getBast(id));
   }
 
@@ -4885,7 +4997,15 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
         revocation_reason=?,updated_at=? WHERE id=?`,
       args: [timestamp, user.id, input.reason, timestamp, bastId],
     });
-    await writeAuditLog(client, request, user, "void", "bast", bastId, input);
+    const projectReopened = await reopenProjectIfHandoverIncomplete(
+      client,
+      String(bast.project_id),
+      timestamp,
+    );
+    await writeAuditLog(client, request, user, "void", "bast", bastId, {
+      ...input,
+      projectReopened,
+    });
     return ok(await getBast(bastId));
   }
 
@@ -5054,8 +5174,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         SELECT p.id,p.code,p.name,
           COALESCE((
             SELECT SUM(CASE
+              WHEN t.source IN ('Profit Share','Profit Share Reversal') THEN 0
               WHEN t.type='Pemasukan' THEN t.amount
-              WHEN t.type='Pengeluaran' AND t.source NOT IN ('Profit Share','Profit Share Reversal') THEN -t.amount
+              WHEN t.type='Pengeluaran' THEN -t.amount
               ELSE 0 END)
             FROM transactions t
             WHERE t.project_id=p.id

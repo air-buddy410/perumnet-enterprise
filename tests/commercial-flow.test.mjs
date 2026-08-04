@@ -1097,3 +1097,154 @@ test("scenario D1: an addendum created in a second package stays inside that pac
   assert.equal(unknownPackage.status, 404);
   assert.equal((await unknownPackage.json()).error.code, "PACKAGE_NOT_FOUND");
 });
+
+// ---------------------------------------------------------------------------
+// Scenario B7 — the quotation lifecycle has ONE rule, and terminal is terminal
+// ---------------------------------------------------------------------------
+
+test("scenario B7: a voided or rejected quotation cannot be revived through the package PATCH", async () => {
+  const project = await createProject("Proyek Siklus Status Quotation");
+  await addBoqItem(project.id, 5_000_000);
+
+  // The legal forward path still works, revisions included.
+  assert.equal((await patchQuotation(project.id, { status: "Draft" })).status, "Draft");
+  const sent = await patchQuotation(project.id, { status: "Sent" });
+  assert.equal(sent.status, "Sent");
+  assert.equal(sent.revisionNo, 1);
+  const revised = await patchQuotation(project.id, {
+    status: "Sent",
+    discountEnabled: true,
+    discountType: "Nominal",
+    discountValue: 500_000,
+  });
+  assert.equal(revised.status, "Sent", "revising a Sent quotation still works");
+  assert.equal(revised.revisionNo, 2);
+  assert.equal(revised.discountAmount, 500_000);
+
+  // Void through the lifecycle action, then try to bring it back to life.
+  await json(`/api/quotations/${revised.id}/void`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  assert.equal((await getQuotation(project.id)).status, "Void");
+  const revived = await request(`/api/quotations?projectId=${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Sent" }),
+  });
+  assert.equal(revived.status, 409, "a voided quotation is terminal");
+  const revivedPayload = await revived.json();
+  assert.equal(revivedPayload.error.code, "INVALID_QUOTATION_STATUS");
+  assert.ok(revivedPayload.error.message.length > 10);
+  const stillVoid = await getQuotation(project.id);
+  assert.equal(stillVoid.status, "Void", "the refused PATCH changed nothing");
+  assert.equal(stillVoid.revisionNo, 2, "and issued no revision");
+  const scope = await scopeQuotation(project.id, stillVoid.id);
+  assert.equal(scope.status, "Void", "the scope stays voided too");
+
+  // A commercial edit that does not touch the status is still a no-op change,
+  // not a revival — but it must not resurrect the document either.
+  const editedVoid = await request(`/api/quotations?projectId=${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ discountValue: 100_000 }),
+  });
+  assert.equal(editedVoid.status, 200);
+  assert.equal((await editedVoid.json()).data.status, "Void");
+
+  // Rejected is terminal in exactly the same way.
+  const rejectedProject = await createProject("Proyek Quotation Ditolak");
+  await addBoqItem(rejectedProject.id, 3_000_000);
+  await patchQuotation(rejectedProject.id, { status: "Draft" });
+  const toReject = await patchQuotation(rejectedProject.id, { status: "Sent" });
+  await json(`/api/quotations/${toReject.id}/reject`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  assert.equal((await getQuotation(rejectedProject.id)).status, "Rejected");
+  const revivedRejection = await request(
+    `/api/quotations?projectId=${rejectedProject.id}`,
+    { method: "PATCH", body: JSON.stringify({ status: "Sent" }) },
+  );
+  assert.equal(revivedRejection.status, 409);
+  assert.equal((await revivedRejection.json()).error.code, "INVALID_QUOTATION_STATUS");
+  assert.equal((await getQuotation(rejectedProject.id)).status, "Rejected");
+});
+
+// ---------------------------------------------------------------------------
+// Scenario B8 — cash that already referenced a quotation blocks its void
+// ---------------------------------------------------------------------------
+
+test("scenario B8: an Accepted quotation with a paid invoice cannot be voided", async () => {
+  const project = await createProject("Proyek Void Quotation Berbayar");
+  await addBoqItem(project.id, 8_000_000);
+  await patchQuotation(project.id, { status: "Draft" });
+  await patchQuotation(project.id, { status: "Sent" });
+  const quotation = await getQuotation(project.id);
+  await acceptQuotation(quotation.id, "void-berbayar");
+  const invoice = await json(
+    "/api/invoices",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        quotationId: quotation.id,
+        type: "DP 50%",
+        issueDate: TODAY,
+        dueDate: isoInDays(14),
+        calculationMode: "Percent",
+        installmentPercent: 50,
+      }),
+    },
+    201,
+  );
+  const paid = await json(
+    `/api/invoices/${invoice.id}/payments`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        grossAmount: invoice.grossTotal,
+        cashAmount: invoice.grossTotal,
+        withholdingAmount: 0,
+        paidDate: TODAY,
+        paymentReference: "BCA-VOID-QUO-001",
+        paymentMethod: "Tunai",
+        attachment: acceptanceAttachment("bukti-void-quotation"),
+      }),
+    },
+    201,
+  );
+  const payment = paid.payments.find((entry) => entry.status === "Posted");
+  assert.ok(payment, "the payment is recorded as Posted");
+
+  // Voiding the quotation would pull the contract out from under posted cash.
+  const blockedByPayment = await request(`/api/quotations/${quotation.id}/void`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  assert.equal(blockedByPayment.status, 409);
+  const paymentPayload = await blockedByPayment.json();
+  assert.equal(paymentPayload.error.code, "QUOTATION_IN_USE_PAYMENT");
+  assert.ok(paymentPayload.error.message.length > 10);
+  assert.equal((await getQuotation(project.id)).status, "Accepted");
+
+  // Voiding the payment is not enough: the invoice itself still references it.
+  await json(`/api/invoices/${invoice.id}/payments/${payment.id}/void`, {
+    method: "POST",
+    body: JSON.stringify({ reason: "Pembayaran keliru dan perlu dikoreksi." }),
+  });
+  const blockedByInvoice = await request(`/api/quotations/${quotation.id}/void`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  assert.equal(blockedByInvoice.status, 409);
+  assert.equal((await blockedByInvoice.json()).error.code, "QUOTATION_IN_USE");
+  assert.equal((await getQuotation(project.id)).status, "Accepted");
+
+  // Remove the invoice and the quotation becomes voidable again.
+  await json(`/api/invoices/${invoice.id}`, { method: "DELETE" }, 204);
+  const voidedScope = await json(`/api/quotations/${quotation.id}/void`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  assert.equal(voidedScope.quotation.status, "Void");
+  assert.equal((await getQuotation(project.id)).status, "Void");
+});

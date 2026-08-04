@@ -15,6 +15,71 @@ import { renderBusinessPdf } from "./pdf";
 
 const idSchema = z.string().trim().min(1).max(100);
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const QUOTATION_STATUSES = [
+  "Draft",
+  "Sent",
+  "Accepted",
+  "Rejected",
+  "Void",
+  "Superseded",
+] as const;
+export type QuotationStatus = (typeof QUOTATION_STATUSES)[number];
+
+// The ONE definition of the Quotation lifecycle. Both writers use it: the
+// package PATCH endpoint (which used to accept any enum value behind a lone
+// "Accepted" guard, so a Void or Rejected quotation could be flipped back to
+// Sent and re-notified to the client) and the /quotations/:id lifecycle
+// actions. Void, Rejected, and Superseded are terminal — nothing revives them.
+// 'Draft' as a target from 'Sent' means "issue the next revision".
+const QUOTATION_TRANSITIONS: Record<QuotationStatus, readonly QuotationStatus[]> = {
+  Draft: ["Sent", "Void"],
+  Sent: ["Draft", "Accepted", "Rejected", "Void"],
+  Accepted: ["Void"],
+  Rejected: ["Void"],
+  Void: [],
+  Superseded: [],
+};
+
+function invalidQuotationTransition(): never {
+  throw new ApiError(
+    409,
+    "INVALID_QUOTATION_STATUS",
+    "Perubahan status Quotation tidak sesuai urutan workflow. Quotation yang sudah dibatalkan, ditolak, atau digantikan revisi baru tidak dapat diaktifkan kembali.",
+  );
+}
+
+/**
+ * Guards every Quotation status write.
+ *
+ * @param currentStatus stored status, or null when a brand-new quotation is created.
+ * @param nextStatus    requested status.
+ * @param options.allowSameStatus the package PATCH endpoint saves commercial
+ *   fields without changing the status (and re-sends a revision as 'Sent'), so
+ *   a no-op transition is legal there; the explicit lifecycle actions refuse it.
+ */
+export function assertQuotationTransition(
+  currentStatus: string | null,
+  nextStatus: string,
+  options: { allowSameStatus?: boolean } = {},
+) {
+  if (!(QUOTATION_STATUSES as readonly string[]).includes(nextStatus)) {
+    invalidQuotationTransition();
+  }
+  // 'Superseded' is a consequence of issuing a revision, never a request.
+  if (nextStatus === "Superseded") invalidQuotationTransition();
+  if (currentStatus === null) {
+    if (nextStatus !== "Draft" && nextStatus !== "Sent") invalidQuotationTransition();
+    return;
+  }
+  if (currentStatus === nextStatus) {
+    if (!options.allowSameStatus) invalidQuotationTransition();
+    return;
+  }
+  const allowed = QUOTATION_TRANSITIONS[currentStatus as QuotationStatus];
+  if (!allowed?.includes(nextStatus as QuotationStatus)) invalidQuotationTransition();
+}
+
 const attachmentSchema = z.object({
   name: z.string().trim().min(1).max(240),
   mimeType: z
@@ -709,20 +774,7 @@ export async function handleQuotationLifecycle(
           throw new ApiError(409, "TAX_RULE_REQUIRED", "Pilih minimal satu aturan pajak sebelum mengirim Quotation.");
         }
       }
-      if (
-        (nextStatus === "Sent" && currentStatus !== "Draft") ||
-        (nextStatus === "Rejected" && currentStatus !== "Sent") ||
-        (nextStatus === "Void" && currentStatus === "Void")
-      ) {
-        throw new ApiError(
-          409,
-          "INVALID_QUOTATION_STATUS",
-          "Perubahan status Quotation tidak sesuai urutan workflow.",
-        );
-      }
-      if (currentStatus === "Accepted" && nextStatus !== "Void") {
-        throw new ApiError(409, "ACCEPTED_QUOTATION_LOCKED", "Quotation yang diterima sudah dikunci.");
-      }
+      assertQuotationTransition(currentStatus, nextStatus);
       if (nextStatus === "Void") {
         const usage = await tx.execute({
           sql: "SELECT id FROM spks WHERE quotation_id=? AND workflow_status<>'Void' LIMIT 1",
@@ -730,6 +782,34 @@ export async function handleQuotationLifecycle(
         });
         if (usage.rows.length) {
           throw new ApiError(409, "QUOTATION_IN_USE", "Void dokumen procurement aktif terlebih dahulu.");
+        }
+        // The DELETE path already refuses a quotation that carries invoices;
+        // the void path only looked at procurement, so an Accepted quotation
+        // whose invoices were already paid could be revoked out from under the
+        // cash that referenced it.
+        const paidInvoice = await tx.execute({
+          sql: `SELECT p.id FROM invoice_payments p
+            JOIN invoices i ON i.id=p.invoice_id
+            WHERE i.quotation_id=? AND p.status='Posted' LIMIT 1`,
+          args: [quotationId],
+        });
+        if (paidInvoice.rows.length) {
+          throw new ApiError(
+            409,
+            "QUOTATION_IN_USE_PAYMENT",
+            "Quotation ini tidak dapat dibatalkan karena Invoice-nya sudah menerima pembayaran. Void pembayaran tersebut terlebih dahulu.",
+          );
+        }
+        const invoiceUsage = await tx.execute({
+          sql: "SELECT id FROM invoices WHERE quotation_id=? LIMIT 1",
+          args: [quotationId],
+        });
+        if (invoiceUsage.rows.length) {
+          throw new ApiError(
+            409,
+            "QUOTATION_IN_USE",
+            "Quotation ini tidak dapat dibatalkan karena sudah memiliki Invoice. Hapus Invoice tersebut terlebih dahulu.",
+          );
         }
       }
       await tx.batch([

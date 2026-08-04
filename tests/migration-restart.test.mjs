@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, rmSync, unlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { after, before, test } from "node:test";
+import { createClient } from "@libsql/client";
 
 let server;
 let baseUrl;
@@ -255,4 +256,114 @@ test("restart re-runs migrations against quotation revisions and multi-package d
     2,
   );
   assert.equal(defaultPackage.scopeCount, 1);
+}, { timeout: 150_000 });
+
+// ---------------------------------------------------------------------------
+// Databases created before the BAST void fix carry
+// CHECK (status IN ('Draft','Final')), so every revocation died on a raw
+// constraint error. Startup must relax that constraint in place — without
+// losing a single row or index.
+// ---------------------------------------------------------------------------
+const CHECK_PATTERN = /CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i;
+
+test("startup relaxes a legacy BAST status constraint without losing rows or indexes", async () => {
+  await login();
+  await stopServer();
+
+  const legacy = createClient({ url: `file:${databasePath}` });
+  const tableSql = String(
+    (
+      await legacy.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='basts' LIMIT 1",
+      )
+    ).rows[0].sql,
+  );
+  assert.match(tableSql, /'Void'/, "fresh databases already declare the Void status");
+  const indexes = (
+    await legacy.execute(
+      "SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='basts' AND sql IS NOT NULL",
+    )
+  ).rows.map((row) => ({ name: String(row.name), sql: String(row.sql) }));
+  assert.ok(indexes.length > 0, "the table carries named indexes worth preserving");
+  const projectId = String(
+    (await legacy.execute("SELECT id FROM projects LIMIT 1")).rows[0].id,
+  );
+
+  // Rewind the table to the pre-fix shape and seed a finalized document on it.
+  await legacy.execute("ALTER TABLE basts RENAME TO basts_legacy_probe");
+  await legacy.execute(
+    tableSql.replace(CHECK_PATTERN, "CHECK (status IN ('Draft', 'Final'))"),
+  );
+  await legacy.execute("INSERT INTO basts SELECT * FROM basts_legacy_probe");
+  await legacy.execute("DROP TABLE basts_legacy_probe");
+  for (const index of indexes) await legacy.execute(index.sql);
+  const stamp = new Date().toISOString();
+  await legacy.execute({
+    sql: `INSERT INTO basts
+      (id,number,project_id,delivery_cycle,revision_no,completion_date,notes,
+       installed_items_json,client_name,client_role,engineer_name,engineer_role,
+       status,created_at,updated_at)
+      VALUES ('bast-legacy-probe','BAST/PN/LEGACY/001',?,1,1,'2026-01-01',
+        'Dokumen warisan sebelum perbaikan.','[]','Klien Warisan','Manager',
+        'Insinyur Warisan','Project Manager','Final',?,?)`,
+    args: [projectId, stamp, stamp],
+  });
+  await assert.rejects(
+    legacy.execute("UPDATE basts SET status='Void' WHERE id='bast-legacy-probe'"),
+    /CHECK/,
+    "the legacy constraint really is back in place",
+  );
+  legacy.close();
+
+  const port = await freePort();
+  baseUrl = `http://127.0.0.1:${port}`;
+  server = startServer(port);
+  await waitForServer(baseUrl);
+  await login();
+
+  const migrated = createClient({ url: `file:${databasePath}` });
+  const migratedSql = String(
+    (
+      await migrated.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='basts' LIMIT 1",
+      )
+    ).rows[0].sql,
+  );
+  assert.match(migratedSql, /'Void'/, "the constraint now allows Void");
+  await migrated.execute("UPDATE basts SET status='Void' WHERE id='bast-legacy-probe'");
+  const row = (
+    await migrated.execute(
+      "SELECT status,notes,number FROM basts WHERE id='bast-legacy-probe' LIMIT 1",
+    )
+  ).rows[0];
+  assert.equal(String(row.status), "Void");
+  assert.equal(String(row.notes), "Dokumen warisan sebelum perbaikan.");
+  assert.equal(String(row.number), "BAST/PN/LEGACY/001");
+  const rebuiltIndexes = (
+    await migrated.execute(
+      "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='basts' AND sql IS NOT NULL",
+    )
+  ).rows.map((entry) => String(entry.name)).sort();
+  assert.deepEqual(
+    rebuiltIndexes,
+    indexes.map((index) => index.name).sort(),
+    "every named index survives the rebuild",
+  );
+  migrated.close();
+
+  // Re-running the migration against an already-correct database is a no-op.
+  await stopServer();
+  const secondPort = await freePort();
+  baseUrl = `http://127.0.0.1:${secondPort}`;
+  server = startServer(secondPort);
+  await waitForServer(baseUrl);
+  await login();
+  const rerun = createClient({ url: `file:${databasePath}` });
+  const stillVoid = (
+    await rerun.execute(
+      "SELECT status FROM basts WHERE id='bast-legacy-probe' LIMIT 1",
+    )
+  ).rows[0];
+  assert.equal(String(stillVoid.status), "Void", "the re-run keeps the data intact");
+  rerun.close();
 }, { timeout: 150_000 });

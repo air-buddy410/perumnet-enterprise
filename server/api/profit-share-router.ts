@@ -63,7 +63,9 @@ async function operatingProfit(client: DatabaseClient, projectId: string) {
   const result = await client.execute({
     sql: `
       SELECT
-        COALESCE(SUM(CASE WHEN type='Pemasukan' THEN amount ELSE 0 END),0) AS income,
+        COALESCE(SUM(CASE
+          WHEN type='Pemasukan' AND source NOT IN ('Profit Share','Profit Share Reversal')
+          THEN amount ELSE 0 END),0) AS income,
         COALESCE(SUM(CASE
           WHEN type='Pengeluaran' AND source NOT IN ('Profit Share','Profit Share Reversal')
           THEN amount ELSE 0 END),0) AS expense
@@ -531,20 +533,39 @@ export async function handleProfitShares(
       }
     }
     const timestamp = new Date().toISOString();
+    // Every other void path in the app posts a contra entry instead of erasing
+    // the original. Deleting the payout row removed the evidence that cash ever
+    // left, so the ledger no longer matched the bank. Reverse it: the payout
+    // stays, a dated reversal cancels it, and net cash returns to pre-payout.
+    const reversalId = randomUUID();
     await client.batch(
       [
         ...(current.transaction_id
           ? [
               {
-                sql: "DELETE FROM transactions WHERE id=?",
-                args: [current.transaction_id],
+                sql: `
+                  INSERT INTO transactions
+                    (id,project_id,date,type,description,amount,source,reference_id,category,created_by,created_at,updated_at)
+                  VALUES (?,?,?,'Pemasukan',?,?,'Profit Share Reversal',?,'Bagi Hasil',?,?,?)
+                `,
+                args: [
+                  reversalId,
+                  current.project_id,
+                  timestamp.slice(0, 10),
+                  `Pembatalan pembagian keuntungan - ${String(current.recipient_name)}`,
+                  current.amount,
+                  `${shareId}:void`,
+                  user.id,
+                  timestamp,
+                  timestamp,
+                ],
               },
             ]
           : []),
         {
           sql: `
             UPDATE project_profit_shares
-            SET status='Void',transaction_id=NULL,updated_at=?
+            SET status='Void',updated_at=?
             WHERE id=?
           `,
           args: [timestamp, shareId],
@@ -554,6 +575,7 @@ export async function handleProfitShares(
     );
     await writeAuditLog(client, request, user, "void", "profit_share", shareId, {
       previousStatus: current.status,
+      reversalTransactionId: current.transaction_id ? reversalId : null,
     });
     const response = await summary(client, String(current.project_id));
     return ok(response.allocations.find((item) => item.id === shareId));
