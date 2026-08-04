@@ -302,6 +302,7 @@ async function mapExpense(
       : "",
     createdBy: String(row.created_by),
     creatorName: String(row.creator_name),
+    submittedBy: row.submitted_by ? String(row.submitted_by) : undefined,
     // Old rows predate paid_by_user_id, so the submitter remains the creditor.
     paidByUserId: String(row.paid_by_user_id ?? row.created_by),
     paidByName: String(row.paid_by_name ?? row.creator_name),
@@ -1120,8 +1121,27 @@ export async function handleProjectExpenses(
       throw new ApiError(409, "INVALID_STATUS", "Hanya pengajuan Menunggu Verifikasi yang dapat disetujui.");
     }
     const input = approvalSchema.parse(await jsonBody(request));
-    if (String(expense.created_by) === user.id && user.role === "Finance" && input.selfApprovalReason.length < 10) {
-      throw new ApiError(422, "SELF_APPROVAL_REASON_REQUIRED", "Finance wajib mengisi alasan saat menyetujui pengajuan sendiri.");
+    // "Finance hanya approve, bukan berarti dia yang belanja": the approver may
+    // never be the person who recorded, submitted, or fronted the money for the
+    // expense. Same rule and same shape as procurement approvals — Finance is
+    // blocked outright, Admin may override but must say why, in the audit log.
+    const selfAuthored =
+      String(expense.created_by) === user.id ||
+      (expense.submitted_by ? String(expense.submitted_by) === user.id : false) ||
+      String(expense.paid_by_user_id ?? expense.created_by) === user.id;
+    if (selfAuthored && user.role === "Finance") {
+      throw new ApiError(
+        409,
+        "SELF_APPROVAL_FORBIDDEN",
+        "Finance tidak boleh menyetujui belanja yang dibuat, diajukan, atau ditalanginya sendiri.",
+      );
+    }
+    if (selfAuthored && user.role === "Admin" && input.selfApprovalReason.trim().length < 5) {
+      throw new ApiError(
+        422,
+        "OVERRIDE_REASON_REQUIRED",
+        "Admin wajib mengisi alasan saat menyetujui pengajuannya sendiri.",
+      );
     }
     const warnings = await duplicateWarnings(client, expense);
     if (warnings.length && !input.duplicateAcknowledged && !bool(expense.duplicate_acknowledged)) {
@@ -1215,7 +1235,8 @@ export async function handleProjectExpenses(
     await writeAuditLog(client, request, user, "approve", "project_expense", expenseId, {
       settlementStatus,
       warningCount: warnings.length,
-      selfApproval: String(expense.created_by) === user.id,
+      selfApproval: selfAuthored,
+      overrideReason: selfAuthored ? input.selfApprovalReason.trim() : undefined,
     });
     return ok(await mapExpense(client, await requireExpense(client, user, expenseId), true));
   }

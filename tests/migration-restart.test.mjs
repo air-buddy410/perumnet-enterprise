@@ -176,6 +176,30 @@ test("restart re-runs migrations against quotation revisions and multi-package d
     },
     201,
   );
+  // An addendum belongs to the package it was raised from. The startup
+  // backfill must never drag it back to the project's default package.
+  const addendum = await json(
+    `/api/boq/scopes?projectId=${project.id}&packageId=${secondPackage.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Addendum Smart Home",
+        items: [
+          {
+            category: "Perangkat",
+            description: "Sensor tambahan",
+            quantity: 2,
+            unit: "unit",
+            costPrice: 150_000,
+            sellingPrice: 250_000,
+          },
+        ],
+      }),
+    },
+    201,
+  );
+  assert.equal(addendum.packageId, secondPackage.id);
+
   const defaultValidation = await json(
     `/api/validations?projectId=${project.id}`,
     { method: "POST" },
@@ -199,9 +223,36 @@ test("restart re-runs migrations against quotation revisions and multi-package d
     (await json(`/api/quotations?projectId=${project.id}`)).number,
     revised.number,
   );
-  assert.equal((await json(`/api/projects/${project.id}/packages`)).length, 2);
+  const packagesAfterRestart = await json(`/api/projects/${project.id}/packages`);
+  assert.equal(packagesAfterRestart.length, 2);
   assert.equal(
     (await json(`/api/validations?projectId=${project.id}`)).id,
     defaultValidation.id,
   );
+
+  // Re-running the migration is idempotent for package-scoped scopes: the
+  // addendum keeps its own package and the default package is untouched.
+  const restartedScopes = await json(
+    `/api/boq/scopes?projectId=${project.id}&packageId=${secondPackage.id}`,
+  );
+  assert.equal(
+    restartedScopes.find((scope) => scope.id === addendum.id)?.packageId,
+    secondPackage.id,
+  );
+  const defaultPackage = packagesAfterRestart.find(
+    (entry) => entry.id !== secondPackage.id,
+  );
+  const defaultScopes = await json(
+    `/api/boq/scopes?projectId=${project.id}&packageId=${defaultPackage.id}`,
+  );
+  assert.equal(
+    defaultScopes.some((scope) => scope.id === addendum.id),
+    false,
+    "the backfill never reassigns an addendum to the default package",
+  );
+  assert.equal(
+    packagesAfterRestart.find((entry) => entry.id === secondPackage.id).scopeCount,
+    2,
+  );
+  assert.equal(defaultPackage.scopeCount, 1);
 }, { timeout: 150_000 });

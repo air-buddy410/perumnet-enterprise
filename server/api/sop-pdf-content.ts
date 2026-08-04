@@ -128,7 +128,7 @@ const specialActions: Bilingual[][] = [
   ],
   [
     ["Verifikasi progres SPK dan penerimaan barang PO", "SPK progress verification and PO goods receipt"],
-    ["Admin, Project Manager, atau Engineer yang izin Procurement & Vendor-nya disetel Kelola. Engineer bawaan hanya Lihat, jadi Admin perlu menaikkannya lebih dulu. Finance tidak dapat melakukannya.", "Admin, Project Manager, or Engineer whose Procurement & Vendors permission is set to Manage. Engineers default to View, so an Admin must raise it first. Finance cannot do this."],
+    ["Admin, Project Manager, atau Engineer yang menjadi anggota proyek. Izin Procurement & Vendor cukup Lihat, jadi Engineer bawaan langsung dapat mencatat verifikasi dan penerimaan barang tanpa perlu dinaikkan ke Kelola. Membuat, menyetujui, dan membayar dokumen tetap memerlukan Kelola. Finance tidak dapat melakukannya.", "Admin, Project Manager, or Engineer who is a member of the project. View on Procurement & Vendors is enough, so a default Engineer can record verification and goods receipt without being raised to Manage. Creating, approving, and paying documents still require Manage. Finance cannot do this."],
   ],
   [
     ["Mencatat pembayaran vendor dan pembayaran invoice klien", "Recording vendor payments and client invoice payments"],
@@ -136,7 +136,7 @@ const specialActions: Bilingual[][] = [
   ],
   [
     ["Memverifikasi (menyetujui/menolak) belanja proyek", "Verifying (approving/rejecting) project expenses"],
-    ["Admin atau Finance dengan izin Pembukuan Kelola. Finance yang menyetujui pengajuannya sendiri wajib menulis alasan minimal 10 karakter.", "Admin or Finance with Manage on Finance. A Finance user approving their own submission must write a reason of at least 10 characters."],
+    ["Admin atau Finance dengan izin Pembukuan Kelola. Finance hanya menyetujui belanja orang lain: pengajuan yang ia buat, ajukan, atau talangi sendiri harus diverifikasi orang lain. Admin yang menyetujui pengajuannya sendiri wajib menulis alasan minimal 5 karakter yang tercatat di audit log.", "Admin or Finance with Manage on Finance. Finance only approves other people's spending: an expense they recorded, submitted, or paid for themselves must be verified by someone else. An Admin approving their own submission must write a reason of at least 5 characters, which is recorded in the audit log."],
   ],
   [
     ["Mencairkan uang muka proyek", "Disbursing a project advance"],
@@ -342,7 +342,7 @@ export const chapterFlow: Chapter = {
         [
           ["BAST", "Handover certificate"],
           ["Dokumen serah terima bertanda tangan dua pihak, bercap, dan ber-QR pemeriksaan keaslian.", "A handover document signed by both parties, sealed, and carrying an authenticity QR code."],
-          ["BAST final tidak dapat diedit maupun dihapus. Status proyek berubah menjadi Selesai.", "A final certificate cannot be edited or deleted. The project status changes to Completed."],
+          ["BAST final tidak dapat diedit maupun dihapus. Status proyek berubah menjadi Selesai hanya setelah seluruh paket yang penawarannya sudah diterima klien memiliki BAST final yang aktif.", "A final certificate cannot be edited or deleted. The project status changes to Completed only once every package with a client-accepted quotation has an active final certificate."],
         ],
         [
           ["Penutupan", "Closeout"],
@@ -634,8 +634,8 @@ export const chapterInstallment: Chapter = {
     {
       kind: "locked",
       text: [
-        "Selama belum ada satu pun catatan pembayaran, invoice masih dapat diedit maupun dihapus. Setelah pembayaran pertama dicatat, invoice terkunci selamanya: menghapus atau mengeditnya akan merusak pembukuan, sehingga aplikasi menolaknya. Perlu diketahui, invoice tetap terkunci walaupun pembayarannya kemudian di-void, karena riwayat pembayarannya sudah ada.",
-        "As long as no payment has been recorded, an invoice can still be edited or deleted. Once the first payment is recorded, the invoice is locked for good: deleting or editing it would corrupt the books, so the application refuses. Note that the invoice stays locked even if the payment is later voided, because a payment history now exists.",
+        "Selama belum ada pembayaran aktif, invoice masih dapat diedit maupun dihapus. Begitu sebuah pembayaran dicatat, invoice terkunci: mengedit atau menghapusnya akan merusak pembukuan, sehingga aplikasi menolaknya. Kuncinya terbuka kembali bila seluruh pembayarannya di-void — pembayaran yang dibatalkan bukan lagi pembayaran aktif, sehingga koreksi tetap mungkin dilakukan. Yang tidak pernah terbuka kembali adalah kunci pajak: invoice yang kewajiban pajaknya sudah disetor atau dilaporkan tetap tidak dapat diedit maupun dihapus.",
+        "As long as there is no active payment, an invoice can still be edited or deleted. Once a payment is recorded the invoice is locked: editing or deleting it would corrupt the books, so the application refuses. The lock lifts again once every payment on it has been voided — a cancelled payment is no longer an active one, so a correction remains possible. What never lifts is the tax lock: an invoice whose tax obligations are already settled or reported can be neither edited nor deleted.",
       ],
     },
     {
@@ -824,10 +824,10 @@ export const chapterAddendum: Chapter = {
     },
     {
       kind: "note",
-      title: ["Addendum berada di tingkat proyek", "An addendum sits at project level"],
+      title: ["Addendum melekat pada satu paket komersial", "An addendum belongs to one commercial package"],
       text: [
-        "Berbeda dengan BoQ Original, addendum tidak melekat pada satu paket komersial. Ia tercatat di tingkat proyek, sehingga tidak ikut terhitung pada ringkasan paket dan tidak muncul pada tab Quotation yang disaring per paket. Bila Anda mencari penawaran addendum, carilah di panel Quotation Original & Addendum pada Procurement & Vendor.",
-        "Unlike the Original BoQ, an addendum is not attached to a single commercial package. It is recorded at project level, so it is not counted in the package summary and does not appear on the package-filtered Quotation tab. When looking for an addendum quotation, look in the Original Quotation & Addendum panel under Procurement & Vendors.",
+        "Seperti BoQ Original, addendum selalu melekat pada satu paket komersial, yaitu paket tempat ia dibuat. Karena itu ia ikut terhitung pada ringkasan paket dan muncul pada tab Quotation yang disaring per paket tersebut. Paket lain pada proyek yang sama tidak terpengaruh sama sekali. Panel Quotation Original & Addendum pada Procurement & Vendor tetap menampilkan seluruh lingkup proyek, sehingga addendum dari paket mana pun dapat ditemukan di sana.",
+        "Like the Original BoQ, an addendum always belongs to one commercial package: the package it was created from. It is therefore counted in that package summary and appears on the Quotation tab filtered to that package. Other packages on the same project are not affected at all. The Original Quotation & Addendum panel under Procurement & Vendors still lists every scope of the project, so an addendum from any package can be found there.",
       ],
     },
     {
@@ -838,8 +838,8 @@ export const chapterAddendum: Chapter = {
           "Trying to edit an accepted quotation in order to squeeze in extra work. The application refuses and points to an Addendum. Follow that advice; do not look for a workaround.",
         ],
         [
-          "Membuat addendum sebelum BoQ Original ada. Aplikasi meminta BoQ Original dibuat lebih dulu.",
-          "Creating an addendum before an Original BoQ exists. The application asks for the Original BoQ to be created first.",
+          "Membuat addendum pada paket yang BoQ Original-nya belum ada. Aplikasi meminta BoQ Original paket itu dibuat lebih dulu.",
+          "Creating an addendum on a package that has no Original BoQ yet. The application asks for that package's Original BoQ to be created first.",
         ],
         [
           "Menghapus addendum yang sudah dipakai dokumen procurement atau sudah diterima klien. Keduanya ditolak; addendum yang diterima bersifat final seperti penawaran biasa.",
@@ -1018,8 +1018,8 @@ export const chapterHandover: Chapter = {
     {
       kind: "locked",
       text: [
-        "BAST menjadi Final dan tidak dapat diedit maupun dihapus, dan status proyek berubah menjadi Selesai. Berkas PDF yang tersimpan itulah yang diunduh berikutnya, bukan hasil cetak ulang. Siapa pun yang memindai QR pada PDF dapat memeriksa apakah dokumen itu asli dan masih berlaku. Bila ada kekeliruan, Admin mencabut dokumennya dengan alasan tertulis, lalu tim membuat BAST baru untuk paket dan siklus yang sama.",
-        "The certificate becomes Final and can be neither edited nor deleted, and the project status changes to Completed. The stored PDF is what is downloaded afterwards, never a fresh re-print. Anyone who scans the QR code on the PDF can check whether the document is genuine and still valid. If something is wrong, an Admin revokes it with a written reason, and the team then creates a new certificate for the same package and cycle.",
+        "BAST menjadi Final dan tidak dapat diedit maupun dihapus. Status proyek berubah menjadi Selesai hanya bila serah terima ini adalah yang terakhir: setiap paket komersial yang penawarannya sudah diterima klien harus memiliki BAST final yang aktif dan belum dicabut. Selama masih ada paket yang berjalan, proyek tetap Aktif. Berkas PDF yang tersimpan itulah yang diunduh berikutnya, bukan hasil cetak ulang. Siapa pun yang memindai QR pada PDF dapat memeriksa apakah dokumen itu asli dan masih berlaku. Bila ada kekeliruan, Admin mencabut dokumennya dengan alasan tertulis, lalu tim membuat BAST baru untuk paket dan siklus yang sama.",
+        "The certificate becomes Final and can be neither edited nor deleted. The project status changes to Completed only when this handover is the last one: every commercial package with a client-accepted quotation must have an active, unrevoked final certificate. While any package is still running, the project stays Active. The stored PDF is what is downloaded afterwards, never a fresh re-print. Anyone who scans the QR code on the PDF can check whether the document is genuine and still valid. If something is wrong, an Admin revokes it with a written reason, and the team then creates a new certificate for the same package and cycle.",
       ],
     },
     {
@@ -1046,8 +1046,8 @@ export const chapterHandover: Chapter = {
           "Finalizing without an active company seal. The seal must be uploaded and its switch turned on, not merely uploaded.",
         ],
         [
-          "Menganggap seluruh proyek belum selesai padahal statusnya sudah Selesai. Pada proyek dengan beberapa paket, satu BAST yang difinalkan sudah mengubah status proyek menjadi Selesai. Paket lain tetap bisa diteruskan.",
-          "Assuming the whole project is unfinished when its status already reads Completed. On a multi-package project, one finalized certificate already flips the project status to Completed. The other packages can still continue.",
+          "Menunggu status proyek berubah menjadi Selesai setelah memfinalkan BAST paket pertama. Pada proyek dengan beberapa paket, proyek baru berstatus Selesai setelah paket terakhir yang penawarannya diterima klien ikut diserahterimakan. Periksa daftar paket bila statusnya belum berubah.",
+          "Waiting for the project status to flip to Completed after finalizing the first package's certificate. On a multi-package project, the project only reads Completed once the last package with a client-accepted quotation has been handed over too. Check the package list if the status has not changed yet.",
         ],
       ],
     },
@@ -1070,7 +1070,7 @@ export const chapterExpenses: Chapter = {
       rows: [
         {
           label: ["Siapa yang boleh", "Who may do it"],
-          value: ["Admin, Project Manager, atau Engineer mencatat. Admin atau Finance memverifikasi. Pencairan uang muka oleh Admin atau Finance. Pembatalan belanja yang sudah disetujui hanya oleh Admin.", "Admin, Project Manager, or Engineer records them. Admin or Finance verifies. Advances are disbursed by Admin or Finance. Only an Admin may void an approved purchase."],
+          value: ["Admin, Project Manager, atau Engineer mencatat. Admin atau Finance memverifikasi, tetapi tidak pernah pengajuannya sendiri. Pencairan uang muka oleh Admin atau Finance. Pembatalan belanja yang sudah disetujui hanya oleh Admin.", "Admin, Project Manager, or Engineer records them. Admin or Finance verifies, but never their own submission. Advances are disbursed by Admin or Finance. Only an Admin may void an approved purchase."],
         },
         {
           label: ["Di mana", "Where"],
@@ -1128,6 +1128,14 @@ export const chapterExpenses: Chapter = {
     },
     {
       kind: "note",
+      title: ["Yang membelanjakan bukan yang menyetujui", "Whoever spends is not whoever approves"],
+      text: [
+        "Finance hanya menyetujui belanja orang lain. Bila pengajuannya dibuat, dikirim, atau uangnya ditalangi oleh akun Finance itu sendiri, aplikasi menolak persetujuannya dan meminta orang lain yang memverifikasi — Admin atau pengguna Finance yang lain. Aturannya sama persis dengan persetujuan SPK dan PO. Admin boleh menerobos bila memang tidak ada pilihan lain, tetapi wajib menuliskan alasannya, dan alasan itu tersimpan di audit log bersama nama serta waktunya.",
+        "Finance only approves other people's spending. If the submission was recorded, sent, or fronted by that same Finance account, the application refuses the approval and asks someone else to verify it — an Admin or another Finance user. The rule is exactly the same as for Work Order and PO approvals. An Admin may override when there really is no alternative, but must write a reason, and that reason is stored in the audit log together with their name and the time.",
+      ],
+    },
+    {
+      kind: "note",
       title: ["Uang muka hanya dapat dipakai bila memang ada saldonya", "An advance can only be used when a balance actually exists"],
       text: [
         "Pilihan Uang muka proyek mati selama proyek belum punya saldo uang muka yang belum habis dipakai. Ini disengaja agar tidak ada nota yang menunjuk uang muka yang belum pernah dicairkan. Finance mencairkan uang mukanya dulu lewat tombol Uang muka, barulah pilihannya menyala. Pada jendela pencairan, aplikasi menampilkan berapa kas yang sudah masuk dari invoice proyek ini sebagai bahan pertimbangan saja; angka itu tidak membatasi besaran pencairan.",
@@ -1152,6 +1160,10 @@ export const chapterExpenses: Chapter = {
         [
           "Menghapus belanja yang salah setelah disetujui. Yang benar: Admin melakukan Void dengan reversal, yang membuat catatan pembalik dan menjaga jejaknya tetap utuh. Lepaskan rekonsiliasi banknya lebih dulu bila sudah dicocokkan.",
           "Deleting a wrong purchase after approval. The correct route: an Admin performs Void with reversal, which posts a reversing entry and keeps the trail intact. Unmatch the bank reconciliation first if it was already matched.",
+        ],
+        [
+          "Berharap dapat menyetujui belanja yang Anda ajukan sendiri dengan menuliskan alasan. Untuk akun Finance hal ini tidak mungkin sama sekali; mintakan persetujuan kepada Admin atau rekan Finance yang lain.",
+          "Expecting to approve your own submission by writing a reason. For a Finance account this is simply not possible; ask an Admin or another Finance colleague to approve it.",
         ],
       ],
     },
@@ -1881,7 +1893,7 @@ export const chapterMessages: Chapter = {
         {
           message: ["Invoice dengan histori pembayaran tidak dapat dihapus. Gunakan void pada pembayaran.", "An invoice with payment history cannot be deleted. Void the payment instead."],
           meaning: ["Invoice sudah pernah dibayar, jadi menghapusnya akan merusak pembukuan.", "The invoice has already been paid, so deleting it would corrupt the books."],
-          action: ["Buka jendela pembayaran invoice, tekan Void pada pembayaran, dan isi alasannya. Perlu diketahui, invoice tetap tidak dapat dihapus setelah itu karena riwayat pembayarannya sudah ada.", "Open the invoice payment window, press Void on the payment, and give a reason. Note that the invoice still cannot be deleted afterwards, because a payment history now exists."],
+          action: ["Buka jendela pembayaran invoice, tekan Void pada pembayaran, dan isi alasannya. Setelah seluruh pembayarannya di-void, invoice dapat diedit maupun dihapus kembali, kecuali bila kewajiban pajaknya sudah disetor atau dilaporkan.", "Open the invoice payment window, press Void on the payment, and give a reason. Once every payment on it has been voided the invoice can be edited or deleted again, unless its tax obligations are already settled or reported."],
         },
         {
           message: ["Invoice dengan kewajiban pajak yang sudah disetor atau dilaporkan tidak dapat dihapus.", "An invoice whose tax obligations are already settled or reported cannot be deleted."],
@@ -1901,12 +1913,17 @@ export const chapterMessages: Chapter = {
         {
           message: ["Verifikasi progres wajib dilakukan Admin, Project Manager, atau Engineer.", "Progress verification must be done by an Admin, Project Manager, or Engineer."],
           meaning: ["Akun Anda berperan Finance, yang memang hanya mencatat pembayaran, bukan membuktikan pekerjaan.", "Your account has the Finance role, which records payments but does not evidence work."],
-          action: ["Minta rekan berperan Admin, Project Manager, atau Engineer melakukannya. Bila Engineer tetap ditolak, izin Procurement & Vendor-nya masih Lihat dan perlu dinaikkan Admin menjadi Kelola.", "Ask a colleague with the Admin, Project Manager, or Engineer role to do it. If an Engineer is still refused, their Procurement & Vendors permission is still View and an Admin must raise it to Manage."],
+          action: ["Minta rekan berperan Admin, Project Manager, atau Engineer melakukannya. Engineer tidak perlu izin Kelola untuk ini — cukup izin Lihat pada Procurement & Vendor dan terdaftar sebagai anggota proyeknya. Bila Engineer tetap ditolak, periksa keanggotaan proyeknya di Manajemen Proyek.", "Ask a colleague with the Admin, Project Manager, or Engineer role to do it. An Engineer does not need Manage for this — View on Procurement & Vendors plus membership of the project is enough. If an Engineer is still refused, check their project membership under Project Management."],
         },
         {
           message: ["Finance tidak boleh menyetujui draft yang dibuat atau diajukannya sendiri.", "Finance may not approve a draft it created or submitted itself."],
           meaning: ["Pembuat dan penyetuju dokumen harus orang yang berbeda.", "The person who submits a document and the person who approves it must be different."],
           action: ["Minta Admin atau pengguna Finance lain menyetujui dokumen tersebut. Admin yang terpaksa menyetujui pengajuannya sendiri wajib menulis alasan.", "Ask an Admin or another Finance user to approve it. An Admin who has to approve their own submission must write a reason."],
+        },
+        {
+          message: ["Finance tidak boleh menyetujui belanja yang dibuat, diajukan, atau ditalanginya sendiri.", "Finance may not approve an expense it created, submitted, or paid for itself."],
+          meaning: ["Aturan yang sama berlaku pada Belanja Proyek: Finance hanya menyetujui belanja orang lain.", "The same rule applies to Project Expenses: Finance only approves other people's spending."],
+          action: ["Minta Admin atau pengguna Finance lain memverifikasi pengajuan tersebut. Admin yang terpaksa menyetujui pengajuannya sendiri wajib menulis alasan, dan alasan itu tersimpan di audit log.", "Ask an Admin or another Finance user to verify that submission. An Admin who has to approve their own submission must write a reason, and that reason is stored in the audit log."],
         },
         {
           message: ["SPK/PO hanya dapat memakai item dari Quotation yang sudah diterima beserta bukti persetujuannya.", "Work Orders and POs may only use items from an accepted quotation together with its proof of approval."],

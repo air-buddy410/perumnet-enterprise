@@ -94,6 +94,10 @@ export function messageOf(error: unknown, language: "id" | "en" = "id") {
         "This project has no active advance yet. Disburse an advance from the Advance menu first.",
       INVALID_EXPENSE_PAYER:
         "The personal funds owner must be the submitter or an active project member.",
+      SELF_APPROVAL_FORBIDDEN:
+        "Finance cannot approve a document it created, submitted, or paid for itself. Ask another approver.",
+      OVERRIDE_REASON_REQUIRED:
+        "An administrator must state a reason when approving their own submission.",
     };
     return error.code && messages[error.code]
       ? messages[error.code]

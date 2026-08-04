@@ -75,6 +75,29 @@ export async function ensureDefaultCommercialPackage(
   return id;
 }
 
+// Single source of truth for "which commercial package does this document
+// belong to?". Every writer that creates a package-scoped row (BoQ scope,
+// quotation, invoice, validation, BAST, addendum) must go through this so a
+// document can never land with package_id NULL and disappear from the
+// package-filtered lists and counters.
+export async function resolveCommercialPackageId(
+  client: DatabaseClient,
+  projectId: string,
+  requestedPackageId?: string | null,
+) {
+  if (!requestedPackageId) {
+    return ensureDefaultCommercialPackage(client, projectId);
+  }
+  const result = await client.execute({
+    sql: "SELECT id FROM project_commercial_packages WHERE id=? AND project_id=? LIMIT 1",
+    args: [requestedPackageId, projectId],
+  });
+  if (!result.rows.length) {
+    throw new ApiError(404, "PACKAGE_NOT_FOUND", "Paket komersial tidak ditemukan.");
+  }
+  return requestedPackageId;
+}
+
 async function listPackages(client: DatabaseClient, projectId: string) {
   const result = await client.execute({
     sql: `SELECT cp.*,

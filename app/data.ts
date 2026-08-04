@@ -408,6 +408,7 @@ export interface ProjectExpense {
   selfApprovalReason: string;
   createdBy: string;
   creatorName: string;
+  submittedBy?: string;
   paidByUserId: string;
   paidByName: string;
   approvedBy?: string;

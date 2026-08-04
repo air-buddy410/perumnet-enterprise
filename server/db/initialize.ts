@@ -1549,10 +1549,43 @@ async function ensureCommercialPackageSchema(client: DatabaseClient) {
       });
     }
     await client.batch([
+      // Addenda used to be inserted with package_id NULL, which hid them from
+      // every package counter and package-filtered quotation query. Adopt the
+      // parent scope's package first — that is the only answer that stays
+      // correct on a project with several packages — and only then fall back
+      // to the project's default package. Both statements are scoped to
+      // `package_id IS NULL`, so re-running the migration is a no-op.
+      {
+        sql: `UPDATE boq_scopes SET package_id=(
+            SELECT parent.package_id FROM boq_scopes parent
+            WHERE parent.id=boq_scopes.parent_scope_id
+          )
+          WHERE package_id IS NULL
+            AND boq_id IN (SELECT id FROM boqs WHERE project_id=?)
+            AND EXISTS (
+              SELECT 1 FROM boq_scopes parent
+              WHERE parent.id=boq_scopes.parent_scope_id
+                AND parent.package_id IS NOT NULL
+            )`,
+        args: [projectId],
+      },
       {
         sql: `UPDATE boq_scopes SET package_id=? WHERE package_id IS NULL
           AND boq_id IN (SELECT id FROM boqs WHERE project_id=?)`,
         args: [packageId, projectId],
+      },
+      // A quotation always belongs to the package of the scope it prices, so
+      // inherit from the (now backfilled) scope before touching the default.
+      {
+        sql: `UPDATE quotations SET package_id=(
+            SELECT s.package_id FROM boq_scopes s WHERE s.id=quotations.scope_id
+          )
+          WHERE project_id=? AND package_id IS NULL AND scope_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM boq_scopes s
+              WHERE s.id=quotations.scope_id AND s.package_id IS NOT NULL
+            )`,
+        args: [projectId],
       },
       {
         sql: "UPDATE quotations SET package_id=? WHERE project_id=? AND package_id IS NULL",
