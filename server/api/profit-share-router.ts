@@ -5,7 +5,11 @@ import { canAccess } from "@/shared/access";
 import { z } from "zod";
 import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
-import { countsAsCashCondition } from "../cash-ledger";
+import {
+  countsAsCashCondition,
+  grossExpenseSum,
+  grossIncomeSum,
+} from "../cash-ledger";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { asNumber } from "../format";
 import {
@@ -63,16 +67,18 @@ async function requireProject(client: DatabaseClient, projectId: string) {
   return result.rows[0];
 }
 
+const OPERATING_SCOPE =
+  "transactions.source NOT IN ('Profit Share','Profit Share Reversal')";
+
 async function operatingProfit(client: DatabaseClient, projectId: string) {
   const result = await client.execute({
+    // Distributions and their reversals are the output of this calculation, so
+    // they never feed back into it. Every other void books a reversal that nets
+    // against the entry it undoes instead of inflating the opposite side.
     sql: `
       SELECT
-        COALESCE(SUM(CASE
-          WHEN type='Pemasukan' AND source NOT IN ('Profit Share','Profit Share Reversal')
-          THEN amount ELSE 0 END),0) AS income,
-        COALESCE(SUM(CASE
-          WHEN type='Pengeluaran' AND source NOT IN ('Profit Share','Profit Share Reversal')
-          THEN amount ELSE 0 END),0) AS expense
+        ${grossIncomeSum("transactions", OPERATING_SCOPE)} AS income,
+        ${grossExpenseSum("transactions", OPERATING_SCOPE)} AS expense
       FROM transactions
       WHERE project_id=? AND ${countsAsCashCondition()}
     `,
@@ -107,7 +113,7 @@ async function operatingProfit(client: DatabaseClient, projectId: string) {
   );
   const taxPosition = await client.execute({
     sql: `SELECT
-      COALESCE(SUM(CASE WHEN o.direction='Payable' AND o.status<>'Void'
+      COALESCE(SUM(CASE WHEN o.direction='Payable'
         THEN o.amount-o.settled_amount ELSE 0 END),0) AS outstanding_payable
       FROM document_taxes dt
       LEFT JOIN tax_obligations o ON o.document_tax_id=dt.id

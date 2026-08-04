@@ -1248,3 +1248,161 @@ test("scenario B8: an Accepted quotation with a paid invoice cannot be voided", 
   assert.equal(voidedScope.quotation.status, "Void");
   assert.equal((await getQuotation(project.id)).status, "Void");
 });
+
+// ---------------------------------------------------------------------------
+// Scenario E1 — "pembulatan" must stay a rounding
+//
+// The custom rounding adjustment was validated as
+// `min(-MAX_SAFE_INTEGER).max(MAX_SAFE_INTEGER)`, so a field labelled "rounding"
+// was an unlimited price override: +500.000.000 on a Rp 10.000.000 quotation
+// produced a Rp 510.000.000 grand total, which then flowed into the invoice
+// snapshots. A required reason is not a cap.
+// ---------------------------------------------------------------------------
+test("scenario E1: a custom rounding adjustment is bounded and refuses politely", async () => {
+  const project = await createProject("Proyek Pembulatan Tak Terbatas");
+  await addBoqItem(project.id, 10_000_000, 1, "Instalasi pembulatan");
+
+  const refused = await request(`/api/quotations?projectId=${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      roundingMode: "Custom",
+      roundingAdjustment: 500_000_000,
+      roundingReason: "Kesepakatan angka bulat dengan klien.",
+    }),
+  });
+  assert.equal(refused.status, 422, "an unbounded rounding is refused, not applied");
+  const refusedBody = await refused.json();
+  assert.equal(refusedBody.error.code, "ROUNDING_ADJUSTMENT_TOO_LARGE");
+  assert.ok(
+    refusedBody.error.message.length > 20,
+    "the refusal names the limit in plain Indonesian",
+  );
+  assert.equal(refusedBody.error.details.limit, 100_000);
+
+  // Nothing was written: the quotation still reads its untouched subtotal.
+  const untouched = await getQuotation(project.id);
+  assert.equal(untouched.grandTotal, 10_000_000);
+  assert.equal(untouched.roundingAdjustment, 0);
+
+  // The coarsest automatic step is always legal.
+  const rounded = await patchQuotation(project.id, {
+    roundingMode: "Custom",
+    roundingAdjustment: 100_000,
+    roundingReason: "Kesepakatan angka bulat dengan klien.",
+  });
+  assert.equal(rounded.roundingAdjustment, 100_000);
+  assert.equal(rounded.grandTotal, 10_100_000);
+  assertQuotationConsistent(rounded, "E1 bounded rounding");
+  await assertStoredGrandTotal(project.id, rounded, "E1 bounded rounding");
+
+  // Above Rp 10.000.000 the 1% arm takes over, so a large contract can still be
+  // rounded to a round contract figure.
+  const bigProject = await createProject("Proyek Pembulatan 1 Persen");
+  await addBoqItem(bigProject.id, 40_000_000, 1, "Instalasi besar");
+  const withinOnePercent = await patchQuotation(bigProject.id, {
+    roundingMode: "Custom",
+    roundingAdjustment: -400_000,
+    roundingReason: "Pembulatan ke angka kontrak yang disepakati.",
+  });
+  assert.equal(withinOnePercent.roundingAdjustment, -400_000);
+  assert.equal(withinOnePercent.grandTotal, 39_600_000);
+  const overOnePercent = await request(`/api/quotations?projectId=${bigProject.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      roundingMode: "Custom",
+      roundingAdjustment: -400_001,
+      roundingReason: "Pembulatan ke angka kontrak yang disepakati.",
+    }),
+  });
+  assert.equal(overOnePercent.status, 422);
+  assert.equal((await overOnePercent.json()).error.details.limit, 400_000);
+});
+
+// ---------------------------------------------------------------------------
+// Scenario E2 — the project value follows the accepted contract
+//
+// `PATCH /api/projects/:id {value: 1}` used to answer 200 and store 1 while the
+// accepted quotation still read Rp 6.000.000; the next BoQ edit silently wrote
+// the contract figure back. Dashboards and portfolio totals drifted from the
+// signed documents in between.
+// ---------------------------------------------------------------------------
+test("scenario E2: a project with an accepted quotation refuses a typed-in value", async () => {
+  const project = await createProject("Proyek Nilai Kontrak");
+
+  // Before any quotation exists the manual field is how a project starts.
+  const manual = await json(`/api/projects/${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ value: 2_500_000 }),
+  });
+  assert.equal(manual.value, 2_500_000, "a project without a contract keeps its manual value");
+
+  await addBoqItem(project.id, 6_000_000, 1, "Instalasi kontrak");
+  await patchQuotation(project.id, { status: "Sent" });
+  const quotation = await getQuotation(project.id);
+  await acceptQuotation(quotation.id, "nilai-kontrak");
+  const accepted = (await json("/api/projects")).find((entry) => entry.id === project.id);
+  assert.equal(accepted.value, 6_000_000, "acceptance derives the value from the contract");
+
+  const refused = await request(`/api/projects/${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ value: 1 }),
+  });
+  assert.equal(refused.status, 409);
+  const refusedBody = await refused.json();
+  assert.equal(refusedBody.error.code, "PROJECT_VALUE_DERIVED");
+  assert.ok(refusedBody.error.message.includes("Addendum"), "the refusal names the way forward");
+  assert.equal(
+    (await json("/api/projects")).find((entry) => entry.id === project.id).value,
+    6_000_000,
+    "the stored value never moved",
+  );
+
+  // Editing anything else on the project still works, including a PATCH that
+  // echoes the unchanged value back — the UI sends whole records.
+  const renamed = await json(`/api/projects/${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ location: "Tabanan", value: 6_000_000 }),
+  });
+  assert.equal(renamed.location, "Tabanan");
+  assert.equal(renamed.value, 6_000_000);
+});
+
+// ---------------------------------------------------------------------------
+// Scenario E3 — a superseded revision is terminal
+//
+// The void guard used to exclude only 'Void', so voiding a historical revision
+// wrote 'Void' onto the boq_scopes row the *current* revision still uses. The
+// lifecycle table added in the previous batch already refuses it; this pins the
+// behaviour so it cannot regress into that shared-row corruption again.
+// ---------------------------------------------------------------------------
+test("scenario E3: voiding a superseded revision is refused and leaves the live scope alone", async () => {
+  const project = await createProject("Proyek Revisi Digantikan");
+  await addBoqItem(project.id, 3_000_000, 1, "Pekerjaan revisi");
+  await patchQuotation(project.id, { status: "Sent" });
+  const firstRevision = await getQuotation(project.id);
+  assert.equal(firstRevision.status, "Sent");
+
+  // Any commercial edit on a Sent quotation issues the next revision.
+  const secondRevision = await patchQuotation(project.id, { validUntil: isoInDays(30) });
+  assert.equal(secondRevision.revisionNo, 2);
+  assert.notEqual(secondRevision.id, firstRevision.id);
+
+  const history = await quotationHistory(project.id);
+  const superseded = history.find((entry) => entry.id === firstRevision.id);
+  assert.ok(superseded, "the first revision is still in the history");
+  assert.equal(superseded.status, "Superseded");
+
+  const refused = await request(`/api/quotations/${firstRevision.id}/void`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  assert.equal(refused.status, 409);
+  assert.equal((await refused.json()).error.code, "INVALID_QUOTATION_STATUS");
+
+  // The live revision and the shared scope row are untouched.
+  const live = await getQuotation(project.id);
+  assert.equal(live.id, secondRevision.id);
+  assert.notEqual(live.status, "Void");
+  const scope = await scopeQuotation(project.id, secondRevision.id);
+  assert.notEqual(scope.status, "Void");
+});

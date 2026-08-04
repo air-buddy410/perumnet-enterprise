@@ -130,6 +130,18 @@ export function messageOf(error: unknown, language: "id" | "en" = "id") {
       BOQ_BELOW_INVOICED_TOTAL:
         "The BoQ cannot fall below the invoices already issued for this package. Edit or delete those invoices first.",
       PACKAGE_NOT_FOUND: "That commercial package was not found in this project.",
+      ROUNDING_ADJUSTMENT_TOO_LARGE:
+        "A custom rounding adjustment has to stay a rounding. Use the discount or tax fields for a larger change to the price.",
+      PROJECT_VALUE_DERIVED:
+        "This project's value follows its client-accepted quotation and cannot be typed in by hand. Issue an addendum if the contract value changed.",
+      VALIDATION_LOCKED_BY_BAST:
+        "This checklist is the evidence behind an issued handover certificate, so it cannot be edited or reverted to Draft. Void that certificate first.",
+      ADVANCE_ALREADY_USED:
+        "This advance has already been spent or partly returned, so it cannot be voided. Record an advance return to close the remaining balance.",
+      RECONCILIATION_LOCKED:
+        "This entry is already matched to a bank statement line. Release the reconciliation first.",
+      LEGACY_INVOICE_PAYMENT_RETIRED:
+        "The old payment-confirmation endpoint has been retired. Record the payment from the invoice payment history so its reference, method, and proof are complete.",
     };
     return error.code && messages[error.code]
       ? messages[error.code]

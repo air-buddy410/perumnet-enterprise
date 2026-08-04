@@ -15,6 +15,7 @@ import { writeAuditLog } from "../audit";
 import {
   calculateInvoiceAllocation,
   calculateQuotationCommercialTotals,
+  customRoundingLimit,
 } from "../commercial";
 import { snapshotQuotationItems } from "../quotation-snapshot";
 import {
@@ -57,6 +58,8 @@ import {
 } from "../email";
 import {
   countsAsCashCondition,
+  grossExpenseSum,
+  grossIncomeSum,
   unreconciledImportCondition,
 } from "../cash-ledger";
 import { asNumber, formatDate, initials, parseJson } from "../format";
@@ -1349,6 +1352,25 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
       input.startDate === undefined ? current.start_date : input.startDate,
       input.targetDate === undefined ? current.target_date : input.targetDate,
     );
+    // Once a quotation is accepted the project value IS the contract:
+    // syncProjectCommercialValue derives it from the accepted grand total and
+    // rewrites it on the next BoQ edit. Accepting a typed value here only
+    // created a window in which dashboards and portfolio totals disagreed with
+    // the signed documents. A project with no accepted quotation keeps the
+    // manual field, because that is how a project starts.
+    if (input.value !== undefined && asNumber(input.value) !== asNumber(current.value)) {
+      const accepted = await client.execute({
+        sql: "SELECT id FROM quotations WHERE project_id=? AND status='Accepted' LIMIT 1",
+        args: [projectId],
+      });
+      if (accepted.rows.length) {
+        throw new ApiError(
+          409,
+          "PROJECT_VALUE_DERIVED",
+          "Nilai proyek ini mengikuti Quotation yang sudah diterima klien dan tidak dapat diketik manual. Terbitkan Addendum bila nilai kontraknya berubah.",
+        );
+      }
+    }
     await client.execute({
       sql: "UPDATE projects SET name=?,client=?,location=?,status=?,start_date=?,target_date=?,value=?,manager_id=?,updated_at=? WHERE id=?",
       args: [
@@ -2306,6 +2328,41 @@ async function handleQuotations(request: Request, user: AuthUser) {
       (nextRoundingMode === "Custom" && currentRoundingMode !== "Custom"
         ? 0
         : asNumber(current?.rounding_adjustment));
+    if (nextRoundingMode === "Custom") {
+      // "Pembulatan" must stay a rounding. Without a cap this field was an
+      // unlimited price override that flowed straight into invoice snapshots.
+      const currentTax = current
+        ? await documentTaxSummary(
+            client,
+            "Quotation",
+            String(current.id),
+            asNumber(current.taxable_base) || boq.totals.selling,
+          )
+        : { taxAdditions: 0, taxWithholdings: 0 };
+      const preliminary = calculateQuotationCommercialTotals({
+        subtotal: boq.totals.selling,
+        discountEnabled:
+          input.discountEnabled === undefined
+            ? Number(current?.discount_enabled) === 1
+            : input.discountEnabled,
+        discountType:
+          (input.discountType ?? String(current?.discount_type)) === "Percent"
+            ? "Percent"
+            : "Nominal",
+        discountValue: input.discountValue ?? asNumber(current?.discount_value),
+        taxAdditions: currentTax.taxAdditions,
+        taxWithholdings: currentTax.taxWithholdings,
+      });
+      const limit = customRoundingLimit(preliminary.beforeRounding);
+      if (Math.abs(roundingAdjustmentValue) > limit) {
+        throw new ApiError(
+          422,
+          "ROUNDING_ADJUSTMENT_TOO_LARGE",
+          `Pembulatan khusus maksimal Rp ${limit.toLocaleString("id-ID")} untuk nilai ini. Gunakan kolom diskon atau pajak untuk perubahan harga yang lebih besar.`,
+          { limit, requested: roundingAdjustmentValue },
+        );
+      }
+    }
     if (requestedStatus === "Sent" && current && Number(current.tax_enabled) === 1) {
       const selectedTaxes = await client.execute({
         sql: "SELECT 1 FROM document_taxes WHERE document_type='Quotation' AND document_id=? LIMIT 1",
@@ -3219,34 +3276,47 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
       .object({ reason: z.string().trim().min(5).max(500) })
       .parse(await jsonBody(request));
     const paymentId = path[3];
-    const paymentResult = await client.execute({
-      sql: `SELECT pay.*,i.project_id,i.number,i.amount AS invoice_amount
-        FROM invoice_payments pay
+    const scopeCheck = await client.execute({
+      sql: `SELECT i.project_id FROM invoice_payments pay
         JOIN invoices i ON i.id=pay.invoice_id
-        WHERE pay.id=? AND pay.invoice_id=? AND pay.status='Posted' LIMIT 1`,
+        WHERE pay.id=? AND pay.invoice_id=? LIMIT 1`,
       args: [paymentId, invoiceId],
     });
-    const payment = paymentResult.rows[0];
-    if (!payment) {
+    if (!scopeCheck.rows[0]) {
       throw new ApiError(404, "NOT_FOUND", "Pembayaran aktif tidak ditemukan.");
     }
-    await assertProjectAccess(user, String(payment.project_id));
-    if (payment.transaction_id) {
-      const reconciled = await client.execute({
-        sql: `SELECT 1 FROM bank_statement_entries
-          WHERE transaction_id=? AND reconciliation_status='Matched' LIMIT 1`,
-        args: [payment.transaction_id],
-      });
-      if (reconciled.rows.length) {
-        throw new ApiError(
-          409,
-          "PAYMENT_RECONCILED",
-          "Lepaskan rekonsiliasi bank sebelum membatalkan pembayaran.",
-        );
-      }
-    }
+    await assertProjectAccess(user, String(scopeCheck.rows[0].project_id));
     const timestamp = now();
     await client.transaction(async (tx) => {
+      // The payment row and the reconciliation guard are read inside the write
+      // transaction. Outside it, only SQLite's serialised writers stopped a
+      // reconciliation committed in between from surviving the void; on
+      // PostgreSQL it would leave a matched bank line on reversed cash.
+      const paymentResult = await tx.execute({
+        sql: `SELECT pay.*,i.project_id,i.number,i.amount AS invoice_amount
+          FROM invoice_payments pay
+          JOIN invoices i ON i.id=pay.invoice_id
+          WHERE pay.id=? AND pay.invoice_id=? AND pay.status='Posted' LIMIT 1`,
+        args: [paymentId, invoiceId],
+      });
+      const payment = paymentResult.rows[0];
+      if (!payment) {
+        throw new ApiError(404, "NOT_FOUND", "Pembayaran aktif tidak ditemukan.");
+      }
+      if (payment.transaction_id) {
+        const reconciled = await tx.execute({
+          sql: `SELECT 1 FROM bank_statement_entries
+            WHERE transaction_id=? AND reconciliation_status='Matched' LIMIT 1`,
+          args: [payment.transaction_id],
+        });
+        if (reconciled.rows.length) {
+          throw new ApiError(
+            409,
+            "PAYMENT_RECONCILED",
+            "Lepaskan rekonsiliasi bank sebelum membatalkan pembayaran.",
+          );
+        }
+      }
       await tx.execute({
         sql: `UPDATE invoice_payments SET status='Void',voided_by=?,voided_at=?,
           void_reason=?,updated_at=? WHERE id=?`,
@@ -3301,131 +3371,27 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
     return ok(await getInvoice(client, invoiceId));
   }
 
+  // The legacy singular /payment endpoint is retired.
+  //
+  // It marked an invoice Lunas by fabricating an `invoice_payments` row with a
+  // `LEGACY-` reference and a hardcoded 27-byte `text/plain` stub as its
+  // "attachment", which is exactly the evidence requirement the real endpoint
+  // exists to enforce: POST /api/invoices/:id/payments demands a reference, a
+  // method, an amount that fits the outstanding balance and a genuine PDF or
+  // image proof, and its void counterpart books a reversal. Nothing in the app
+  // called this route; the billing view has used /payments and
+  // /payments/:id/void throughout. Kept reachable as a friendly 410 rather than
+  // a 404 so any old client learns why, mirroring the retired /api/spks writes.
   if (
     invoiceId &&
     action === "payment" &&
     ["POST", "PATCH"].includes(request.method)
   ) {
-    if (!mutationRoles("invoices").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengonfirmasi pembayaran.");
-    assertAccess(user, "finance", "manage");
-    const invoice = await ensureExists(
-      "SELECT * FROM invoices WHERE id=?",
-      [invoiceId],
-      "Invoice tidak ditemukan.",
+    throw new ApiError(
+      410,
+      "LEGACY_INVOICE_PAYMENT_RETIRED",
+      "Endpoint konfirmasi pembayaran lama sudah tidak berlaku. Catat pembayaran melalui histori pembayaran invoice agar referensi, metode, dan bukti pembayarannya lengkap.",
     );
-    await assertProjectAccess(user, String(invoice.project_id));
-    const input = z
-      .object({
-        status: z.enum(["Belum Lunas", "Lunas"]).default("Lunas"),
-        paidDate: isoDateSchema.optional(),
-      })
-      .parse(await jsonBody(request));
-    const paidDate =
-      input.paidDate ?? invoice.paid_date ?? now().slice(0, 10);
-    const timestamp = now();
-    const current = await getInvoice(client, invoiceId);
-    if (input.status === "Belum Lunas") {
-      if (current.payments.some((payment) => payment.status === "Posted")) {
-        throw new ApiError(
-          409,
-          "PAYMENT_VOID_REQUIRED",
-          "Batalkan setiap pembayaran aktif melalui histori pembayaran.",
-        );
-      }
-      await detachOrDeleteSystemTransaction(client, "Invoice", invoiceId);
-      await client.execute({
-        sql: "UPDATE invoices SET status='Belum Lunas',paid_date=NULL,updated_at=? WHERE id=?",
-        args: [timestamp, invoiceId],
-      });
-    } else if (current.outstanding > 0) {
-      const withholdingAmount = Math.min(
-        current.outstanding,
-        Math.max(0, current.taxWithholdings - current.withheldTax),
-      );
-      const cashAmount = current.outstanding - withholdingAmount;
-      const paymentId = `invoice-payment-${randomUUID()}`;
-      const transactionId = cashAmount > 0 ? randomUUID() : null;
-      await client.transaction(async (tx) => {
-        await lockDocumentTaxes(
-          tx,
-          "Invoice",
-          invoiceId,
-          String(invoice.due_date),
-        );
-        if (transactionId) {
-          await tx.execute({
-            sql: `INSERT INTO transactions
-              (id,project_id,date,type,description,amount,source,reference_id,
-               category,origin,created_by,created_at,updated_at)
-              VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
-            args: [
-              transactionId,
-              invoice.project_id,
-              paidDate,
-              "Pemasukan",
-              `Pembayaran ${String(invoice.number)}`,
-              cashAmount,
-              "Invoice Payment",
-              paymentId,
-              "Penjualan",
-              user.id,
-              timestamp,
-              timestamp,
-            ],
-          });
-        }
-        await tx.execute({
-          sql: `INSERT INTO invoice_payments
-            (id,invoice_id,gross_amount,cash_amount,withholding_amount,paid_date,
-             payment_reference,payment_method,attachment_name,
-             attachment_mime_type,attachment_content_base64,status,
-             transaction_id,created_by,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,'Posted',?,?,?,?)`,
-          args: [
-            paymentId,
-            invoiceId,
-            current.outstanding,
-            cashAmount,
-            withholdingAmount,
-            paidDate,
-            `LEGACY-${String(invoice.number)}`,
-            "Lainnya",
-            "Konfirmasi pembayaran kompatibilitas",
-            "text/plain",
-            "S29uZmlybWFzaSBwZW1iYXlhcmFu",
-            transactionId,
-            user.id,
-            timestamp,
-            timestamp,
-          ],
-        });
-        await tx.execute({
-          sql: "UPDATE invoices SET status='Lunas',paid_date=?,updated_at=? WHERE id=?",
-          args: [paidDate, timestamp, invoiceId],
-        });
-      });
-    }
-    await writeAuditLog(
-      client,
-      request,
-      user,
-      input.status === "Lunas" ? "confirm_payment" : "cancel_payment",
-      "invoice",
-      invoiceId,
-      { status: input.status, paidDate },
-    );
-    if (input.status === "Lunas" && invoice.status !== "Lunas") {
-      await notifyProjectStakeholders(client, {
-        projectId: String(invoice.project_id),
-        eventType: "invoice_paid",
-        subject: `Pembayaran ${String(invoice.number)} diterima`,
-        message: `pembayaran invoice ${String(invoice.number)} sebesar Rp ${asNumber(invoice.amount).toLocaleString("id-ID")} telah dikonfirmasi.`,
-        subjectEn: `Payment for ${String(invoice.number)} received`,
-        messageEn: `invoice ${String(invoice.number)} payment of IDR ${asNumber(invoice.amount).toLocaleString("en-US")} has been confirmed.`,
-        includeFinance: true,
-      });
-    }
-    return ok(await getInvoice(client, invoiceId));
   }
 
   if (invoiceId && !action && request.method === "GET") {
@@ -3457,7 +3423,7 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
           WHERE dt.document_type='Invoice' AND dt.document_id=?
             AND (
               o.settled_amount>0
-              OR o.status NOT IN ('Outstanding','Void')
+              OR o.status<>'Outstanding'
               OR o.reporting_status NOT IN ('Candidate','Void')
               OR EXISTS(SELECT 1 FROM tax_settlements s WHERE s.obligation_id=o.id)
             )
@@ -3598,7 +3564,7 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
           WHERE dt.document_type='Invoice' AND dt.document_id=?
             AND (
               o.settled_amount>0
-              OR o.status NOT IN ('Outstanding','Void')
+              OR o.status<>'Outstanding'
               OR o.reporting_status NOT IN ('Candidate','Void')
               OR EXISTS(SELECT 1 FROM tax_settlements s WHERE s.obligation_id=o.id)
             )
@@ -4343,30 +4309,63 @@ async function handleValidations(request: Request, path: string[], user: AuthUse
     if (input.items.some((item) => !allowed.has(item.id))) {
       throw new ApiError(422, "INVALID_VALIDATION_ITEM", "Item validasi tidak sesuai dengan BoQ proyek.");
     }
-    const timestamp = now();
-    await client.batch(
-      input.items.map((item) => ({
-        sql: "UPDATE project_validation_items SET checked=?,notes=?,updated_at=? WHERE id=? AND validation_id=?",
-        args: [item.checked ? 1 : 0, item.notes, timestamp, item.id, validationId],
-      })),
-      "write",
-    );
-    if (input.status === "Completed") {
-      const incomplete = await client.execute({
-        sql: "SELECT COUNT(*) AS count FROM project_validation_items WHERE validation_id=? AND checked=0",
-        args: [validationId],
+    // A completed checklist is the evidence a finalized BAST was issued against.
+    // Reverting it to Draft — or unchecking items underneath it — used to be
+    // accepted with no guard at all, which quietly withdrew the evidence for a
+    // handover document that was already signed and sealed. Only a Final BAST
+    // locks it: a Draft one re-runs assertCompletedValidation at finalization,
+    // and a revoked one reads 'Void'. The addendum flow still demotes the
+    // checklist, but through ensureValidation/resetProjectValidation when the
+    // BoQ genuinely changes, not through a user edit.
+    if (String(validation.status) === "Completed") {
+      const issued = await client.execute({
+        sql: `SELECT id FROM basts
+          WHERE project_id=? AND package_id=? AND delivery_cycle=?
+            AND status='Final' LIMIT 1`,
+        args: [
+          validation.project_id,
+          validation.package_id,
+          asNumber(validation.delivery_cycle) || 1,
+        ],
       });
-      const total = await client.execute({
-        sql: "SELECT COUNT(*) AS count FROM project_validation_items WHERE validation_id=?",
-        args: [validationId],
-      });
-      if (!asNumber(total.rows[0]?.count) || asNumber(incomplete.rows[0]?.count)) {
-        throw new ApiError(409, "VALIDATION_INCOMPLETE", "Centang seluruh Perangkat dan Material sebelum validasi diselesaikan.");
+      if (issued.rows.length) {
+        throw new ApiError(
+          409,
+          "VALIDATION_LOCKED_BY_BAST",
+          "Checklist ini sudah menjadi dasar BAST yang diterbitkan, jadi tidak dapat diubah atau dikembalikan ke Draft. Void BAST tersebut terlebih dahulu.",
+        );
       }
     }
-    await client.execute({
-      sql: "UPDATE project_validations SET status=?,notes=?,validated_by=?,completed_at=?,updated_at=? WHERE id=?",
-      args: [input.status, input.notes ?? validation.notes ?? "", user.id, input.status === "Completed" ? timestamp : null, timestamp, validationId],
+    const timestamp = now();
+    // Items and status move together. The completeness check used to run after
+    // the item batch had already been committed, so a request that ended in 409
+    // left the record inconsistent: unchecked items under a status still
+    // reading 'Completed'. Inside the transaction the throw rolls both back.
+    await client.transaction(async (tx) => {
+      if (input.items.length) {
+        await tx.batch(
+          input.items.map((item) => ({
+            sql: "UPDATE project_validation_items SET checked=?,notes=?,updated_at=? WHERE id=? AND validation_id=?",
+            args: [item.checked ? 1 : 0, item.notes, timestamp, item.id, validationId],
+          })),
+          "write",
+        );
+      }
+      if (input.status === "Completed") {
+        const counts = await tx.execute({
+          sql: `SELECT COUNT(*) AS total,
+            COALESCE(SUM(CASE WHEN checked=0 THEN 1 ELSE 0 END),0) AS incomplete
+            FROM project_validation_items WHERE validation_id=?`,
+          args: [validationId],
+        });
+        if (!asNumber(counts.rows[0]?.total) || asNumber(counts.rows[0]?.incomplete)) {
+          throw new ApiError(409, "VALIDATION_INCOMPLETE", "Centang seluruh Perangkat dan Material sebelum validasi diselesaikan.");
+        }
+      }
+      await tx.execute({
+        sql: "UPDATE project_validations SET status=?,notes=?,validated_by=?,completed_at=?,updated_at=? WHERE id=?",
+        args: [input.status, input.notes ?? validation.notes ?? "", user.id, input.status === "Completed" ? timestamp : null, timestamp, validationId],
+      });
     });
     await writeAuditLog(client, request, user, input.status === "Completed" ? "complete" : "update", "project_validation", validationId, {
       checked: input.items.filter((item) => item.checked).length,
@@ -5491,16 +5490,21 @@ async function handleFinance(request: Request, user: AuthUser) {
   const pendingWhere = conditions.length
     ? `WHERE ${[...conditions, unreconciledImportCondition()].join(" AND ")}`
     : `WHERE ${unreconciledImportCondition()}`;
+  // A void books a reversal in the opposite direction. Netting it against the
+  // side it undoes keeps gross income and gross expense at their pre-void
+  // figures instead of inflating both of them forever.
+  const grossIncome = grossIncomeSum();
+  const grossExpense = grossExpenseSum();
   const totals = await client.execute({
-    sql: `SELECT COALESCE(SUM(CASE WHEN type='Pemasukan' THEN amount ELSE 0 END),0) AS income,COALESCE(SUM(CASE WHEN type='Pengeluaran' THEN amount ELSE 0 END),0) AS expense FROM transactions ${reportedWhere}`,
+    sql: `SELECT ${grossIncome} AS income,${grossExpense} AS expense FROM transactions ${reportedWhere}`,
     args: args as never[],
   });
   const pending = await client.execute({
-    sql: `SELECT COUNT(*) AS entries,COALESCE(SUM(CASE WHEN type='Pemasukan' THEN amount ELSE 0 END),0) AS income,COALESCE(SUM(CASE WHEN type='Pengeluaran' THEN amount ELSE 0 END),0) AS expense FROM transactions ${pendingWhere}`,
+    sql: `SELECT COUNT(*) AS entries,${grossIncome} AS income,${grossExpense} AS expense FROM transactions ${pendingWhere}`,
     args: args as never[],
   });
   const monthly = await client.execute({
-    sql: `SELECT substr(date,1,7) AS month,COALESCE(SUM(CASE WHEN type='Pemasukan' THEN amount ELSE 0 END),0) AS income,COALESCE(SUM(CASE WHEN type='Pengeluaran' THEN amount ELSE 0 END),0) AS expense FROM transactions ${reportedWhere} GROUP BY substr(date,1,7) ORDER BY month`,
+    sql: `SELECT substr(date,1,7) AS month,${grossIncome} AS income,${grossExpense} AS expense FROM transactions ${reportedWhere} GROUP BY substr(date,1,7) ORDER BY month`,
     args: args as never[],
   });
   const income = asNumber(totals.rows[0]?.income);

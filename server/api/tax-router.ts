@@ -847,8 +847,15 @@ export async function handleTaxSettlements(
   assertFinanceManage(user);
   if (request.method === "POST" && !settlementId) {
     const input = settlementSchema.parse(await jsonBody(request));
+    // `tax_obligations.status` is derived from settled_amount by
+    // obligationStatus() and only ever reads 'Outstanding', 'Partially Settled'
+    // or 'Settled'. The old `status<>'Void'` filter tested a value nothing has
+    // ever written: cancelling a filing is `reporting_status='Void'`, which the
+    // reporting endpoint writes under its own transition guard, and cancelling
+    // the liability itself means deleting the source document. See the same
+    // removal in profit-share-router.ts and the invoice edit/delete locks.
     const obligationResult = await client.execute({
-      sql: "SELECT * FROM tax_obligations WHERE id=? AND status<>'Void' LIMIT 1",
+      sql: "SELECT * FROM tax_obligations WHERE id=? LIMIT 1",
       args: [input.obligationId],
     });
     const obligation = obligationResult.rows[0];
@@ -937,36 +944,40 @@ export async function handleTaxSettlements(
       throw new ApiError(403, "FORBIDDEN", "Hanya Admin yang dapat membatalkan settlement.");
     }
     const input = voidSchema.parse(await jsonBody(request));
-    const result = await client.execute({
-      sql: `SELECT s.*,o.amount AS obligation_amount,o.settled_amount,
-        o.direction,o.project_id FROM tax_settlements s
-        JOIN tax_obligations o ON o.id=s.obligation_id
-        WHERE s.id=? AND s.status='Posted' LIMIT 1`,
-      args: [settlementId],
-    });
-    const settlement = result.rows[0];
-    if (!settlement) throw new ApiError(404, "NOT_FOUND", "Settlement aktif tidak ditemukan.");
-    if (settlement.transaction_id) {
-      const reconciled = await client.execute({
-        sql: `SELECT 1 FROM bank_statement_entries
-          WHERE transaction_id=? AND reconciliation_status='Matched' LIMIT 1`,
-        args: [settlement.transaction_id],
-      });
-      if (reconciled.rows.length) {
-        throw new ApiError(
-          409,
-          "RECONCILIATION_LOCKED",
-          "Lepaskan rekonsiliasi bank sebelum membatalkan settlement.",
-        );
-      }
-    }
     const timestamp = now();
     const reversalId = `transaction-${randomUUID()}`;
-    const newSettled = Math.max(
-      0,
-      numberValue(settlement.settled_amount) - numberValue(settlement.amount),
-    );
     await client.transaction(async (tx) => {
+      // Settlement row and reconciliation guard both read inside the write
+      // transaction: SQLite serialises writers, PostgreSQL does not, and a
+      // reconciliation committed between the guard and the void would leave a
+      // matched bank line pointing at money that was just reversed.
+      const result = await tx.execute({
+        sql: `SELECT s.*,o.amount AS obligation_amount,o.settled_amount,
+          o.direction,o.project_id FROM tax_settlements s
+          JOIN tax_obligations o ON o.id=s.obligation_id
+          WHERE s.id=? AND s.status='Posted' LIMIT 1`,
+        args: [settlementId],
+      });
+      const settlement = result.rows[0];
+      if (!settlement) throw new ApiError(404, "NOT_FOUND", "Settlement aktif tidak ditemukan.");
+      if (settlement.transaction_id) {
+        const reconciled = await tx.execute({
+          sql: `SELECT 1 FROM bank_statement_entries
+            WHERE transaction_id=? AND reconciliation_status='Matched' LIMIT 1`,
+          args: [settlement.transaction_id],
+        });
+        if (reconciled.rows.length) {
+          throw new ApiError(
+            409,
+            "RECONCILIATION_LOCKED",
+            "Lepaskan rekonsiliasi bank sebelum membatalkan settlement.",
+          );
+        }
+      }
+      const newSettled = Math.max(
+        0,
+        numberValue(settlement.settled_amount) - numberValue(settlement.amount),
+      );
       await tx.execute({
         sql: `INSERT INTO transactions
           (id,project_id,date,type,description,amount,source,reference_id,category,

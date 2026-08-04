@@ -452,6 +452,8 @@ export interface ProjectAdvance {
   paymentReference: string;
   notes: string;
   status: "Open" | "Settled" | "Void";
+  voidedAt?: string | null;
+  voidReason?: string | null;
 }
 
 export interface BankAccount {

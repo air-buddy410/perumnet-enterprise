@@ -530,6 +530,10 @@ export const chapterQuotation: Chapter = {
           "Set rounding if needed. The options are None, Up, Down, or Custom. Up and Down require a step of Rp 1,000, Rp 10,000, or Rp 100,000. Custom means you type the adjustment yourself and must write a reason of at least 5 characters.",
         ],
         [
+          "Pembulatan Khusus tetap harus berupa pembulatan. Batasnya adalah Rp 100.000 atau 1% dari nilai sebelum pembulatan, mana yang lebih besar; di luar itu aplikasi menolak dengan pesan yang menyebut batasnya. Perubahan harga yang lebih besar dari itu adalah diskon atau pajak, dan harus dicatat di kolomnya sendiri agar terlihat apa adanya di PDF dan di invoice.",
+          "A Custom rounding must still be a rounding. The limit is Rp 100,000 or 1% of the value before rounding, whichever is larger; beyond that the application refuses and names the limit. A larger change to the price is a discount or a tax, and belongs in its own field so it shows up for what it is on the PDF and on the invoices.",
+        ],
+        [
           "Bila memakai pajak, tekan Pajak, nyalakan Gunakan pajak, lalu pilih aturannya. Aturan pajak beserta tarifnya disiapkan perusahaan di Pembukuan; tidak ada tarif yang tertanam mati di dalam aplikasi. Pajak hanya dapat diubah selama penawaran masih Draft.",
           "If tax applies, press Tax, switch on Apply tax, and choose the rules. The tax rules and their rates are configured by the company in Finance; no rate is hard-wired into the application. Tax can only be changed while the quotation is still a Draft.",
         ],
@@ -554,8 +558,8 @@ export const chapterQuotation: Chapter = {
     {
       kind: "locked",
       text: [
-        "Penawaran berstatus Diterima. Item BoQ paket itu, diskon, pajak, dan pembulatan terkunci permanen dan tidak dapat diedit maupun dihapus. Nilai proyek langsung disamakan dengan Total tagihan klien. Sejak saat itu Anda dapat membuat invoice termin dan dokumen SPK/PO. Setiap perubahan pekerjaan sesudahnya harus lewat Addendum.",
-        "The quotation is now Accepted. That package's BoQ items, discount, tax, and rounding are locked permanently and can be neither edited nor deleted. The project value is immediately set to the Total billed to the client. From then on you can raise installment invoices and procurement documents. Any later change to the work must go through an Addendum.",
+        "Penawaran berstatus Diterima. Item BoQ paket itu, diskon, pajak, dan pembulatan terkunci permanen dan tidak dapat diedit maupun dihapus. Nilai proyek langsung disamakan dengan Total tagihan klien, dan sejak saat itu nilai proyek mengikuti kontrak: kolom Nilai pada data proyek tidak lagi dapat diketik manual, dan aplikasi menolak bila dicoba. Sejak saat itu Anda dapat membuat invoice termin dan dokumen SPK/PO. Setiap perubahan pekerjaan sesudahnya harus lewat Addendum.",
+        "The quotation is now Accepted. That package's BoQ items, discount, tax, and rounding are locked permanently and can be neither edited nor deleted. The project value is immediately set to the Total billed to the client, and from then on the project value follows the contract: the Value field on the project record can no longer be typed in by hand, and the application refuses the attempt. From then on you can raise installment invoices and procurement documents. Any later change to the work must go through an Addendum.",
       ],
     },
     {
@@ -954,8 +958,8 @@ export const chapterProcurement: Chapter = {
           "Press Pay for the next term. Enter the gross settled, tax withheld, actual cash paid, payment date, vendor invoice number, payment reference, and method. For a bank transfer, choose an active company account. Upload the transfer receipt, then press Post payment.",
         ],
         [
-          "Setelah seluruh kuantitas PO diterima, atau seluruh termin non-DP pada SPK diverifikasi, dokumen boleh diselesaikan.",
-          "Once every PO quantity has been received, or every non-DP term on an SPK has been verified, the document may be completed.",
+          "Setelah seluruh kuantitas PO diterima, atau seluruh termin non-DP pada SPK diverifikasi, dokumen boleh diselesaikan. Selesai bersifat final: dokumen yang sudah Selesai tidak dapat diselesaikan lagi, tetapi pelunasan terakhirnya tetap boleh dicatat sesudah itu.",
+          "Once every PO quantity has been received, or every non-DP term on an SPK has been verified, the document may be completed. Completion is final: a document already marked Completed cannot be completed again, though its final settlement may still be recorded afterwards.",
         ],
       ],
     },
@@ -964,6 +968,14 @@ export const chapterProcurement: Chapter = {
       text: [
         "Dokumen yang sudah disetujui terkunci dan nilainya menjadi komitmen perusahaan. Pajak pada dokumen itu ikut terkunci saat persetujuan. Hanya kas aktual yang masuk Buku Kas. Sisa komitmen yang belum dibayar langsung mengurangi laba yang aman dibagikan.",
         "An approved document is locked and its value becomes a company commitment. Its tax figures lock at approval too. Only the actual cash enters the Cash Ledger. Any unpaid commitment immediately reduces the profit that is safe to distribute.",
+      ],
+    },
+    {
+      kind: "note",
+      title: ["Disetujui belum berarti boleh dibayar", "Approved does not yet mean payable"],
+      text: [
+        "Persetujuan adalah keputusan internal; Kirim adalah saat dokumen benar-benar berlaku bagi vendor. Karena itu pembayaran dan penyelesaian baru terbuka setelah dokumen dikirim. Dokumen yang masih berstatus Disetujui — sudah disetujui tetapi belum dikirim ke vendor — ditolak bila dicoba dibayar atau diselesaikan. Tekan Kirim lebih dulu.",
+        "Approval is an internal decision; Send is the moment the document actually binds the vendor. Payment and completion therefore only open once the document has been sent. A document still sitting at Approved — signed off internally but never sent to the vendor — is refused for both payment and completion. Press Send first.",
       ],
     },
     {
@@ -1064,6 +1076,14 @@ export const chapterHandover: Chapter = {
       text: [
         "BAST menjadi Final dan tidak dapat diedit maupun dihapus. Status proyek berubah menjadi Selesai hanya bila serah terima ini adalah yang terakhir: setiap paket komersial yang penawarannya sudah diterima klien harus memiliki BAST final yang aktif dan belum dicabut. Selama masih ada paket yang berjalan, proyek tetap Aktif. Berkas PDF yang tersimpan itulah yang diunduh berikutnya, bukan hasil cetak ulang. Siapa pun yang memindai QR pada PDF dapat memeriksa apakah dokumen itu asli dan masih berlaku. Bila ada kekeliruan, Admin mencabut dokumennya dengan alasan tertulis, lalu tim membuat BAST baru untuk paket dan siklus yang sama.",
         "The certificate becomes Final and can be neither edited nor deleted. The project status changes to Completed only when this handover is the last one: every commercial package with a client-accepted quotation must have an active, unrevoked final certificate. While any package is still running, the project stays Active. The stored PDF is what is downloaded afterwards, never a fresh re-print. Anyone who scans the QR code on the PDF can check whether the document is genuine and still valid. If something is wrong, an Admin revokes it with a written reason, and the team then creates a new certificate for the same package and cycle.",
+      ],
+    },
+    {
+      kind: "note",
+      title: ["Checklist yang sudah dipakai BAST final ikut terkunci", "A checklist a final certificate was issued against locks too"],
+      text: [
+        "Begitu sebuah BAST difinalisasi untuk paket dan siklus tersebut, daftar pemeriksaan yang menjadi dasarnya ikut terkunci: centangnya tidak dapat diubah dan statusnya tidak dapat dikembalikan ke Draft. Alasannya sederhana — daftar itu adalah bukti serah terima yang sudah ditandatangani dan dicap, dan menariknya kembali berarti menghapus bukti dokumen yang masih berlaku. Selama BAST-nya masih Draft daftar itu tetap boleh diubah, karena finalisasi memeriksa ulang kelengkapannya. Bila daftarnya perlu diperiksa ulang setelah final, cabut BAST-nya lebih dulu; setelah itu daftar pemeriksaan dapat disinkronkan dan dicentang kembali.",
+        "Once a handover certificate has been finalized for that package and cycle, the checklist behind it locks as well: its ticks can no longer be changed and its status cannot be returned to Draft. The reason is simple — that checklist is the evidence behind a signed and sealed handover, and withdrawing it would erase the evidence for a document that is still valid. While the certificate is still a Draft the checklist may still be edited, because finalization re-checks it. If the checklist needs redoing after finalization, revoke the certificate first; it can then be re-synced and re-checked.",
       ],
     },
     {
@@ -1196,6 +1216,14 @@ export const chapterExpenses: Chapter = {
       text: [
         "Pilihan Uang muka proyek mati selama proyek belum punya saldo uang muka yang belum habis dipakai. Ini disengaja agar tidak ada nota yang menunjuk uang muka yang belum pernah dicairkan. Finance mencairkan uang mukanya dulu lewat tombol Uang muka, barulah pilihannya menyala. Pada jendela pencairan, aplikasi menampilkan berapa kas yang sudah masuk dari invoice proyek ini sebagai bahan pertimbangan saja; angka itu tidak membatasi besaran pencairan.",
         "The Project advance option stays disabled while the project has no unspent advance balance. This is deliberate, so no receipt can point at an advance that was never disbursed. Finance disburses the advance first using the Advance button, and only then does the option light up. In the disbursement window the application shows how much cash has come in from this project's invoices as background for the decision only; that figure does not cap the disbursement.",
+      ],
+    },
+    {
+      kind: "note",
+      title: ["Void mengembalikan saldo uang muka dan membukanya kembali", "Voiding gives the advance balance back and reopens it"],
+      text: [
+        "Uang muka yang terpakai habis otomatis berstatus Selesai. Bila belanja yang memakainya kemudian di-void oleh Admin, saldonya kembali dan status uang muka itu kembali menjadi Terbuka, sehingga saldo tersebut benar-benar dapat dipakai lagi untuk nota berikutnya. Untuk pencairan yang memang salah catat dan belum tersentuh sama sekali, Admin dapat membatalkan uang mukanya langsung; aplikasi mencatat pembalik kasnya. Bila sebagian sudah dipakai atau sudah dikembalikan, atau pencairannya sudah cocok dengan mutasi bank, pembatalan ditolak — gunakan pengembalian uang muka, karena uangnya memang sudah keluar.",
+        "An advance drawn down to zero closes as Settled. If the purchase that consumed it is later voided by an Admin, the balance comes back and the advance returns to Open, so that restored balance really can fund the next receipt. For a disbursement that was simply recorded in error and never touched, an Admin can void the advance itself; the application posts the reversing cash entry. If any of it has been spent or returned, or the disbursement is already matched to a bank entry, the void is refused — record an advance return instead, because the money genuinely left.",
       ],
     },
     {
@@ -1952,6 +1980,36 @@ export const chapterMessages: Chapter = {
           action: ["Isi persentase sebesar sisa yang disebutkan pada pesan, atau hapus dulu invoice termin yang salah selama belum ada pembayarannya.", "Enter the remaining percentage quoted in the message, or first delete the incorrect installment invoice while it still has no payment."],
         },
         {
+          message: ["Pembulatan khusus maksimal Rp ... untuk nilai ini.", "The message names the maximum custom rounding allowed for this value."],
+          meaning: ["Selisih pembulatan yang Anda ketik lebih besar daripada yang masih masuk akal disebut pembulatan: batasnya Rp 100.000 atau 1% dari nilai sebelum pembulatan, mana yang lebih besar.", "The adjustment you typed is larger than anything that could still be called a rounding: the limit is Rp 100,000 or 1% of the value before rounding, whichever is larger."],
+          action: ["Bila memang bermaksud memotong harga, isi kolom Diskon; bila menambah biaya, gunakan aturan pajak Tambah. Keduanya tercetak apa adanya di PDF dan ikut terbawa ke invoice, sedangkan pembulatan tidak dimaksudkan untuk itu.", "If you meant to reduce the price, use the Discount field; if you meant to add a charge, use an Add-effect tax rule. Both print for what they are on the PDF and carry through to the invoices, which is not what rounding is for."],
+        },
+        {
+          message: ["Nilai proyek ini mengikuti Quotation yang sudah diterima klien dan tidak dapat diketik manual.", "This project's value follows its client-accepted quotation and cannot be typed in by hand."],
+          meaning: ["Proyek ini sudah punya penawaran berstatus Diterima, jadi nilainya diturunkan dari kontrak dan bukan lagi angka yang diketik.", "This project already has an Accepted quotation, so its value is derived from the contract instead of typed."],
+          action: ["Kosongkan kembali kolom Nilai ke angka semula. Bila nilai kontraknya memang berubah, buat Addendum; nilai proyek akan menyesuaikan sendiri begitu addendum itu diterima klien.", "Put the Value field back to its previous figure. If the contract value genuinely changed, create an Addendum; the project value updates itself once the client accepts it."],
+        },
+        {
+          message: ["Checklist ini sudah menjadi dasar BAST yang diterbitkan.", "This checklist is the evidence behind an issued handover certificate."],
+          meaning: ["Daftar pemeriksaan Perangkat dan Material ini sudah dipakai untuk memfinalisasi BAST, jadi centang dan statusnya terkunci.", "This Device and Material checklist was used to finalize a handover certificate, so its ticks and its status are locked."],
+          action: ["Bila daftarnya memang perlu diperiksa ulang, minta Admin mencabut BAST-nya lebih dulu, lalu sinkronkan dan centang ulang daftar pemeriksaannya.", "If the checklist genuinely needs redoing, ask an Admin to revoke the certificate first, then re-sync and re-check the list."],
+        },
+        {
+          message: ["Dokumen harus sudah disetujui dan dikirim ke vendor sebelum dibayar.", "The document must be approved and sent to the vendor before it can be paid."],
+          meaning: ["Dokumen masih berstatus Disetujui: keputusan internal sudah selesai, tetapi vendor belum menerima dokumennya.", "The document is still at Approved: the internal decision is done, but the vendor has not received the document."],
+          action: ["Tekan Kirim pada dokumen tersebut, lalu ulangi pembayarannya. Pesan senada muncul pada Selesaikan, dan dokumen yang sudah Selesai tidak dapat diselesaikan untuk kedua kalinya.", "Press Send on the document, then repeat the payment. A matching message appears for Complete, and a document already Completed cannot be completed a second time."],
+        },
+        {
+          message: ["Uang muka ini sudah terpakai atau sebagian sudah dikembalikan, jadi tidak dapat dibatalkan.", "This advance has already been spent or partly returned, so it cannot be voided."],
+          meaning: ["Pembatalan uang muka hanya untuk pencairan yang murni salah catat dan belum tersentuh. Uang muka ini sudah punya catatan penyelesaian.", "Voiding an advance is only for a disbursement recorded purely in error and never touched. This one already has settlement records."],
+          action: ["Gunakan Pengembalian uang muka untuk menutup sisa saldonya. Bila pencairannya sudah cocok dengan mutasi bank, pengembalian memang satu-satunya jalan, karena uangnya benar-benar keluar.", "Use Advance return to close the remaining balance. If the disbursement is already matched to a bank entry, a return is the only route, because the money genuinely left."],
+        },
+        {
+          message: ["Endpoint konfirmasi pembayaran lama sudah tidak berlaku.", "The old payment-confirmation endpoint has been retired."],
+          meaning: ["Sebuah alat atau integrasi lama masih memanggil jalur penandaan Lunas versi lawas, yang menandai invoice lunas tanpa referensi dan tanpa bukti pembayaran yang sesungguhnya.", "An old tool or integration is still calling the legacy mark-as-paid route, which marked an invoice paid with no reference and no real payment evidence."],
+          action: ["Catat pembayarannya lewat histori pembayaran pada invoice, yang meminta nominal, tanggal, referensi, metode, dan bukti transfer. Pembatalannya juga ada di sana dan otomatis mencatat pembalik kasnya.", "Record the payment through the invoice payment history, which asks for the amount, date, reference, method, and transfer proof. Its void action lives there too and posts the reversing cash entry automatically."],
+        },
+        {
           message: ["Quotation yang diterima klien sudah dikunci. Buat Addendum baru.", "A client-accepted quotation is locked and cannot be changed."],
           meaning: ["Penawaran yang sudah disetujui klien memang tidak boleh diubah lagi.", "A quotation the client has approved may not be edited any more."],
           action: ["Buka Procurement & Vendor, panel Quotation Original & Addendum, buat Addendum, lalu proses pekerjaan tambahan di sana.", "Open Procurement & Vendors, the Original Quotation & Addendum panel, create an Addendum, and handle the extra work there."],
@@ -2262,6 +2320,10 @@ export const chapterAppendix: Chapter = {
         [
           "Pembatalan tidak pernah menghapus data. Void membuat catatan pembalik, sehingga transaksi asli dan pembatalannya sama-sama terlihat.",
           "A cancellation never deletes data. A void posts a reversing entry, so both the original transaction and its cancellation remain visible.",
+        ],
+        [
+          "Catatan pembalik itu hanya membatalkan, bukan menambah uang baru. Karena itu laporan mengurangkannya dari sisi yang dibatalkan, bukan menambahkannya ke sisi sebaliknya: setelah pembayaran vendor Rp 2.000.000 di-void, Kas masuk, Kas keluar, grafik bulanan, dan laba proyek semuanya kembali persis seperti sebelum pembayaran itu dicatat. Kedua barisnya tetap terlihat di Buku Kas.",
+          "A reversing entry only undoes; it is not new money. Reports therefore subtract it from the side it cancels rather than adding it to the opposite one: after a Rp 2,000,000 vendor payment is voided, Cash in, Cash out, the monthly chart, and project profit all return to exactly what they were before the payment was recorded. Both rows stay visible in the cash ledger.",
         ],
         [
           "Setiap dokumen menyimpan siapa yang membuatnya, siapa yang mengajukan, siapa yang menyetujui, dan kapan. Riwayat ini tidak dapat diubah oleh pengguna.",
