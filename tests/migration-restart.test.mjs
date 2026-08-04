@@ -367,3 +367,92 @@ test("startup relaxes a legacy BAST status constraint without losing rows or ind
   assert.equal(String(stillVoid.status), "Void", "the re-run keeps the data intact");
   rerun.close();
 }, { timeout: 150_000 });
+
+// ---------------------------------------------------------------------------
+// Packages created before documents required an Active package carry the old
+// 'Draft' default. Nothing can move them out of it — the transition table has
+// no route back into Draft, so the status control never offers it — and they
+// would silently refuse every new quotation, invoice, validation and BAST.
+// Startup must promote them, exactly once.
+// ---------------------------------------------------------------------------
+test("startup promotes legacy Draft packages so they accept documents again", async () => {
+  await login();
+  const project = await json(
+    "/api/projects",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Proyek Paket Warisan",
+        client: "Klien Paket",
+        location: "Makassar",
+        status: "Draft",
+        value: 2_000_000,
+      }),
+    },
+    201,
+  );
+  const [legacyPackage] = await json(`/api/projects/${project.id}/packages`);
+  assert.equal(legacyPackage.status, "Active", "new packages start Active");
+
+  await stopServer();
+  const legacy = createClient({ url: `file:${databasePath}` });
+  await legacy.execute({
+    sql: "UPDATE project_commercial_packages SET status='Draft' WHERE id=?",
+    args: [legacyPackage.id],
+  });
+  legacy.close();
+
+  const port = await freePort();
+  baseUrl = `http://127.0.0.1:${port}`;
+  server = startServer(port);
+  await waitForServer(baseUrl);
+  await login();
+
+  const promoted = (await json(`/api/projects/${project.id}/packages`)).find(
+    (entry) => entry.id === legacyPackage.id,
+  );
+  assert.equal(promoted.status, "Active", "the legacy package was promoted");
+
+  // The promotion is only worth anything if the package really takes documents.
+  await json(
+    `/api/boq/items?projectId=${project.id}&packageId=${legacyPackage.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        category: "Perangkat",
+        description: "Access point",
+        quantity: 1,
+        unit: "unit",
+        costPrice: 800_000,
+        sellingPrice: 1_200_000,
+      }),
+    },
+    201,
+  );
+  const quotation = await json(`/api/quotations?projectId=${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Sent" }),
+  });
+  assert.equal(quotation.status, "Sent");
+
+  // A package deliberately retired must survive the next restart as retired —
+  // the promotion targets the legacy default, not every non-Active package.
+  await json(
+    `/api/projects/${project.id}/packages/${legacyPackage.id}`,
+    { method: "PATCH", body: JSON.stringify({ status: "Completed" }) },
+  );
+  await stopServer();
+  const rerunPort = await freePort();
+  baseUrl = `http://127.0.0.1:${rerunPort}`;
+  server = startServer(rerunPort);
+  await waitForServer(baseUrl);
+  await login();
+  const afterRerun = (await json(`/api/projects/${project.id}/packages`)).find(
+    (entry) => entry.id === legacyPackage.id,
+  );
+  assert.equal(
+    afterRerun.status,
+    "Completed",
+    "the migration never reactivates a package someone retired on purpose",
+  );
+}, { timeout: 180_000 });

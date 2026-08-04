@@ -2101,6 +2101,32 @@ async function ensureBastEngineerRoleColumn(client: DatabaseClient) {
   }
 }
 
+// Creating a quotation, invoice, validation or BAST now requires an Active
+// commercial package. Packages created before that rule were stamped 'Draft' by
+// the old column default — a state nothing can leave, because the status
+// control did not exist yet and the transition table has no route back into
+// Draft. Left alone they would silently refuse every new document. Promote them
+// once; on every later boot the WHERE clause matches nothing, since no writer
+// can produce a Draft package again (every INSERT names its status, and the
+// request schema defaults to Active).
+async function ensureCommercialPackageActiveDefault(client: DatabaseClient) {
+  await client.execute(
+    "UPDATE project_commercial_packages SET status='Active' WHERE status='Draft'",
+  );
+  // PostgreSQL still carries the stale 'Draft' default on the live column.
+  // Nothing reads it — every insert is explicit — but a wrong default is a trap
+  // for the next writer, and correcting it is one cheap statement. SQLite keeps
+  // defaults inside the CREATE TABLE text and would need a full table rebuild
+  // to change one, which is not worth it for a value no code path reaches.
+  try {
+    await client.execute(
+      "ALTER TABLE project_commercial_packages ALTER COLUMN status SET DEFAULT 'Active'",
+    );
+  } catch {
+    // SQLite, which cannot alter a column default in place.
+  }
+}
+
 // The BAST void endpoint writes status='Void', but the original table declared
 // CHECK (status IN ('Draft','Final')) — every revocation failed with a raw
 // constraint error surfaced as a 500. Fresh databases now declare 'Void' in the
@@ -2814,6 +2840,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureSpkPaymentColumns(client);
   await ensureProcurementSchema(client);
   await ensureCommercialPackageSchema(client);
+  await ensureCommercialPackageActiveDefault(client);
   await ensureBastVoidStatus(client);
   await ensureBankReconciliationSchema(client);
   await ensureTransactionOriginColumn(client);
