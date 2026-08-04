@@ -288,6 +288,29 @@ export function BillingView({
     quotation.validUntil < serverToday &&
     quotation.status !== "Accepted",
   );
+  // Everything past Draft has already left the office, so the delivery step is
+  // complete and "Tandai sudah dikirim" is no longer an available transition —
+  // on an Accepted quotation it could only return ACCEPTED_QUOTATION_LOCKED.
+  const quotationSettled = ["Accepted", "Rejected", "Void", "Superseded"].includes(quotation?.status ?? "");
+  const quotationDispatched = quotation?.status === "Sent" || quotationSettled;
+  const quotationDeliveryTitle = quotation?.status === "Accepted"
+    ? (id ? "Diterima klien" : "Accepted by the client")
+    : quotation?.status === "Rejected"
+      ? (id ? "Ditolak klien" : "Rejected by the client")
+      : quotation?.status === "Void"
+        ? (id ? "Dibatalkan" : "Voided")
+        : quotation?.status === "Superseded"
+          ? (id ? "Digantikan revisi baru" : "Superseded by a newer revision")
+          : quotation?.status === "Sent"
+            ? (id ? "Sudah dikirim" : "Sent")
+            : (id ? "Menunggu dikirim" : "Awaiting delivery");
+  const quotationDeliveryDetail = quotation?.status === "Accepted"
+    ? (id ? "Nilai, pajak, dan pembulatan terkunci permanen" : "Value, tax, and rounding are permanently locked")
+    : quotationSettled
+      ? (id ? "Dokumen tidak dapat diubah lagi" : "This document can no longer be changed")
+      : quotation?.status === "Sent"
+        ? (id ? "Nilai terkunci sampai BoQ berubah" : "Value is locked until the BoQ changes")
+        : (id ? "Periksa tanggal dan isi dokumen" : "Review dates and document content");
 
   function setValidityDays(days: number) {
     if (!quotationIssuedAt) return;
@@ -774,11 +797,11 @@ export function BillingView({
               <div className="document-status-list">
                 <div className={quotationItems.length ? "done" : "active"}><span><Check size={14} /></span><div><strong>BoQ</strong><small>{quotationItems.length} item · {formatCurrency(boqTotal, language)}</small></div></div>
                 <div className={quotation?.id ? "done" : "active"}><span><FileCheck2 size={14} /></span><div><strong>Quotation</strong><small>{quotation?.number ?? (id ? "Belum disimpan" : "Not saved")}</small></div></div>
-                <div className={quotation?.status === "Sent" ? "done" : "active"}><span><Mail size={14} /></span><div><strong>{quotation?.status === "Sent" ? (id ? "Sudah dikirim" : "Sent") : (id ? "Menunggu dikirim" : "Awaiting delivery")}</strong><small>{quotation?.status === "Sent" ? (id ? "Nilai terkunci sampai BoQ berubah" : "Value is locked until the BoQ changes") : (id ? "Periksa tanggal dan isi dokumen" : "Review dates and document content")}</small></div></div>
+                <div className={quotationDispatched ? "done" : "active"}><span><Mail size={14} /></span><div><strong>{quotationDeliveryTitle}</strong><small>{quotationDeliveryDetail}</small></div></div>
               </div>
-              {canManage && (
-                <button className="button primary full-width" type="button" disabled={!quotationItems.length || quotation?.status === "Sent" || quotationExpired} onClick={markQuotationSent}>
-                  <Send size={16} /> {quotation?.status === "Sent" ? (id ? "Sudah dikirim" : "Sent") : (id ? "Tandai sudah dikirim" : "Mark as sent")}
+              {canManage && !quotationSettled && (
+                <button className="button primary full-width" type="button" disabled={!quotationItems.length || quotationDispatched || quotationExpired} onClick={markQuotationSent}>
+                  <Send size={16} /> {quotationDispatched ? (id ? "Sudah dikirim" : "Sent") : (id ? "Tandai sudah dikirim" : "Mark as sent")}
                 </button>
               )}
             </section>

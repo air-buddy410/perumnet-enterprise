@@ -2504,7 +2504,13 @@ h3 {
 .catalog-inactive { opacity: .64; }
 .catalog-empty { padding: 30px 16px; color: var(--muted); font-size: 11px; text-align: center; }
 
-.catalog-modal-backdrop { align-items: stretch; justify-content: flex-end; padding: 0; }
+/* `.modal-backdrop` is a grid whose single implicit column stretches to the
+   backdrop width by default, which is what lets `.modal-card` resolve
+   `width: min(100%, …)`. Overriding `justify-content` alone would collapse that
+   track to max-content and make the drawer's percentage width circular (it
+   resolved to a 225–312px strip on a 390px screen), so the track is declared
+   explicitly and the drawer is pushed to the trailing edge with justify-items. */
+.modal-backdrop.catalog-modal-backdrop { grid-template-columns: minmax(0, 1fr); align-items: stretch; justify-items: end; padding: 0; }
 .catalog-editor { display: flex; width: min(520px, 100%); height: 100%; flex-direction: column; overflow: hidden; background: #fff; box-shadow: -20px 0 60px rgba(24,49,56,.18); animation: catalog-slide-in 180ms ease-out; }
 .catalog-editor > .panel-head { flex: 0 0 auto; min-height: 82px; border-bottom: 1px solid var(--line); }
 .catalog-editor-body { display: grid; align-content: start; gap: 14px; overflow-y: auto; padding: 20px; }
@@ -3351,6 +3357,8 @@ h3 {
 
 .invoice-actions {
   display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 7px;
 }
@@ -7912,6 +7920,34 @@ h3 {
   .user-row > .status-badge {
     display: none;
   }
+
+  /* The invoice grid's track minimums add up to ~941px plus gaps, so from this
+     breakpoint down the row no longer fits and nothing around it scrolls
+     horizontally — Pajak/Edit/Konfirmasi/Hapus simply left the screen. The row
+     stacks here rather than only below 760px, matching the breakpoint where the
+     shell already switches to the off-canvas sidebar. */
+  .invoice-row {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .invoice-primary {
+    min-width: 180px;
+    flex: 1;
+  }
+
+  .invoice-amount,
+  .invoice-due {
+    min-width: calc(50% - 6px);
+    flex: 1;
+  }
+
+  .invoice-actions {
+    width: 100%;
+  }
 }
 
 @media (max-width: 760px) {
@@ -8192,7 +8228,10 @@ h3 {
     width: 100%;
   }
 
+  /* 30px is below the ~40px touch guideline; these are the primary filters on
+     the dashboard and the schedule mode switch on the project page. */
   .segmented-control button {
+    min-height: 40px;
     flex: 1 0 auto;
   }
 
@@ -8336,6 +8375,19 @@ h3 {
     flex: 1;
   }
 
+  /* The trailing `.icon-button.danger` keeps its fixed 36px however far the
+     `.button` children shrink, so a single non-wrapping line still pushed
+     `Hapus` past a 390px viewport. Let the strip wrap and give the labelled
+     buttons a readable floor instead. */
+  .invoice-actions {
+    justify-content: flex-start;
+  }
+
+  .invoice-actions .button {
+    min-width: 104px;
+    flex: 1 1 auto;
+  }
+
   .project-hero {
     display: flex;
     align-items: flex-start;
@@ -8456,6 +8508,20 @@ h3 {
     max-height: 92vh;
     border-radius: 18px 18px 0 0;
     padding: 18px;
+  }
+
+  /* Tall forms (SPK, PO, tax rules, new user) run well past a phone-sized card,
+     so the primary action was never on screen when the sheet opened. Pin the
+     action row to the bottom of the scrolling card, the same treatment
+     `.catalog-editor-actions` already gives the catalog drawer. */
+  .modal-card .modal-actions {
+    position: sticky;
+    z-index: 2;
+    bottom: -18px;
+    margin: 3px -18px -18px;
+    border-top: 1px solid var(--line);
+    padding: 12px 18px calc(12px + env(safe-area-inset-bottom));
+    background: #fff;
   }
 
   .toast {
@@ -8757,7 +8823,10 @@ html.document-preview-open { overflow: hidden; }
 }
 
 @media (max-width: 760px) {
-  .catalog-ai-drawer { width: 100%; height: min(94dvh, 900px); border-radius: 20px 20px 0 0; }
+  /* The backdrop stretches its single track so the drawer can resolve a
+     percentage width; a sheet that is shorter than the screen still has to sit
+     on the bottom edge, so it aligns itself rather than the container. */
+  .catalog-ai-drawer { width: 100%; height: min(94dvh, 900px); align-self: end; border-radius: 20px 20px 0 0; }
   .catalog-ai-head { padding: 18px 16px; }
   .catalog-ai-input,
   .catalog-ai-result { padding: 16px; }
