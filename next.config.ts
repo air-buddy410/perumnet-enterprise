@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { measurementId } from "./app/analytics";
 
 const configuredBasePath = process.env.NEXT_PUBLIC_BASE_PATH?.trim() ?? "";
 const basePath =
@@ -34,6 +35,52 @@ const isDevelopment = process.env.NODE_ENV !== "production";
 // loads a script, opens an iframe, and posts the token back.
 const cloudflareTurnstile = "https://challenges.cloudflare.com";
 
+// Google Analytics 4, and only when it is actually switched on.
+//
+// The whole policy below is unchanged when NEXT_PUBLIC_GA_MEASUREMENT_ID is
+// unset — which is how the demo build and the current production build ship —
+// so no origin is opened up for a tag that is not there. `next build` bakes
+// custom headers into the routes manifest, so this is decided at build time,
+// the same moment Next inlines the NEXT_PUBLIC_* value into the bundle. The two
+// cannot drift.
+//
+// Each entry is what gtag.js actually reaches for, nothing wider:
+//
+//   script-src  www.googletagmanager.com   The gtag.js loader. next/script
+//                                          appends a <script src> for it after
+//                                          hydration and React emits a
+//                                          <link rel=preload as=script> for the
+//                                          same URL, and both are governed by
+//                                          script-src. The inline bootstrap
+//                                          needs nothing new — it is covered by
+//                                          the 'unsafe-inline' already here.
+//   connect-src *.google-analytics.com     The measurement endpoint. GA4 sends
+//                                          /g/collect to www. or to a regional
+//                                          host (region1., region5., …), so the
+//                                          host cannot be pinned exactly.
+//   connect-src *.analytics.google.com     Where gtag.js redirects collection
+//                                          for some regions and where it posts
+//                                          the server-side consent ping.
+//   connect-src *.googletagmanager.com     gtag.js fetches its own remote
+//                                          config (/gtag/destination) over
+//                                          fetch, not as a script tag.
+//   img-src     *.google-analytics.com     The fallback beacon. When fetch and
+//                                          sendBeacon are both unavailable —
+//                                          old in-app browsers, which on this
+//                                          site means WhatsApp's — GA4 falls
+//                                          back to a 1x1 GIF.
+//
+// Deliberately NOT added: googleads.g.doubleclick.net, google.com/ads and the
+// rest of the remarketing set. They are only reached when Google Signals is on,
+// and app/analytics.ts turns it off.
+const googleTagManager = "https://www.googletagmanager.com";
+const analyticsEnabled = measurementId() !== null;
+const analyticsScriptSources = analyticsEnabled ? ` ${googleTagManager}` : "";
+const analyticsConnectSources = analyticsEnabled
+  ? " https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com"
+  : "";
+const analyticsImageSources = analyticsEnabled ? " https://*.google-analytics.com" : "";
+
 const contentSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -42,11 +89,11 @@ const contentSecurityPolicy = [
   "form-action 'self'",
   // data: covers inline SVG icons and generated QR codes; blob: covers the
   // client-side object URLs used to hand a generated PDF or XLSX to the user.
-  "img-src 'self' data: blob:",
+  `img-src 'self' data: blob:${analyticsImageSources}`,
   "font-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
-  `script-src 'self' 'unsafe-inline'${isDevelopment ? " 'unsafe-eval'" : ""} ${cloudflareTurnstile}`,
-  `connect-src 'self' ${cloudflareTurnstile}${isDevelopment ? " ws: wss:" : ""}`,
+  `script-src 'self' 'unsafe-inline'${isDevelopment ? " 'unsafe-eval'" : ""} ${cloudflareTurnstile}${analyticsScriptSources}`,
+  `connect-src 'self' ${cloudflareTurnstile}${analyticsConnectSources}${isDevelopment ? " ws: wss:" : ""}`,
   `frame-src 'self' ${cloudflareTurnstile}`,
   "worker-src 'self' blob:",
   "manifest-src 'self'",
