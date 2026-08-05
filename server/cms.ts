@@ -117,6 +117,29 @@ function stringArray(value: unknown) {
   }
 }
 
+/**
+ * One row of cms_services in the shape the public site consumes. Shared by the
+ * list query in getCmsContent and the single-slug lookup behind
+ * /services/[slug] so a detail page can never disagree with the list.
+ */
+function mapService(row: Record<string, unknown>): CmsService {
+  return {
+    id: String(row.id),
+    slug: String(row.slug),
+    title: String(row.title),
+    titleEn: String(row.title_en ?? ""),
+    summary: String(row.summary),
+    summaryEn: String(row.summary_en ?? ""),
+    description: String(row.description),
+    descriptionEn: String(row.description_en ?? ""),
+    features: stringArray(row.features_json),
+    featuresEn: stringArray(row.features_json_en),
+    icon: String(row.icon),
+    sortOrder: numberValue(row.sort_order),
+    isPublished: booleanValue(row.is_published),
+  };
+}
+
 function portfolioImage(row: Record<string, unknown>) {
   if (row.image_storage_url) return `/api/cms/media/${String(row.id)}`;
   return String(row.image_url ?? "");
@@ -183,21 +206,7 @@ export async function getCmsContent(includeHidden = false): Promise<CmsContent> 
     settingsEn: Object.fromEntries(
       settingResult.rows.map((row) => [String(row.key_name), String(row.value_content_en ?? "")]),
     ),
-    services: serviceResult.rows.map((row) => ({
-      id: String(row.id),
-      slug: String(row.slug),
-      title: String(row.title),
-      titleEn: String(row.title_en ?? ""),
-      summary: String(row.summary),
-      summaryEn: String(row.summary_en ?? ""),
-      description: String(row.description),
-      descriptionEn: String(row.description_en ?? ""),
-      features: stringArray(row.features_json),
-      featuresEn: stringArray(row.features_json_en),
-      icon: String(row.icon),
-      sortOrder: numberValue(row.sort_order),
-      isPublished: booleanValue(row.is_published),
-    })),
+    services: serviceResult.rows.map(mapService),
     portfolios: portfolioResult.rows.map((row) => ({
       id: String(row.id),
       title: String(row.title),
@@ -253,6 +262,22 @@ export async function getCmsContent(includeHidden = false): Promise<CmsContent> 
       isVisible: booleanValue(row.is_visible),
     })),
   };
+}
+
+/**
+ * The single service behind /services/[slug]. Unpublished rows are filtered in
+ * SQL exactly like getCmsPageBySlug, so unpublishing a service in the panel
+ * turns its detail page into a 404 rather than leaving it quietly reachable.
+ */
+export async function getCmsServiceBySlug(slug: string) {
+  const { client } = await getDatabase();
+  const result = await client.execute({
+    sql: "SELECT * FROM cms_services WHERE slug=? AND is_published=1 LIMIT 1",
+    args: [slug],
+  });
+  const row = result.rows[0];
+  if (!row) return null;
+  return mapService(row);
 }
 
 export async function getCmsPageBySlug(slug: string) {
