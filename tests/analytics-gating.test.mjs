@@ -262,13 +262,33 @@ test(
         }
       }
 
-      // No host was opened up for a tag that is not there: the policy is the
-      // one that shipped before analytics existed.
+      // No host was opened up for a tag that is not there. Checked against the
+      // analytics origins by name rather than by searching for "google": the
+      // policy legitimately carries Google Fonts, which is a different service
+      // and is asserted as present just below.
       const { csp } = await page(baseUrl, "/");
-      assert.ok(!csp.includes("google"), `CSP was widened for absent analytics: ${csp}`);
+      for (const host of [
+        "googletagmanager.com",
+        "google-analytics.com",
+        "analytics.google.com",
+      ]) {
+        assert.ok(!csp.includes(host), `CSP was widened for absent analytics: ${csp}`);
+      }
       assert.ok(directive(csp, "script-src").includes("https://challenges.cloudflare.com"), csp);
       assert.ok(directive(csp, "connect-src").includes("https://challenges.cloudflare.com"), csp);
       assert.equal(directive(csp, "img-src"), "img-src 'self' data: blob:");
+
+      // The brand typefaces need both origins — the stylesheet and the font
+      // files it references. Allowing only one renders the site in Arial, which
+      // is what production did until this was fixed, silently.
+      assert.ok(
+        directive(csp, "style-src").includes("https://fonts.googleapis.com"),
+        `the Google Fonts stylesheet is blocked again: ${csp}`,
+      );
+      assert.ok(
+        directive(csp, "font-src").includes("https://fonts.gstatic.com"),
+        `the Google Fonts files are blocked again: ${csp}`,
+      );
     });
   },
 );

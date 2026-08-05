@@ -35,6 +35,31 @@ const isDevelopment = process.env.NODE_ENV !== "production";
 // loads a script, opens an iframe, and posts the token back.
 const cloudflareTurnstile = "https://challenges.cloudflare.com";
 
+// Google Fonts carries the two typefaces the site is actually designed in, DM
+// Sans and Plus Jakarta Sans. The stylesheet comes from fonts.googleapis.com and
+// the font files it then references from fonts.gstatic.com, so both need a home:
+// allowing only the stylesheet gets the @font-face rules and none of the fonts.
+//
+// Omitting them was a real regression rather than a theoretical one. The policy
+// blocked the stylesheet, `document.fonts.size` was 0 on production, and every
+// visitor read the site in Arial. Nothing errored loudly — it simply was not the
+// design. Self-hosting through next/font would remove these two origins
+// altogether and is the better end state; this restores the intended rendering
+// without touching how the fonts are declared.
+const googleFontsStylesheet = "https://fonts.googleapis.com";
+const googleFontsFiles = "https://fonts.gstatic.com";
+
+// Cloudflare Web Analytics. Cloudflare injects this beacon into the HTML on its
+// way through the proxy, so it arrives whether or not the application asks for
+// it — blocking it did not stop the injection, it only stopped the owner's own
+// Cloudflare dashboard from receiving anything. The script loads from
+// static.cloudflareinsights.com and reports to cloudflareinsights.com; both are
+// needed, since a script that cannot report is the same as no script at all.
+// Turning the feature off in the Cloudflare dashboard is the alternative if the
+// owner would rather carry one less third-party script than have the data.
+const cloudflareInsightsScript = "https://static.cloudflareinsights.com";
+const cloudflareInsightsBeacon = "https://cloudflareinsights.com";
+
 // Google Analytics 4, and only when it is actually switched on.
 //
 // The whole policy below is unchanged when NEXT_PUBLIC_GA_MEASUREMENT_ID is
@@ -90,10 +115,10 @@ const contentSecurityPolicy = [
   // data: covers inline SVG icons and generated QR codes; blob: covers the
   // client-side object URLs used to hand a generated PDF or XLSX to the user.
   `img-src 'self' data: blob:${analyticsImageSources}`,
-  "font-src 'self' data:",
-  "style-src 'self' 'unsafe-inline'",
-  `script-src 'self' 'unsafe-inline'${isDevelopment ? " 'unsafe-eval'" : ""} ${cloudflareTurnstile}${analyticsScriptSources}`,
-  `connect-src 'self' ${cloudflareTurnstile}${analyticsConnectSources}${isDevelopment ? " ws: wss:" : ""}`,
+  `font-src 'self' data: ${googleFontsFiles}`,
+  `style-src 'self' 'unsafe-inline' ${googleFontsStylesheet}`,
+  `script-src 'self' 'unsafe-inline'${isDevelopment ? " 'unsafe-eval'" : ""} ${cloudflareTurnstile} ${cloudflareInsightsScript}${analyticsScriptSources}`,
+  `connect-src 'self' ${cloudflareTurnstile} ${cloudflareInsightsBeacon}${analyticsConnectSources}${isDevelopment ? " ws: wss:" : ""}`,
   `frame-src 'self' ${cloudflareTurnstile}`,
   "worker-src 'self' blob:",
   "manifest-src 'self'",
