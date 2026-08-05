@@ -14,6 +14,9 @@
 //   * the Service JSON-LD parses and names the Organization by @id instead of
 //     restating the company, and the BreadcrumbList matches the visible trail;
 //   * the sitemap carries all ten URLs and every URL in it still answers 200;
+//   * every <lastmod> in the sitemap is the moment its page's content changed —
+//     stable between two fetches, and moved by editing that page's own row
+//     rather than by the clock;
 //   * features_json is rendered, and a malformed value cannot take the page
 //     down.
 //
@@ -445,6 +448,115 @@ test("every URL the sitemap advertises answers 200", { timeout: 240_000 }, async
     const response = await page(url.slice(ORIGIN.length) || "/");
     assert.equal(response.status, 200, `${url} answered ${response.status}`);
   }
+});
+
+/**
+ * loc -> lastmod for every <url> block, paired inside the block so a missing
+ * <lastmod> shows up as null instead of silently borrowing its neighbour's.
+ */
+function sitemapLastmods(xml) {
+  return new Map(
+    [...xml.matchAll(/<url>([\s\S]*?)<\/url>/g)].map((match) => [
+      match[1].match(/<loc>([^<]*)<\/loc>/)?.[1] ?? null,
+      match[1].match(/<lastmod>([^<]*)<\/lastmod>/)?.[1] ?? null,
+    ]),
+  );
+}
+
+/**
+ * <lastmod> has to be the moment the page's content changed. It was
+ * `new Date()` applied to every entry, so it was the moment of the *request*:
+ * two fetches seconds apart disagreed, all 26 URLs always agreed with each
+ * other, and editing one service description told Google nothing about which
+ * page to recrawl. Google drops a lastmod it can show to be unreliable, so the
+ * field was worthless — and it is the field the owner needs most, having just
+ * submitted this sitemap to Search Console.
+ *
+ * Both halves of that fail on the commit before the fix: the stability check
+ * because the timestamp is minted per request, and the per-page checks because
+ * every URL carries the same value no matter what the database says.
+ */
+test("the sitemap dates every URL from its own content, not from the clock", { timeout: 180_000 }, async () => {
+  const lastmods = async () => sitemapLastmods((await page("/sitemap.xml")).html);
+  const original = String(
+    (await database.execute("SELECT updated_at FROM cms_services WHERE slug='cctv'")).rows[0]
+      .updated_at,
+  );
+  const cctv = [`${ORIGIN}/services/cctv`, `${ORIGIN}/en/services/cctv`];
+  const services = [`${ORIGIN}/services`, `${ORIGIN}/en/services`];
+  const home = [`${ORIGIN}/`, `${ORIGIN}/en`];
+
+  const baseline = await lastmods();
+  assert.equal(baseline.size, 26, `sitemap has ${baseline.size} URLs`);
+  for (const [url, lastmod] of baseline) {
+    assert.ok(lastmod, `${url} has no <lastmod>`);
+    // "Invalid Date" is what an unparseable updated_at serialises to, and it is
+    // worse than no lastmod at all.
+    assert.ok(!Number.isNaN(Date.parse(lastmod)), `${url} lastmod is "${lastmod}"`);
+  }
+
+  // 1. Nothing in the sitemap may depend on when it was fetched.
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  assert.deepEqual(
+    [...(await lastmods())],
+    [...baseline],
+    "a second fetch returned different lastmod values with no CMS edit in between",
+  );
+
+  try {
+    // 2. Backdating one service moves that service's two URLs and nothing
+    //    else. A value older than every other row keeps the /services and /
+    //    maxima where they are, which isolates the per-URL granularity.
+    const backdated = "2019-07-04T05:06:07.000Z";
+    await database.execute({
+      sql: "UPDATE cms_services SET updated_at=? WHERE slug='cctv'",
+      args: [backdated],
+    });
+    const moved = await lastmods();
+    for (const url of cctv) {
+      assert.equal(Date.parse(moved.get(url)), Date.parse(backdated), `${url} kept the old lastmod`);
+    }
+    for (const [url, lastmod] of baseline) {
+      if (cctv.includes(url)) continue;
+      assert.equal(moved.get(url), lastmod, `${url} moved because a different page was edited`);
+    }
+
+    // 3. A real panel edit stamps the row with "now", and then the pages that
+    //    render that row — its own, the list that reprints its description,
+    //    and the home page whose cards come from the same table — all move,
+    //    while the pages that render other tables stay put.
+    const newest = Math.max(...[...baseline.values()].map((value) => Date.parse(value)));
+    const edited = new Date(newest + 3_600_000).toISOString();
+    await database.execute({
+      sql: "UPDATE cms_services SET updated_at=? WHERE slug='cctv'",
+      args: [edited],
+    });
+    const bumped = await lastmods();
+    for (const url of [...cctv, ...services, ...home]) {
+      assert.equal(Date.parse(bumped.get(url)), Date.parse(edited), `${url} did not follow the edit`);
+    }
+    for (const url of [
+      `${ORIGIN}/portfolio`,
+      `${ORIGIN}/en/portfolio`,
+      `${ORIGIN}/testimonials`,
+      `${ORIGIN}/en/testimonials`,
+      `${ORIGIN}/contact`,
+      `${ORIGIN}/en/contact`,
+      ...SLUGS.filter((slug) => slug !== "cctv").flatMap((slug) => [
+        `${ORIGIN}/services/${slug}`,
+        `${ORIGIN}/en/services/${slug}`,
+      ]),
+    ]) {
+      assert.equal(bumped.get(url), baseline.get(url), `${url} moved for an edit it does not render`);
+    }
+  } finally {
+    await database.execute({
+      sql: "UPDATE cms_services SET updated_at=? WHERE slug='cctv'",
+      args: [original],
+    });
+  }
+
+  assert.deepEqual([...(await lastmods())], [...baseline], "restoring updated_at did not restore the sitemap");
 });
 
 // ---------------------------------------------------------------------------
