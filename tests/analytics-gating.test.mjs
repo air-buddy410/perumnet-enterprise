@@ -263,10 +263,10 @@ test(
       }
 
       // No host was opened up for a tag that is not there. Checked against the
-      // analytics origins by name rather than by searching for "google": the
-      // policy legitimately carries Google Fonts, which is a different service
-      // and is asserted as present just below.
-      const { csp } = await page(baseUrl, "/");
+      // analytics origins by name rather than by searching for "google", so
+      // that this keeps testing the analytics gate specifically and does not
+      // quietly start passing or failing on some unrelated Google origin.
+      const { csp, html } = await page(baseUrl, "/");
       for (const host of [
         "googletagmanager.com",
         "google-analytics.com",
@@ -278,17 +278,59 @@ test(
       assert.ok(directive(csp, "connect-src").includes("https://challenges.cloudflare.com"), csp);
       assert.equal(directive(csp, "img-src"), "img-src 'self' data: blob:");
 
-      // The brand typefaces need both origins — the stylesheet and the font
-      // files it references. Allowing only one renders the site in Arial, which
-      // is what production did until this was fixed, silently.
-      assert.ok(
-        directive(csp, "style-src").includes("https://fonts.googleapis.com"),
-        `the Google Fonts stylesheet is blocked again: ${csp}`,
-      );
-      assert.ok(
-        directive(csp, "font-src").includes("https://fonts.gstatic.com"),
-        `the Google Fonts files are blocked again: ${csp}`,
-      );
+      // The brand typefaces are committed to the repo and served by next/font
+      // from this origin, so neither Google Fonts host belongs in the policy
+      // any more. These two directives are asserted whole: a later change that
+      // re-adds an origin here has to come past this line.
+      assert.equal(directive(csp, "style-src"), "style-src 'self' 'unsafe-inline'");
+      assert.equal(directive(csp, "font-src"), "font-src 'self' data:");
+
+      // …and the page does not reach for them either, so the tightened policy
+      // is not quietly breaking the design the way it did before this landed.
+      for (const host of ["fonts.googleapis.com", "fonts.gstatic.com"]) {
+        assert.ok(!html.includes(host), `the home page still reaches for ${host}`);
+      }
+
+      // Follow the real chain the browser follows: the document's stylesheets,
+      // the @font-face rules inside them, and then the font files those point
+      // at. Checking the HTML alone would pass just as happily if the fonts
+      // had stopped loading altogether.
+      const stylesheets = [...html.matchAll(/href="(\/[^"]*\.css[^"]*)"/g)].map((match) => match[1]);
+      assert.ok(stylesheets.length > 0, "the home page links no stylesheet");
+
+      const fontFiles = new Set();
+      let css = "";
+      for (const href of stylesheets) {
+        const sheetUrl = new URL(href, baseUrl);
+        const response = await fetch(sheetUrl);
+        assert.equal(response.status, 200, `${href} returned ${response.status}`);
+        const text = await response.text();
+        css += text;
+        for (const [, reference] of text.matchAll(/url\(["']?([^"')]+\.woff2?)["']?\)/g)) {
+          fontFiles.add(new URL(reference, sheetUrl).href);
+        }
+      }
+
+      // Named faces, not next/font's hashed handles: every font-family rule in
+      // globals.css and the CSS modules asks for these two names literally.
+      for (const family of ["DM Sans", "Plus Jakarta Sans"]) {
+        assert.match(
+          css,
+          new RegExp(`@font-face\\s*{[^}]*font-family:\\s*["']?${family}["']?\\s*[;}]`),
+          `no @font-face declares the family "${family}"`,
+        );
+      }
+      assert.ok(css.includes("font-display: swap"), "the faces are not declared font-display: swap");
+
+      assert.ok(fontFiles.size >= 2, `expected both families' files, saw ${[...fontFiles]}`);
+      for (const file of fontFiles) {
+        assert.ok(file.startsWith(baseUrl), `a font is loaded off-origin: ${file}`);
+        const response = await fetch(file);
+        assert.equal(response.status, 200, `${file} returned ${response.status}`);
+        const bytes = await response.arrayBuffer();
+        // wOF2 — proves the committed file is what actually gets served.
+        assert.equal(Buffer.from(bytes.slice(0, 4)).toString("latin1"), "wOF2", `${file} is not woff2`);
+      }
     });
   },
 );
