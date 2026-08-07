@@ -99,6 +99,15 @@ export function messageOf(error: unknown, language: "id" | "en" = "id") {
       VALIDATION_ERROR: "The submitted data is not valid. Check the highlighted fields and try again.",
       BRAND_REQUIRED: "Select a brand for Device or Material items.",
       BRAND_CATEGORY_MISMATCH: "The brand does not belong to the selected active category.",
+      CATEGORY_NOT_FOUND: "That catalog category was not found. Refresh the catalog and pick one again.",
+      CATEGORY_IN_USE:
+        "This category already has items, so it cannot be deleted. Deactivate it instead so the history stays intact.",
+      BRAND_IN_USE:
+        "This brand is already used by catalog items, so it cannot be deleted. Deactivate it instead so the history stays intact.",
+      ITEM_IN_USE:
+        "This item is already used in a BoQ, so it cannot be deleted. Deactivate it instead so the history stays intact.",
+      RELATED_DATA_CONFLICT:
+        "Related data changed while this was being saved, so the change could not be applied. Reload the page and try again.",
       EXPENSE_BANK_ACCOUNT_REQUIRED:
         "Select an active company account for a purchase paid by bank transfer.",
       ADVANCE_UNAVAILABLE:

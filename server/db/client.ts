@@ -14,7 +14,14 @@ export interface DatabaseStatement {
   args?: unknown[];
 }
 
+// Handlers that need row-level locking have to know which engine they are
+// talking to: `SELECT ... FOR UPDATE` is the only way to serialize a
+// check-then-delete against PostgreSQL, and it is a syntax error on SQLite,
+// where a write transaction already holds the single writer lock.
+export type DatabaseDialect = "postgres" | "sqlite";
+
 export interface DatabaseClient {
+  readonly dialect: DatabaseDialect;
   execute(statement: string | DatabaseStatement): Promise<QueryResult>;
   batch(statements: DatabaseStatement[], mode?: "read" | "write" | "deferred"): Promise<unknown>;
   transaction<T>(callback: (client: DatabaseClient) => Promise<T>): Promise<T>;
@@ -32,6 +39,7 @@ declare global {
 
 function libSqlAdapter(client: Client): DatabaseClient {
   return {
+    dialect: "sqlite",
     async execute(input) {
       const statement =
         typeof input === "string"
@@ -49,6 +57,7 @@ function libSqlAdapter(client: Client): DatabaseClient {
     async transaction(callback) {
       const transaction = await client.transaction("write");
       const transactionClient: DatabaseClient = {
+        dialect: "sqlite",
         async execute(input) {
           const statement =
             typeof input === "string"
@@ -96,6 +105,7 @@ function libSqlAdapter(client: Client): DatabaseClient {
 
 function d1Adapter(database: D1DatabaseLike): DatabaseClient {
   const adapter: DatabaseClient = {
+    dialect: "sqlite",
     async execute(input) {
       const statement = typeof input === "string" ? { sql: input, args: [] } : input;
       const result = await database
@@ -138,6 +148,7 @@ function postgresQuery(sql: string) {
 
 function postgresAdapter(pool: Pool): DatabaseClient {
   return {
+    dialect: "postgres",
     async execute(input) {
       const statement = typeof input === "string" ? { sql: input, args: [] } : input;
       const result = await pool.query(postgresQuery(statement.sql), statement.args ?? []);
@@ -161,6 +172,7 @@ function postgresAdapter(pool: Pool): DatabaseClient {
     async transaction(callback) {
       const connection = await pool.connect();
       const transactionClient: DatabaseClient = {
+        dialect: "postgres",
         async execute(input) {
           const statement = typeof input === "string" ? { sql: input, args: [] } : input;
           const result = await connection.query(

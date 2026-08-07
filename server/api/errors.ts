@@ -18,15 +18,44 @@ export function partialPatchSchema<S extends z.ZodObject<z.ZodRawShape>>(schema:
   return z.object(shape) as unknown as ReturnType<S["partial"]>;
 }
 
+// Plain field assignments rather than constructor parameter properties: Node
+// strips types without transforming them, so parameter properties would make
+// this module unimportable from the .mjs tests.
 export class ApiError extends Error {
-  constructor(
-    public status: number,
-    public code: string,
-    message: string,
-    public details?: unknown,
-  ) {
+  status: number;
+  code: string;
+  details?: unknown;
+
+  constructor(status: number, code: string, message: string, details?: unknown) {
     super(message);
+    this.status = status;
+    this.code = code;
+    this.details = details;
   }
+}
+
+// Several catalog and document tables are wired with ON DELETE RESTRICT, so the
+// database is the last line of defence behind every handler's own guard. Those
+// guards read and write in separate statements, and under concurrency a row can
+// still appear or vanish in between — the driver then raises a constraint error
+// that used to escape as a raw 500 on a button the user just pressed.
+//
+// PostgreSQL reports 23503 when the referenced row is missing and 23001 when it
+// is still referenced; SQLite collapses both into one code, so the answer covers
+// either direction: something related moved underneath this request.
+const FOREIGN_KEY_ERROR_CODES = new Set([
+  "23503", // PostgreSQL foreign_key_violation
+  "23001", // PostgreSQL restrict_violation
+  "SQLITE_CONSTRAINT_FOREIGNKEY",
+  "SQLITE_CONSTRAINT_TRIGGER",
+]);
+
+export function isForeignKeyViolation(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && FOREIGN_KEY_ERROR_CODES.has(code)) return true;
+  const message = (error as { message?: unknown }).message;
+  return typeof message === "string" && /FOREIGN KEY constraint failed/i.test(message);
 }
 
 export function ok(data: unknown, status = 200, headers?: HeadersInit) {
@@ -65,6 +94,22 @@ export function errorResponse(error: unknown) {
         },
       },
       { status: 422 },
+    );
+  }
+
+  if (isForeignKeyViolation(error)) {
+    // Still worth logging: reaching here means a handler guard lost a race, or
+    // a route is missing one entirely.
+    console.error("Pelanggaran foreign key mencapai lapisan respons:", error);
+    return Response.json(
+      {
+        error: {
+          code: "RELATED_DATA_CONFLICT",
+          message:
+            "Data terkait baru saja berubah, jadi perubahan ini tidak dapat disimpan. Muat ulang halaman lalu coba lagi.",
+        },
+      },
+      { status: 409 },
     );
   }
 
