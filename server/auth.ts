@@ -95,6 +95,15 @@ function serializeCookie(name: string, value: string, maxAge: number) {
   return `${name}=${encodeURIComponent(value)}; Path=${cookiePath}; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
 }
 
+// A bcrypt digest at the same cost factor the application uses for real
+// passwords (12). When no account matches, we still run a full comparison
+// against this value so both paths cost the same. Without it the request that
+// finds no row returned in a few milliseconds while a real account spent the
+// ~200ms bcrypt needs, and that gap alone told an attacker which addresses are
+// registered. Nothing hashes to it; it is not a usable password.
+const ABSENT_ACCOUNT_PASSWORD_HASH =
+  "$2b$12$hrZ1mh6YKsTSNlHAQsAzy.gvJYs4rUXP2sAoADK/jNt00Im9gQXWq";
+
 export async function verifyCredentials(email: string, password: string) {
   const { client } = await getDatabase();
   const result = await client.execute({
@@ -111,7 +120,13 @@ export async function verifyCredentials(email: string, password: string) {
   });
   const row = result.rows[0];
 
-  if (!row || !(await compare(password, String(row.password_hash)))) {
+  // Always hash, even when there is no account, so the two paths are
+  // indistinguishable by timing.
+  const passwordMatches = await compare(
+    password,
+    row ? String(row.password_hash) : ABSENT_ACCOUNT_PASSWORD_HASH,
+  );
+  if (!row || !passwordMatches) {
     throw new ApiError(401, "INVALID_CREDENTIALS", "Email atau kata sandi tidak sesuai.");
   }
   if (row.status !== "Aktif") {
@@ -158,6 +173,36 @@ export async function revokeSession(request: Request) {
   await client.execute({
     sql: "DELETE FROM sessions WHERE token_hash = ?",
     args: [sha256(token)],
+  });
+}
+
+/**
+ * Ends every session belonging to `userId` except the one that made this
+ * request. Changing your own password has to evict whoever else is holding a
+ * stolen cookie; logging yourself out at the same moment would only teach
+ * people to avoid rotating their password.
+ */
+export async function revokeOtherSessions(
+  client: DatabaseClient,
+  request: Request,
+  userId: string,
+) {
+  const token = parseCookies(request.headers.get("cookie")).get(SESSION_COOKIE);
+  if (!token) {
+    await revokeAllSessions(client, userId);
+    return;
+  }
+  await client.execute({
+    sql: "DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?",
+    args: [userId, sha256(token)],
+  });
+}
+
+/** Ends every session belonging to `userId`, including the caller's own. */
+export async function revokeAllSessions(client: DatabaseClient, userId: string) {
+  await client.execute({
+    sql: "DELETE FROM sessions WHERE user_id = ?",
+    args: [userId],
   });
 }
 
@@ -236,4 +281,57 @@ export async function createPasswordResetToken(client: DatabaseClient, userId: s
 
 export function hashResetToken(token: string) {
   return sha256(token);
+}
+
+export function emailChangeTokenMinutes() {
+  const configured = Number(process.env.EMAIL_CHANGE_TOKEN_MINUTES);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : 60;
+}
+
+/**
+ * Stores a pending email change and returns the raw confirmation token. The
+ * account keeps its current address until the token comes back, so a stolen
+ * session cannot move the recovery address out from under the real owner.
+ * Requesting a new change supersedes any earlier pending one.
+ */
+export async function createEmailChangeToken(
+  client: DatabaseClient,
+  input: {
+    userId: string;
+    currentEmail: string;
+    newEmail: string;
+    requestedBy: string;
+  },
+) {
+  const rawToken = randomBytes(32).toString("base64url");
+  const now = new Date();
+  await client.batch(
+    [
+      {
+        sql: "DELETE FROM email_change_requests WHERE user_id = ? OR expires_at <= ?",
+        args: [input.userId, now.toISOString()],
+      },
+      {
+        sql: `INSERT INTO email_change_requests
+          (id,user_id,current_email,new_email,token_hash,requested_by,expires_at,created_at)
+          VALUES (?,?,?,?,?,?,?,?)`,
+        args: [
+          randomUUID(),
+          input.userId,
+          input.currentEmail,
+          input.newEmail,
+          sha256(rawToken),
+          input.requestedBy,
+          new Date(
+            now.getTime() + emailChangeTokenMinutes() * 60 * 1000,
+          ).toISOString(),
+          now.toISOString(),
+        ],
+      },
+    ],
+    "write",
+  );
+  return rawToken;
 }

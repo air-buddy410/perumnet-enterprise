@@ -83,6 +83,46 @@ async function categoryAndBrand(
   return { category, brand };
 }
 
+// Both item_catalog_brands.category_id and item_catalog_items.category_id are
+// ON DELETE RESTRICT, so checking for items and then deleting in a separate
+// statement leaves a window: a brand or an item committed in between turns the
+// DELETE into a raw RESTRICT violation instead of the friendly 409 this route
+// promises. Holding the category row for the whole check-and-delete closes it —
+// on PostgreSQL through FOR UPDATE, which conflicts with the FOR KEY SHARE lock
+// a child insert takes, and on SQLite through the write transaction itself.
+async function deleteCatalogCategory(client: DatabaseClient, categoryId: string) {
+  await client.transaction(async (tx) => {
+    const locked = await tx.execute({
+      sql: `SELECT id FROM item_catalog_categories WHERE id=?${
+        tx.dialect === "postgres" ? " FOR UPDATE" : ""
+      }`,
+      args: [categoryId],
+    });
+    if (!locked.rows.length) {
+      throw new ApiError(404, "NOT_FOUND", "Kategori tidak ditemukan.");
+    }
+    const usage = await tx.execute({
+      sql: "SELECT id FROM item_catalog_items WHERE category_id=? LIMIT 1",
+      args: [categoryId],
+    });
+    if (usage.rows.length) {
+      throw new ApiError(
+        409,
+        "CATEGORY_IN_USE",
+        "Kategori sudah memiliki item. Nonaktifkan kategori agar histori tetap aman.",
+      );
+    }
+    await tx.execute({
+      sql: "DELETE FROM item_catalog_brands WHERE category_id=?",
+      args: [categoryId],
+    });
+    await tx.execute({
+      sql: "DELETE FROM item_catalog_categories WHERE id=?",
+      args: [categoryId],
+    });
+  });
+}
+
 function mapCategory(row: Record<string, unknown>) {
   return {
     id: String(row.id),
@@ -500,12 +540,7 @@ export async function handleCatalog(request: Request, path: string[], user: Auth
     return ok({ id });
   }
   if (child === "categories" && id && request.method === "DELETE") {
-    const usage = await client.execute({ sql: "SELECT id FROM item_catalog_items WHERE category_id=? LIMIT 1", args: [id] });
-    if (usage.rows.length) throw new ApiError(409, "CATEGORY_IN_USE", "Kategori sudah memiliki item. Nonaktifkan kategori agar histori tetap aman.");
-    await client.batch([
-      { sql: "DELETE FROM item_catalog_brands WHERE category_id=?", args: [id] },
-      { sql: "DELETE FROM item_catalog_categories WHERE id=?", args: [id] },
-    ], "write");
+    await deleteCatalogCategory(client, id);
     await writeAuditLog(client, request, user, "delete", "item_catalog_category", id);
     return noContent();
   }
@@ -526,8 +561,20 @@ export async function handleCatalog(request: Request, path: string[], user: Auth
     const current = (await client.execute({ sql: "SELECT * FROM item_catalog_brands WHERE id=?", args: [id] })).rows[0];
     if (!current) throw new ApiError(404, "NOT_FOUND", "Merek tidak ditemukan.");
     const input = partialPatchSchema(brandSchema).parse(await jsonBody(request));
+    const nextCategoryId = String(input.categoryId ?? current.category_id);
+    // Nothing else validated this id, so an unknown category reached the
+    // RESTRICT constraint and came back as a raw 500 on a plain edit.
+    if (nextCategoryId !== String(current.category_id)) {
+      const target = await client.execute({
+        sql: "SELECT id FROM item_catalog_categories WHERE id=? LIMIT 1",
+        args: [nextCategoryId],
+      });
+      if (!target.rows.length) {
+        throw new ApiError(404, "CATEGORY_NOT_FOUND", "Kategori katalog tidak ditemukan.");
+      }
+    }
     await client.execute({ sql: "UPDATE item_catalog_brands SET category_id=?,name=?,status=?,sort_order=?,updated_at=? WHERE id=?",
-      args: [input.categoryId ?? current.category_id,input.name ?? current.name,input.status ?? current.status,input.sortOrder ?? current.sort_order,new Date().toISOString(),id] });
+      args: [nextCategoryId,input.name ?? current.name,input.status ?? current.status,input.sortOrder ?? current.sort_order,new Date().toISOString(),id] });
     await writeAuditLog(client, request, user, "update", "item_catalog_brand", id, input); return ok({ id });
   }
   if (child === "brands" && id && request.method === "DELETE") {

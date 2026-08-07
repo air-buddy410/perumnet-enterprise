@@ -2504,7 +2504,13 @@ h3 {
 .catalog-inactive { opacity: .64; }
 .catalog-empty { padding: 30px 16px; color: var(--muted); font-size: 11px; text-align: center; }
 
-.catalog-modal-backdrop { align-items: stretch; justify-content: flex-end; padding: 0; }
+/* `.modal-backdrop` is a grid whose single implicit column stretches to the
+   backdrop width by default, which is what lets `.modal-card` resolve
+   `width: min(100%, …)`. Overriding `justify-content` alone would collapse that
+   track to max-content and make the drawer's percentage width circular (it
+   resolved to a 225–312px strip on a 390px screen), so the track is declared
+   explicitly and the drawer is pushed to the trailing edge with justify-items. */
+.modal-backdrop.catalog-modal-backdrop { grid-template-columns: minmax(0, 1fr); align-items: stretch; justify-items: end; padding: 0; }
 .catalog-editor { display: flex; width: min(520px, 100%); height: 100%; flex-direction: column; overflow: hidden; background: #fff; box-shadow: -20px 0 60px rgba(24,49,56,.18); animation: catalog-slide-in 180ms ease-out; }
 .catalog-editor > .panel-head { flex: 0 0 auto; min-height: 82px; border-bottom: 1px solid var(--line); }
 .catalog-editor-body { display: grid; align-content: start; gap: 14px; overflow-y: auto; padding: 20px; }
@@ -3351,6 +3357,8 @@ h3 {
 
 .invoice-actions {
   display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 7px;
 }
@@ -3419,6 +3427,14 @@ h3 {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.6;
+}
+
+/* A hint that has become a refusal-in-waiting: the same note, in the amber
+   this app already uses for something the reader has to act on. */
+.form-hint.attention {
+  border-left-color: #e8b23a;
+  background: #fff9df;
+  color: #775317;
 }
 
 /* Project details */
@@ -4259,6 +4275,47 @@ h3 {
   font-size: 9px;
 }
 
+/* Payment terms carry a real Pending/Partial/Paid status now, so they list
+   alongside the payment history with the same three-column rhythm. */
+.order-term-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.order-term-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.order-term-list > div > span:first-child,
+.order-term-list small {
+  display: block;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.order-term-list > div > span:first-child {
+  color: var(--navy);
+  font-weight: 700;
+}
+
+.order-term-list strong {
+  color: var(--navy);
+  font-size: 9px;
+}
+
+.order-term-list .status-badge {
+  min-height: 18px;
+  padding: 3px 7px;
+  font-size: 8px;
+}
+
 .category-picker {
   display: flex;
   flex-wrap: wrap;
@@ -4861,6 +4918,22 @@ h3 {
   line-height: 1.5;
 }
 
+/* Money the books deliberately leave out has to read as something to act on,
+   not as reassurance, so the same note carries the amber of a pending item. */
+.security-note.attention {
+  border-color: #f1d88c;
+  background: #fff9df;
+  color: #775317;
+}
+
+.security-note.attention strong {
+  color: #6a4a14;
+}
+
+.security-note.attention span {
+  color: #7d5f22;
+}
+
 /* Finance */
 .finance-kpi-grid {
   display: grid;
@@ -5437,6 +5510,18 @@ h3 {
 
 .transaction-table {
   min-width: 830px;
+}
+
+/* The exclusion badge spells out why the row is not cash, so it wraps inside a
+   bounded width instead of stretching the table for everyone else. */
+.transaction-name .status-badge {
+  min-height: 0;
+  max-width: 220px;
+  padding: 3px 8px;
+  font-size: 8px;
+  line-height: 1.35;
+  text-align: left;
+  white-space: normal;
 }
 
 .transaction-icon.income {
@@ -6514,7 +6599,32 @@ h3 {
 .expense-advance-list strong { color: var(--navy); font-size: 12px; }
 .expense-category-list small,
 .expense-advance-list small { color: var(--muted); font-size: 9px; }
-.expense-advance-list > div > span:last-child { text-align: right; }
+.expense-advance-list > div { flex-wrap: wrap; }
+.expense-advance-list > div > span:nth-child(2) { margin-left: auto; text-align: right; }
+/* The row's own `span { display: grid }` would flatten the badge, which is an
+   inline pill everywhere else in the app. */
+.expense-advance-list .status-badge {
+  display: inline-flex;
+  min-height: 20px;
+  padding: 3px 8px;
+  font-size: 9px;
+}
+/* A voided advance still has to read as a record, not as a live balance. */
+.expense-advance-list > div.voided { border-style: dashed; background: var(--surface-soft); }
+.expense-advance-list > div.voided > span:nth-child(2) strong { color: var(--muted); text-decoration: line-through; }
+
+.expense-advance-void-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--surface-soft);
+}
+.expense-advance-void-summary > div { display: grid; gap: 3px; min-width: 0; }
+.expense-advance-void-summary span { color: var(--muted); font-size: 9px; }
+.expense-advance-void-summary strong { color: var(--navy); font-size: 12px; }
 
 .tax-mode-row {
   display: flex;
@@ -6744,6 +6854,10 @@ h3 {
 .profile-form-card,
 .settings-card {
   padding: 22px;
+}
+
+.profile-email-pending {
+  margin-bottom: 18px;
 }
 
 .profile-summary-card {
@@ -7912,6 +8026,34 @@ h3 {
   .user-row > .status-badge {
     display: none;
   }
+
+  /* The invoice grid's track minimums add up to ~941px plus gaps, so from this
+     breakpoint down the row no longer fits and nothing around it scrolls
+     horizontally — Pajak/Edit/Konfirmasi/Hapus simply left the screen. The row
+     stacks here rather than only below 760px, matching the breakpoint where the
+     shell already switches to the off-canvas sidebar. */
+  .invoice-row {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .invoice-primary {
+    min-width: 180px;
+    flex: 1;
+  }
+
+  .invoice-amount,
+  .invoice-due {
+    min-width: calc(50% - 6px);
+    flex: 1;
+  }
+
+  .invoice-actions {
+    width: 100%;
+  }
 }
 
 @media (max-width: 760px) {
@@ -8192,7 +8334,10 @@ h3 {
     width: 100%;
   }
 
+  /* 30px is below the ~40px touch guideline; these are the primary filters on
+     the dashboard and the schedule mode switch on the project page. */
   .segmented-control button {
+    min-height: 40px;
     flex: 1 0 auto;
   }
 
@@ -8336,6 +8481,19 @@ h3 {
     flex: 1;
   }
 
+  /* The trailing `.icon-button.danger` keeps its fixed 36px however far the
+     `.button` children shrink, so a single non-wrapping line still pushed
+     `Hapus` past a 390px viewport. Let the strip wrap and give the labelled
+     buttons a readable floor instead. */
+  .invoice-actions {
+    justify-content: flex-start;
+  }
+
+  .invoice-actions .button {
+    min-width: 104px;
+    flex: 1 1 auto;
+  }
+
   .project-hero {
     display: flex;
     align-items: flex-start;
@@ -8456,6 +8614,20 @@ h3 {
     max-height: 92vh;
     border-radius: 18px 18px 0 0;
     padding: 18px;
+  }
+
+  /* Tall forms (SPK, PO, tax rules, new user) run well past a phone-sized card,
+     so the primary action was never on screen when the sheet opened. Pin the
+     action row to the bottom of the scrolling card, the same treatment
+     `.catalog-editor-actions` already gives the catalog drawer. */
+  .modal-card .modal-actions {
+    position: sticky;
+    z-index: 2;
+    bottom: -18px;
+    margin: 3px -18px -18px;
+    border-top: 1px solid var(--line);
+    padding: 12px 18px calc(12px + env(safe-area-inset-bottom));
+    background: #fff;
   }
 
   .toast {
@@ -8750,6 +8922,10 @@ html.document-preview-open { overflow: hidden; }
 .commercial-package-control > label > svg { position: absolute; right: 0; bottom: 3px; color: #7a9197; pointer-events: none; }
 .commercial-package-popover { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; width: min(340px, calc(100vw - 32px)); padding: 16px; border: 1px solid #d7e6e4; border-radius: 18px; background: #fff; box-shadow: 0 22px 55px rgba(23,59,70,.2); }
 .commercial-package-popover .field { margin-top: 12px; }
+.commercial-package-popover .package-status-hint { margin-top: 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+/* The switcher strips its own select down to a bare label; a select inside the
+   popover is an ordinary form field and has to look like every other one. */
+.commercial-package-popover .field select { height: 42px; padding: 0 34px 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: #fff; color: var(--ink); font-weight: 600; }
 @media (max-width: 620px) {
   .commercial-package-control { width: 100%; }
   .commercial-package-control > label { min-width: 0; flex: 1; }
@@ -8757,7 +8933,10 @@ html.document-preview-open { overflow: hidden; }
 }
 
 @media (max-width: 760px) {
-  .catalog-ai-drawer { width: 100%; height: min(94dvh, 900px); border-radius: 20px 20px 0 0; }
+  /* The backdrop stretches its single track so the drawer can resolve a
+     percentage width; a sheet that is shorter than the screen still has to sit
+     on the bottom edge, so it aligns itself rather than the container. */
+  .catalog-ai-drawer { width: 100%; height: min(94dvh, 900px); align-self: end; border-radius: 20px 20px 0 0; }
   .catalog-ai-head { padding: 18px 16px; }
   .catalog-ai-input,
   .catalog-ai-result { padding: 16px; }

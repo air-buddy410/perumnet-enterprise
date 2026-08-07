@@ -67,7 +67,51 @@ const reportingSchema = z.object({
   taxInvoiceDate: isoDateSchema.optional().nullable(),
   returnReference: z.string().trim().max(160).optional().nullable(),
   notes: z.string().trim().max(1_000).optional().nullable(),
+  overrideReason: z.string().trim().min(10).max(500).optional(),
 });
+
+// The invoice edit and delete locks read `reporting_status NOT IN
+// ('Candidate','Void')`, so a downgrade is a way to unlock an invoice whose VAT
+// was already filed with DJP. Reporting therefore only moves forward on its own;
+// walking it back is an Admin action that has to state a reason, and the
+// evidence of the filing (`reported_at` / `reported_by`) is never erased.
+const REPORTING_ORDER = ["Candidate", "Ready", "Reported", "Settled"] as const;
+
+function assertReportingTransition(
+  user: AuthUser,
+  currentStatus: string,
+  nextStatus: string,
+  overrideReason?: string,
+) {
+  if (currentStatus === nextStatus) return false;
+  const currentIndex = REPORTING_ORDER.indexOf(
+    currentStatus as (typeof REPORTING_ORDER)[number],
+  );
+  const nextIndex = REPORTING_ORDER.indexOf(
+    nextStatus as (typeof REPORTING_ORDER)[number],
+  );
+  const forward =
+    currentIndex >= 0 && nextIndex >= 0 && nextIndex > currentIndex;
+  // Voiding is only free while nothing has been filed yet.
+  const voidBeforeFiling =
+    nextStatus === "Void" && currentIndex >= 0 && currentIndex <= 1;
+  if (forward || voidBeforeFiling) return false;
+  if (user.role !== "Admin") {
+    throw new ApiError(
+      403,
+      "REPORTING_DOWNGRADE_FORBIDDEN",
+      `Status pelaporan hanya dapat maju (${REPORTING_ORDER.join(" → ")}). Hanya Admin yang dapat menurunkan status pajak yang sudah dilaporkan, dengan alasan tercatat.`,
+    );
+  }
+  if (!overrideReason?.trim()) {
+    throw new ApiError(
+      422,
+      "REPORTING_REASON_REQUIRED",
+      "Isi alasan penurunan status pelaporan pajak agar tercatat di jejak audit.",
+    );
+  }
+  return true;
+}
 
 function now() {
   return new Date().toISOString();
@@ -665,7 +709,15 @@ export async function handleTaxObligations(
     if (input.reportingStatus === "Reported" && !input.returnReference?.trim()) {
       throw new ApiError(422, "REPORT_REFERENCE_REQUIRED", "Referensi pelaporan pajak wajib diisi.");
     }
+    const currentStatus = String(row.reporting_status ?? "Candidate");
+    const downgraded = assertReportingTransition(
+      user,
+      currentStatus,
+      input.reportingStatus,
+      input.overrideReason,
+    );
     const timestamp = now();
+    const filing = ["Reported", "Settled"].includes(input.reportingStatus);
     await client.execute({
       sql: `UPDATE tax_obligations SET reporting_status=?,tax_period=?,
         tax_invoice_number=?,tax_invoice_date=?,return_reference=?,
@@ -677,17 +729,17 @@ export async function handleTaxObligations(
         input.taxInvoiceDate ?? row.tax_invoice_date,
         input.returnReference ?? row.return_reference,
         input.notes ?? row.reporting_notes,
-        ["Reported", "Settled"].includes(input.reportingStatus)
-          ? row.reported_at ?? timestamp
-          : null,
-        ["Reported", "Settled"].includes(input.reportingStatus)
-          ? user.id
-          : null,
+        row.reported_at ?? (filing ? timestamp : null),
+        row.reported_by ?? (filing ? user.id : null),
         timestamp,
         obligationId,
       ],
     });
-    await writeAuditLog(client, request, user, "reporting", "tax_obligation", obligationId, input);
+    await writeAuditLog(client, request, user, "reporting", "tax_obligation", obligationId, {
+      ...input,
+      previousReportingStatus: currentStatus,
+      downgraded,
+    });
     return ok({ id: obligationId, ...input });
   }
   if (request.method !== "GET" || obligationId) {
@@ -795,8 +847,15 @@ export async function handleTaxSettlements(
   assertFinanceManage(user);
   if (request.method === "POST" && !settlementId) {
     const input = settlementSchema.parse(await jsonBody(request));
+    // `tax_obligations.status` is derived from settled_amount by
+    // obligationStatus() and only ever reads 'Outstanding', 'Partially Settled'
+    // or 'Settled'. The old `status<>'Void'` filter tested a value nothing has
+    // ever written: cancelling a filing is `reporting_status='Void'`, which the
+    // reporting endpoint writes under its own transition guard, and cancelling
+    // the liability itself means deleting the source document. See the same
+    // removal in profit-share-router.ts and the invoice edit/delete locks.
     const obligationResult = await client.execute({
-      sql: "SELECT * FROM tax_obligations WHERE id=? AND status<>'Void' LIMIT 1",
+      sql: "SELECT * FROM tax_obligations WHERE id=? LIMIT 1",
       args: [input.obligationId],
     });
     const obligation = obligationResult.rows[0];
@@ -822,8 +881,8 @@ export async function handleTaxSettlements(
       await tx.execute({
         sql: `INSERT INTO transactions
           (id,project_id,date,type,description,amount,source,reference_id,category,
-           created_by,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+           origin,created_by,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
         args: [
           transactionId,
           obligation.project_id ?? null,
@@ -885,41 +944,45 @@ export async function handleTaxSettlements(
       throw new ApiError(403, "FORBIDDEN", "Hanya Admin yang dapat membatalkan settlement.");
     }
     const input = voidSchema.parse(await jsonBody(request));
-    const result = await client.execute({
-      sql: `SELECT s.*,o.amount AS obligation_amount,o.settled_amount,
-        o.direction,o.project_id FROM tax_settlements s
-        JOIN tax_obligations o ON o.id=s.obligation_id
-        WHERE s.id=? AND s.status='Posted' LIMIT 1`,
-      args: [settlementId],
-    });
-    const settlement = result.rows[0];
-    if (!settlement) throw new ApiError(404, "NOT_FOUND", "Settlement aktif tidak ditemukan.");
-    if (settlement.transaction_id) {
-      const reconciled = await client.execute({
-        sql: `SELECT 1 FROM bank_statement_entries
-          WHERE transaction_id=? AND reconciliation_status='Matched' LIMIT 1`,
-        args: [settlement.transaction_id],
-      });
-      if (reconciled.rows.length) {
-        throw new ApiError(
-          409,
-          "RECONCILIATION_LOCKED",
-          "Lepaskan rekonsiliasi bank sebelum membatalkan settlement.",
-        );
-      }
-    }
     const timestamp = now();
     const reversalId = `transaction-${randomUUID()}`;
-    const newSettled = Math.max(
-      0,
-      numberValue(settlement.settled_amount) - numberValue(settlement.amount),
-    );
     await client.transaction(async (tx) => {
+      // Settlement row and reconciliation guard both read inside the write
+      // transaction: SQLite serialises writers, PostgreSQL does not, and a
+      // reconciliation committed between the guard and the void would leave a
+      // matched bank line pointing at money that was just reversed.
+      const result = await tx.execute({
+        sql: `SELECT s.*,o.amount AS obligation_amount,o.settled_amount,
+          o.direction,o.project_id FROM tax_settlements s
+          JOIN tax_obligations o ON o.id=s.obligation_id
+          WHERE s.id=? AND s.status='Posted' LIMIT 1`,
+        args: [settlementId],
+      });
+      const settlement = result.rows[0];
+      if (!settlement) throw new ApiError(404, "NOT_FOUND", "Settlement aktif tidak ditemukan.");
+      if (settlement.transaction_id) {
+        const reconciled = await tx.execute({
+          sql: `SELECT 1 FROM bank_statement_entries
+            WHERE transaction_id=? AND reconciliation_status='Matched' LIMIT 1`,
+          args: [settlement.transaction_id],
+        });
+        if (reconciled.rows.length) {
+          throw new ApiError(
+            409,
+            "RECONCILIATION_LOCKED",
+            "Lepaskan rekonsiliasi bank sebelum membatalkan settlement.",
+          );
+        }
+      }
+      const newSettled = Math.max(
+        0,
+        numberValue(settlement.settled_amount) - numberValue(settlement.amount),
+      );
       await tx.execute({
         sql: `INSERT INTO transactions
           (id,project_id,date,type,description,amount,source,reference_id,category,
-           created_by,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+           origin,created_by,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
         args: [
           reversalId,
           settlement.project_id ?? null,

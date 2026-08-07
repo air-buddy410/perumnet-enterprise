@@ -630,6 +630,119 @@ export async function notifyProjectStakeholders(
   );
 }
 
+/**
+ * Goes to the NEW address. The change only takes effect when this link comes
+ * back, which is what stops a stolen session from redirecting account recovery.
+ */
+export async function sendEmailChangeConfirmationEmail(
+  client: DatabaseClient,
+  user: {
+    id: string;
+    email: string;
+    preferredLanguage?: EmailLanguage;
+  },
+  newEmail: string,
+  token: string,
+  validMinutes: number,
+) {
+  const en = user.preferredLanguage === "en";
+  const confirmUrl = applicationUrl(
+    `/api/auth/confirm-email-change?token=${encodeURIComponent(token)}`,
+  );
+  return sendEmailDelivery(client, {
+    userId: user.id,
+    recipient: newEmail,
+    eventType: "email_change_confirm",
+    senderProfile: "security",
+    subject: en
+      ? "Confirm your new PerumNet Enterprise email address"
+      : "Konfirmasi alamat email PerumNet Enterprise yang baru",
+    html: emailFrame(
+      en ? "Confirm this email address" : "Konfirmasi alamat email ini",
+      en
+        ? `A request was made to move the PerumNet Enterprise account currently using ${user.email} to this address. The account keeps its old address until you confirm here. This link is valid for ${validMinutes} minutes. Ignore this email if you did not request the change.`
+        : `Ada permintaan memindahkan akun PerumNet Enterprise yang saat ini memakai ${user.email} ke alamat ini. Akun tetap memakai alamat lama sampai Anda mengonfirmasi di sini. Tautan ini berlaku ${validMinutes} menit. Abaikan email ini bila Anda tidak meminta perubahan tersebut.`,
+      {
+        label: en ? "Confirm email address" : "Konfirmasi alamat email",
+        url: confirmUrl,
+      },
+      user.preferredLanguage,
+    ),
+    respectPreference: false,
+  });
+}
+
+/**
+ * Goes to the OLD address, at request time. If someone else asked for the
+ * change, this is how the real owner finds out while they can still act.
+ */
+export async function sendEmailChangeRequestedEmail(
+  client: DatabaseClient,
+  user: {
+    id: string;
+    email: string;
+    preferredLanguage?: EmailLanguage;
+  },
+  newEmail: string,
+) {
+  const en = user.preferredLanguage === "en";
+  return sendEmailDelivery(client, {
+    userId: user.id,
+    recipient: user.email,
+    eventType: "email_change_requested",
+    senderProfile: "security",
+    subject: en
+      ? "An email address change was requested on your account"
+      : "Ada permintaan penggantian alamat email pada akun Anda",
+    html: emailFrame(
+      en ? "Did you request this?" : "Apakah ini permintaan Anda?",
+      en
+        ? `A request was made to move this PerumNet Enterprise account to ${newEmail}. Nothing has changed yet — the account still uses this address until the new one is confirmed. If this was not you, change your password now and tell your administrator; changing your password also signs out every other device.`
+        : `Ada permintaan memindahkan akun PerumNet Enterprise ini ke ${newEmail}. Belum ada yang berubah — akun masih memakai alamat ini sampai alamat baru dikonfirmasi. Bila ini bukan Anda, segera ganti kata sandi dan beri tahu administrator; mengganti kata sandi sekaligus mengakhiri sesi di perangkat lain.`,
+      {
+        label: en ? "Open PerumNet Enterprise" : "Buka PerumNet Enterprise",
+        url: applicationUrl("/admin"),
+      },
+      user.preferredLanguage,
+    ),
+    respectPreference: false,
+  });
+}
+
+/** Goes to the OLD address once the change has actually taken effect. */
+export async function sendEmailChangedEmail(
+  client: DatabaseClient,
+  user: {
+    id: string;
+    preferredLanguage?: EmailLanguage;
+  },
+  previousEmail: string,
+  newEmail: string,
+) {
+  const en = user.preferredLanguage === "en";
+  return sendEmailDelivery(client, {
+    userId: user.id,
+    recipient: previousEmail,
+    eventType: "email_changed",
+    senderProfile: "security",
+    subject: en
+      ? "The email address on your PerumNet Enterprise account has changed"
+      : "Alamat email akun PerumNet Enterprise Anda telah berubah",
+    html: emailFrame(
+      en ? "This account now uses a different address" : "Akun ini kini memakai alamat lain",
+      en
+        ? `The PerumNet Enterprise account that used this address now signs in with ${newEmail}. Every session on the account was ended as part of the change. If this was not you, contact your administrator immediately.`
+        : `Akun PerumNet Enterprise yang memakai alamat ini sekarang masuk dengan ${newEmail}. Seluruh sesi akun tersebut diakhiri sebagai bagian dari perubahan ini. Bila ini bukan Anda, segera hubungi administrator.`,
+      {
+        label: en ? "Open PerumNet Enterprise" : "Buka PerumNet Enterprise",
+        url: applicationUrl("/admin"),
+      },
+      user.preferredLanguage,
+    ),
+    respectPreference: false,
+  });
+}
+
 export async function sendPasswordResetEmail(
   client: DatabaseClient,
   user: {

@@ -8,6 +8,11 @@ import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { claimSequence } from "../db/counters";
 import { resolveCommercialPackageId } from "./commercial-package-router";
+import {
+  assertBoqTotalCoversInvoices,
+  resetProjectValidation,
+  syncCommercialValues,
+} from "./commercial-sync";
 import { snapshotQuotationItems } from "../quotation-snapshot";
 import { lockDocumentTaxes } from "../tax";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
@@ -15,6 +20,71 @@ import { renderBusinessPdf } from "./pdf";
 
 const idSchema = z.string().trim().min(1).max(100);
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const QUOTATION_STATUSES = [
+  "Draft",
+  "Sent",
+  "Accepted",
+  "Rejected",
+  "Void",
+  "Superseded",
+] as const;
+export type QuotationStatus = (typeof QUOTATION_STATUSES)[number];
+
+// The ONE definition of the Quotation lifecycle. Both writers use it: the
+// package PATCH endpoint (which used to accept any enum value behind a lone
+// "Accepted" guard, so a Void or Rejected quotation could be flipped back to
+// Sent and re-notified to the client) and the /quotations/:id lifecycle
+// actions. Void, Rejected, and Superseded are terminal — nothing revives them.
+// 'Draft' as a target from 'Sent' means "issue the next revision".
+const QUOTATION_TRANSITIONS: Record<QuotationStatus, readonly QuotationStatus[]> = {
+  Draft: ["Sent", "Void"],
+  Sent: ["Draft", "Accepted", "Rejected", "Void"],
+  Accepted: ["Void"],
+  Rejected: ["Void"],
+  Void: [],
+  Superseded: [],
+};
+
+function invalidQuotationTransition(): never {
+  throw new ApiError(
+    409,
+    "INVALID_QUOTATION_STATUS",
+    "Perubahan status Quotation tidak sesuai urutan workflow. Quotation yang sudah dibatalkan, ditolak, atau digantikan revisi baru tidak dapat diaktifkan kembali.",
+  );
+}
+
+/**
+ * Guards every Quotation status write.
+ *
+ * @param currentStatus stored status, or null when a brand-new quotation is created.
+ * @param nextStatus    requested status.
+ * @param options.allowSameStatus the package PATCH endpoint saves commercial
+ *   fields without changing the status (and re-sends a revision as 'Sent'), so
+ *   a no-op transition is legal there; the explicit lifecycle actions refuse it.
+ */
+export function assertQuotationTransition(
+  currentStatus: string | null,
+  nextStatus: string,
+  options: { allowSameStatus?: boolean } = {},
+) {
+  if (!(QUOTATION_STATUSES as readonly string[]).includes(nextStatus)) {
+    invalidQuotationTransition();
+  }
+  // 'Superseded' is a consequence of issuing a revision, never a request.
+  if (nextStatus === "Superseded") invalidQuotationTransition();
+  if (currentStatus === null) {
+    if (nextStatus !== "Draft" && nextStatus !== "Sent") invalidQuotationTransition();
+    return;
+  }
+  if (currentStatus === nextStatus) {
+    if (!options.allowSameStatus) invalidQuotationTransition();
+    return;
+  }
+  const allowed = QUOTATION_TRANSITIONS[currentStatus as QuotationStatus];
+  if (!allowed?.includes(nextStatus as QuotationStatus)) invalidQuotationTransition();
+}
+
 const attachmentSchema = z.object({
   name: z.string().trim().min(1).max(240),
   mimeType: z
@@ -341,6 +411,7 @@ export async function handleBoqScopes(
       client,
       projectId,
       input.packageId ?? requestedPackageId,
+      { requireActive: true },
     );
     const parentScope = await client.execute({
       sql: `SELECT s.id,s.boq_id FROM boq_scopes s
@@ -445,6 +516,10 @@ export async function handleBoqScopes(
       });
     });
     await syncProjectCommercialValue(client, projectId);
+    // An addendum adds Perangkat/Material rows to the package the handover
+    // checklist is signed against. Leaving an already-Completed validation in
+    // place would let a BAST be finalized over items nobody ever ticked.
+    await resetProjectValidation(client, projectId, packageId);
     await writeAuditLog(client, request, user, "create", "boq_addendum", scopeIdValue, {
       title: input.title,
       quotationId,
@@ -481,6 +556,37 @@ export async function handleBoqScopes(
         "Item yang sudah diterima klien tidak dapat diedit. Buat Addendum baru.",
       );
     }
+    // A Void, Rejected, or Superseded quotation is terminal. Editing its scope
+    // used to force the same row back to 'Draft' in place, which revived a
+    // document the lifecycle guard refuses to revive.
+    if (
+      current.quotation &&
+      !["Draft", "Sent"].includes(current.quotation.status)
+    ) {
+      invalidQuotationTransition();
+    }
+    // Shrinking a priced scope below the money already invoiced against the
+    // package was possible here because only the BoQ handlers checked. The
+    // comparison is package-wide: the other scopes of the package keep their
+    // value, only this scope's items are replaced.
+    if (resolvedItems && current.packageId) {
+      const siblings = await client.execute({
+        sql: `SELECT COALESCE(SUM(i.quantity*i.selling_price),0) AS total
+          FROM boq_items i JOIN boq_scopes s ON s.id=i.scope_id
+          WHERE s.package_id=? AND s.id<>?`,
+        args: [current.packageId, scopeId],
+      });
+      await assertBoqTotalCoversInvoices(
+        client,
+        current.projectId,
+        numberValue(siblings.rows[0]?.total) +
+          resolvedItems.reduce(
+            (sum, item) => sum + item.quantity * item.sellingPrice,
+            0,
+          ),
+        current.packageId,
+      );
+    }
     const issuedAt = input.issuedAt ?? current.quotation?.issuedAt;
     const validUntil =
       input.validUntil === undefined
@@ -492,7 +598,7 @@ export async function handleBoqScopes(
     const timestamp = now();
     await client.transaction(async (tx) => {
       await tx.execute({
-        sql: "UPDATE boq_scopes SET title=?,status='Draft',updated_at=? WHERE id=?",
+        sql: "UPDATE boq_scopes SET title=?,updated_at=? WHERE id=?",
         args: [input.title ?? current.title, timestamp, scopeId],
       });
       if (resolvedItems) {
@@ -528,21 +634,27 @@ export async function handleBoqScopes(
         );
       }
       if (current.quotation) {
+        // Never rewrite the status here. A Sent quotation that has to change is
+        // superseded and revised by syncCommercialValues below; forcing it back
+        // to 'Draft' in place left the frozen quotation_items snapshot printing
+        // pre-edit lines under a post-edit total, and left its taxes locked.
         await tx.execute({
-          sql: `UPDATE quotations SET issued_at=?,valid_until=?,status='Draft',
-            accepted_at=NULL,acceptance_attachment_name=NULL,
-            acceptance_attachment_mime_type=NULL,
-            acceptance_attachment_content_base64=NULL,updated_at=? WHERE id=?`,
-          args: [
-            issuedAt,
-            validUntil,
-            timestamp,
-            current.quotation.id,
-          ],
+          sql: `UPDATE quotations SET issued_at=?,valid_until=?,updated_at=?
+            WHERE id=?`,
+          args: [issuedAt, validUntil, timestamp, current.quotation.id],
         });
       }
     });
-    await syncProjectCommercialValue(client, current.projectId);
+    if (resolvedItems) {
+      await syncCommercialValues(client, current.projectId, { request, user });
+      await resetProjectValidation(
+        client,
+        current.projectId,
+        current.packageId ?? undefined,
+      );
+    } else {
+      await syncProjectCommercialValue(client, current.projectId);
+    }
     await writeAuditLog(client, request, user, "update", "boq_scope", scopeId, {
       ...input,
       itemCount: resolvedItems?.length,
@@ -709,20 +821,7 @@ export async function handleQuotationLifecycle(
           throw new ApiError(409, "TAX_RULE_REQUIRED", "Pilih minimal satu aturan pajak sebelum mengirim Quotation.");
         }
       }
-      if (
-        (nextStatus === "Sent" && currentStatus !== "Draft") ||
-        (nextStatus === "Rejected" && currentStatus !== "Sent") ||
-        (nextStatus === "Void" && currentStatus === "Void")
-      ) {
-        throw new ApiError(
-          409,
-          "INVALID_QUOTATION_STATUS",
-          "Perubahan status Quotation tidak sesuai urutan workflow.",
-        );
-      }
-      if (currentStatus === "Accepted" && nextStatus !== "Void") {
-        throw new ApiError(409, "ACCEPTED_QUOTATION_LOCKED", "Quotation yang diterima sudah dikunci.");
-      }
+      assertQuotationTransition(currentStatus, nextStatus);
       if (nextStatus === "Void") {
         const usage = await tx.execute({
           sql: "SELECT id FROM spks WHERE quotation_id=? AND workflow_status<>'Void' LIMIT 1",
@@ -730,6 +829,34 @@ export async function handleQuotationLifecycle(
         });
         if (usage.rows.length) {
           throw new ApiError(409, "QUOTATION_IN_USE", "Void dokumen procurement aktif terlebih dahulu.");
+        }
+        // The DELETE path already refuses a quotation that carries invoices;
+        // the void path only looked at procurement, so an Accepted quotation
+        // whose invoices were already paid could be revoked out from under the
+        // cash that referenced it.
+        const paidInvoice = await tx.execute({
+          sql: `SELECT p.id FROM invoice_payments p
+            JOIN invoices i ON i.id=p.invoice_id
+            WHERE i.quotation_id=? AND p.status='Posted' LIMIT 1`,
+          args: [quotationId],
+        });
+        if (paidInvoice.rows.length) {
+          throw new ApiError(
+            409,
+            "QUOTATION_IN_USE_PAYMENT",
+            "Quotation ini tidak dapat dibatalkan karena Invoice-nya sudah menerima pembayaran. Void pembayaran tersebut terlebih dahulu.",
+          );
+        }
+        const invoiceUsage = await tx.execute({
+          sql: "SELECT id FROM invoices WHERE quotation_id=? LIMIT 1",
+          args: [quotationId],
+        });
+        if (invoiceUsage.rows.length) {
+          throw new ApiError(
+            409,
+            "QUOTATION_IN_USE",
+            "Quotation ini tidak dapat dibatalkan karena sudah memiliki Invoice. Hapus Invoice tersebut terlebih dahulu.",
+          );
         }
       }
       await tx.batch([

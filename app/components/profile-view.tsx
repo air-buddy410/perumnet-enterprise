@@ -1,6 +1,6 @@
 "use client";
 
-import { Camera, Mail, MapPin, Phone, Save, UserRound } from "lucide-react";
+import { Camera, Mail, MailCheck, MapPin, Phone, Save, UserRound } from "lucide-react";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { api, messageOf, type SessionUser } from "../api-client";
 import type { AppLanguage } from "../i18n";
@@ -17,6 +17,14 @@ interface ProfileData {
   address: string;
   birthDate: string;
   avatarUrl?: string;
+}
+
+// A new address only becomes the account's address once the link sent to it is
+// opened, so PATCH answers with the address still in force plus the request it
+// parked. Without this banner the form looks like it silently dropped the edit.
+interface PendingEmailChange {
+  pendingEmail: string;
+  expiresInMinutes: number;
 }
 
 interface ProfileViewProps {
@@ -39,6 +47,7 @@ export function ProfileView({ language, user, notify, onUserChange }: ProfileVie
     birthDate: "",
     avatarUrl: user.avatarUrl,
   });
+  const [pendingEmailChange, setPendingEmailChange] = useState<PendingEmailChange | null>(null);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
@@ -60,13 +69,22 @@ export function ProfileView({ language, user, notify, onUserChange }: ProfileVie
     event.preventDefault();
     setSaving(true);
     try {
-      const updated = await api<ProfileData>("/api/profile", {
+      const updated = await api<ProfileData & { pendingEmailChange?: PendingEmailChange }>("/api/profile", {
         method: "PATCH",
         body: JSON.stringify(profile),
       });
       setProfile(updated);
+      setPendingEmailChange(updated.pendingEmailChange ?? null);
       onUserChange({ ...user, name: updated.name, email: updated.email, avatarUrl: updated.avatarUrl ?? user.avatarUrl });
-      notify(language === "id" ? "Profil berhasil diperbarui." : "Profile updated successfully.");
+      notify(
+        updated.pendingEmailChange
+          ? language === "id"
+            ? "Profil disimpan. Alamat email baru menunggu konfirmasi dari alamat itu sendiri."
+            : "Profile saved. The new email address is waiting for confirmation from that address."
+          : language === "id"
+            ? "Profil berhasil diperbarui."
+            : "Profile updated successfully.",
+      );
     } catch (error) {
       notify(messageOf(error, language));
     } finally {
@@ -138,6 +156,19 @@ export function ProfileView({ language, user, notify, onUserChange }: ProfileVie
         </aside>
         <form className="panel profile-form-card" onSubmit={save}>
           <div className="panel-head"><div><span className="eyebrow">{id ? "DATA PRIBADI" : "PERSONAL DETAILS"}</span><h2>{id ? "Informasi profil" : "Profile information"}</h2></div><UserRound size={22} /></div>
+          {pendingEmailChange ? (
+            <div className="security-note attention profile-email-pending" data-testid="pending-email-note">
+              <MailCheck size={19} />
+              <div>
+                <strong>{id ? "Penggantian email menunggu konfirmasi" : "Email change waiting for confirmation"}</strong>
+                <span>
+                  {id
+                    ? `Akun ini masih memakai ${profile.email}. Kami mengirim tautan konfirmasi ke ${pendingEmailChange.pendingEmail}; alamat itu baru berlaku setelah tautannya dibuka. Tautan berlaku ${pendingEmailChange.expiresInMinutes} menit, dan alamat lama sudah diberi tahu bahwa ada permintaan penggantian.`
+                    : `This account still uses ${profile.email}. A confirmation link was sent to ${pendingEmailChange.pendingEmail}; that address only takes effect once the link is opened. The link is valid for ${pendingEmailChange.expiresInMinutes} minutes, and the old address has been notified that a change was requested.`}
+                </span>
+              </div>
+            </div>
+          ) : null}
           <div className="form-grid">
             <label className="field"><span>{id ? "Nama lengkap" : "Full name"}</span><input required value={profile.name} onChange={(event) => setField("name", event.target.value)} /></label>
             <label className="field"><span>Email</span><input required type="email" value={profile.email} onChange={(event) => setField("email", event.target.value)} /></label>

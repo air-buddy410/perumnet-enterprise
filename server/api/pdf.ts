@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { jsPDF } from "jspdf";
 import QRCode from "qrcode";
 import { ApiError } from "./errors";
+import { grossCashContribution } from "../cash-ledger";
 import { getDatabase } from "../db/client";
 import { asNumber, formatDate, parseJson } from "../format";
 import { documentTaxSummary } from "../tax";
@@ -49,6 +50,9 @@ export type FinancialReportEntry = {
   amount: number;
   source: string;
   category: string;
+  // False for an imported bank line nobody has reconciled yet. The line is
+  // still printed, it just does not count towards the reported cash.
+  countsAsCash?: boolean;
 };
 
 export type FinancialReportBankAccount = {
@@ -1820,12 +1824,18 @@ export async function renderFinancialReportPdf(
       ? `${displayDate(sortedDates[0], language)} ${tr(language, "s.d.", "to")} ${displayDate(sortedDates.at(-1), language)}`
       : tr(language, "Belum ada transaksi", "No transactions yet");
   const reportDate = localIsoDate();
-  const income = entries
-    .filter((entry) => entry.type === "Pemasukan")
-    .reduce((sum, entry) => sum + entry.amount, 0);
-  const expense = entries
-    .filter((entry) => entry.type === "Pengeluaran")
-    .reduce((sum, entry) => sum + entry.amount, 0);
+  const booked = entries.filter((entry) => entry.countsAsCash !== false);
+  // A reversal nets against the entry it undoes instead of adding to the other
+  // side, so voiding a payment restores the gross figures rather than inflating
+  // both of them. See server/cash-ledger.ts.
+  const income = booked.reduce(
+    (sum, entry) => sum + grossCashContribution(entry).income,
+    0,
+  );
+  const expense = booked.reduce(
+    (sum, entry) => sum + grossCashContribution(entry).expense,
+    0,
+  );
   const netCash = income - expense;
   const context = await createDocument({
     title: tr(language, "Laporan Arus Kas", "Cash Flow Report"),
@@ -2036,13 +2046,11 @@ export async function renderFinancialReportPdf(
       income: 0,
       expense: 0,
     };
-    if (entry.type === "Pemasukan") {
-      monthValue.income += entry.amount;
-      projectValue.income += entry.amount;
-    } else {
-      monthValue.expense += entry.amount;
-      projectValue.expense += entry.amount;
-    }
+    const contribution = grossCashContribution(entry);
+    monthValue.income += contribution.income;
+    monthValue.expense += contribution.expense;
+    projectValue.income += contribution.income;
+    projectValue.expense += contribution.expense;
     monthly.set(month, monthValue);
     projects.set(entry.project, projectValue);
   }

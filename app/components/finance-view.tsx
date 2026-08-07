@@ -45,10 +45,25 @@ interface FinanceViewProps {
   projectId?: string;
   projects: Project[];
   canManage: boolean;
+  isAdmin: boolean;
   canUseBanking: boolean;
   canConfigureBanking: boolean;
   canApproveProfitShares: boolean;
   canConfigureTax: boolean;
+}
+
+interface UnreconciledTotals {
+  entries: number;
+  income: number;
+  expense: number;
+}
+
+interface FinanceSummary {
+  income: number;
+  expense: number;
+  netCash: number;
+  cashRatio: number;
+  unreconciled: UnreconciledTotals;
 }
 
 const transactionCategories = [
@@ -105,11 +120,20 @@ function makassarDate(value: string) {
   return `${values.year}-${values.month}-${values.day}`;
 }
 
+// An imported bank line that nobody has matched yet almost always duplicates a
+// source document that already booked the same money, so the server leaves it
+// out of every aggregate and flags it per row. Every total on this screen has
+// to agree with that, otherwise the fix never reaches the person reading it.
+function countsAsCash(transaction: Transaction) {
+  return transaction.countsAsCash !== false;
+}
+
 function summarize(transactions: Transaction[]) {
-  const income = transactions
+  const booked = transactions.filter(countsAsCash);
+  const income = booked
     .filter((transaction) => transaction.type === "Pemasukan")
     .reduce((sum, transaction) => sum + transaction.amount, 0);
-  const expense = transactions
+  const expense = booked
     .filter((transaction) => transaction.type === "Pengeluaran")
     .reduce((sum, transaction) => sum + transaction.amount, 0);
   return { income, expense, netCash: income - expense };
@@ -156,6 +180,7 @@ export function FinanceView({
   projectId,
   projects,
   canManage,
+  isAdmin,
   canUseBanking,
   canConfigureBanking,
   canApproveProfitShares,
@@ -163,6 +188,11 @@ export function FinanceView({
 }: FinanceViewProps) {
   const id = language === "id";
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [unreconciled, setUnreconciled] = useState<UnreconciledTotals>({
+    entries: 0,
+    income: 0,
+    expense: 0,
+  });
   const [serverToday, setServerToday] = useState("");
   const [periodMonths, setPeriodMonths] = useState<3 | 6 | 12>(6);
   const [bankBalance, setBankBalance] = useState(0);
@@ -231,6 +261,35 @@ export function FinanceView({
     };
   }, [periodMonths, serverToday]);
 
+  const financeQuery = useMemo(() => {
+    const params = new URLSearchParams();
+    if (projectId) params.set("projectId", projectId);
+    if (periodWindow) {
+      params.set("from", periodWindow.currentStart);
+      params.set("to", periodWindow.currentEnd);
+    }
+    const value = params.toString();
+    return value ? `?${value}` : "";
+  }, [periodWindow, projectId]);
+
+  // The pending figure is reported rather than hidden, so the money left out of
+  // the cards above is still visible and still chaseable.
+  const loadSummary = useCallback(async () => {
+    if (!periodWindow) return;
+    try {
+      const summary = await api<FinanceSummary>(`/api/finance/summary${financeQuery}`);
+      setUnreconciled(
+        summary.unreconciled ?? { entries: 0, income: 0, expense: 0 },
+      );
+    } catch (error) {
+      notify(messageOf(error, language));
+    }
+  }, [financeQuery, language, notify, periodWindow]);
+
+  useEffect(() => {
+    void Promise.resolve().then(loadSummary);
+  }, [loadSummary]);
+
   const periodTransactions = useMemo(
     () =>
       periodWindow
@@ -273,6 +332,7 @@ export function FinanceView({
       });
     }
     for (const transaction of periodTransactions) {
+      if (!countsAsCash(transaction)) continue;
       const key = transaction.dateIso?.slice(0, 7);
       if (!key || !months.has(key)) continue;
       const current = months.get(key)!;
@@ -293,6 +353,7 @@ export function FinanceView({
   const projectCashFlow = useMemo(() => {
     const grouped = new Map<string, { income: number; expense: number }>();
     for (const transaction of periodTransactions) {
+      if (!countsAsCash(transaction)) continue;
       const current = grouped.get(transaction.project) ?? {
         income: 0,
         expense: 0,
@@ -396,6 +457,7 @@ export function FinanceView({
         }),
       });
       await loadTransactions();
+      await loadSummary();
       setDescription("");
       setAmount(0);
       setShowTransactionForm(false);
@@ -428,27 +490,17 @@ export function FinanceView({
     try {
       await api(`/api/transactions/${transaction.id}`, { method: "DELETE" });
       await loadTransactions();
+      await loadSummary();
       notify(id ? "Transaksi manual dihapus." : "Manual transaction deleted.");
     } catch (error) {
       notify(messageOf(error, language));
     }
   }
 
-  function reportQuery() {
-    const params = new URLSearchParams();
-    if (projectId) params.set("projectId", projectId);
-    if (periodWindow) {
-      params.set("from", periodWindow.currentStart);
-      params.set("to", periodWindow.currentEnd);
-    }
-    const value = params.toString();
-    return value ? `?${value}` : "";
-  }
-
   async function exportReport() {
     try {
       await downloadApiFile(
-        `/api/transactions/report.pdf${reportQuery()}`,
+        `/api/transactions/report.pdf${financeQuery}`,
         id ? "Laporan-Arus-Kas-PerumNet.pdf" : "PerumNet-Cash-Flow-Report.pdf",
       );
       notify(id ? "Laporan arus kas PDF berhasil diekspor." : "Cash flow PDF exported.");
@@ -460,7 +512,7 @@ export function FinanceView({
   async function exportCsv() {
     try {
       await downloadApiFile(
-        `/api/transactions/report.csv${reportQuery()}`,
+        `/api/transactions/report.csv${financeQuery}`,
         id ? "Laporan-Arus-Kas-PerumNet.csv" : "PerumNet-Cash-Flow-Report.csv",
       );
       notify(id ? "Laporan arus kas CSV berhasil diekspor." : "Cash flow CSV exported.");
@@ -567,6 +619,24 @@ export function FinanceView({
         </article>
       </section>
 
+      {unreconciled.entries > 0 ? (
+        <section className="security-note attention" data-testid="unreconciled-note">
+          <Landmark size={19} />
+          <div>
+            <strong>
+              {id
+                ? "Mutasi bank belum direkonsiliasi"
+                : "Unreconciled bank entries"}
+            </strong>
+            <span>
+              {id
+                ? `${unreconciled.entries} mutasi impor belum dicocokkan: ${formatCurrency(unreconciled.income, language)} masuk dan ${formatCurrency(unreconciled.expense, language)} keluar. Angka itu belum dihitung sebagai kas pada kartu di atas karena hampir selalu menduplikasi invoice, pembayaran vendor, atau setoran pajak yang sudah tercatat. Cocokkan mutasinya di bagian Rekening perusahaan agar ikut terhitung lewat catatan sumbernya.`
+                : `${unreconciled.entries} imported entries are still unmatched: ${formatCurrency(unreconciled.income, language)} in and ${formatCurrency(unreconciled.expense, language)} out. They are not counted as cash in the cards above because such a line nearly always duplicates an invoice, a vendor payment, or a tax settlement that was already recorded. Match them in the Company banking section so they count through their source record.`}
+            </span>
+          </div>
+        </section>
+      ) : null}
+
       {canUseBanking ? (
         <BankingPanel
           language={language}
@@ -578,6 +648,7 @@ export function FinanceView({
           onBalanceChange={setBankBalance}
           onLedgerChanged={() => {
             void loadTransactions();
+            void loadSummary();
           }}
         />
       ) : null}
@@ -588,6 +659,7 @@ export function FinanceView({
           notify={notify}
           canManage={canManage}
           canConfigure={canConfigureTax}
+          isAdmin={isAdmin}
           serverToday={serverToday}
         />
       ) : null}
@@ -797,6 +869,13 @@ export function FinanceView({
                       <div>
                         <strong>{transaction.description}</strong>
                         <small>{localizedLabel(language, transaction.type)}</small>
+                        {countsAsCash(transaction) ? null : (
+                          <span className="status-badge warning">
+                            {id
+                              ? "Belum direkonsiliasi — belum dihitung sebagai kas"
+                              : "Unreconciled — not counted as cash"}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </td>

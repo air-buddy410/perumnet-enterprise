@@ -9,12 +9,38 @@ import { getDatabase, type DatabaseClient } from "../db/client";
 import { claimSequence } from "../db/counters";
 import { notifyProjectStakeholders } from "../email";
 import { documentTaxSummary, lockDocumentTaxes } from "../tax";
-import { ApiError, created, jsonBody, noContent, ok } from "./errors";
+import { ApiError, created, jsonBody, noContent, ok, partialPatchSchema } from "./errors";
 import { renderBusinessPdf } from "./pdf";
 
 const idSchema = z.string().trim().min(1).max(100);
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const moneySchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+
+/**
+ * The `workflow_status` values a document may be in for money to leave, and for
+ * the document to be closed. Both used to be written as negative guards
+ * (`approvalStatus !== "Approved" || workflowStatus === "Void"`), which admitted
+ * every status nobody had thought to exclude: `Disetujui` — approved internally
+ * but never sent to the vendor — was payable and closeable, and `Selesai` was
+ * not terminal, so a finished document could be completed again.
+ *
+ * Payment stays legal after `Selesai` on purpose: retention and final invoices
+ * are settled once the work is signed off, and `verifiedPayable` already caps
+ * how much may be released.
+ */
+const PAYABLE_WORKFLOW_STATUSES = [
+  "Dikirim",
+  "Dikerjakan",
+  "Diterima Sebagian",
+  "Diterima",
+  "Selesai",
+];
+const COMPLETABLE_WORKFLOW_STATUSES = [
+  "Dikirim",
+  "Dikerjakan",
+  "Diterima Sebagian",
+  "Diterima",
+];
 const attachmentSchema = z.object({
   name: z.string().trim().min(1).max(240),
   mimeType: z
@@ -200,10 +226,41 @@ function paymentState(contract: number, paid: number) {
   return "Dibayar Sebagian";
 }
 
+/**
+ * Keeps `spk_payment_terms.status` honest.
+ *
+ * The column was inserted as 'Pending' and never updated by anything, so it was
+ * a dead field that the API still published (`terms[].status`): every term of
+ * every fully paid work order still reported "Pending", and any report keyed off
+ * it was wrong. It is recomputed from the posted payments allocated to each
+ * term, so posting and voiding a payment both settle it, and it can never drift
+ * away from `spk_payments`.
+ */
+async function refreshTermStatuses(client: DatabaseClient, orderId: string) {
+  await client.execute({
+    sql: `UPDATE spk_payment_terms SET status=CASE
+        WHEN COALESCE((SELECT SUM(CASE WHEN p.gross_amount>0
+            THEN p.gross_amount ELSE p.amount END)
+          FROM spk_payments p
+          WHERE p.term_id=spk_payment_terms.id AND p.status='Posted'),0) <= 0
+          THEN 'Pending'
+        WHEN COALESCE((SELECT SUM(CASE WHEN p.gross_amount>0
+            THEN p.gross_amount ELSE p.amount END)
+          FROM spk_payments p
+          WHERE p.term_id=spk_payment_terms.id AND p.status='Posted'),0)
+          >= spk_payment_terms.planned_amount THEN 'Paid'
+        ELSE 'Partial' END,
+      updated_at=?
+      WHERE spk_id=?`,
+    args: [now(), orderId],
+  });
+}
+
 async function updateOrderPaymentCompatibility(
   client: DatabaseClient,
   orderId: string,
 ) {
+  await refreshTermStatuses(client, orderId);
   const totals = await client.execute({
     sql: `SELECT s.cost,
       s.document_type,
@@ -313,7 +370,9 @@ export async function handleVendorCategories(
   }
 
   if (request.method === "PATCH") {
-    const input = vendorCategorySchema.partial().parse(await jsonBody(request));
+    // A plain `.partial()` re-applied the "Aktif" default, so renaming a
+    // retired vendor category quietly brought it back into circulation.
+    const input = partialPatchSchema(vendorCategorySchema).parse(await jsonBody(request));
     try {
       await client.execute({
         sql: `UPDATE vendor_categories SET name=?,name_en=?,vendor_type=?,
@@ -1292,8 +1351,15 @@ async function completeOrder(request: Request, user: AuthUser, orderId: string) 
   const { client } = await getDatabase();
   const order = await getOrder(client, orderId);
   await assertProjectAccess(client, user, order.projectId);
-  if (order.approvalStatus !== "Approved" || order.workflowStatus === "Void") {
-    throw new ApiError(409, "INVALID_STATUS", "Dokumen aktif harus disetujui sebelum diselesaikan.");
+  if (
+    order.approvalStatus !== "Approved" ||
+    !COMPLETABLE_WORKFLOW_STATUSES.includes(order.workflowStatus)
+  ) {
+    throw new ApiError(
+      409,
+      "INVALID_STATUS",
+      "Hanya dokumen yang sudah disetujui dan dikirim ke vendor yang dapat diselesaikan, dan hanya sekali.",
+    );
   }
   if (order.documentType === "PO") {
     const complete = order.items.every((item) => {
@@ -1568,8 +1634,15 @@ async function payOrder(
   const { client } = await getDatabase();
   const order = await getOrder(client, orderId);
   await assertProjectAccess(client, user, order.projectId);
-  if (order.approvalStatus !== "Approved" || order.workflowStatus === "Void") {
-    throw new ApiError(409, "APPROVAL_REQUIRED", "Dokumen harus aktif dan disetujui sebelum dibayar.");
+  if (
+    order.approvalStatus !== "Approved" ||
+    !PAYABLE_WORKFLOW_STATUSES.includes(order.workflowStatus)
+  ) {
+    throw new ApiError(
+      409,
+      "APPROVAL_REQUIRED",
+      "Dokumen harus sudah disetujui dan dikirim ke vendor sebelum dibayar.",
+    );
   }
   if (input.termId && !order.terms.some((term) => term.id === input.termId)) {
     throw new ApiError(404, "NOT_FOUND", "Termin pembayaran tidak ditemukan.");
@@ -1613,8 +1686,8 @@ async function payOrder(
       await tx.execute({
         sql: `INSERT INTO transactions
           (id,project_id,date,type,description,amount,source,reference_id,category,
-           created_by,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+           origin,created_by,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
         args: [
           transactionId,
           current.projectId,
@@ -1696,28 +1769,31 @@ async function voidPayment(
   const { client } = await getDatabase();
   const order = await getOrder(client, orderId);
   await assertProjectAccess(client, user, order.projectId);
-  const paymentResult = await client.execute({
-    sql: "SELECT * FROM spk_payments WHERE id=? AND spk_id=? AND status='Posted' LIMIT 1",
-    args: [paymentId, orderId],
-  });
-  const payment = paymentResult.rows[0];
-  if (!payment) {
-    throw new ApiError(404, "NOT_FOUND", "Pembayaran aktif tidak ditemukan.");
-  }
-  const reconciliation = await client.execute({
-    sql: `SELECT id FROM bank_statement_entries
-      WHERE transaction_id=? AND reconciliation_status='Matched' LIMIT 1`,
-    args: [payment.transaction_id],
-  });
-  if (reconciliation.rows.length) {
-    throw new ApiError(
-      409,
-      "PAYMENT_RECONCILED",
-      "Lepaskan rekonsiliasi mutasi bank sebelum membatalkan pembayaran.",
-    );
-  }
   const timestamp = now();
   await client.transaction(async (tx) => {
+    // Both reads belong inside the write transaction: on PostgreSQL a
+    // reconciliation committed between the guard and the void would otherwise
+    // slip through, leaving a matched bank line pointing at reversed cash.
+    const paymentResult = await tx.execute({
+      sql: "SELECT * FROM spk_payments WHERE id=? AND spk_id=? AND status='Posted' LIMIT 1",
+      args: [paymentId, orderId],
+    });
+    const payment = paymentResult.rows[0];
+    if (!payment) {
+      throw new ApiError(404, "NOT_FOUND", "Pembayaran aktif tidak ditemukan.");
+    }
+    const reconciliation = await tx.execute({
+      sql: `SELECT id FROM bank_statement_entries
+        WHERE transaction_id=? AND reconciliation_status='Matched' LIMIT 1`,
+      args: [payment.transaction_id],
+    });
+    if (reconciliation.rows.length) {
+      throw new ApiError(
+        409,
+        "PAYMENT_RECONCILED",
+        "Lepaskan rekonsiliasi mutasi bank sebelum membatalkan pembayaran.",
+      );
+    }
     await tx.execute({
       sql: `UPDATE spk_payments SET status='Void',voided_by=?,voided_at=?,
         void_reason=?,updated_at=? WHERE id=?`,
@@ -1727,8 +1803,8 @@ async function voidPayment(
       await tx.execute({
         sql: `INSERT INTO transactions
         (id,project_id,date,type,description,amount,source,reference_id,category,
-         created_by,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+         origin,created_by,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
         args: [
           randomUUID(),
           order.projectId,

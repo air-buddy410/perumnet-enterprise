@@ -36,6 +36,32 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 );
 CREATE INDEX IF NOT EXISTS password_reset_user_idx ON password_reset_tokens(user_id);
 
+CREATE TABLE IF NOT EXISTS email_change_requests (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  current_email TEXT NOT NULL,
+  new_email TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  requested_by TEXT,
+  expires_at TEXT NOT NULL,
+  confirmed_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS email_change_requests_user_idx
+  ON email_change_requests(user_id);
+
+CREATE TABLE IF NOT EXISTS auth_rate_limits (
+  scope_key TEXT NOT NULL,
+  route_key TEXT NOT NULL,
+  window_started_at TEXT NOT NULL,
+  failure_count INTEGER NOT NULL DEFAULT 0,
+  blocked_until TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (scope_key, route_key)
+);
+CREATE INDEX IF NOT EXISTS auth_rate_limits_blocked_idx
+  ON auth_rate_limits(route_key, blocked_until);
+
 CREATE TABLE IF NOT EXISTS user_profiles (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   phone TEXT,
@@ -502,7 +528,7 @@ CREATE TABLE IF NOT EXISTS basts (
   engineer_name TEXT NOT NULL,
   engineer_role TEXT NOT NULL DEFAULT 'Project Manager',
   engineer_signature TEXT,
-  status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Final')),
+  status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Final', 'Void')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -583,6 +609,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   source TEXT NOT NULL,
   reference_id TEXT,
   category TEXT NOT NULL DEFAULT 'Lainnya',
+  origin TEXT NOT NULL DEFAULT 'system',
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -905,6 +932,7 @@ CREATE TABLE IF NOT EXISTS bank_statement_entries (
   bank_account_id TEXT NOT NULL REFERENCES bank_accounts(id) ON DELETE CASCADE,
   import_id TEXT REFERENCES bank_statement_imports(id) ON DELETE SET NULL,
   transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+  excluded_transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
   date TEXT NOT NULL,
   description TEXT NOT NULL,
   type TEXT NOT NULL CHECK (type IN ('Pemasukan', 'Pengeluaran')),
@@ -1354,6 +1382,50 @@ async function ensureDocumentCounters(client: DatabaseClient) {
     key TEXT PRIMARY KEY,
     last_value INTEGER NOT NULL DEFAULT 0
   )`);
+}
+
+// Step two of the pattern in server/db/README.md. `schemaSql` covers fresh
+// installations; this covers the databases that already exist in demo and
+// production, which never re-run a CREATE TABLE they have already skipped in a
+// dialect-specific way. Both statements are idempotent.
+async function ensureAuthHardeningSchema(client: DatabaseClient) {
+  await client.execute(`CREATE TABLE IF NOT EXISTS email_change_requests (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    current_email TEXT NOT NULL,
+    new_email TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    requested_by TEXT,
+    expires_at TEXT NOT NULL,
+    confirmed_at TEXT,
+    created_at TEXT NOT NULL
+  )`);
+  await client.execute(
+    "CREATE INDEX IF NOT EXISTS email_change_requests_user_idx ON email_change_requests(user_id)",
+  );
+  await client.execute(`CREATE TABLE IF NOT EXISTS auth_rate_limits (
+    scope_key TEXT NOT NULL,
+    route_key TEXT NOT NULL,
+    window_started_at TEXT NOT NULL,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    blocked_until TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (scope_key, route_key)
+  )`);
+  await client.execute(
+    "CREATE INDEX IF NOT EXISTS auth_rate_limits_blocked_idx ON auth_rate_limits(route_key, blocked_until)",
+  );
+  // The tables are pure scratch state; drop anything that can no longer matter
+  // so neither grows without bound on a long-lived installation.
+  const timestamp = new Date().toISOString();
+  await client.execute({
+    sql: "DELETE FROM email_change_requests WHERE expires_at <= ? OR confirmed_at IS NOT NULL",
+    args: [timestamp],
+  });
+  await client.execute({
+    sql: "DELETE FROM auth_rate_limits WHERE updated_at <= ?",
+    args: [new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString()],
+  });
 }
 
 async function ensureCommercialPackageSchema(client: DatabaseClient) {
@@ -2029,6 +2101,89 @@ async function ensureBastEngineerRoleColumn(client: DatabaseClient) {
   }
 }
 
+// Creating a quotation, invoice, validation or BAST now requires an Active
+// commercial package. Packages created before that rule were stamped 'Draft' by
+// the old column default — a state nothing can leave, because the status
+// control did not exist yet and the transition table has no route back into
+// Draft. Left alone they would silently refuse every new document. Promote them
+// once; on every later boot the WHERE clause matches nothing, since no writer
+// can produce a Draft package again (every INSERT names its status, and the
+// request schema defaults to Active).
+async function ensureCommercialPackageActiveDefault(client: DatabaseClient) {
+  await client.execute(
+    "UPDATE project_commercial_packages SET status='Active' WHERE status='Draft'",
+  );
+  // PostgreSQL still carries the stale 'Draft' default on the live column.
+  // Nothing reads it — every insert is explicit — but a wrong default is a trap
+  // for the next writer, and correcting it is one cheap statement. SQLite keeps
+  // defaults inside the CREATE TABLE text and would need a full table rebuild
+  // to change one, which is not worth it for a value no code path reaches.
+  try {
+    await client.execute(
+      "ALTER TABLE project_commercial_packages ALTER COLUMN status SET DEFAULT 'Active'",
+    );
+  } catch {
+    // SQLite, which cannot alter a column default in place.
+  }
+}
+
+// The BAST void endpoint writes status='Void', but the original table declared
+// CHECK (status IN ('Draft','Final')) — every revocation failed with a raw
+// constraint error surfaced as a 500. Fresh databases now declare 'Void' in the
+// schema; databases created before this fix are relaxed here. Idempotent: it
+// inspects the live constraint first and does nothing once 'Void' is allowed.
+async function ensureBastVoidStatus(client: DatabaseClient) {
+  let tableSql: string | null = null;
+  let sqlite = true;
+  try {
+    const result = await client.execute(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='basts' LIMIT 1",
+    );
+    tableSql = result.rows[0]?.sql ? String(result.rows[0].sql) : null;
+  } catch {
+    sqlite = false;
+  }
+  if (!sqlite) {
+    // PostgreSQL names the inline CHECK `basts_status_check`, so it can be
+    // replaced in place. Dropping and re-adding in ONE statement keeps the
+    // migration both re-runnable and atomic: a failure can never leave the
+    // column with no constraint at all.
+    try {
+      await client.execute(
+        `ALTER TABLE basts
+          DROP CONSTRAINT IF EXISTS basts_status_check,
+          ADD CONSTRAINT basts_status_check CHECK (status IN ('Draft', 'Final', 'Void'))`,
+      );
+    } catch {
+      // Another dialect, or the constraint was never declared — nothing to relax.
+    }
+    return;
+  }
+  if (!tableSql) return;
+  const checkPattern = /CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i;
+  const declaredCheck = tableSql.match(checkPattern);
+  if (!declaredCheck || /'Void'/i.test(declaredCheck[0])) return;
+  // SQLite cannot alter a CHECK constraint, so rebuild the table from its own
+  // stored DDL. Deriving the new DDL from sqlite_master (instead of restating
+  // it here) preserves every column and default added by later migrations.
+  const indexes = await client.execute(
+    "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='basts' AND sql IS NOT NULL",
+  );
+  const rebuiltSql = tableSql.replace(
+    checkPattern,
+    "CHECK (status IN ('Draft', 'Final', 'Void'))",
+  );
+  await client.execute("DROP TABLE IF EXISTS basts_status_migration");
+  await client.execute("ALTER TABLE basts RENAME TO basts_status_migration");
+  await client.execute(rebuiltSql);
+  await client.execute("INSERT INTO basts SELECT * FROM basts_status_migration");
+  // Dropping the old table also drops the indexes that travelled with it.
+  await client.execute("DROP TABLE basts_status_migration");
+  for (const row of indexes.rows) {
+    await client.execute(String(row.sql));
+  }
+}
+
 async function ensureTransactionCategoryColumn(client: DatabaseClient) {
   try {
     await client.execute("SELECT category FROM transactions LIMIT 1");
@@ -2354,6 +2509,56 @@ async function ensureProcurementSchema(client: DatabaseClient) {
   }
 }
 
+// Step two of the pattern in server/db/README.md for the reconciliation memory
+// added with the exclude/restore fix: excluding a mutasi has to remember which
+// transaction it was booked against, otherwise restoring it invents a second
+// `Bank:` transaction next to the one that already recorded the same cash.
+async function ensureBankReconciliationSchema(client: DatabaseClient) {
+  await ensureColumn(
+    client,
+    "bank_statement_entries",
+    "excluded_transaction_id",
+    "TEXT",
+  );
+}
+
+// Manual transaction CRUD used to be gated by a denylist of source prefixes, so
+// every new system source was tamperable until somebody remembered to add it.
+// `origin` inverts that into an allowlist: only rows a human typed in are
+// editable. The classification of pre-existing rows runs exactly once, right
+// after the column is created — never again, so a row can not be silently
+// re-classified later by a source string that happens not to match.
+async function ensureTransactionOriginColumn(client: DatabaseClient) {
+  try {
+    await client.execute("SELECT origin FROM transactions LIMIT 1");
+    return;
+  } catch {
+    // The column does not exist yet.
+  }
+  try {
+    await client.execute(
+      "ALTER TABLE transactions ADD COLUMN origin TEXT NOT NULL DEFAULT 'system'",
+    );
+  } catch {
+    await client.execute("SELECT origin FROM transactions LIMIT 1");
+    return;
+  }
+  await client.execute(`
+    UPDATE transactions SET origin='manual'
+    WHERE NOT (
+      source IN ('Invoice','SPK')
+      OR source LIKE 'Bank:%'
+      OR source LIKE 'Profit Share%'
+      OR source LIKE 'Procurement %'
+      OR source LIKE 'Invoice Payment%'
+      OR source LIKE 'Tax Settlement%'
+      OR source LIKE 'Project Expense%'
+      OR source LIKE 'Project Advance%'
+      OR category='Bagi Hasil'
+    )
+  `);
+}
+
 async function ensureTaxAndEmailSchema(client: DatabaseClient) {
   const timestamp = new Date().toISOString();
 
@@ -2635,7 +2840,12 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureSpkPaymentColumns(client);
   await ensureProcurementSchema(client);
   await ensureCommercialPackageSchema(client);
+  await ensureCommercialPackageActiveDefault(client);
+  await ensureBastVoidStatus(client);
+  await ensureBankReconciliationSchema(client);
+  await ensureTransactionOriginColumn(client);
   await ensureDocumentCounters(client);
+  await ensureAuthHardeningSchema(client);
   await ensureTaxAndEmailSchema(client);
   await ensureProjectExpenseSchema(client);
   await ensureItemCatalogSchema(client);
@@ -2788,16 +2998,22 @@ export async function initializeDatabase(client: DatabaseClient) {
     ));
   }
 
-  const transactionRows = [
-    ["trx-1", "project-1", "2026-07-18", "Pengeluaran", "Pembelian access point tahap 2", 29400000, "Material"],
-    ["trx-2", "project-2", "2026-07-15", "Pemasukan", "Pembayaran invoice DP 30%", 29040000, "Invoice"],
-    ["trx-3", "project-1", "2026-07-10", "Pemasukan", "Pembayaran invoice DP 50%", 93725000, "Invoice"],
-    ["trx-4", "project-1", "2026-07-09", "Pengeluaran", "Termin awal teknisi jaringan", 6250000, "SPK"],
-    ["trx-5", "project-2", "2026-07-04", "Pengeluaran", "Pembelian kamera dan NVR", 41750000, "Material"],
-  ];
+  // Demo cash movements. They exist so a development or demo install has a
+  // populated Keuangan page; a production install must never open its books
+  // with roughly Rp 200 juta of fictitious movements, so they are gated on the
+  // same condition that deactivates the demo user accounts.
+  const transactionRows = production
+    ? []
+    : [
+        ["trx-1", "project-1", "2026-07-18", "Pengeluaran", "Pembelian access point tahap 2", 29400000, "Material", "manual"],
+        ["trx-2", "project-2", "2026-07-15", "Pemasukan", "Pembayaran invoice DP 30%", 29040000, "Invoice", "system"],
+        ["trx-3", "project-1", "2026-07-10", "Pemasukan", "Pembayaran invoice DP 50%", 93725000, "Invoice", "system"],
+        ["trx-4", "project-1", "2026-07-09", "Pengeluaran", "Termin awal teknisi jaringan", 6250000, "SPK", "system"],
+        ["trx-5", "project-2", "2026-07-04", "Pengeluaran", "Pembelian kamera dan NVR", 41750000, "Material", "manual"],
+      ];
   for (const row of transactionRows) {
     statements.push(statement(
-      "INSERT INTO transactions (id,project_id,date,type,description,amount,source,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO transactions (id,project_id,date,type,description,amount,source,origin,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
       [...row, "user-1", now, now],
     ));
   }

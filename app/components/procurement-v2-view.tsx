@@ -36,7 +36,7 @@ import {
   Vendor,
   VendorCategory,
 } from "../data";
-import { type AppLanguage, localizedLabel } from "../i18n";
+import { type AppLanguage, BOQ_ROLES, localizedLabel } from "../i18n";
 import { DocumentTaxEditor } from "./document-tax-editor";
 import { CatalogPicker } from "./catalog-picker";
 import { DocumentPreviewModal } from "./document-preview-modal";
@@ -55,6 +55,45 @@ interface ProcurementViewProps {
 type Tab = "orders" | "vendors" | "categories" | "commercial";
 type Attachment = { name: string; mimeType: string; contentBase64: string };
 type DraftLine = { selected: boolean; quantity: number; agreedUnitCost: number };
+// Rejecting, voiding a document, and voiding a payment all record an audited
+// reason the server requires to be at least five characters.
+type ReasonPrompt =
+  | { kind: "reject"; order: ProcurementOrder }
+  | { kind: "void"; order: ProcurementOrder }
+  | { kind: "payment-void"; order: ProcurementOrder; paymentId: string };
+
+const REASON_MIN_LENGTH = 5;
+
+// Mirrors the positive allowlists the endpoints now enforce. `Disetujui` means
+// approved internally but never sent to the vendor, so neither money nor
+// closure may leave from there — Kirim comes first. `Selesai` stays payable
+// because retention and final settlement land after sign-off, but it is
+// terminal, so a finished document cannot be completed a second time.
+const PAYABLE_WORKFLOW_STATUSES = [
+  "Dikirim",
+  "Dikerjakan",
+  "Diterima Sebagian",
+  "Diterima",
+  "Selesai",
+];
+const COMPLETABLE_WORKFLOW_STATUSES = [
+  "Dikirim",
+  "Dikerjakan",
+  "Diterima Sebagian",
+  "Diterima",
+];
+
+function termStatusTone(status: string) {
+  if (status === "Paid") return "success";
+  if (status === "Partial") return "warning";
+  return "neutral";
+}
+
+function termStatusLabel(id: boolean, status: string) {
+  if (status === "Paid") return id ? "Lunas" : "Paid";
+  if (status === "Partial") return id ? "Dibayar Sebagian" : "Partial";
+  return id ? "Belum Dibayar" : "Pending";
+}
 
 async function attachmentFromFile(file: File): Promise<Attachment> {
   const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -168,6 +207,8 @@ export function ProcurementViewV2({
   const [receiptNumber, setReceiptNumber] = useState("");
   const [busy, setBusy] = useState("");
   const [preview, setPreview] = useState<{ url: string; title: string; filename: string } | null>(null);
+  const [reasonPrompt, setReasonPrompt] = useState<ReasonPrompt | null>(null);
+  const [reasonText, setReasonText] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -223,6 +264,15 @@ export function ProcurementViewV2({
     }, 0);
     return () => window.clearTimeout(update);
   }, [load]);
+
+  useEffect(() => {
+    if (!reasonPrompt) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setReasonPrompt(null);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [reasonPrompt]);
 
   const filteredVendors = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -497,9 +547,25 @@ export function ProcurementViewV2({
     }
   }
 
-  async function orderAction(
+  // Reject and Void need an audited reason, which is captured by the modal
+  // below rather than by `window.prompt` — the native dialog is unstyled,
+  // cramped on a phone, and cannot enforce the server's five-character minimum.
+  function orderAction(
     order: ProcurementOrder,
     action: "submit" | "approve" | "reject" | "send" | "complete" | "void",
+  ) {
+    if (action === "reject" || action === "void") {
+      setReasonText("");
+      setReasonPrompt({ kind: action, order });
+      return;
+    }
+    void runOrderAction(order, action);
+  }
+
+  async function runOrderAction(
+    order: ProcurementOrder,
+    action: "submit" | "approve" | "reject" | "send" | "complete" | "void",
+    reason?: string,
   ) {
     setBusy(`${order.id}:${action}`);
     try {
@@ -514,22 +580,36 @@ export function ProcurementViewV2({
               : undefined,
         });
       }
-      if (action === "reject" || action === "void") {
-        const reason = window.prompt(
-          action === "reject"
-            ? id
-              ? "Alasan penolakan:"
-              : "Rejection reason:"
-            : id
-              ? "Alasan void dokumen:"
-              : "Document void reason:",
-        );
-        if (!reason) return;
-        body = JSON.stringify({ reason });
-      }
+      if (reason) body = JSON.stringify({ reason });
       await api(`/api/procurement-orders/${order.id}/${action}`, {
         method: "POST",
         body,
+      });
+      await load();
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function submitReason(event: FormEvent) {
+    event.preventDefault();
+    if (!reasonPrompt) return;
+    const reason = reasonText.trim();
+    if (reason.length < REASON_MIN_LENGTH) return;
+    const target = reasonPrompt;
+    setReasonPrompt(null);
+    setReasonText("");
+    if (target.kind !== "payment-void") {
+      await runOrderAction(target.order, target.kind, reason);
+      return;
+    }
+    setBusy(`${target.order.id}:payment-void`);
+    try {
+      await api(`/api/procurement-orders/${target.order.id}/payments/${target.paymentId}/void`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
       });
       await load();
     } catch (error) {
@@ -761,20 +841,9 @@ export function ProcurementViewV2({
     }
   }
 
-  async function voidPayment(order: ProcurementOrder, paymentId: string) {
-    const reason = window.prompt(
-      id ? "Alasan pembatalan pembayaran:" : "Payment void reason:",
-    );
-    if (!reason) return;
-    try {
-      await api(`/api/procurement-orders/${order.id}/payments/${paymentId}/void`, {
-        method: "POST",
-        body: JSON.stringify({ reason }),
-      });
-      await load();
-    } catch (error) {
-      notify(messageOf(error, language));
-    }
+  function voidPayment(order: ProcurementOrder, paymentId: string) {
+    setReasonText("");
+    setReasonPrompt({ kind: "payment-void", order, paymentId });
   }
 
   async function deleteOrder(order: ProcurementOrder) {
@@ -946,8 +1015,8 @@ export function ProcurementViewV2({
                   {["Admin", "Finance"].includes(userRole) && !order.legacy && order.approvalStatus === "Pending" && <button className="button danger small" type="button" onClick={() => orderAction(order, "reject")}><X size={14} /> {id ? "Tolak" : "Reject"}</button>}
                   {canManage && !order.legacy && order.approvalStatus === "Approved" && order.workflowStatus === "Disetujui" && <button className="button secondary small" type="button" onClick={() => orderAction(order, "send")}><Send size={14} /> {id ? "Kirim" : "Send"}</button>}
                   {["Admin", "Project Manager", "Engineer"].includes(userRole) && !order.legacy && order.approvalStatus === "Approved" && ["Dikirim", "Dikerjakan", "Diterima Sebagian"].includes(order.workflowStatus) && <button className="button secondary small" type="button" onClick={() => { setVerificationOrder(order); if (order.documentType === "SPK") { const term = order.terms.find((item) => item.type !== "DP"); setVerificationTermId(term?.id ?? ""); setVerificationAmount(term?.plannedAmount ?? 0); setVerificationProgress(100); } }}><PackageCheck size={14} /> {order.documentType === "PO" ? (id ? "Terima barang" : "Receive") : (id ? "Verifikasi" : "Verify")}</button>}
-                  {canManagePayments && !order.legacy && order.approvalStatus === "Approved" && order.availableToPay > 0 && <button className="button secondary small" type="button" onClick={() => openPayment(order)}><CircleDollarSign size={14} /> {id ? "Bayar" : "Pay"}</button>}
-                  {canManage && !order.legacy && order.approvalStatus === "Approved" && !["Disetujui", "Selesai", "Void"].includes(order.workflowStatus) && <button className="button subtle small" type="button" onClick={() => orderAction(order, "complete")}><BadgeCheck size={14} /> {id ? "Selesaikan" : "Complete"}</button>}
+                  {canManagePayments && !order.legacy && order.approvalStatus === "Approved" && PAYABLE_WORKFLOW_STATUSES.includes(order.workflowStatus) && order.availableToPay > 0 && <button className="button secondary small" type="button" onClick={() => openPayment(order)}><CircleDollarSign size={14} /> {id ? "Bayar" : "Pay"}</button>}
+                  {canManage && !order.legacy && order.approvalStatus === "Approved" && COMPLETABLE_WORKFLOW_STATUSES.includes(order.workflowStatus) && <button className="button subtle small" type="button" onClick={() => orderAction(order, "complete")}><BadgeCheck size={14} /> {id ? "Selesaikan" : "Complete"}</button>}
                   {["Admin", "Finance"].includes(userRole) && !order.legacy && order.workflowStatus !== "Void" && <button className="button danger small" type="button" onClick={() => orderAction(order, "void")}><X size={14} /> Void</button>}
                   <button className="icon-button" type="button" aria-label={`${id ? "Pratinjau" : "Preview"} ${order.number}`} onClick={() => setPreview({ url: `/api/procurement-orders/${order.id}/pdf`, title: order.number, filename: `${order.number.replaceAll("/", "-")}.pdf` })}><Eye size={15} /></button>
                   <button className="button subtle small" type="button" onClick={() => downloadApiFile(`/api/procurement-orders/${order.id}/pdf`, `${order.number.replaceAll("/", "-")}.pdf`)}><Download size={14} /> PDF</button>
@@ -961,8 +1030,8 @@ export function ProcurementViewV2({
                       : (id ? "Menunggu verifikasi progres sebelum termin berikutnya dapat dibayar." : "Awaiting progress verification before the next payment term can be paid.")}</span>
                   </div>
                 )}
-                {order.payments.length > 0 && (
-                  <details className="order-history"><summary>{id ? "Termin & histori pembayaran" : "Terms & payment history"}</summary><div className="order-payment-list">{order.payments.map((payment) => <div key={payment.id}><span>{payment.paidDate} · {payment.vendorInvoiceNumber}<small>{payment.paymentReference} · {payment.status} · {id ? "kas" : "cash"} {formatCurrency(payment.cashAmount ?? payment.amount, language)}</small></span><strong>{formatCurrency(payment.grossAmount ?? payment.amount, language)}</strong>{userRole === "Admin" && payment.status === "Posted" && <button className="button danger small" type="button" onClick={() => voidPayment(order, payment.id)}>Void</button>}</div>)}</div></details>
+                {(order.terms.length > 0 || order.payments.length > 0) && (
+                  <details className="order-history"><summary>{id ? "Termin & histori pembayaran" : "Terms & payment history"}</summary>{order.terms.length > 0 && <div className="order-term-list">{order.terms.map((term) => <div key={term.id}><span>{term.label}<small>{term.type}{term.percentage ? ` · ${term.percentage}%` : ""} · {term.requiresVerification ? (id ? "perlu verifikasi" : "needs verification") : (id ? "tanpa verifikasi" : "no verification")}</small></span><strong>{formatCurrency(term.plannedAmount, language)}</strong><span className={`status-badge ${termStatusTone(term.status)}`}>{termStatusLabel(id, term.status)}</span></div>)}</div>}{order.payments.length > 0 && <div className="order-payment-list">{order.payments.map((payment) => <div key={payment.id}><span>{payment.paidDate} · {payment.vendorInvoiceNumber}<small>{payment.paymentReference} · {payment.status} · {id ? "kas" : "cash"} {formatCurrency(payment.cashAmount ?? payment.amount, language)}</small></span><strong>{formatCurrency(payment.grossAmount ?? payment.amount, language)}</strong>{userRole === "Admin" && payment.status === "Posted" && <button className="button danger small" type="button" onClick={() => voidPayment(order, payment.id)}>Void</button>}</div>)}</div>}</details>
                 )}
               </article>
             ))}
@@ -1045,7 +1114,7 @@ export function ProcurementViewV2({
               <label className="field">
                 <span>{id ? "Kategori item" : "Item category"}</span>
                 <select disabled={Boolean(addendumCatalogItemId)} value={addendumCategory} onChange={(event) => setAddendumCategory(event.target.value as typeof addendumCategory)}>
-                  <option>Perangkat</option><option>Material</option><option>Jasa</option><option>Mobilitas</option>
+                  {BOQ_ROLES.map((entry) => <option key={entry} value={entry}>{localizedLabel(language, entry)}</option>)}
                 </select>
               </label>
               <label className="field">
@@ -1081,6 +1150,45 @@ export function ProcurementViewV2({
       {editingScopeValidity && <div className="modal-backdrop" onMouseDown={() => setEditingScopeValidity(null)}><section className="modal-card" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">QUOTATION VALIDITY</span><h2>{editingScopeValidity.quotation?.number}</h2></div><button className="icon-button" type="button" onClick={() => setEditingScopeValidity(null)}><X size={18} /></button></div><form className="form-grid" onSubmit={saveScopeValidity}><label className="field full"><span>{id ? "Tanggal terbit" : "Issue date"}</span><input required type="date" value={scopeIssuedAt} onChange={(event) => setScopeIssuedAt(event.target.value)} /></label><label className="field full"><span>{id ? "Berlaku sampai" : "Valid until"}</span><input required type="date" min={scopeIssuedAt} value={scopeValidUntil} onChange={(event) => setScopeValidUntil(event.target.value)} /></label><div className="field full"><span>{id ? "Pilihan cepat" : "Quick validity"}</span><div className="title-actions">{[7, 14, 30, 60].map((days) => <button className="button subtle small" type="button" key={days} onClick={() => setScopeValidityDays(days)}>{days} {id ? "hari" : "days"}</button>)}</div></div><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setEditingScopeValidity(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "scope-validity"}>{id ? "Simpan masa berlaku" : "Save validity"}</button></div></form></section></div>}
 
       {paymentOrder && <div className="modal-backdrop" onMouseDown={() => setPaymentOrder(null)}><section className="modal-card wide" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">{id ? "PEMBAYARAN AKTUAL" : "ACTUAL PAYMENT"}</span><h2>{paymentOrder.number}</h2></div><button className="icon-button" type="button" onClick={() => setPaymentOrder(null)}><X size={18} /></button></div><form className="form-grid" onSubmit={savePayment}><label className="field"><span>{id ? "Termin" : "Term"}</span><select value={paymentTermId} onChange={(event) => setPaymentTermId(event.target.value)}>{paymentOrder.terms.map((term) => <option value={term.id} key={term.id}>{term.label} · {formatCurrency(term.plannedAmount, language)}</option>)}</select></label><label className="field"><span>{id ? "Bruto diselesaikan" : "Gross settled"}</span><input required type="number" min="1" max={paymentOrder.availableToPay} value={paymentAmount || ""} onChange={(event) => { const gross = Number(event.target.value); setPaymentAmount(gross); setPaymentCashAmount(Math.max(0, gross - paymentWithholdingAmount)); }} /></label><label className="field"><span>{id ? "Pajak dipotong" : "Tax withheld"}</span><input required type="number" min="0" max={paymentOrder.taxWithholdings ?? 0} value={paymentWithholdingAmount} onChange={(event) => { const withholding = Number(event.target.value); setPaymentWithholdingAmount(withholding); setPaymentCashAmount(Math.max(0, paymentAmount - withholding)); }} /></label><label className="field"><span>{id ? "Kas aktual dibayar" : "Actual cash paid"}</span><input required type="number" min="0" value={paymentCashAmount} onChange={(event) => setPaymentCashAmount(Number(event.target.value))} /></label><label className="field"><span>{id ? "Tanggal bayar" : "Payment date"}</span><input required type="date" max={serverToday} value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} /></label><label className="field"><span>{id ? "Nomor tagihan vendor" : "Vendor invoice number"}</span><input required value={vendorInvoice} onChange={(event) => setVendorInvoice(event.target.value)} /></label><label className="field"><span>{id ? "Referensi pembayaran" : "Payment reference"}</span><input required value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} /></label><label className="field"><span>{id ? "Metode" : "Method"}</span><select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as typeof paymentMethod)}><option>Transfer Bank</option><option>Tunai</option><option>Kartu</option><option>Lainnya</option></select></label>{paymentMethod === "Transfer Bank" && <label className="field full"><span>{id ? "Rekening perusahaan" : "Company bank account"}</span><select required value={bankAccountId} onChange={(event) => setBankAccountId(event.target.value)}>{banks.filter((bank) => bank.status === "Aktif").map((bank) => <option value={bank.id} key={bank.id}>{bank.bankName} · {bank.accountNumberMasked}</option>)}</select></label>}<label className="field full"><span>{id ? "Bukti pembayaran" : "Payment proof"}</span><input required type="file" accept=".pdf,image/png,image/jpeg,image/webp" onChange={(event) => setPaymentFile(event.target.files?.[0] ?? null)} /></label><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setPaymentOrder(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "payment" || paymentAmount <= 0 || paymentAmount !== paymentCashAmount + paymentWithholdingAmount}>{id ? "Catat pembayaran" : "Post payment"}</button></div></form></section></div>}
+
+      {reasonPrompt && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setReasonPrompt(null)}>
+          <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="procurement-reason-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div>
+                <span className="eyebrow">{reasonPrompt.kind === "reject" ? (id ? "TOLAK PENGAJUAN" : "REJECT SUBMISSION") : reasonPrompt.kind === "void" ? (id ? "VOID DOKUMEN" : "VOID DOCUMENT") : (id ? "VOID PEMBAYARAN" : "VOID PAYMENT")}</span>
+                <h2 id="procurement-reason-title">{reasonPrompt.order.number}</h2>
+              </div>
+              <button className="icon-button" type="button" aria-label={id ? "Tutup" : "Close"} onClick={() => setReasonPrompt(null)}><X size={18} /></button>
+            </div>
+            <form className="form-grid" onSubmit={submitReason}>
+              <label className="field full">
+                <span>{id ? `Alasan (minimal ${REASON_MIN_LENGTH} karakter)` : `Reason (at least ${REASON_MIN_LENGTH} characters)`}</span>
+                <textarea
+                  autoFocus
+                  required
+                  minLength={REASON_MIN_LENGTH}
+                  maxLength={1000}
+                  value={reasonText}
+                  onChange={(event) => setReasonText(event.target.value)}
+                  placeholder={reasonPrompt.kind === "reject"
+                    ? (id ? "Contoh: harga vendor di atas anggaran paket." : "Example: the vendor price exceeds the package budget.")
+                    : (id ? "Contoh: dokumen dibuat pada proyek yang salah." : "Example: the document was raised against the wrong project.")}
+                />
+              </label>
+              <p className="form-hint full">{id
+                ? "Alasan ini tercatat permanen pada jejak audit dokumen dan tidak dapat diubah."
+                : "This reason is written permanently to the document audit trail and cannot be edited."}</p>
+              <div className="modal-actions full">
+                <button className="button secondary" type="button" onClick={() => setReasonPrompt(null)}>{id ? "Batal" : "Cancel"}</button>
+                <button className="button danger" type="submit" disabled={reasonText.trim().length < REASON_MIN_LENGTH}>
+                  {reasonPrompt.kind === "reject" ? (id ? "Tolak" : "Reject") : "Void"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
 
       <DocumentPreviewModal
         open={Boolean(preview)}
