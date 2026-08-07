@@ -277,7 +277,7 @@ body {
   overflow-x: clip;
   background: var(--background);
   color: var(--ink);
-  font-family: "DM Sans", Arial, sans-serif;
+  font-family: var(--font-dm-sans), Arial, sans-serif;
   font-size: 15px;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -327,7 +327,7 @@ h1,
 h2,
 h3 {
   color: var(--navy-deep);
-  font-family: "Plus Jakarta Sans", "DM Sans", Arial, sans-serif;
+  font-family: var(--font-plus-jakarta-sans), var(--font-dm-sans), Arial, sans-serif;
   letter-spacing: -0.035em;
 }
 
@@ -361,7 +361,7 @@ h3 {
 .eyebrow {
   display: inline-block;
   color: var(--teal-dark);
-  font-family: "Plus Jakarta Sans", "DM Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), var(--font-dm-sans), sans-serif;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.14em;
@@ -1002,7 +1002,7 @@ h3 {
   display: flex;
   align-items: center;
   gap: 13px;
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 13px;
   font-weight: 800;
   letter-spacing: 0.13em;
@@ -1312,13 +1312,13 @@ h3 {
 
 .sidebar-brand strong {
   color: var(--navy-deep);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 16px;
 }
 
 .sidebar-brand span {
   color: var(--teal-dark);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.14em;
@@ -1583,7 +1583,7 @@ h3 {
 
 .topbar-title strong {
   color: var(--navy-deep);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 14px;
 }
 
@@ -1708,7 +1708,7 @@ h3 {
 
 .dropdown-head strong {
   color: var(--navy-deep);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 12px;
 }
 
@@ -1962,7 +1962,7 @@ h3 {
 .metric-main strong {
   overflow: hidden;
   color: var(--navy-deep);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: clamp(18px, 1.7vw, 24px);
   letter-spacing: -0.04em;
   text-overflow: ellipsis;
@@ -2037,7 +2037,7 @@ h3 {
 
 .project-code {
   color: var(--muted);
-  font-family: "DM Sans", sans-serif;
+  font-family: var(--font-dm-sans), sans-serif;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -2125,7 +2125,7 @@ h3 {
 
 .project-finance > strong {
   color: var(--navy);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 13px;
 }
 
@@ -2813,7 +2813,7 @@ h3 {
 
 .margin-total strong {
   color: var(--teal-dark);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 17px;
 }
 
@@ -2997,7 +2997,7 @@ h3 {
 .document-letterhead strong,
 .bast-letterhead strong {
   color: var(--navy);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 13px;
   letter-spacing: 0.08em;
 }
@@ -3030,7 +3030,7 @@ h3 {
 
 .document-title > div:first-child span {
   color: var(--teal-dark);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.17em;
@@ -3130,7 +3130,7 @@ h3 {
 
 .document-total strong {
   color: var(--navy);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 13px;
 }
 
@@ -3180,7 +3180,7 @@ h3 {
   border: 2px solid rgba(4, 169, 159, 0.45);
   border-radius: 50%;
   color: rgba(4, 169, 159, 0.65);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-weight: 800;
   transform: rotate(-10deg);
 }
@@ -3407,7 +3407,7 @@ h3 {
 
 .invoice-form-summary strong {
   color: var(--teal-dark);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   text-align: right;
 }
 
@@ -3516,7 +3516,7 @@ h3 {
 
 .progress-ring strong {
   color: var(--teal-dark);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 14px;
 }
 
@@ -3578,7 +3578,7 @@ h3 {
 
 .project-summary-grid strong {
   color: var(--navy);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 18px;
 }
 
@@ -3624,7 +3624,7 @@ h3 {
   margin-top: 8px;
   overflow-wrap: anywhere;
   color: var(--navy);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: clamp(12px, 1vw, 16px);
 }
 
@@ -4972,7 +4972,7 @@ h3 {
 .finance-kpi > strong {
   overflow: hidden;
   color: var(--navy-deep);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: clamp(18px, 2vw, 25px);
   letter-spacing: -.04em;
   text-overflow: ellipsis;
@@ -5687,7 +5687,7 @@ h3 {
 .bank-account-main b {
   overflow: hidden;
   color: var(--navy-deep);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -6879,7 +6879,7 @@ h3 {
   background: linear-gradient(145deg, var(--teal), var(--teal-dark));
   box-shadow: 0 8px 28px rgba(33, 88, 92, .18);
   color: #fff;
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 30px;
   font-weight: 800;
 }

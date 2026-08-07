@@ -31,6 +31,15 @@ const isDevelopment = process.env.NODE_ENV !== "production";
 //                               speed), and Next injects inline <style> for
 //                               critical CSS.
 //
+// Note that style-src has no fonts.googleapis.com and font-src no
+// fonts.gstatic.com, and neither is an oversight. The brand faces are pulled at
+// build time by next/font/google in app/layout.tsx and served from this origin,
+// so the browser never talks to Google for them. Re-adding a
+// <link rel=stylesheet href=fonts.googleapis.com> would need both of those
+// origins opened up and would go back to blocking first paint on a round trip
+// to Google — this policy blocking that link is what left the site rendering in
+// Arial until the fonts were self-hosted.
+//
 // challenges.cloudflare.com is the Turnstile widget on the public lead form: it
 // loads a script, opens an iframe, and posts the token back.
 const cloudflareTurnstile = "https://challenges.cloudflare.com";

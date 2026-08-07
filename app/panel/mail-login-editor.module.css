@@ -2,7 +2,7 @@
 .pageHeader { display:flex; align-items:flex-end; justify-content:space-between; gap:28px; }
 .pageHeader > div { max-width:760px; }
 .pageHeader span, .sectionHeading span, .cardHeading > div > span, .previewHeader span { display:block; color:var(--teal-dark); font-size:10px; font-weight:850; letter-spacing:.15em; }
-.pageHeader h2 { margin:9px 0 8px; color:var(--ink); font-family:"Plus Jakarta Sans",sans-serif; font-size:clamp(27px,3vw,40px); line-height:1.14; letter-spacing:-.045em; }
+.pageHeader h2 { margin:9px 0 8px; color:var(--ink); font-family:var(--font-plus-jakarta-sans),sans-serif; font-size:clamp(27px,3vw,40px); line-height:1.14; letter-spacing:-.045em; }
 .pageHeader p { margin:0; color:var(--muted); font-size:13px; line-height:1.7; }
 .pageHeader > a { min-height:42px; padding:0 14px; display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:8px; color:var(--ink); background:#fff; font-size:11px; font-weight:800; text-decoration:none; white-space:nowrap; }
 .statusBar { padding:14px; display:grid; grid-template-columns:minmax(260px,1fr) auto auto; align-items:center; gap:12px; border:1px solid var(--line); border-radius:12px; background:#fff; }
@@ -43,7 +43,7 @@
 .field, .assetField { min-width:0; display:grid; gap:7px; color:#52656b; font-size:11px; font-weight:750; }
 .field > span { display:flex; justify-content:space-between; gap:10px; }
 .field > span small { color:#52666c; font-size:9px; font-weight:600; }
-.field input, .field textarea { width:100%; border:1px solid #d5e1de; border-radius:8px; color:var(--ink); background:#fff; font:500 13px "DM Sans",sans-serif; outline:none; }
+.field input, .field textarea { width:100%; border:1px solid #d5e1de; border-radius:8px; color:var(--ink); background:#fff; font:500 13px var(--font-dm-sans),sans-serif; outline:none; }
 .field input { height:44px; padding:0 12px; }
 .field textarea { min-height:92px; padding:11px 12px; line-height:1.55; resize:vertical; }
 .field input:focus, .field textarea:focus { border-color:var(--teal); box-shadow:0 0 0 3px rgba(4,169,159,.1); }
@@ -73,7 +73,7 @@
 .previewVisual > *:not(.previewOrb) { position:relative; z-index:1; }
 .previewVisual > img { width:78px; height:78px; margin:0 auto 26px; padding:10px; object-fit:contain; border-radius:15px; background:#fff; box-shadow:0 17px 30px rgba(0,70,66,.2); }
 .previewVisual > span { font-size:8px; font-weight:850; letter-spacing:.16em; text-align:center; }
-.previewVisual h4 { margin:9px 0; font:750 24px/1.14 "Plus Jakarta Sans",sans-serif; letter-spacing:-.045em; text-align:center; }
+.previewVisual h4 { margin:9px 0; font:750 24px/1.14 var(--font-plus-jakarta-sans),sans-serif; letter-spacing:-.045em; text-align:center; }
 .previewVisual p { margin:0 auto; max-width:280px; color:#d9f6f2; font-size:10px; line-height:1.65; text-align:center; }
 .previewPerumnet .previewVisual { align-items:center; background:linear-gradient(145deg,#05aaa0,#00988f 58%,#087f79); }
 .previewPerumnet .previewVisual > img { width:96px; height:96px; margin:0 auto 26px; aspect-ratio:1; }
