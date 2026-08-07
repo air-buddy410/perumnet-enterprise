@@ -6,11 +6,12 @@ import { MapPinned, MapPinPlus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Project, ProjectStatus } from "../data";
 import { type AppLanguage } from "../i18n";
+import { decideFrame, frameKey } from "../map-framing";
 
 /**
  * The project map on the admin dashboard.
  *
- * Two things about this component are load-bearing rather than incidental.
+ * Three things about this component are load-bearing rather than incidental.
  *
  * Scope: it never queries anything. Every pin comes from the `projects` array
  * the dashboard already holds, which is the response of `GET /api/projects` —
@@ -22,10 +23,17 @@ import { type AppLanguage } from "../i18n";
  * Loading: Leaflet touches `window` the moment it is imported, so it is pulled
  * in with a dynamic `import()` inside an effect. That keeps it out of the server
  * render and out of the initial JavaScript for /admin — measured: the sign-in
- * screen never fetches the chunk, and the dashboard fetches it once. Its
- * stylesheet is a static import and so does ship with the page (about 2.7 kB
- * gzipped), which is the price of the panel and its empty state rendering
- * correctly on the server instead of popping in after hydration.
+ * screen never fetches the chunk, and the dashboard fetches it once. The marker
+ * clustering plugin rides in the same deferred chunk, behind
+ * `./project-map-cluster`, for the same reason and with the same measurement.
+ * Leaflet's stylesheet is a static import and so does ship with the page (about
+ * 2.7 kB gzipped), which is the price of the panel and its empty state
+ * rendering correctly on the server instead of popping in after hydration; the
+ * plugin's stylesheet is not needed until the map exists and so does not.
+ *
+ * Framing: the view follows the workspace picker, and only the workspace
+ * picker. `app/map-framing.ts` holds the rule and explains why it is a rule
+ * rather than "re-fit whenever `projects` changes".
  */
 
 // Bali, framed so the whole island and the near parts of Lombok fit. Used when
@@ -67,13 +75,150 @@ const FIT_OPTIONS = {
   maxZoom: 13,
 };
 
-function applyView(map: Leaflet.Map, bounds: Leaflet.LatLngBounds | null) {
-  if (bounds) map.fitBounds(bounds, FIT_OPTIONS);
-  else map.setView(BALI_CENTRE, BALI_ZOOM);
+// Long enough to read as one continuous move across the island, short enough
+// not to make somebody wait for their own click. Leaflet's own default is
+// distance-dependent and can run well past a second on a long hop.
+const FLY_SECONDS = 0.7;
+
+/**
+ * How close two pins have to be before they are drawn as one badge.
+ *
+ * The plugin's default is 80px, which is wrong for Bali specifically. The
+ * island fits this panel at about zoom 9, where 80px is roughly 24km — Denpasar
+ * and Ubud are 17km apart and would collapse into a single badge in the default
+ * view, hiding two pins that were perfectly legible side by side. That is the
+ * failure mode clustering is supposed to cure, not cause.
+ *
+ * 32px is the honest threshold instead: a pin is 22px across, so two pins whose
+ * centres are 32px apart are already overlapping and one of them is already
+ * partly hidden. Below that, merging them shows more than leaving them; above
+ * it, merging them shows less. At the all-Bali view that keeps Denpasar, Ubud,
+ * Karangasem, Singaraja and Nusa Penida as five separate pins while grouping
+ * the sites *within* each of those towns, which is what the owner asked for.
+ */
+const CLUSTER_RADIUS = 32;
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+function applyView(map: Leaflet.Map, bounds: Leaflet.LatLngBounds | null, animate: boolean) {
+  if (!bounds) {
+    map.setView(BALI_CENTRE, BALI_ZOOM);
+    return;
+  }
+  // A map that teleports between two places on the same island reads as a
+  // different map; the same map moving reads as the same map moving. Under
+  // `prefers-reduced-motion` the caller asks for the jump, and gets it.
+  if (animate) map.flyToBounds(bounds, { ...FIT_OPTIONS, duration: FLY_SECONDS });
+  else map.fitBounds(bounds, FIT_OPTIONS);
 }
 
 function isMapped(project: Project): project is Project & { latitude: number; longitude: number } {
   return typeof project.latitude === "number" && typeof project.longitude === "number";
+}
+
+/** A marker that remembers which state it is drawing, so a cluster can tally. */
+type ProjectMarker = Leaflet.Marker & { projectStatus?: ProjectStatus };
+
+/**
+ * A DivIcon that carries its own accessible name.
+ *
+ * Leaflet applies `title` to a marker element but never `aria-label`, and a div
+ * icon gets no `alt` either — which is why this component has always set the
+ * attribute by hand after adding the marker. Clustering breaks that approach:
+ * markercluster destroys and rebuilds a marker's element every time a group
+ * opens or closes, so an attribute set once is gone after the first zoom, and a
+ * cluster badge has no element to set anything on until it appears. Stamping it
+ * inside `createIcon` is the one place that covers every element Leaflet will
+ * ever build for this icon.
+ */
+function labelledIcon(
+  leaflet: typeof Leaflet,
+  options: Leaflet.DivIconOptions,
+  label: string,
+): Leaflet.DivIcon {
+  const icon = leaflet.divIcon(options);
+  const create = icon.createIcon.bind(icon);
+  icon.createIcon = (oldIcon?: HTMLElement) => {
+    const element = create(oldIcon);
+    element.setAttribute("aria-label", label);
+    element.setAttribute("title", label);
+    return element;
+  };
+  return icon;
+}
+
+/**
+ * The badge a cluster wears.
+ *
+ * A cluster stands for several projects and they will usually not all be in the
+ * same state, so it cannot take one of the three state colours: a green badge
+ * over two deals and a finished job is the map saying something untrue. The
+ * plugin's own `MarkerCluster.Default.css` is no help — its badges are green,
+ * yellow and orange *by size*, which on this map reads as precisely the thing
+ * it does not mean, and is why that stylesheet is not imported.
+ *
+ * So the badge is neutral where it counts: a white disc carrying the number, in
+ * the same ink and weight as the tallies in the legend above. The mix is told
+ * by the ring around it, split into arcs in proportion to the states inside, in
+ * the same three colours as the pins — three drafts wear a solid grey ring, a
+ * mixed group wears a divided one. That costs no extra space, because a badge
+ * on a map needed an outline anyway, and it adds no text. Colour is not the
+ * only channel: the accessible name and the hover tooltip both spell the
+ * breakdown out in words, in the reading language.
+ */
+function clusterIcon(
+  leaflet: typeof Leaflet,
+  cluster: Leaflet.MarkerCluster,
+  id: boolean,
+): Leaflet.DivIcon {
+  const tally: Record<ProjectStatus, number> = { Draft: 0, Aktif: 0, Selesai: 0 };
+  for (const child of cluster.getAllChildMarkers()) {
+    const status = (child as ProjectMarker).projectStatus;
+    if (status) tally[status] += 1;
+  }
+  const total = cluster.getChildCount();
+  const counted = STATUS_ORDER.reduce((sum, status) => sum + tally[status], 0);
+
+  const arcs: string[] = [];
+  let cursor = 0;
+  for (const status of STATUS_ORDER) {
+    if (!tally[status]) continue;
+    const from = (cursor / counted) * 100;
+    cursor += tally[status];
+    const to = (cursor / counted) * 100;
+    arcs.push(`${STATUS_COLOUR[status]} ${from.toFixed(2)}% ${to.toFixed(2)}%`);
+  }
+
+  // A cluster whose children all somehow arrived without a state cannot happen
+  // from this component, but a ring built from nothing would be an invalid
+  // gradient and the badge would silently lose its outline over pale tiles.
+  const ring = arcs.length ? `conic-gradient(${arcs.join(",")})` : STATUS_COLOUR.Draft;
+
+  const breakdown = STATUS_ORDER.filter((status) => tally[status])
+    .map((status) => `${tally[status]} ${STATUS_LABEL[status][id ? "id" : "en"]}`)
+    .join(", ");
+  // Indonesian does not inflect the noun for number and a cluster is never one
+  // project, but the singular is spelled out rather than assumed away.
+  const label = id
+    ? `${total} proyek di area ini: ${breakdown}.`
+    : `${total} ${total === 1 ? "project" : "projects"} in this area: ${breakdown}.`;
+
+  return labelledIcon(
+    leaflet,
+    {
+      className: "project-map-cluster-icon",
+      html: `<span class="project-map-cluster" style="background:${ring}"><b>${total}</b></span>`,
+      iconSize: [34, 34],
+      iconAnchor: [17, 17],
+    },
+    label,
+  );
 }
 
 export interface ProjectMapProps {
@@ -96,7 +241,13 @@ export function ProjectMap({
   const mapRef = useRef<Leaflet.Map | null>(null);
   const leafletRef = useRef<typeof Leaflet | null>(null);
   const markersRef = useRef(new Map<string, Leaflet.Marker>());
+  const clusterRef = useRef<Leaflet.MarkerClusterGroup | null>(null);
   const boundsRef = useRef<Leaflet.LatLngBounds | null>(null);
+  // The frame the view was last pointed at, and whether it has ever been
+  // pointed at pins at all. Together they are what keeps the map from moving
+  // for any reason other than the selection changing — see ../map-framing.
+  const frameRef = useRef<string | null>(null);
+  const framedRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
   const [pinMode, setPinMode] = useState(false);
@@ -115,6 +266,13 @@ export function ProjectMap({
   // be torn down and rebuilt on every render.
   const placeHandler = useRef<(latitude: number, longitude: number) => void>(() => {});
   const openHandler = useRef(onOpenProject);
+  // The cluster group's `iconCreateFunction` is registered once, when the map
+  // is built, but the badge it draws is bilingual.
+  const languageRef = useRef(id);
+
+  useEffect(() => {
+    languageRef.current = id;
+  }, [id]);
 
   useEffect(() => {
     placeHandler.current = (latitude, longitude) => {
@@ -134,6 +292,10 @@ export function ProjectMap({
     void (async () => {
       try {
         const leaflet = await import("leaflet");
+        // Sequential, and it has to stay that way: the clustering plugin reads
+        // the global `L` that Leaflet's own bundle installs on evaluation. See
+        // ./project-map-cluster for the whole of that story.
+        const { createClusterGroup } = await import("./project-map-cluster");
         if (cancelled || !containerRef.current) return;
         leafletRef.current = leaflet;
         const map = leaflet.map(containerRef.current, {
@@ -165,7 +327,25 @@ export function ProjectMap({
         map.on("click", (event: Leaflet.LeafletMouseEvent) => {
           placeHandler.current(event.latlng.lat, event.latlng.lng);
         });
+
+        const clusters = createClusterGroup({
+          maxClusterRadius: CLUSTER_RADIUS,
+          // The hover hull is the plugin's most decorative feature and the one
+          // nobody asked for: a polygon that flashes over the island whenever
+          // the pointer crosses a badge. The badge already says how many, and
+          // clicking it shows exactly where.
+          showCoverageOnHover: false,
+          // Clicking a cluster zooms to its contents; at the tile layer's
+          // deepest zoom, sites that are genuinely on top of each other fan out
+          // instead, because there is no zoom left to separate them with.
+          zoomToBoundsOnClick: true,
+          spiderfyOnMaxZoom: true,
+          iconCreateFunction: (cluster) => clusterIcon(leaflet, cluster, languageRef.current),
+        });
+        clusters.addTo(map);
+
         mapRef.current = map;
+        clusterRef.current = clusters;
         setReady(true);
       } catch {
         // A chunk that will not load must not take the rest of the dashboard
@@ -178,7 +358,10 @@ export function ProjectMap({
       cancelled = true;
       mapRef.current?.remove();
       mapRef.current = null;
+      clusterRef.current = null;
       markers.clear();
+      frameRef.current = null;
+      framedRef.current = false;
       setReady(false);
     };
   }, []);
@@ -195,7 +378,11 @@ export function ProjectMap({
       const map = mapRef.current;
       if (!map) return;
       map.invalidateSize();
-      applyView(map, boundsRef.current);
+      // Never animated, and never when there is nothing to frame: a resize is a
+      // correction to the view the operator is already looking at, not a
+      // journey to a new one, and with no pins there is nothing to correct —
+      // dropping back to the whole island would throw away a pan they made.
+      if (boundsRef.current) applyView(map, boundsRef.current, false);
     });
     observer.observe(container);
     return () => observer.disconnect();
@@ -204,51 +391,95 @@ export function ProjectMap({
   useEffect(() => {
     const leaflet = leafletRef.current;
     const map = mapRef.current;
-    if (!ready || !leaflet || !map) return;
+    const clusters = clusterRef.current;
+    if (!ready || !leaflet || !map || !clusters) return;
 
     const markers = markersRef.current;
     const seen = new Set<string>();
+    const added: Leaflet.Marker[] = [];
 
     for (const project of mapped) {
       seen.add(project.id);
       const position: [number, number] = [project.latitude, project.longitude];
       const colour = STATUS_COLOUR[project.status];
       const label = `${project.name} — ${STATUS_LABEL[project.status][id ? "id" : "en"]}`;
-      const icon = leaflet.divIcon({
-        className: "project-map-marker",
-        html: `<span class="project-map-pin" style="background:${colour}"></span>`,
-        iconSize: [22, 22],
-        iconAnchor: [11, 11],
-      });
-      const existing = markers.get(project.id);
+      const icon = labelledIcon(
+        leaflet,
+        {
+          className: "project-map-marker",
+          html: `<span class="project-map-pin" style="background:${colour}"></span>`,
+          iconSize: [22, 22],
+          iconAnchor: [11, 11],
+        },
+        label,
+      );
+      const existing = markers.get(project.id) as ProjectMarker | undefined;
       if (existing) {
         existing.setLatLng(position);
         existing.setIcon(icon);
         existing.options.title = label;
-        existing.getElement()?.setAttribute("title", label);
-        existing.getElement()?.setAttribute("aria-label", label);
+        existing.projectStatus = project.status;
         continue;
       }
-      const marker = leaflet
-        .marker(position, { icon, title: label, alt: label, riseOnHover: true, keyboard: true })
-        .addTo(map);
+      const marker = leaflet.marker(position, {
+        icon,
+        title: label,
+        alt: label,
+        riseOnHover: true,
+        keyboard: true,
+      }) as ProjectMarker;
+      marker.projectStatus = project.status;
       marker.on("click", () => openHandler.current(project.id));
-      marker.getElement()?.setAttribute("aria-label", label);
+      // Leaflet gives a marker `tabindex="0"` and `role="button"` but stops
+      // there: a div is not a button, so Enter did nothing. The cluster badge
+      // next to it does respond to Enter — markercluster binds
+      // `clusterkeypress` — and a map where a keyboard can open five projects
+      // at once but not one of them on its own is worse than either.
+      marker.on("keypress", (event) => {
+        const key = (event as Leaflet.LeafletKeyboardEvent).originalEvent?.key;
+        if (key === "Enter") openHandler.current(project.id);
+      });
       markers.set(project.id, marker);
+      added.push(marker);
     }
 
+    const dropped: Leaflet.Marker[] = [];
     for (const [projectId, marker] of markers) {
       if (seen.has(projectId)) continue;
-      marker.remove();
+      dropped.push(marker);
       markers.delete(projectId);
     }
+
+    // In bulk rather than one at a time: every single add or remove re-runs the
+    // clustering pass, and the picker swapping the whole portfolio for one
+    // project is the common case, not the rare one.
+    if (dropped.length) clusters.removeLayers(dropped);
+    if (added.length) clusters.addLayers(added);
+    // A status change repaints a pin and a language change rewrites its label;
+    // the badges above them have to be told, or a cluster keeps yesterday's mix
+    // in its ring and the other language in its accessible name.
+    if (markers.size) clusters.refreshClusters();
 
     boundsRef.current = mapped.length
       ? leaflet.latLngBounds(
           mapped.map((project) => [project.latitude, project.longitude] as [number, number]),
         )
       : null;
-    applyView(map, boundsRef.current);
+
+    const frame = frameKey(mapped);
+    const decision = decideFrame(frame, frameRef.current);
+    if (decision === "fit") {
+      // The first framing is the map arriving at its subject and should simply
+      // be there. Every one after it is the view following the picker, and that
+      // is the one worth animating.
+      applyView(map, boundsRef.current, framedRef.current && !prefersReducedMotion());
+      framedRef.current = true;
+    } else if (decision === "reset") {
+      applyView(map, null, false);
+    }
+    // "hold" records the frame too: the map is now standing for this selection,
+    // it just did not have to move to do it.
+    if (decision !== "skip") frameRef.current = frame;
   }, [id, mapped, ready]);
 
   useEffect(() => {

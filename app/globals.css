@@ -2004,6 +2004,53 @@ h3 {
   cursor: pointer;
 }
 
+/* The badge drawn where several pins would otherwise sit on top of each other.
+   It takes none of the three state colours for itself, because the group it
+   stands for is usually in more than one state — see `clusterIcon` in
+   app/components/project-map.tsx. The count sits on white; the ring around it
+   is a conic-gradient built per cluster, its arcs in proportion to the states
+   underneath. */
+.project-map-cluster-icon {
+  cursor: pointer;
+}
+
+.project-map-cluster {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 50%;
+  /* The hairline is what keeps a pale arc off a pale tile; the drop shadow is
+     the same one the pins carry, so a badge sits at the same height as them. */
+  box-shadow: 0 0 0 2px #fff, 0 2px 6px rgba(24, 58, 65, 0.45);
+}
+
+.project-map-cluster b {
+  display: grid;
+  min-width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 999px;
+  padding: 0 4px;
+  background: #fff;
+  color: var(--navy-deep);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* The plugin's stylesheet slides markers in and out of their badge over 0.3s.
+   It arrives with the deferred map chunk and so may land after this file in the
+   cascade, which is why this selector is deliberately one step more specific
+   than the rule it is overriding rather than relying on order. */
+@media (prefers-reduced-motion: reduce) {
+  .project-map-canvas .leaflet-cluster-anim .leaflet-marker-icon,
+  .project-map-canvas .leaflet-cluster-anim .leaflet-marker-shadow {
+    transition: none;
+  }
+}
+
 .project-map-overlay {
   position: absolute;
   inset: 0;
