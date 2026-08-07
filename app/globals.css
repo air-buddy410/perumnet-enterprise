@@ -2130,6 +2130,93 @@ h3 {
   }
 }
 
+/* Project states, directly under the map.
+   Three cards in the map legend's own order and colours. The count sits on the
+   right at display size because it is what the block is for; the schedule fact
+   under the label is the reason the block exists at all rather than repeating
+   the legend. */
+.project-state-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.project-state-card {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  align-content: center;
+  gap: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.project-state-dot {
+  grid-row: 1;
+  grid-column: 1;
+  width: 11px;
+  height: 11px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(35, 61, 73, 0.22);
+}
+
+.project-state-label {
+  grid-row: 1;
+  grid-column: 2;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.project-state-count {
+  grid-row: 1 / span 2;
+  grid-column: 3;
+  align-self: center;
+  color: var(--navy-deep);
+  font-family: "Plus Jakarta Sans", sans-serif;
+  font-size: clamp(26px, 2.3vw, 34px);
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+/* The Selesai card has no honest fact to print — nothing records when a project
+   was finished — so this line is empty there. It keeps its height anyway, or
+   the three cards stop lining up. */
+.project-state-fact {
+  grid-row: 2;
+  grid-column: 1 / span 2;
+  min-height: 16px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+@media (max-width: 620px) {
+  .project-state-grid {
+    grid-template-columns: 1fr;
+    gap: 9px;
+  }
+
+  .project-state-card {
+    padding: 12px 14px;
+  }
+
+  .project-state-count {
+    font-size: 26px;
+  }
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2419,6 +2506,15 @@ h3 {
   white-space: nowrap;
 }
 
+/* The panel shows three rows; the badge counts the whole queue. This line is
+   what stops those two numbers looking like a contradiction. */
+.attention-more {
+  border-top: 1px solid var(--line);
+  padding: 10px 15px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .attention-icon {
   display: grid;
   width: 34px;
@@ -2473,6 +2569,69 @@ h3 {
 .team-activity small {
   color: #a2adae;
   font-size: 8px;
+}
+
+/* The money, at the foot of the dashboard.
+   One panel rather than two loose cards: the owner asked for these figures to
+   be something you scroll down to, and a labelled section with a sentence
+   explaining what each one counts survives that demotion better than two cards
+   that have simply lost their row. */
+.finance-strip-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 20px;
+  padding: 18px 20px 20px;
+}
+
+.finance-figure {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 13px;
+}
+
+.finance-figure-main {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.finance-figure-main > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.finance-figure-main strong {
+  overflow: hidden;
+  color: var(--navy-deep);
+  font-family: "Plus Jakarta Sans", sans-serif;
+  font-size: clamp(20px, 1.8vw, 26px);
+  letter-spacing: -0.04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.finance-figure-main small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.finance-strip-note {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+@media (max-width: 620px) {
+  .finance-strip-body {
+    grid-template-columns: 1fr;
+    gap: 14px 0;
+    padding: 15px 16px 17px;
+  }
 }
 
 /* Context and BoQ */

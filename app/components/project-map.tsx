@@ -36,20 +36,25 @@ const BALI_ZOOM = 9;
 
 // The three colours are the ones the status badges already use elsewhere in the
 // application, so a project reads the same on the map as it does on its card.
-const STATUS_COLOUR: Record<ProjectStatus, string> = {
+// Exported because the project-state block sits directly under the map and has
+// to agree with it: one definition, or the dot beside "On progress" drifts away
+// from the pins it is describing.
+export const STATUS_COLOUR: Record<ProjectStatus, string> = {
   Draft: "#6d7b7d",
   Aktif: "#007a74",
   Selesai: "#267653",
 };
 
 // The owner's own words for the three states, and their English equivalents.
-const STATUS_LABEL: Record<ProjectStatus, { id: string; en: string }> = {
+export const STATUS_LABEL: Record<ProjectStatus, { id: string; en: string }> = {
   Draft: { id: "Deal-an", en: "In negotiation" },
   Aktif: { id: "On progress", en: "In progress" },
   Selesai: { id: "Selesai", en: "Completed" },
 };
 
-const STATUS_ORDER: ProjectStatus[] = ["Draft", "Aktif", "Selesai"];
+// Deal-an, then On progress, then Selesai — the order the work moves in, and
+// the order the legend and the state block under it both read in.
+export const STATUS_ORDER: ProjectStatus[] = ["Draft", "Aktif", "Selesai"];
 
 // Asymmetric on purpose: the extra room at the bottom keeps the southernmost
 // pin clear of the attribution strip, which is required to be there and which

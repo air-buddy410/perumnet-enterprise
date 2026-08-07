@@ -444,6 +444,14 @@ export const chapterStart: Chapter = {
           "Pins are guessed from the Location field each time a project is saved. When a location cannot be recognised the project still saves without a pin, and the number of such projects is stated plainly under the map. Press Set a map pin, choose the project, and click the correct position. A pin placed by a person is never overwritten by a later automatic guess.",
         ],
         [
+          "Baca tiga kartu status tepat di bawah peta: Deal-an, On progress, dan Selesai. Angka besarnya adalah jumlah proyek pada status itu; baris kecil di bawahnya menyebut berapa yang sudah lewat rencana mulai atau lewat tanggal target, dan mengatakan apa adanya bila tanggal tersebut memang belum diisi. Kartu Selesai hanya memuat jumlah, karena tanggal sebuah proyek benar-benar rampung tidak pernah dicatat sehingga tidak ada keterangan waktu yang dapat dipertanggungjawabkan.",
+          "Read the three state cards directly under the map: In negotiation, In progress, and Completed. The large figure is how many projects are in that state; the small line beneath says how many have gone past their planned start or their target date, and says so plainly when that date has never been filled in. The Completed card carries its count alone, because the date a project actually finished is never recorded and so no claim about timing can be supported.",
+        ],
+        [
+          "Gulir ke bagian paling bawah Dashboard untuk angka uang. Nilai proyek berjalan dan Piutang diterima berada di bawah daftar Proyek terbaru, bukan di baris teratas. Nilai proyek berjalan menjumlahkan kontrak berstatus On progress saja; Piutang diterima mengikuti porsi setiap proyek yang sudah tertutup pembayaran terkonfirmasi, bukan saldo rekening. Keduanya mengikuti pemilih proyek yang sama seperti seluruh isi Dashboard.",
+          "Scroll to the very bottom of the Dashboard for the money. Active project value and Receivables collected sit below the Recent projects list rather than in the top row. Active project value adds up only the contracts that are In progress; Receivables collected follows the share of each project that confirmed payments already cover, not a bank balance. Both follow the same project picker as the rest of the Dashboard.",
+        ],
+        [
           "Bila proyek dijual dalam beberapa lingkup, pilih juga paket komersial di bagian atas BoQ Generator, Quotation & Invoice, Validasi Perangkat, dan BAST Digital. Paket pertama dibuat otomatis dengan kode PKG-01 dan judul Lingkup Utama.",
           "If the project is sold as several scopes, also choose the commercial package at the top of BoQ Generator, Quotations & Invoices, Device Validation, and Digital Handover. The first package is created automatically with the code PKG-01 and the title Main Scope.",
         ],
