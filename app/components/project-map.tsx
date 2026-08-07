@@ -149,6 +149,12 @@ export function ProjectMap({
           dragging: !leaflet.Browser.mobile,
           attributionControl: true,
         });
+        // Leaflet's default attribution prefix is its own branding — a Ukrainian
+        // flag and a link to leafletjs.com — which is the library advertising
+        // itself, not a credit anyone is owed. Dropping the prefix leaves the
+        // OpenStreetMap credit added by the tile layer below, which IS required
+        // by the tile usage policy and must never be removed.
+        map.attributionControl.setPrefix(false);
         leaflet
           .tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
             maxZoom: 18,
