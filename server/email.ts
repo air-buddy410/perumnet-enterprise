@@ -130,6 +130,21 @@ export function emailDeliveryConfigured(
   );
 }
 
+/**
+ * True when a *security* email genuinely cannot reach its recipient — capture
+ * or disabled mode, or no working credentials for the security profile.
+ *
+ * The recovery endpoints use this to decide whether handing the raw token back
+ * in the HTTP response is the only way a developer could ever complete the
+ * flow. `RESEND_API_KEY` used to stand in for that question, which was wrong in
+ * both directions: this deployment sends over SMTP, so the key is always empty
+ * and the test always passed, leaving NODE_ENV as the single thing between the
+ * internet and an unauthenticated admin takeover.
+ */
+export function securityMailUndeliverable() {
+  return emailMode() !== "live" || !emailDeliveryConfigured("security");
+}
+
 export function emailMode() {
   if (process.env.APP_MODE === "demo") return "capture" as const;
   const configured = process.env.EMAIL_MODE?.toLowerCase();
@@ -148,8 +163,16 @@ function smtpConfigured(profile: EmailSenderProfile = "operational") {
   const securityCredentials =
     profile === "security" && securitySmtpConfigured();
   return Boolean(
-    (process.env.SECURITY_SMTP_HOST ?? process.env.SMTP_HOST) &&
-      process.env.SMTP_PORT &&
+    (securityCredentials
+      ? process.env.SECURITY_SMTP_HOST ?? process.env.SMTP_HOST
+      : process.env.SMTP_HOST) &&
+      // Mirrors sendWithSmtp exactly. Reading SMTP_PORT for a dedicated
+      // security transport declared the profile unconfigured whenever only the
+      // SECURITY_SMTP_* set was filled in — the same shape of mistake that
+      // stalled the outbox.
+      (securityCredentials
+        ? process.env.SECURITY_SMTP_PORT ?? process.env.SMTP_PORT
+        : process.env.SMTP_PORT) &&
       (securityCredentials
         ? process.env.SECURITY_SMTP_USER && process.env.SECURITY_SMTP_PASS
         : process.env.SMTP_USER && process.env.SMTP_PASS),
@@ -164,6 +187,11 @@ export function emailProviderName(
   if (process.env.RESEND_API_KEY) return "resend";
   return "disabled";
 }
+
+// `body_html` is NOT NULL in the schema, so a redacted body is the empty
+// string rather than NULL. That keeps the retention work off the two-step
+// column migration path in server/db/README.md entirely.
+const REDACTED_BODY = "";
 
 async function enqueueOutbox(
   client: DatabaseClient,
@@ -185,7 +213,11 @@ async function enqueueOutbox(
       input.senderProfile ?? "operational",
       input.recipient,
       input.subject,
-      input.html,
+      // A Skipped row is already terminal: nobody will ever send it, and
+      // nothing reads the stored body. Keeping the HTML would keep a live
+      // reset URL — token and all — on disk indefinitely, which in capture
+      // mode (demo) means forever.
+      status === "Skipped" ? REDACTED_BODY : input.html,
       status,
       emailProviderName(input.senderProfile),
       timestamp,
@@ -392,13 +424,17 @@ async function deliverOutboxRow(
       throw new Error("Provider email belum dikonfigurasi.");
     }
     await client.execute({
+      // The body is dropped the moment it is no longer needed. It holds the
+      // full reset or email-change URL with a live token, plus client names,
+      // project titles, invoice numbers and amounts.
       sql: `UPDATE email_outbox SET status='Sent',provider=?,provider_id=?,
-        attempt_count=?,locked_at=NULL,last_error=NULL,sent_at=?,updated_at=?
+        attempt_count=?,locked_at=NULL,last_error=NULL,body_html=?,sent_at=?,updated_at=?
         WHERE id=?`,
       args: [
         provider,
         providerId ?? null,
         attempt,
+        REDACTED_BODY,
         timestamp,
         timestamp,
         row.id,
@@ -428,9 +464,12 @@ async function deliverOutboxRow(
     ).toISOString();
     await client.execute({
       sql: `UPDATE email_outbox SET status='Failed',provider=?,
-        attempt_count=?,next_attempt_at=?,locked_at=NULL,last_error=?,updated_at=?
+        attempt_count=?,next_attempt_at=?,locked_at=NULL,last_error=?,
+        ${exhausted ? "body_html=?," : ""}updated_at=?
         WHERE id=?`,
-      args: [provider, attempt, retryAt, message, timestamp, row.id],
+      args: exhausted
+        ? [provider, attempt, retryAt, message, REDACTED_BODY, timestamp, row.id]
+        : [provider, attempt, retryAt, message, timestamp, row.id],
     });
     if (exhausted) {
       await recordDelivery(client, input, {
@@ -449,17 +488,36 @@ async function deliverOutboxRow(
   }
 }
 
+function unconfiguredProfileReason(profile: EmailSenderProfile) {
+  return profile === "security"
+    ? "Profil pengirim keamanan belum dikonfigurasi (SECURITY_SMTP_* atau SMTP_*). Email tidak dikirim."
+    : "Profil pengirim operasional belum dikonfigurasi (SMTP_* atau RESEND_API_KEY). Email tidak dikirim.";
+}
+
 export async function dispatchEmailOutbox(
   client: DatabaseClient,
   batchSize = 20,
 ) {
-  if (emailMode() !== "live" || !emailDeliveryConfigured()) {
+  // The mode is a whole-process switch, so it still short-circuits here. What
+  // is NOT a whole-process switch is whether a provider is configured: that is
+  // per sender profile. Asking `emailDeliveryConfigured()` with no argument
+  // answered for "operational" and then stalled the entire outbox — including
+  // every password reset on the "security" profile — whenever the operational
+  // credentials were missing. The reset sat Pending with attempt_count 0 and
+  // last_error NULL, so it never failed and nobody ever found out.
+  if (emailMode() !== "live") {
     return [];
   }
   const timestamp = new Date().toISOString();
   const staleLock = new Date(Date.now() - 10 * 60_000).toISOString();
   await client.execute({
+    // A row that killed the worker mid-send never reached the increment inside
+    // deliverOutboxRow, so releasing the lock without counting the attempt put
+    // it straight back at the front of the queue with its full retry budget —
+    // forever, on a process with max_memory_restart: "180M". Every other
+    // failure path counts; this one has to as well.
     sql: `UPDATE email_outbox SET status='Failed',locked_at=NULL,
+      attempt_count=attempt_count+1,
       next_attempt_at=?,last_error='Worker lock expired',updated_at=?
       WHERE status='Processing' AND locked_at<?`,
     args: [timestamp, timestamp, staleLock],
@@ -484,21 +542,94 @@ export async function dispatchEmailOutbox(
       sql: "SELECT * FROM email_outbox WHERE id=? AND status='Processing' AND locked_at=? LIMIT 1",
       args: [candidate.id, lockedAt],
     });
-    if (!claimed.rows[0]) continue;
-    results.push(await deliverOutboxRow(client, claimed.rows[0]));
+    const row = claimed.rows[0];
+    if (!row) continue;
+    const profile = senderProfile(row);
+    if (!emailDeliveryConfigured(profile)) {
+      const reason = unconfiguredProfileReason(profile);
+      await client.execute({
+        sql: `UPDATE email_outbox SET status='Skipped',provider=?,locked_at=NULL,
+          last_error=?,body_html=?,updated_at=? WHERE id=?`,
+        args: [emailProviderName(profile), reason, REDACTED_BODY, lockedAt, row.id],
+      });
+      await recordDelivery(client, {
+        userId: row.user_id ? String(row.user_id) : undefined,
+        recipient: String(row.recipient),
+        eventType: String(row.event_type),
+        senderProfile: profile,
+        subject: String(row.subject),
+        html: "",
+      }, {
+        id: String(row.id),
+        configured: false,
+        status: "skipped",
+        error: reason,
+      });
+      results.push({ id: String(row.id), status: "skipped", error: reason });
+      continue;
+    }
+    results.push(await deliverOutboxRow(client, row));
   }
   return results;
 }
 
+/**
+ * Terminal rows keep their audit value — who, what, when, why it failed — but
+ * not their content. Two passes: redact the body of anything already finished
+ * (this catches rows written before redaction-on-completion existed), then drop
+ * finished rows entirely once they are older than the retention window.
+ *
+ * `cms_leads` sets the standard here with its 730-day anonymisation. This table
+ * is an operational log rather than a client record, so it keeps less and for
+ * less time, but it stops keeping it forever.
+ */
+export async function pruneEmailOutbox(client: DatabaseClient) {
+  const timestamp = new Date().toISOString();
+  const retentionDays = Number(process.env.EMAIL_OUTBOX_RETENTION_DAYS ?? 180);
+  const days = Number.isFinite(retentionDays) && retentionDays > 0 ? retentionDays : 180;
+  const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+  const terminal = `(status IN ('Sent','Skipped') OR (status='Failed' AND attempt_count>=5))`;
+
+  const stale = await client.execute({
+    sql: `SELECT id FROM email_outbox WHERE ${terminal} AND body_html<>''`,
+  });
+  if (stale.rows.length) {
+    await client.execute({
+      sql: `UPDATE email_outbox SET body_html=?,updated_at=?
+        WHERE ${terminal} AND body_html<>''`,
+      args: [REDACTED_BODY, timestamp],
+    });
+  }
+
+  const expired = await client.execute({
+    sql: `SELECT id FROM email_outbox WHERE ${terminal} AND created_at<?`,
+    args: [cutoff],
+  });
+  if (expired.rows.length) {
+    await client.execute({
+      sql: `DELETE FROM email_outbox WHERE ${terminal} AND created_at<?`,
+      args: [cutoff],
+    });
+  }
+
+  return { redacted: stale.rows.length, deleted: expired.rows.length };
+}
+
+export type RetryEmailOutboxResult = "queued" | "not-found" | "body-purged";
+
 export async function retryEmailOutbox(
   client: DatabaseClient,
   outboxId: string,
-) {
+): Promise<RetryEmailOutboxResult> {
   const current = await client.execute({
-    sql: "SELECT id FROM email_outbox WHERE id=? AND status='Failed' LIMIT 1",
+    sql: "SELECT id,body_html FROM email_outbox WHERE id=? AND status='Failed' LIMIT 1",
     args: [outboxId],
   });
-  if (!current.rows.length) return false;
+  const row = current.rows[0];
+  if (!row) return "not-found";
+  // A row that exhausted its retries had its body redacted. Re-queueing it
+  // would send an empty message that looks delivered; say so instead.
+  if (!String(row.body_html ?? "")) return "body-purged";
   const timestamp = new Date().toISOString();
   await client.execute({
     sql: `UPDATE email_outbox SET status='Pending',attempt_count=0,
@@ -506,7 +637,7 @@ export async function retryEmailOutbox(
       WHERE id=? AND status='Failed'`,
     args: [timestamp, timestamp, outboxId],
   });
-  return true;
+  return "queued";
 }
 
 export async function sendAccountCreatedEmail(
@@ -628,6 +759,119 @@ export async function notifyProjectStakeholders(
       });
     }),
   );
+}
+
+/**
+ * Goes to the NEW address. The change only takes effect when this link comes
+ * back, which is what stops a stolen session from redirecting account recovery.
+ */
+export async function sendEmailChangeConfirmationEmail(
+  client: DatabaseClient,
+  user: {
+    id: string;
+    email: string;
+    preferredLanguage?: EmailLanguage;
+  },
+  newEmail: string,
+  token: string,
+  validMinutes: number,
+) {
+  const en = user.preferredLanguage === "en";
+  const confirmUrl = applicationUrl(
+    `/api/auth/confirm-email-change?token=${encodeURIComponent(token)}`,
+  );
+  return sendEmailDelivery(client, {
+    userId: user.id,
+    recipient: newEmail,
+    eventType: "email_change_confirm",
+    senderProfile: "security",
+    subject: en
+      ? "Confirm your new PerumNet Enterprise email address"
+      : "Konfirmasi alamat email PerumNet Enterprise yang baru",
+    html: emailFrame(
+      en ? "Confirm this email address" : "Konfirmasi alamat email ini",
+      en
+        ? `A request was made to move the PerumNet Enterprise account currently using ${user.email} to this address. The account keeps its old address until you confirm here. This link is valid for ${validMinutes} minutes. Ignore this email if you did not request the change.`
+        : `Ada permintaan memindahkan akun PerumNet Enterprise yang saat ini memakai ${user.email} ke alamat ini. Akun tetap memakai alamat lama sampai Anda mengonfirmasi di sini. Tautan ini berlaku ${validMinutes} menit. Abaikan email ini bila Anda tidak meminta perubahan tersebut.`,
+      {
+        label: en ? "Confirm email address" : "Konfirmasi alamat email",
+        url: confirmUrl,
+      },
+      user.preferredLanguage,
+    ),
+    respectPreference: false,
+  });
+}
+
+/**
+ * Goes to the OLD address, at request time. If someone else asked for the
+ * change, this is how the real owner finds out while they can still act.
+ */
+export async function sendEmailChangeRequestedEmail(
+  client: DatabaseClient,
+  user: {
+    id: string;
+    email: string;
+    preferredLanguage?: EmailLanguage;
+  },
+  newEmail: string,
+) {
+  const en = user.preferredLanguage === "en";
+  return sendEmailDelivery(client, {
+    userId: user.id,
+    recipient: user.email,
+    eventType: "email_change_requested",
+    senderProfile: "security",
+    subject: en
+      ? "An email address change was requested on your account"
+      : "Ada permintaan penggantian alamat email pada akun Anda",
+    html: emailFrame(
+      en ? "Did you request this?" : "Apakah ini permintaan Anda?",
+      en
+        ? `A request was made to move this PerumNet Enterprise account to ${newEmail}. Nothing has changed yet — the account still uses this address until the new one is confirmed. If this was not you, change your password now and tell your administrator; changing your password also signs out every other device.`
+        : `Ada permintaan memindahkan akun PerumNet Enterprise ini ke ${newEmail}. Belum ada yang berubah — akun masih memakai alamat ini sampai alamat baru dikonfirmasi. Bila ini bukan Anda, segera ganti kata sandi dan beri tahu administrator; mengganti kata sandi sekaligus mengakhiri sesi di perangkat lain.`,
+      {
+        label: en ? "Open PerumNet Enterprise" : "Buka PerumNet Enterprise",
+        url: applicationUrl("/admin"),
+      },
+      user.preferredLanguage,
+    ),
+    respectPreference: false,
+  });
+}
+
+/** Goes to the OLD address once the change has actually taken effect. */
+export async function sendEmailChangedEmail(
+  client: DatabaseClient,
+  user: {
+    id: string;
+    preferredLanguage?: EmailLanguage;
+  },
+  previousEmail: string,
+  newEmail: string,
+) {
+  const en = user.preferredLanguage === "en";
+  return sendEmailDelivery(client, {
+    userId: user.id,
+    recipient: previousEmail,
+    eventType: "email_changed",
+    senderProfile: "security",
+    subject: en
+      ? "The email address on your PerumNet Enterprise account has changed"
+      : "Alamat email akun PerumNet Enterprise Anda telah berubah",
+    html: emailFrame(
+      en ? "This account now uses a different address" : "Akun ini kini memakai alamat lain",
+      en
+        ? `The PerumNet Enterprise account that used this address now signs in with ${newEmail}. Every session on the account was ended as part of the change. If this was not you, contact your administrator immediately.`
+        : `Akun PerumNet Enterprise yang memakai alamat ini sekarang masuk dengan ${newEmail}. Seluruh sesi akun tersebut diakhiri sebagai bagian dari perubahan ini. Bila ini bukan Anda, segera hubungi administrator.`,
+      {
+        label: en ? "Open PerumNet Enterprise" : "Buka PerumNet Enterprise",
+        url: applicationUrl("/admin"),
+      },
+      user.preferredLanguage,
+    ),
+    respectPreference: false,
+  });
 }
 
 export async function sendPasswordResetEmail(

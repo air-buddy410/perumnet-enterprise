@@ -15,7 +15,7 @@
   overflow-x: clip;
   color: var(--ink);
   background: #fff;
-  font-family: "DM Sans", Arial, sans-serif;
+  font-family: var(--font-dm-sans), Arial, sans-serif;
   font-size: 16px;
 }
 
@@ -62,7 +62,7 @@
 .brand { display: inline-flex; align-items: center; gap: 11px; flex: 0 0 auto; }
 .brand img { width: 50px; height: 50px; object-fit: contain; border-radius: 10px; }
 .brand span { display: grid; line-height: 1.15; letter-spacing: .11em; }
-.brand strong { font-family: "Plus Jakarta Sans", sans-serif; font-size: 13px; color: var(--navy); }
+.brand strong { font-family: var(--font-plus-jakarta-sans), sans-serif; font-size: 13px; color: var(--navy); }
 .brand small { margin-top: 4px; color: var(--teal-dark); font-size: 10px; font-weight: 700; letter-spacing: .25em; }
 
 .desktopNav { display: flex; align-items: center; justify-content: center; gap: 18px; margin-left: auto; }
@@ -97,7 +97,7 @@
 .eyebrow { color: #d7f8f4; }
 .eyebrowDark { color: var(--teal-dark); }
 .eyebrowLight { color: #9ff1e9; }
-.hero h1, .pageHero h1 { margin: 22px 0; color: var(--surface-text); font-family: "Plus Jakarta Sans", sans-serif; font-size: clamp(48px, 5.1vw, 74px); line-height: 1.03; letter-spacing: -.055em; }
+.hero h1, .pageHero h1 { margin: 22px 0; color: var(--surface-text); font-family: var(--font-plus-jakarta-sans), sans-serif; font-size: clamp(48px, 5.1vw, 74px); line-height: 1.03; letter-spacing: -.055em; }
 .heroCopy > p { max-width: 620px; margin: 0; color: rgba(255,255,255,.84); color: color-mix(in srgb, var(--surface-text) 84%, transparent); font-size: 18px; line-height: 1.75; }
 .heroActions { display: flex; align-items: center; gap: 14px; margin-top: 34px; }
 .primaryButton { min-height: 54px; padding: 0 22px; color: var(--teal-dark) !important; background: #fff; font-size: 15px; }
@@ -139,7 +139,7 @@
 .statsBar div { min-height: 112px; display: flex; flex-direction: column; justify-content: center; padding: 0 28px; border-right: 1px solid rgba(255,255,255,.14); }
 .statsBar div:first-child { padding-left: 0; }
 .statsBar div:last-child { border-right: 0; }
-.statsBar strong { font-family: "Plus Jakarta Sans", sans-serif; font-size: 23px; color: #fff; }
+.statsBar strong { font-family: var(--font-plus-jakarta-sans), sans-serif; font-size: 23px; color: #fff; }
 .statsBar span { margin-top: 4px; color: rgba(255,255,255,.68); font-size: 13px; }
 
 .aboutSection, .servicesSection, .portfolioSection, .labsSection, .partnersSection, .faqSection, .archiveSection, .detailList, .contactSection, .richPage {
@@ -147,7 +147,7 @@
   margin: 0 auto;
 }
 .aboutSection { display: grid; grid-template-columns: 1.05fr .75fr; gap: 120px; padding: 116px 0; }
-.sectionIntro h2, .sectionHeader h2, .processSection h2, .closingCta h2, .simpleCta h2, .contactPanel h2 { margin: 15px 0 0; font-family: "Plus Jakarta Sans", sans-serif; font-size: clamp(34px, 3.6vw, 52px); line-height: 1.12; letter-spacing: -.045em; }
+.sectionIntro h2, .sectionHeader h2, .processSection h2, .closingCta h2, .simpleCta h2, .contactPanel h2 { margin: 15px 0 0; font-family: var(--font-plus-jakarta-sans), sans-serif; font-size: clamp(34px, 3.6vw, 52px); line-height: 1.12; letter-spacing: -.045em; }
 .aboutCopy { padding-top: 34px; }
 .aboutCopy p { margin: 0; color: var(--muted); font-size: 17px; line-height: 1.8; }
 .aboutCopy a, .sectionHeader > a, .inlineButton { display: inline-flex; align-items: center; gap: 8px; margin-top: 26px; color: var(--teal-dark) !important; font-size: 15px; font-weight: 800; }
@@ -161,12 +161,12 @@
 .serviceCard:hover { transform: translateY(-6px); border-color: rgba(4,169,159,.4); box-shadow: 0 22px 60px rgba(38,61,70,.1); }
 .cardTopline { display: flex; align-items: center; justify-content: space-between; color: var(--teal); }
 .cardTopline span { font-size: 11px; font-weight: 800; letter-spacing: .14em; }
-.serviceCard h3 { margin: 54px 0 14px; font-family: "Plus Jakarta Sans", sans-serif; font-size: 23px; letter-spacing: -.035em; }
+.serviceCard h3 { margin: 54px 0 14px; font-family: var(--font-plus-jakarta-sans), sans-serif; font-size: 23px; letter-spacing: -.035em; }
 .serviceCard p { margin: 0; color: var(--muted); font-size: 16px; line-height: 1.75; }
 .cardLink { margin-top: auto; padding-top: 24px; display: flex; align-items: center; gap: 7px; color: var(--teal-dark); font-size: 14px; font-weight: 800; }
 
 .labsSection { padding: 94px 0; display: grid; grid-template-columns: .95fr 1.05fr; gap: 80px; align-items: center; border-top: 1px solid var(--line); }
-.labsCopy h2 { max-width: 620px; margin: 18px 0; font-family: "Plus Jakarta Sans", sans-serif; font-size: clamp(36px, 4vw, 54px); line-height: 1.08; letter-spacing: -.05em; }
+.labsCopy h2 { max-width: 620px; margin: 18px 0; font-family: var(--font-plus-jakarta-sans), sans-serif; font-size: clamp(36px, 4vw, 54px); line-height: 1.08; letter-spacing: -.05em; }
 .labsCopy > p { max-width: 570px; margin: 0; color: var(--muted); font-size: 17px; line-height: 1.75; }
 .codeWindow { overflow: hidden; border: 1px solid #d6e5e2; border-radius: 18px; color: #d5ece9; background: #20373f; box-shadow: 0 30px 75px rgba(35,59,67,.16); }
 .codeWindow > div { min-height: 48px; padding: 0 18px; display: flex; align-items: center; gap: 7px; border-bottom: 1px solid rgba(255,255,255,.09); background: #273f47; }
@@ -189,7 +189,7 @@
 .processSection ol { list-style: none; margin: 0; padding: 0; }
 .processSection li { display: grid; grid-template-columns: 48px 1fr; gap: 20px; padding: 27px 0; border-bottom: 1px solid rgba(255,255,255,.12); }
 .processSection li > span { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.19); border-radius: 50%; color: var(--gold); font-size: 11px; font-weight: 800; }
-.processSection strong { font-family: "Plus Jakarta Sans", sans-serif; font-size: 18px; }
+.processSection strong { font-family: var(--font-plus-jakarta-sans), sans-serif; font-size: 18px; }
 .processSection p { margin: 8px 0 0; color: rgba(255,255,255,.72); color: color-mix(in srgb, var(--surface-text) 72%, transparent); font-size: 16px; line-height: 1.65; }
 
 .portfolioSection { padding: 110px 0 120px; }
@@ -202,7 +202,7 @@
 .imageFallback { width: 100%; height: 100%; display: grid; place-items: center; color: var(--teal); background: linear-gradient(145deg,#e8f5f2,#c7e7e2); }
 .portfolioCopy { padding: 21px 22px 25px; }
 .portfolioCopy p { margin: 0; color: var(--teal-dark); font-size: 12px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
-.portfolioCopy h3 { margin: 10px 0 10px; font-family: "Plus Jakarta Sans", sans-serif; font-size: 21px; letter-spacing: -.025em; }
+.portfolioCopy h3 { margin: 10px 0 10px; font-family: var(--font-plus-jakarta-sans), sans-serif; font-size: 21px; letter-spacing: -.025em; }
 .portfolioCopy > span { color: var(--muted); font-size: 15px; line-height: 1.65; }
 
 .partnersSection { padding: 96px 0 106px; scroll-margin-top: 100px; }
@@ -215,7 +215,7 @@
 .partnerCard img { width: min(78%,190px); height: 82px; object-fit: contain; }
 .partnerCardDark { border-color: #17242b; background: #17242b; }
 .partnerFallback { display: grid; place-items: center; gap: 8px; color: var(--teal-dark); text-align: center; }
-.partnerFallback strong { font-family: "Plus Jakarta Sans",sans-serif; font-size: 25px; letter-spacing: .08em; }
+.partnerFallback strong { font-family: var(--font-plus-jakarta-sans),sans-serif; font-size: 25px; letter-spacing: .08em; }
 .partnerFallback small { color: var(--muted); font-size: 12px; }
 
 .testimonialSection { position: relative; padding: 110px max(24px, calc((100vw - 1180px)/2)) 120px; color: #fff; background: var(--green-surface); }
@@ -235,11 +235,11 @@
 
 .faqSection { padding: 102px 0 112px; display: grid; grid-template-columns: .72fr 1.28fr; gap: 92px; scroll-margin-top: 100px; }
 .faqIntro { align-self: start; position: sticky; top: 118px; }
-.faqIntro h2 { margin: 15px 0 16px; font-family: "Plus Jakarta Sans", sans-serif; font-size: clamp(34px, 3.6vw, 50px); line-height: 1.1; letter-spacing: -.045em; }
+.faqIntro h2 { margin: 15px 0 16px; font-family: var(--font-plus-jakarta-sans), sans-serif; font-size: clamp(34px, 3.6vw, 50px); line-height: 1.1; letter-spacing: -.045em; }
 .faqIntro > p { margin: 0; color: var(--muted); font-size: 16px; line-height: 1.75; }
 .faqList { border-top: 1px solid var(--line); }
 .faqList details { border-bottom: 1px solid var(--line); }
-.faqList summary { min-height: 88px; padding: 22px 0; display: flex; align-items: center; justify-content: space-between; gap: 24px; list-style: none; color: var(--ink); font-family: "Plus Jakarta Sans", sans-serif; font-size: 18px; font-weight: 700; cursor: pointer; }
+.faqList summary { min-height: 88px; padding: 22px 0; display: flex; align-items: center; justify-content: space-between; gap: 24px; list-style: none; color: var(--ink); font-family: var(--font-plus-jakarta-sans), sans-serif; font-size: 18px; font-weight: 700; cursor: pointer; }
 .faqList summary::-webkit-details-marker { display: none; }
 .faqList summary i { position: relative; width: 28px; height: 28px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 50%; }
 .faqList summary i::before, .faqList summary i::after { content: ""; position: absolute; left: 8px; right: 8px; top: 13px; height: 2px; background: var(--teal-dark); }
@@ -265,7 +265,7 @@
 .serviceDetail { display: grid; grid-template-columns: 50px 68px 1fr .75fr; gap: 26px; align-items: start; padding: 52px 0; border-bottom: 1px solid var(--line); scroll-margin-top: 104px; }
 .detailNumber { padding-top: 11px; color: var(--teal-dark); font-size: 11px; font-weight: 800; letter-spacing: .14em; }
 .detailIcon { width: 58px; height: 58px; display: grid; place-items: center; border-radius: 13px; color: var(--teal-dark); background: #e8f7f4; }
-.serviceDetail h2 { margin: 4px 0 13px; font-family: "Plus Jakarta Sans",sans-serif; font-size: 29px; letter-spacing: -.035em; }
+.serviceDetail h2 { margin: 4px 0 13px; font-family: var(--font-plus-jakarta-sans),sans-serif; font-size: 29px; letter-spacing: -.035em; }
 .serviceDetail p { margin: 0; color: var(--muted); font-size: 16px; line-height: 1.75; }
 .serviceDetail .detailLead { margin-bottom: 12px; color: var(--ink); font-size: 18px; }
 .serviceDetail ul { list-style: none; margin: 7px 0 0; padding: 0; display: grid; gap: 13px; }
@@ -320,7 +320,7 @@
 
 .leadForm { width:100%; padding:30px; display:grid; gap:20px; border:1px solid rgba(255,255,255,.46); border-radius:14px; color:var(--ink); background:#fff; box-shadow:0 24px 65px rgba(0,67,64,.18); }
 .leadFormHeader > span { color:var(--teal-dark); font-size:10px; font-weight:800; letter-spacing:.16em; }
-.leadFormHeader h3 { margin:9px 0 6px; color:var(--ink); font-family:"Plus Jakarta Sans",sans-serif; font-size:26px; letter-spacing:-.04em; }
+.leadFormHeader h3 { margin:9px 0 6px; color:var(--ink); font-family:var(--font-plus-jakarta-sans),sans-serif; font-size:26px; letter-spacing:-.04em; }
 .leadFormHeader p { margin:0; color:var(--muted); font-size:13px; line-height:1.6; }
 .leadFields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
 .leadFields label { min-width:0; display:grid; gap:7px; color:#4b6269; font-size:12px; font-weight:700; }
@@ -339,7 +339,7 @@
 .leadFormCompact .leadFormHeader h3 { font-size:22px; }
 .leadSuccess { width:100%; padding:30px; display:flex; align-items:flex-start; gap:15px; border-radius:14px; color:var(--ink); background:#fff; box-shadow:0 24px 65px rgba(0,67,64,.18); }
 .leadSuccess > svg { flex:0 0 auto; color:var(--teal); }
-.leadSuccess strong { font-family:"Plus Jakarta Sans",sans-serif; font-size:20px; }
+.leadSuccess strong { font-family:var(--font-plus-jakarta-sans),sans-serif; font-size:20px; }
 .leadSuccess p { color:var(--muted); line-height:1.6; }
 .leadSuccess button { padding:0; border:0; color:var(--teal-dark); background:none; font-weight:800; cursor:pointer; }
 .honeypot { position:absolute!important; left:-9999px!important; width:1px!important; height:1px!important; overflow:hidden!important; }

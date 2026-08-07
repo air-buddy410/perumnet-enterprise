@@ -1,6 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
+import sharp from "sharp";
 import { z } from "zod";
 import { writeAuditLog } from "../audit";
 import { requireUser, type AuthUser } from "../auth";
@@ -155,6 +156,19 @@ async function mediaResponse(request: Request, id: string) {
   });
 }
 
+// Everything this endpoint is allowed to hand back as an image. An SVG is a
+// document, not a picture: it carries <script>, and served as image/svg+xml
+// from this origin that script runs here, next to a SameSite=Lax session
+// cookie, and can call the app's own API as the logged-in administrator.
+const PARTNER_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+const MAX_PARTNER_LOGO_SIZE = 2 * 1024 * 1024;
+const MAX_PARTNER_LOGO_DIMENSION = 4096;
+const SHARP_FORMAT_MIME: Record<string, string> = {
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+};
+
 async function partnerMediaResponse(request: Request, id: string) {
   const { client } = await getDatabase();
   const result = await client.execute({
@@ -166,13 +180,135 @@ async function partnerMediaResponse(request: Request, id: string) {
   if (!row.is_visible) await admin(request);
   const file = await readProjectFile(String(row.logo_storage_url));
   if (!file) throw new ApiError(404, "NOT_FOUND", "Logo tidak ditemukan.");
+  const storedType = String(row.logo_mime_type ?? file.contentType ?? "");
+  const displayable = (PARTNER_IMAGE_TYPES as readonly string[]).includes(storedType);
+  // New uploads are rasterised, so `displayable` is true for everything stored
+  // from here on. Rows written before that — an SVG partner logo that arrived
+  // by email and was uploaded as received — must never execute: they leave as
+  // an opaque download inside a CSP that permits nothing at all.
   return new Response(file.content, {
-    headers: {
-      "Content-Type": String(row.logo_mime_type ?? file.contentType ?? "application/octet-stream"),
-      "Cache-Control": "public, max-age=300, must-revalidate",
-      "X-Content-Type-Options": "nosniff",
-    },
+    headers: displayable
+      ? {
+          "Content-Type": storedType,
+          "Cache-Control": "public, max-age=300, must-revalidate",
+          "X-Content-Type-Options": "nosniff",
+        }
+      : {
+          "Content-Type": "application/octet-stream",
+          "Content-Disposition": `attachment; filename="partner-logo-${id}"`,
+          "Cache-Control": "private, no-store",
+          "X-Content-Type-Options": "nosniff",
+        },
   });
+}
+
+/**
+ * Turns whatever an administrator uploaded into bytes this system is willing to
+ * serve back as an image.
+ *
+ * The declared multipart content type is caller input and is never believed on
+ * its own — sharp reads the actual bytes and the two have to agree. An SVG is
+ * accepted for convenience (partner logos genuinely arrive that way) but never
+ * stored: it is rasterised to PNG, which drops any script, external reference
+ * or embedded entity along with it.
+ */
+async function preparePartnerLogo(file: File) {
+  if (file.size > MAX_PARTNER_LOGO_SIZE) {
+    throw new ApiError(413, "FILE_TOO_LARGE", "Ukuran logo maksimal 2 MB.");
+  }
+  const declared = file.type;
+  if (!["image/svg+xml", ...PARTNER_IMAGE_TYPES].includes(declared)) {
+    throw new ApiError(415, "UNSUPPORTED_FILE", "Gunakan logo SVG, PNG, JPG, atau WebP.");
+  }
+  const source = Buffer.from(await file.arrayBuffer());
+  let metadata;
+  try {
+    metadata = await sharp(source, {
+      failOn: "error",
+      limitInputPixels: MAX_PARTNER_LOGO_DIMENSION * MAX_PARTNER_LOGO_DIMENSION,
+    }).metadata();
+  } catch {
+    throw new ApiError(415, "INVALID_IMAGE", "Isi file bukan gambar yang valid.");
+  }
+  const detected = metadata.format ?? "";
+  if (
+    metadata.width &&
+    metadata.height &&
+    (metadata.width > MAX_PARTNER_LOGO_DIMENSION || metadata.height > MAX_PARTNER_LOGO_DIMENSION)
+  ) {
+    throw new ApiError(422, "IMAGE_DIMENSIONS", "Dimensi logo maksimal 4096 × 4096 piksel.");
+  }
+  if (declared === "image/svg+xml" || detected === "svg") {
+    // A raster type over SVG bytes, or an SVG type over anything else: the two
+    // have to agree before the file is stored under a type this app will later
+    // hand back to a browser.
+    if (detected !== "svg" || declared !== "image/svg+xml") {
+      throw new ApiError(415, "IMAGE_TYPE_MISMATCH", "Tipe file tidak sesuai dengan isi gambarnya.");
+    }
+    try {
+      const raster = await sharp(source, { failOn: "error", density: 192 })
+        .resize({ width: 1200, height: 600, fit: "inside", withoutEnlargement: true })
+        .png({ compressionLevel: 9 })
+        .toBuffer();
+      return { content: raster, mimeType: "image/png" };
+    } catch {
+      throw new ApiError(422, "IMAGE_PROCESSING_FAILED", "Logo SVG tidak dapat diproses menjadi gambar.");
+    }
+  }
+  if (SHARP_FORMAT_MIME[detected] !== declared) {
+    throw new ApiError(415, "IMAGE_TYPE_MISMATCH", "Tipe file tidak sesuai dengan isi gambarnya.");
+  }
+  return { content: source, mimeType: declared };
+}
+
+const PORTFOLIO_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+const MAX_PORTFOLIO_IMAGE_SIZE = 5 * 1024 * 1024;
+const MAX_PORTFOLIO_IMAGE_DIMENSION = 4096;
+
+/**
+ * Same rule as `preparePartnerLogo`, applied to portfolio photographs: the
+ * declared multipart type is caller input, so sharp reads the bytes and the two
+ * have to agree before anything is stored under a type this app will later hand
+ * back to a browser.
+ *
+ * The whitelist here is raster-only and the media route already answers with
+ * `nosniff`, so nothing executes today even without the check. That is the
+ * reason this was a gap rather than a hole — and exactly why it should be
+ * closed while it is still cheap: the stored mime type is what the response
+ * Content-Type is built from, and the next person to widen this list (SVG for
+ * a client logo, PDF for a case study) would inherit a route that trusts the
+ * uploader about what the bytes are.
+ */
+async function preparePortfolioImage(file: File) {
+  if (file.size > MAX_PORTFOLIO_IMAGE_SIZE) {
+    throw new ApiError(413, "FILE_TOO_LARGE", "Ukuran gambar maksimal 5 MB.");
+  }
+  const declared = file.type;
+  if (!(PORTFOLIO_IMAGE_TYPES as readonly string[]).includes(declared)) {
+    throw new ApiError(415, "UNSUPPORTED_FILE", "Gunakan gambar JPG, PNG, atau WebP.");
+  }
+  const source = Buffer.from(await file.arrayBuffer());
+  let metadata;
+  try {
+    metadata = await sharp(source, {
+      failOn: "error",
+      limitInputPixels: MAX_PORTFOLIO_IMAGE_DIMENSION * MAX_PORTFOLIO_IMAGE_DIMENSION,
+    }).metadata();
+  } catch {
+    throw new ApiError(415, "INVALID_IMAGE", "Isi file bukan gambar yang valid.");
+  }
+  if (
+    metadata.width &&
+    metadata.height &&
+    (metadata.width > MAX_PORTFOLIO_IMAGE_DIMENSION ||
+      metadata.height > MAX_PORTFOLIO_IMAGE_DIMENSION)
+  ) {
+    throw new ApiError(422, "IMAGE_DIMENSIONS", "Dimensi gambar maksimal 4096 × 4096 piksel.");
+  }
+  if (SHARP_FORMAT_MIME[metadata.format ?? ""] !== declared) {
+    throw new ApiError(415, "IMAGE_TYPE_MISMATCH", "Tipe file tidak sesuai dengan isi gambarnya.");
+  }
+  return { content: source, mimeType: declared };
 }
 
 async function updateTexts(request: Request, user: AuthUser) {
@@ -293,11 +429,17 @@ async function handlePortfolios(request: Request, id: string | undefined, user: 
     let storageUrl: string | null = null;
     let mimeType: string | null = null;
     if (file instanceof File && file.size > 0) {
-      if (file.size > 5 * 1024 * 1024) throw new ApiError(413, "FILE_TOO_LARGE", "Ukuran gambar maksimal 5 MB.");
-      if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) throw new ApiError(415, "UNSUPPORTED_FILE", "Gunakan gambar JPG, PNG, atau WebP.");
-      const stored = await storeProjectFile(`cms-${portfolioId}`, file.type, await file.arrayBuffer());
+      const image = await preparePortfolioImage(file);
+      const stored = await storeProjectFile(
+        `cms-${portfolioId}`,
+        image.mimeType,
+        image.content.buffer.slice(
+          image.content.byteOffset,
+          image.content.byteOffset + image.content.byteLength,
+        ) as ArrayBuffer,
+      );
       storageUrl = stored.storageUrl;
-      mimeType = file.type;
+      mimeType = image.mimeType;
     }
     const timestamp = new Date().toISOString();
     await client.execute({
@@ -319,12 +461,18 @@ async function handlePortfolios(request: Request, id: string | undefined, user: 
     let imageUrl = String(current.rows[0].image_url ?? "");
     const file = input.form.get("image");
     if (file instanceof File && file.size > 0) {
-      if (file.size > 5 * 1024 * 1024) throw new ApiError(413, "FILE_TOO_LARGE", "Ukuran gambar maksimal 5 MB.");
-      if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) throw new ApiError(415, "UNSUPPORTED_FILE", "Gunakan gambar JPG, PNG, atau WebP.");
+      const image = await preparePortfolioImage(file);
       if (storageUrl) await deleteProjectFile(storageUrl);
-      const stored = await storeProjectFile(`cms-${randomUUID()}`, file.type, await file.arrayBuffer());
+      const stored = await storeProjectFile(
+        `cms-${randomUUID()}`,
+        image.mimeType,
+        image.content.buffer.slice(
+          image.content.byteOffset,
+          image.content.byteOffset + image.content.byteLength,
+        ) as ArrayBuffer,
+      );
       storageUrl = stored.storageUrl;
-      mimeType = file.type;
+      mimeType = image.mimeType;
       imageUrl = "";
     }
     await client.execute({
@@ -461,21 +609,24 @@ async function handlePartners(request: Request, id: string | undefined, user: Au
   }
   const input = await partnerInput(request);
   const file = input.form.get("logo");
-  if (file instanceof File && file.size > 2 * 1024 * 1024) {
-    throw new ApiError(413, "FILE_TOO_LARGE", "Ukuran logo maksimal 2 MB.");
-  }
-  if (file instanceof File && file.size > 0 && !["image/jpeg", "image/png", "image/webp", "image/svg+xml"].includes(file.type)) {
-    throw new ApiError(415, "UNSUPPORTED_FILE", "Gunakan logo SVG, PNG, JPG, atau WebP.");
-  }
+  const logo =
+    file instanceof File && file.size > 0 ? await preparePartnerLogo(file) : null;
 
   if (request.method === "POST" && !id) {
     const partnerId = randomUUID();
     let storageUrl: string | null = null;
     let mimeType: string | null = null;
-    if (file instanceof File && file.size > 0) {
-      const stored = await storeProjectFile(`cms-partner-${partnerId}`, file.type, await file.arrayBuffer());
+    if (logo) {
+      const stored = await storeProjectFile(
+        `cms-partner-${partnerId}`,
+        logo.mimeType,
+        logo.content.buffer.slice(
+          logo.content.byteOffset,
+          logo.content.byteOffset + logo.content.byteLength,
+        ) as ArrayBuffer,
+      );
       storageUrl = stored.storageUrl;
-      mimeType = file.type;
+      mimeType = logo.mimeType;
     }
     const timestamp = new Date().toISOString();
     await client.execute({
@@ -495,11 +646,18 @@ async function handlePartners(request: Request, id: string | undefined, user: Au
     let storageUrl = current.rows[0].logo_storage_url ? String(current.rows[0].logo_storage_url) : null;
     let mimeType = current.rows[0].logo_mime_type ? String(current.rows[0].logo_mime_type) : null;
     let logoUrl = String(current.rows[0].logo_url ?? "");
-    if (file instanceof File && file.size > 0) {
+    if (logo) {
       if (storageUrl) await deleteProjectFile(storageUrl);
-      const stored = await storeProjectFile(`cms-partner-${randomUUID()}`, file.type, await file.arrayBuffer());
+      const stored = await storeProjectFile(
+        `cms-partner-${randomUUID()}`,
+        logo.mimeType,
+        logo.content.buffer.slice(
+          logo.content.byteOffset,
+          logo.content.byteOffset + logo.content.byteLength,
+        ) as ArrayBuffer,
+      );
       storageUrl = stored.storageUrl;
-      mimeType = file.type;
+      mimeType = logo.mimeType;
       logoUrl = "";
     }
     await client.execute({

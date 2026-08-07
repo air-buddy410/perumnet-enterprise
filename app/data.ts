@@ -355,6 +355,10 @@ export interface Transaction {
   category: string;
   categoryKey?: string;
   editable?: boolean;
+  // False while an imported bank mutasi is still unreconciled: show the row, but
+  // never add it to a cash total — it usually duplicates a source-document
+  // transaction that already booked the same money.
+  countsAsCash?: boolean;
 }
 
 export interface ProjectExpenseAttachment {
@@ -448,6 +452,8 @@ export interface ProjectAdvance {
   paymentReference: string;
   notes: string;
   status: "Open" | "Settled" | "Void";
+  voidedAt?: string | null;
+  voidReason?: string | null;
 }
 
 export interface BankAccount {

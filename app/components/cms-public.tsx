@@ -36,6 +36,8 @@ import { PublicLeadForm } from "./public-lead-form";
 import { PublicMobileMenu } from "./public-mobile-menu";
 import { PublicMotionController } from "./public-motion-controller";
 import { PublicPortfolioImage } from "./public-portfolio-image";
+import { SiteAnalytics } from "./site-analytics";
+import { measurementId } from "../analytics";
 import styles from "../site.module.css";
 
 const serviceIcons = {
@@ -114,6 +116,7 @@ export function PublicShell({
   const configuredSurfaceColor = content.settings.dark_font_color || "#FFFFFF";
   const surfaceColor = /^#[0-9a-f]{6}$/i.test(configuredSurfaceColor) ? configuredSurfaceColor : "#FFFFFF";
   const motionEnabled = content.settings.motion_enabled !== "false";
+  const gaMeasurementId = measurementId();
 
   return (
     <div
@@ -123,6 +126,20 @@ export function PublicShell({
       lang={language}
       style={{ "--surface-text": surfaceColor } as CSSProperties}
     >
+      {/*
+        Analytics hangs off the public shell rather than the root layout, which
+        is shared with /admin, /panel and the BAST verification page. Placing it
+        here means the console routes never render the component at all — the
+        tag cannot reach staff traffic by accident, only by someone deliberately
+        wrapping the ERP in PublicShell.
+
+        The ternary rather than letting <SiteAnalytics> return null for itself:
+        a rendered client component is a client boundary whether or not it draws
+        anything, so its chunk is fetched and hydrated on every page. Not
+        rendering it keeps it out of the flight payload entirely, which is what
+        the demo build — and production until the owner pastes an ID — needs.
+      */}
+      {gaMeasurementId ? <SiteAnalytics measurementId={gaMeasurementId} /> : null}
       <PublicMotionController enabled={motionEnabled} />
       <script
         type="application/ld+json"

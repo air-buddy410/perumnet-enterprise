@@ -49,6 +49,12 @@ interface BoqTemplate {
   lastUsed: string;
 }
 
+// GET /api/boq reports the commercial scope status, which follows the quotation
+// lifecycle (Draft → Sent → Accepted/Rejected/Void). PUT /api/boq only accepts
+// Draft or Final, so the status is echoed back only when it is a value that
+// endpoint understands; otherwise it is omitted and the server keeps its own.
+const SAVEABLE_BOQ_STATUSES = ["Draft", "Final"];
+
 export function BoqView({ language, navigate, notify, projectId, canManage, canManageCatalog }: BoqViewProps) {
   const id = language === "id";
   const [items, setItems] = useState<BoqItem[]>([]);
@@ -96,6 +102,11 @@ export function BoqView({ language, navigate, notify, projectId, canManage, canM
       active = false;
     };
   }, [language, notify, packageId, projectId]);
+
+  // Once the client accepts the quotation the server locks the Original scope:
+  // every write returns ACCEPTED_SCOPE_LOCKED and further work goes through an
+  // Addendum. Reflect that instead of offering a button that can only fail.
+  const boqLocked = boqStatus === "Accepted";
 
   const totals = useMemo(() => {
     const cost = items.reduce((sum, item) => sum + item.quantity * item.costPrice, 0);
@@ -175,7 +186,7 @@ export function BoqView({ language, navigate, notify, projectId, canManage, canM
         {
           method: "PUT",
           body: JSON.stringify({
-            status: boqStatus,
+            ...(SAVEABLE_BOQ_STATUSES.includes(boqStatus) ? { status: boqStatus } : {}),
             items: nextItems.map((item) => ({
               category: item.category,
               description: item.description,
@@ -278,7 +289,9 @@ export function BoqView({ language, navigate, notify, projectId, canManage, canM
       notify(id ? "Tambahkan minimal satu item sebelum membuat Quotation." : "Add at least one item before creating a Quotation.");
       return;
     }
-    if (canManage && !(await saveBoq())) return;
+    // An accepted scope is locked server-side; saving it would only surface a
+    // 409, so go straight to the quotation the client already approved.
+    if (canManage && !boqLocked && !(await saveBoq())) return;
     navigate("billing");
   }
 
@@ -308,7 +321,7 @@ export function BoqView({ language, navigate, notify, projectId, canManage, canM
           <CommercialPackageSwitcher projectId={projectId} language={language} canManage={canManage} value={packageId} onChange={selectPackage} notify={notify} />
           {canManage && (
             <>
-              <button className="button secondary" type="button" onClick={() => saveBoq()}>
+              <button className="button secondary" type="button" disabled={boqLocked} onClick={() => saveBoq()}>
                 <Save size={16} /> {id ? "Simpan BoQ" : "Save BoQ"}
               </button>
               <button className="button secondary" type="button" onClick={saveTemplate}>
@@ -334,6 +347,11 @@ export function BoqView({ language, navigate, notify, projectId, canManage, canM
           <span>{project.code}</span>
           <span>{project.client}</span>
           <span className="status-badge info"><span className="badge-dot" /> {boqStatus}</span>
+          {boqLocked && (
+            <span>{id
+              ? "BoQ dikunci setelah disetujui klien. Tambahkan pekerjaan melalui Addendum."
+              : "The BoQ is locked after client acceptance. Add work through an Addendum."}</span>
+          )}
         </div>
       </section>
 

@@ -277,7 +277,7 @@ body {
   overflow-x: clip;
   background: var(--background);
   color: var(--ink);
-  font-family: "DM Sans", Arial, sans-serif;
+  font-family: var(--font-dm-sans), Arial, sans-serif;
   font-size: 15px;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -327,7 +327,7 @@ h1,
 h2,
 h3 {
   color: var(--navy-deep);
-  font-family: "Plus Jakarta Sans", "DM Sans", Arial, sans-serif;
+  font-family: var(--font-plus-jakarta-sans), var(--font-dm-sans), Arial, sans-serif;
   letter-spacing: -0.035em;
 }
 
@@ -361,7 +361,7 @@ h3 {
 .eyebrow {
   display: inline-block;
   color: var(--teal-dark);
-  font-family: "Plus Jakarta Sans", "DM Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), var(--font-dm-sans), sans-serif;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.14em;
@@ -1002,7 +1002,7 @@ h3 {
   display: flex;
   align-items: center;
   gap: 13px;
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 13px;
   font-weight: 800;
   letter-spacing: 0.13em;
@@ -1312,13 +1312,13 @@ h3 {
 
 .sidebar-brand strong {
   color: var(--navy-deep);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 16px;
 }
 
 .sidebar-brand span {
   color: var(--teal-dark);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.14em;
@@ -1583,7 +1583,7 @@ h3 {
 
 .topbar-title strong {
   color: var(--navy-deep);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 14px;
 }
 
@@ -1708,7 +1708,7 @@ h3 {
 
 .dropdown-head strong {
   color: var(--navy-deep);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 12px;
 }
 
@@ -1962,7 +1962,7 @@ h3 {
 .metric-main strong {
   overflow: hidden;
   color: var(--navy-deep);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: clamp(18px, 1.7vw, 24px);
   letter-spacing: -0.04em;
   text-overflow: ellipsis;
@@ -2037,7 +2037,7 @@ h3 {
 
 .project-code {
   color: var(--muted);
-  font-family: "DM Sans", sans-serif;
+  font-family: var(--font-dm-sans), sans-serif;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -2125,7 +2125,7 @@ h3 {
 
 .project-finance > strong {
   color: var(--navy);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 13px;
 }
 
@@ -2504,7 +2504,13 @@ h3 {
 .catalog-inactive { opacity: .64; }
 .catalog-empty { padding: 30px 16px; color: var(--muted); font-size: 11px; text-align: center; }
 
-.catalog-modal-backdrop { align-items: stretch; justify-content: flex-end; padding: 0; }
+/* `.modal-backdrop` is a grid whose single implicit column stretches to the
+   backdrop width by default, which is what lets `.modal-card` resolve
+   `width: min(100%, …)`. Overriding `justify-content` alone would collapse that
+   track to max-content and make the drawer's percentage width circular (it
+   resolved to a 225–312px strip on a 390px screen), so the track is declared
+   explicitly and the drawer is pushed to the trailing edge with justify-items. */
+.modal-backdrop.catalog-modal-backdrop { grid-template-columns: minmax(0, 1fr); align-items: stretch; justify-items: end; padding: 0; }
 .catalog-editor { display: flex; width: min(520px, 100%); height: 100%; flex-direction: column; overflow: hidden; background: #fff; box-shadow: -20px 0 60px rgba(24,49,56,.18); animation: catalog-slide-in 180ms ease-out; }
 .catalog-editor > .panel-head { flex: 0 0 auto; min-height: 82px; border-bottom: 1px solid var(--line); }
 .catalog-editor-body { display: grid; align-content: start; gap: 14px; overflow-y: auto; padding: 20px; }
@@ -2807,7 +2813,7 @@ h3 {
 
 .margin-total strong {
   color: var(--teal-dark);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 17px;
 }
 
@@ -2991,7 +2997,7 @@ h3 {
 .document-letterhead strong,
 .bast-letterhead strong {
   color: var(--navy);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 13px;
   letter-spacing: 0.08em;
 }
@@ -3024,7 +3030,7 @@ h3 {
 
 .document-title > div:first-child span {
   color: var(--teal-dark);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.17em;
@@ -3124,7 +3130,7 @@ h3 {
 
 .document-total strong {
   color: var(--navy);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 13px;
 }
 
@@ -3174,7 +3180,7 @@ h3 {
   border: 2px solid rgba(4, 169, 159, 0.45);
   border-radius: 50%;
   color: rgba(4, 169, 159, 0.65);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-weight: 800;
   transform: rotate(-10deg);
 }
@@ -3351,6 +3357,8 @@ h3 {
 
 .invoice-actions {
   display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 7px;
 }
@@ -3399,7 +3407,7 @@ h3 {
 
 .invoice-form-summary strong {
   color: var(--teal-dark);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   text-align: right;
 }
 
@@ -3419,6 +3427,14 @@ h3 {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.6;
+}
+
+/* A hint that has become a refusal-in-waiting: the same note, in the amber
+   this app already uses for something the reader has to act on. */
+.form-hint.attention {
+  border-left-color: #e8b23a;
+  background: #fff9df;
+  color: #775317;
 }
 
 /* Project details */
@@ -3500,7 +3516,7 @@ h3 {
 
 .progress-ring strong {
   color: var(--teal-dark);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 14px;
 }
 
@@ -3562,7 +3578,7 @@ h3 {
 
 .project-summary-grid strong {
   color: var(--navy);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 18px;
 }
 
@@ -3608,7 +3624,7 @@ h3 {
   margin-top: 8px;
   overflow-wrap: anywhere;
   color: var(--navy);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: clamp(12px, 1vw, 16px);
 }
 
@@ -4259,6 +4275,47 @@ h3 {
   font-size: 9px;
 }
 
+/* Payment terms carry a real Pending/Partial/Paid status now, so they list
+   alongside the payment history with the same three-column rhythm. */
+.order-term-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.order-term-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.order-term-list > div > span:first-child,
+.order-term-list small {
+  display: block;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.order-term-list > div > span:first-child {
+  color: var(--navy);
+  font-weight: 700;
+}
+
+.order-term-list strong {
+  color: var(--navy);
+  font-size: 9px;
+}
+
+.order-term-list .status-badge {
+  min-height: 18px;
+  padding: 3px 7px;
+  font-size: 8px;
+}
+
 .category-picker {
   display: flex;
   flex-wrap: wrap;
@@ -4861,6 +4918,22 @@ h3 {
   line-height: 1.5;
 }
 
+/* Money the books deliberately leave out has to read as something to act on,
+   not as reassurance, so the same note carries the amber of a pending item. */
+.security-note.attention {
+  border-color: #f1d88c;
+  background: #fff9df;
+  color: #775317;
+}
+
+.security-note.attention strong {
+  color: #6a4a14;
+}
+
+.security-note.attention span {
+  color: #7d5f22;
+}
+
 /* Finance */
 .finance-kpi-grid {
   display: grid;
@@ -4899,7 +4972,7 @@ h3 {
 .finance-kpi > strong {
   overflow: hidden;
   color: var(--navy-deep);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: clamp(18px, 2vw, 25px);
   letter-spacing: -.04em;
   text-overflow: ellipsis;
@@ -5439,6 +5512,18 @@ h3 {
   min-width: 830px;
 }
 
+/* The exclusion badge spells out why the row is not cash, so it wraps inside a
+   bounded width instead of stretching the table for everyone else. */
+.transaction-name .status-badge {
+  min-height: 0;
+  max-width: 220px;
+  padding: 3px 8px;
+  font-size: 8px;
+  line-height: 1.35;
+  text-align: left;
+  white-space: normal;
+}
+
 .transaction-icon.income {
   background: var(--green-soft);
   color: var(--green);
@@ -5602,7 +5687,7 @@ h3 {
 .bank-account-main b {
   overflow: hidden;
   color: var(--navy-deep);
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -6514,7 +6599,32 @@ h3 {
 .expense-advance-list strong { color: var(--navy); font-size: 12px; }
 .expense-category-list small,
 .expense-advance-list small { color: var(--muted); font-size: 9px; }
-.expense-advance-list > div > span:last-child { text-align: right; }
+.expense-advance-list > div { flex-wrap: wrap; }
+.expense-advance-list > div > span:nth-child(2) { margin-left: auto; text-align: right; }
+/* The row's own `span { display: grid }` would flatten the badge, which is an
+   inline pill everywhere else in the app. */
+.expense-advance-list .status-badge {
+  display: inline-flex;
+  min-height: 20px;
+  padding: 3px 8px;
+  font-size: 9px;
+}
+/* A voided advance still has to read as a record, not as a live balance. */
+.expense-advance-list > div.voided { border-style: dashed; background: var(--surface-soft); }
+.expense-advance-list > div.voided > span:nth-child(2) strong { color: var(--muted); text-decoration: line-through; }
+
+.expense-advance-void-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--surface-soft);
+}
+.expense-advance-void-summary > div { display: grid; gap: 3px; min-width: 0; }
+.expense-advance-void-summary span { color: var(--muted); font-size: 9px; }
+.expense-advance-void-summary strong { color: var(--navy); font-size: 12px; }
 
 .tax-mode-row {
   display: flex;
@@ -6746,6 +6856,10 @@ h3 {
   padding: 22px;
 }
 
+.profile-email-pending {
+  margin-bottom: 18px;
+}
+
 .profile-summary-card {
   display: grid;
   justify-items: center;
@@ -6765,7 +6879,7 @@ h3 {
   background: linear-gradient(145deg, var(--teal), var(--teal-dark));
   box-shadow: 0 8px 28px rgba(33, 88, 92, .18);
   color: #fff;
-  font-family: "Plus Jakarta Sans", sans-serif;
+  font-family: var(--font-plus-jakarta-sans), sans-serif;
   font-size: 30px;
   font-weight: 800;
 }
@@ -7139,38 +7253,114 @@ h3 {
   outline: none;
 }
 
+/* The workflow guides used to be `<details>` in this grid, and opening one ran
+   its column far past its neighbour — a two-column grid with one tall cell in
+   it can never look tidy. The cards below never change size; the guide itself
+   opens in the shared `.modal-backdrop`/`.modal-card` dialog. */
 .help-guide-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
-.help-guide {
-  padding: 0;
-  overflow: hidden;
+.help-guide-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 15px;
+  cursor: pointer;
+  text-align: left;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
 }
 
-.help-guide summary {
+.help-guide-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.help-guide-card:focus-visible {
+  outline: 3px solid rgba(4, 169, 159, 0.25);
+  outline-offset: 2px;
+}
+
+.help-guide-card-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 15px;
-  cursor: pointer;
-  list-style: none;
 }
 
-.help-guide summary::-webkit-details-marker {
-  display: none;
-}
-
-.help-guide summary strong {
-  flex: 1;
+.help-guide-card-head strong {
   color: var(--navy);
   font-size: 12px;
+  line-height: 1.45;
 }
 
-.help-guide[open] summary > svg {
-  transform: rotate(180deg);
+.help-guide-card-summary {
+  color: #617174;
+  font-size: 10px;
+  line-height: 1.7;
+}
+
+/* `margin-top: auto` pins the cue to the bottom edge, so the row of cards
+   reads as one band however long each summary runs. */
+.help-guide-card-cue {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: auto;
+  color: var(--teal-dark);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.help-guide-card-cue > svg {
+  transition: transform 160ms ease;
+}
+
+.help-guide-card:hover .help-guide-card-cue > svg {
+  transform: translateX(2px);
+}
+
+/* The dialog takes focus on open so the reader lands inside it rather than
+   behind it, but it is a landing spot, not a control — a browser focus ring
+   drawn round the whole card reads as an error state. The visible focus
+   indicator belongs to the close button and the cards, which keep theirs. */
+.help-guide-modal:focus {
+  outline: none;
+}
+
+/* The dialog opens with the shared `modal-in` every other modal uses. What it
+   adds is the matching exit: the component keeps the dialog mounted, flags it
+   `is-closing`, and drops it when the animation ends — a card that fades in and
+   then vanishes on close reads as a glitch rather than a dismissal. The exit is
+   shorter than the entrance so dismissal feels immediate without cutting. */
+.help-guide-backdrop {
+  animation: help-guide-backdrop-in 180ms ease-out;
+}
+
+.help-guide-backdrop.is-closing {
+  animation: help-guide-backdrop-out 150ms ease-in forwards;
+  pointer-events: none;
+}
+
+.help-guide-backdrop.is-closing .modal-card {
+  animation: help-guide-card-out 150ms ease-in forwards;
+}
+
+@keyframes help-guide-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes help-guide-backdrop-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes help-guide-card-out {
+  from { transform: translateY(0) scale(1); opacity: 1; }
+  to { transform: translateY(10px) scale(.985); opacity: 0; }
 }
 
 .help-section-head {
@@ -7193,10 +7383,12 @@ h3 {
   line-height: 1.65;
 }
 
+/* Lives only inside the guide dialog now, so it sits flush against the card
+   padding instead of indenting itself under a summary row's icon. */
 .help-guide-body {
   display: grid;
   gap: 11px;
-  margin: 0 15px 16px 57px;
+  margin: 0;
   color: #617174;
   font-size: 10px;
   line-height: 1.7;
@@ -7467,6 +7659,20 @@ h3 {
 .button.danger:hover {
   border-color: #e2a39e;
   background: #fdebea;
+}
+
+/* The internal edition of a vendor document. Amber rather than the neutral
+   PDF button on purpose: the two files sit side by side and only one of them
+   may ever reach the contractor. */
+.button.internal {
+  border-color: #e8cf9a;
+  background: #fdf6e6;
+  color: #8a6318;
+}
+
+.button.internal:hover {
+  border-color: #d9ba75;
+  background: #f9edd4;
 }
 
 .table-row-actions,
@@ -7912,6 +8118,34 @@ h3 {
   .user-row > .status-badge {
     display: none;
   }
+
+  /* The invoice grid's track minimums add up to ~941px plus gaps, so from this
+     breakpoint down the row no longer fits and nothing around it scrolls
+     horizontally — Pajak/Edit/Konfirmasi/Hapus simply left the screen. The row
+     stacks here rather than only below 760px, matching the breakpoint where the
+     shell already switches to the off-canvas sidebar. */
+  .invoice-row {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .invoice-primary {
+    min-width: 180px;
+    flex: 1;
+  }
+
+  .invoice-amount,
+  .invoice-due {
+    min-width: calc(50% - 6px);
+    flex: 1;
+  }
+
+  .invoice-actions {
+    width: 100%;
+  }
 }
 
 @media (max-width: 760px) {
@@ -7971,10 +8205,6 @@ h3 {
   .help-glossary,
   .language-options {
     grid-template-columns: 1fr;
-  }
-
-  .help-guide-body {
-    margin-left: 15px;
   }
 
   .help-guide-body dl > div {
@@ -8192,7 +8422,10 @@ h3 {
     width: 100%;
   }
 
+  /* 30px is below the ~40px touch guideline; these are the primary filters on
+     the dashboard and the schedule mode switch on the project page. */
   .segmented-control button {
+    min-height: 40px;
     flex: 1 0 auto;
   }
 
@@ -8336,6 +8569,19 @@ h3 {
     flex: 1;
   }
 
+  /* The trailing `.icon-button.danger` keeps its fixed 36px however far the
+     `.button` children shrink, so a single non-wrapping line still pushed
+     `Hapus` past a 390px viewport. Let the strip wrap and give the labelled
+     buttons a readable floor instead. */
+  .invoice-actions {
+    justify-content: flex-start;
+  }
+
+  .invoice-actions .button {
+    min-width: 104px;
+    flex: 1 1 auto;
+  }
+
   .project-hero {
     display: flex;
     align-items: flex-start;
@@ -8456,6 +8702,20 @@ h3 {
     max-height: 92vh;
     border-radius: 18px 18px 0 0;
     padding: 18px;
+  }
+
+  /* Tall forms (SPK, PO, tax rules, new user) run well past a phone-sized card,
+     so the primary action was never on screen when the sheet opened. Pin the
+     action row to the bottom of the scrolling card, the same treatment
+     `.catalog-editor-actions` already gives the catalog drawer. */
+  .modal-card .modal-actions {
+    position: sticky;
+    z-index: 2;
+    bottom: -18px;
+    margin: 3px -18px -18px;
+    border-top: 1px solid var(--line);
+    padding: 12px 18px calc(12px + env(safe-area-inset-bottom));
+    background: #fff;
   }
 
   .toast {
@@ -8651,6 +8911,20 @@ h3 {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+
+  /* The blanket rule above only collapses durations, so a transform still
+     lands — instantly, which is the jump reduced motion is meant to avoid.
+     The guide cards drop their lift and their arrow nudge outright and keep
+     the border and shadow as the hover signal. The guide dialog's own
+     animations are left to the blanket rule: they still have to *end* for the
+     component to unmount, so they are shortened, never removed. */
+  .help-guide-card:hover {
+    transform: none;
+  }
+
+  .help-guide-card:hover .help-guide-card-cue > svg {
+    transform: none;
+  }
 }
 
 @media print {
@@ -8750,6 +9024,10 @@ html.document-preview-open { overflow: hidden; }
 .commercial-package-control > label > svg { position: absolute; right: 0; bottom: 3px; color: #7a9197; pointer-events: none; }
 .commercial-package-popover { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; width: min(340px, calc(100vw - 32px)); padding: 16px; border: 1px solid #d7e6e4; border-radius: 18px; background: #fff; box-shadow: 0 22px 55px rgba(23,59,70,.2); }
 .commercial-package-popover .field { margin-top: 12px; }
+.commercial-package-popover .package-status-hint { margin-top: 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+/* The switcher strips its own select down to a bare label; a select inside the
+   popover is an ordinary form field and has to look like every other one. */
+.commercial-package-popover .field select { height: 42px; padding: 0 34px 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: #fff; color: var(--ink); font-weight: 600; }
 @media (max-width: 620px) {
   .commercial-package-control { width: 100%; }
   .commercial-package-control > label { min-width: 0; flex: 1; }
@@ -8757,7 +9035,10 @@ html.document-preview-open { overflow: hidden; }
 }
 
 @media (max-width: 760px) {
-  .catalog-ai-drawer { width: 100%; height: min(94dvh, 900px); border-radius: 20px 20px 0 0; }
+  /* The backdrop stretches its single track so the drawer can resolve a
+     percentage width; a sheet that is shorter than the screen still has to sit
+     on the bottom edge, so it aligns itself rather than the container. */
+  .catalog-ai-drawer { width: 100%; height: min(94dvh, 900px); align-self: end; border-radius: 20px 20px 0 0; }
   .catalog-ai-head { padding: 18px 16px; }
   .catalog-ai-input,
   .catalog-ai-result { padding: 16px; }

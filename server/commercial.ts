@@ -30,6 +30,33 @@ function money(value: unknown) {
   return Number.isFinite(result) ? result : 0;
 }
 
+/** The coarsest automatic rounding the UI offers. */
+export const MAX_ROUNDING_STEP = 100_000;
+
+/**
+ * How far a *rounding* adjustment may move the grand total.
+ *
+ * The field is labelled "pembulatan" and its value flows straight into the
+ * invoice snapshots, but it used to be validated only against
+ * `Number.MAX_SAFE_INTEGER` — so `roundingAdjustment: 500.000.000` on a
+ * Rp 10.000.000 quotation produced a Rp 510.000.000 grand total. A required
+ * reason is not a cap: an unbounded field labelled "rounding" is an unlogged
+ * price override that bypasses the discount and tax fields entirely.
+ *
+ * The bound is the larger of the coarsest automatic step (Rp 100.000 — so every
+ * adjustment the Up/Down modes can ever produce is legal by construction) and
+ * 1% of the pre-rounding total, which keeps "round this Rp 480.000.000 contract
+ * to the nearest million" workable without opening the door to a second
+ * discount. Anything beyond that is a price change and belongs in the discount
+ * or tax fields, where it is named for what it is.
+ */
+export function customRoundingLimit(beforeRounding: number) {
+  return Math.max(
+    MAX_ROUNDING_STEP,
+    Math.ceil(Math.abs(money(beforeRounding)) / 100),
+  );
+}
+
 export function calculateQuotationCommercialTotals(
   input: QuotationCommercialInput,
 ): QuotationCommercialTotals {
@@ -53,7 +80,15 @@ export function calculateQuotationCommercialTotals(
     : 0;
   let roundingAdjustment = 0;
   if (mode === "Custom") {
-    roundingAdjustment = money(input.customRoundingAdjustment);
+    // Clamped rather than trusted: the write endpoint refuses an out-of-range
+    // value with a friendly message, and this keeps every other consumer
+    // (recomputes, revision copies, invoice snapshots, the catalog writer)
+    // inside the bound even for a row stored before the cap existed.
+    const limit = customRoundingLimit(beforeRounding);
+    roundingAdjustment = Math.max(
+      -limit,
+      Math.min(limit, money(input.customRoundingAdjustment)),
+    );
   } else if (step > 0 && mode === "Up") {
     roundingAdjustment = Math.ceil(beforeRounding / step) * step - beforeRounding;
   } else if (step > 0 && mode === "Down") {

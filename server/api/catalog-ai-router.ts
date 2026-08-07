@@ -7,7 +7,7 @@ import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { callGemini, defaultGeminiModel } from "./catalog-ai-gemini";
 import type { Recommendation } from "./catalog-ai-schema";
-import { ApiError, created, jsonBody, ok } from "./errors";
+import { ApiError, created, jsonBody, ok, refuseOnReference } from "./errors";
 
 const idSchema = z.string().trim().min(1).max(100);
 const analyzeSchema = z.object({
@@ -241,7 +241,10 @@ export async function handleCatalogAi(request: Request, path: string[], user: Au
     const sku = input.sku ?? recommendation.sku;
     const duplicate = await client.execute({ sql: "SELECT id FROM item_catalog_items WHERE sku=? LIMIT 1", args: [sku] });
     if (duplicate.rows.length) throw new ApiError(409, "SKU_EXISTS", "SKU sudah digunakan item lain.");
-    await client.transaction(async (tx) => {
+    // The category and brand above were read before this transaction opened, so
+    // either can be deleted in the meantime. Refuse cleanly instead of letting
+    // the foreign-key error escape as a raw 500.
+    await refuseOnReference(client.transaction(async (tx) => {
       await tx.execute({
         sql: `INSERT INTO item_catalog_items
           (id,category_id,brand_id,sku,name,name_en,model,specifications,unit,
@@ -262,7 +265,7 @@ export async function handleCatalogAi(request: Request, path: string[], user: Au
           override_reason=?,catalog_item_id=?,updated_at=? WHERE id=?`,
         args: [user.id, timestamp, input.overrideReason ?? null, itemId, timestamp, runId],
       });
-    });
+    }), () => new ApiError(404, "CATEGORY_NOT_FOUND", "Kategori atau merek katalog tidak ditemukan lagi. Muat ulang katalog lalu setujui kembali."));
     await writeAuditLog(client, request, user, "approve", "catalog_ai_run", runId, {
       catalogItemId: itemId,
       categoryId: input.categoryId,

@@ -128,12 +128,22 @@ export function UsersView({ notify, language, currentUserId, canManage }: UsersV
         setUsers((current) => [user, ...current]);
         notify(id ? "Akun siap dipakai. Sampaikan email dan kata sandi awal kepada pengguna secara aman." : "The account is ready. Share the email and initial password securely.");
       } else if (editing) {
-        const updated = withPermissions(await api<TeamUser>(`/api/users/${editing.id}`, {
+        // Nobody moves their own recovery address without proving they own the
+        // new inbox, Admin included: the answer keeps the old address and parks
+        // the request, so say so rather than report a change that did not land.
+        const response = await api<TeamUser & { pendingEmailChange?: { pendingEmail: string; expiresInMinutes: number } }>(`/api/users/${editing.id}`, {
           method: "PATCH",
           body: JSON.stringify(payload),
-        }));
+        });
+        const updated = withPermissions(response);
         setUsers((current) => current.map((user) => user.id === updated.id ? updated : user));
-        notify(id ? "Akun dan hak akses berhasil diperbarui." : "Account and permissions updated.");
+        notify(
+          response.pendingEmailChange
+            ? id
+              ? `Akun diperbarui, tetapi alamat email tetap ${updated.email} sampai tautan konfirmasi di ${response.pendingEmailChange.pendingEmail} dibuka. Tautan berlaku ${response.pendingEmailChange.expiresInMinutes} menit dan alamat lama sudah diberi tahu.`
+              : `The account was updated, but the email address stays ${updated.email} until the confirmation link at ${response.pendingEmailChange.pendingEmail} is opened. The link is valid for ${response.pendingEmailChange.expiresInMinutes} minutes and the old address has been notified.`
+            : id ? "Akun dan hak akses berhasil diperbarui." : "Account and permissions updated.",
+        );
       }
       setEditing(null);
       setPassword("");

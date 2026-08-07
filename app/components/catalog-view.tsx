@@ -24,7 +24,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import { api, ApiClientError, downloadApiFile, messageOf } from "../api-client";
 import type { CatalogBrand, CatalogCategory, CatalogItem, CatalogPayload } from "../data";
 import { formatCurrency } from "../data";
-import type { AppLanguage } from "../i18n";
+import { type AppLanguage, BOQ_ROLES, localizedItemCount, localizedLabel } from "../i18n";
 
 type EditorMode = "item" | "category" | "brand" | null;
 type ItemFormState = {
@@ -88,7 +88,7 @@ function formatElapsed(totalSeconds: number) {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-const roles = ["Perangkat", "Material", "Jasa", "Mobilitas"] as const;
+const roles = BOQ_ROLES;
 const emptyItem: ItemFormState = {
   categoryId: "", brandId: "", sku: "", name: "", nameEn: "", model: "",
   specifications: "", unit: "unit", costPrice: 0, margin1Percent: 20,
@@ -141,6 +141,20 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
     const timer = window.setTimeout(() => { void load(); }, 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+
+  // Both catalog drawers are modal dialogs, so they close on Escape like every
+  // other modal in the app. The editor drawer is dismissed outright; the AI
+  // panel keeps its server-side run and simply closes the panel.
+  useEffect(() => {
+    if (!editor && !aiOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if (editor) setEditor(null);
+      else setAiOpen(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [aiOpen, editor]);
 
   const categories = useMemo(() => data.categories.filter((entry) => !role || entry.boqRole === role), [data.categories, role]);
   const brands = useMemo(() => data.brands.filter((entry) => !categoryId || entry.categoryId === categoryId), [data.brands, categoryId]);
@@ -445,7 +459,7 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
 
     <section className="catalog-summary-grid">
       {roles.map((entry) => <button type="button" key={entry} className={role === entry ? "active" : ""} onClick={() => { setRole(role === entry ? "" : entry); setCategoryId(""); setBrandId(""); }}>
-        <span>{entry === "Perangkat" ? <Boxes size={19} /> : <Layers3 size={19} />}</span><strong>{entry}</strong><small>{data.items.filter((item) => item.boqRole === entry).length} item</small>
+        <span>{entry === "Perangkat" ? <Boxes size={19} /> : <Layers3 size={19} />}</span><strong>{localizedLabel(language, entry)}</strong><small>{localizedItemCount(language, data.items.filter((item) => item.boqRole === entry).length)}</small>
       </button>)}
     </section>
 
@@ -466,7 +480,7 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
           }}
         >
           <Boxes size={16} />
-          <span><strong>{entry.name}</strong><small>{entry.itemCount} item</small></span>
+          <span><strong>{entry.name}</strong><small>{localizedItemCount(language, entry.itemCount)}</small></span>
         </button>
       ))}
     </section>
@@ -481,17 +495,17 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
       </div>
       <div className="table-scroll"><table className="data-table catalog-table"><thead><tr><th>Item / Model</th><th>{id ? "Kategori" : "Category"}</th><th>{id ? "Merek" : "Brand"}</th><th>{id ? "Harga pokok" : "Cost"}</th><th>{id ? "Harga 1" : "Price 1"}</th><th>{id ? "Harga 2" : "Price 2"}</th><th>Status</th><th><span className="sr-only">Aksi</span></th></tr></thead>
         <tbody>{items.map((item) => <tr key={item.id} className={item.status === "Nonaktif" ? "catalog-inactive" : ""}><td><div className="catalog-item-name"><strong>{item.name}</strong><span>{item.model || item.sku}</span><small>{item.sku}</small></div></td>
-          <td><strong>{item.category}</strong><small className="table-subline">{item.boqRole}</small></td><td>{item.brand ?? "—"}</td><td>{formatCurrency(item.costPrice, language)}</td>
+          <td><strong>{item.category}</strong><small className="table-subline">{localizedLabel(language, item.boqRole)}</small></td><td>{item.brand ?? "—"}</td><td>{formatCurrency(item.costPrice, language)}</td>
           <td><strong>{formatCurrency(item.price1, language)}</strong><small className="table-subline">+{item.margin1Percent}%</small></td><td><strong>{formatCurrency(item.price2, language)}</strong><small className="table-subline">+{item.margin2Percent}%</small></td>
           <td><span className={`status-badge ${item.status === "Aktif" ? "success" : "muted"}`}>{item.status}</span></td><td><div className="table-row-actions"><button className="icon-button" type="button" onClick={() => openItem(item)} aria-label={`Edit ${item.name}`}><Pencil size={15} /></button><button className="icon-button danger" type="button" onClick={() => void remove("items", item.id, item.name)} aria-label={`Hapus ${item.name}`}><Trash2 size={15} /></button></div></td></tr>)}</tbody></table></div>
       {loading ? <div className="catalog-empty">{id ? "Memuat katalog..." : "Loading catalog..."}</div> : !items.length ? <div className="catalog-empty">{id ? "Belum ada item pada filter ini." : "No items match these filters."}</div> : null}
     </section>
 
-    {editor && <div className="modal-backdrop catalog-modal-backdrop" role="presentation"><form className="catalog-editor" onSubmit={saveEditor}>
-      <div className="panel-head"><div><span className="eyebrow">{editor === "item" ? (id ? "ITEM KATALOG" : "CATALOG ITEM") : editor === "category" ? (id ? "KATEGORI" : "CATEGORY") : (id ? "MEREK" : "BRAND")}</span><h2>{editingId ? (id ? "Edit data" : "Edit data") : (id ? "Tambah data" : "Add data")}</h2></div><button className="icon-button" type="button" onClick={() => setEditor(null)}><X size={18} /></button></div>
+    {editor && <div className="modal-backdrop catalog-modal-backdrop" role="presentation" onMouseDown={() => setEditor(null)}><form className="catalog-editor" role="dialog" aria-modal="true" aria-labelledby="catalog-editor-title" onMouseDown={(event) => event.stopPropagation()} onSubmit={saveEditor}>
+      <div className="panel-head"><div><span className="eyebrow">{editor === "item" ? (id ? "ITEM KATALOG" : "CATALOG ITEM") : editor === "category" ? (id ? "KATEGORI" : "CATEGORY") : (id ? "MEREK" : "BRAND")}</span><h2 id="catalog-editor-title">{editingId ? (id ? "Edit data" : "Edit data") : (id ? "Tambah data" : "Add data")}</h2></div><button className="icon-button" type="button" aria-label={id ? "Tutup" : "Close"} onClick={() => setEditor(null)}><X size={18} /></button></div>
       <div className="catalog-editor-body">
         {editor === "item" && <>
-          <div className="form-grid two-columns"><label className="field select-field"><span>{id ? "Kategori" : "Category"}</span><select required value={itemForm.categoryId} onChange={(event) => { const next = data.categories.find((entry) => entry.id === event.target.value); setItemForm((current) => ({ ...current, categoryId: event.target.value, brandId: "", margin1Percent: next?.defaultMargin1Percent ?? current.margin1Percent, margin2Percent: next?.defaultMargin2Percent ?? current.margin2Percent })); }}>{data.categories.filter((entry) => entry.status === "Aktif" || entry.id === itemForm.categoryId).map((entry) => <option key={entry.id} value={entry.id}>{entry.boqRole} · {entry.name}</option>)}</select></label>
+          <div className="form-grid two-columns"><label className="field select-field"><span>{id ? "Kategori" : "Category"}</span><select required value={itemForm.categoryId} onChange={(event) => { const next = data.categories.find((entry) => entry.id === event.target.value); setItemForm((current) => ({ ...current, categoryId: event.target.value, brandId: "", margin1Percent: next?.defaultMargin1Percent ?? current.margin1Percent, margin2Percent: next?.defaultMargin2Percent ?? current.margin2Percent })); }}>{data.categories.filter((entry) => entry.status === "Aktif" || entry.id === itemForm.categoryId).map((entry) => <option key={entry.id} value={entry.id}>{localizedLabel(language, entry.boqRole)} · {entry.name}</option>)}</select></label>
             <label className="field select-field"><span>{id ? "Merek" : "Brand"}{["Perangkat", "Material"].includes(selectedCategory?.boqRole ?? "") ? " *" : ""}</span><select required={["Perangkat", "Material"].includes(selectedCategory?.boqRole ?? "")} value={itemForm.brandId} onChange={(event) => setItemForm((current) => ({ ...current, brandId: event.target.value }))}><option value="">{id ? "Tanpa merek" : "No brand"}</option>{itemBrands.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label></div>
           <div className="form-grid two-columns"><label className="field"><span>SKU</span><input required value={itemForm.sku} onChange={(event) => setItemForm((current) => ({ ...current, sku: event.target.value }))} /></label><label className="field"><span>{id ? "Model" : "Model"}</span><input value={itemForm.model} onChange={(event) => setItemForm((current) => ({ ...current, model: event.target.value }))} /></label></div>
           <label className="field"><span>{id ? "Nama item" : "Item name"}</span><input required value={itemForm.name} onChange={(event) => setItemForm((current) => ({ ...current, name: event.target.value }))} /></label>
@@ -501,13 +515,13 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
           <div className="catalog-price-grid"><label className="field"><span>Margin 1 (%)</span><input type="number" min="0" step="0.01" value={itemForm.margin1Percent} onChange={(event) => setItemForm((current) => ({ ...current, margin1Percent: Number(event.target.value) }))} /><strong>{formatCurrency(price1, language)}</strong></label><label className="field"><span>Margin 2 (%)</span><input type="number" min="0" step="0.01" value={itemForm.margin2Percent} onChange={(event) => setItemForm((current) => ({ ...current, margin2Percent: Number(event.target.value) }))} /><strong>{formatCurrency(price2, language)}</strong></label></div>
           <label className="field select-field"><span>Status</span><select value={itemForm.status} onChange={(event) => setItemForm((current) => ({ ...current, status: event.target.value as "Aktif" | "Nonaktif" }))}><option>Aktif</option><option>Nonaktif</option></select></label>
         </>}
-        {editor === "category" && <><label className="field select-field"><span>{id ? "Peran di BoQ" : "BoQ role"}</span><select value={categoryForm.boqRole} onChange={(event) => setCategoryForm((current) => ({ ...current, boqRole: event.target.value }))}>{roles.map((entry) => <option key={entry}>{entry}</option>)}</select></label><label className="field"><span>{id ? "Nama kategori" : "Category name"}</span><input required value={categoryForm.name} onChange={(event) => setCategoryForm((current) => ({ ...current, name: event.target.value }))} /></label><label className="field"><span>{id ? "Nama Inggris" : "English name"}</span><input value={categoryForm.nameEn} onChange={(event) => setCategoryForm((current) => ({ ...current, nameEn: event.target.value }))} /></label><div className="form-grid two-columns"><label className="field"><span>Default Margin 1 (%)</span><input type="number" min="0" value={categoryForm.defaultMargin1Percent} onChange={(event) => setCategoryForm((current) => ({ ...current, defaultMargin1Percent: Number(event.target.value) }))} /></label><label className="field"><span>Default Margin 2 (%)</span><input type="number" min="0" value={categoryForm.defaultMargin2Percent} onChange={(event) => setCategoryForm((current) => ({ ...current, defaultMargin2Percent: Number(event.target.value) }))} /></label></div><div className="catalog-related-list"><strong>{id ? "Kategori tersedia" : "Available categories"}</strong>{data.categories.map((entry) => <button type="button" key={entry.id} onClick={() => openCategory(entry)}><span>{entry.boqRole} · {entry.name}</span><Pencil size={14} /></button>)}</div></>}
-        {editor === "brand" && <><label className="field select-field"><span>{id ? "Kategori" : "Category"}</span><select required value={brandForm.categoryId} onChange={(event) => setBrandForm((current) => ({ ...current, categoryId: event.target.value }))}>{data.categories.map((entry) => <option key={entry.id} value={entry.id}>{entry.boqRole} · {entry.name}</option>)}</select></label><label className="field"><span>{id ? "Nama merek" : "Brand name"}</span><input required value={brandForm.name} onChange={(event) => setBrandForm((current) => ({ ...current, name: event.target.value }))} /></label><div className="catalog-related-list"><strong>{id ? "Merek tersedia" : "Available brands"}</strong>{data.brands.filter((entry) => entry.categoryId === brandForm.categoryId).map((entry) => <button type="button" key={entry.id} onClick={() => openBrand(entry)}><span>{entry.name}</span><Pencil size={14} /></button>)}</div></>}
+        {editor === "category" && <><label className="field select-field"><span>{id ? "Peran di BoQ" : "BoQ role"}</span><select value={categoryForm.boqRole} onChange={(event) => setCategoryForm((current) => ({ ...current, boqRole: event.target.value }))}>{roles.map((entry) => <option key={entry} value={entry}>{localizedLabel(language, entry)}</option>)}</select></label><label className="field"><span>{id ? "Nama kategori" : "Category name"}</span><input required value={categoryForm.name} onChange={(event) => setCategoryForm((current) => ({ ...current, name: event.target.value }))} /></label><label className="field"><span>{id ? "Nama Inggris" : "English name"}</span><input value={categoryForm.nameEn} onChange={(event) => setCategoryForm((current) => ({ ...current, nameEn: event.target.value }))} /></label><div className="form-grid two-columns"><label className="field"><span>Default Margin 1 (%)</span><input type="number" min="0" value={categoryForm.defaultMargin1Percent} onChange={(event) => setCategoryForm((current) => ({ ...current, defaultMargin1Percent: Number(event.target.value) }))} /></label><label className="field"><span>Default Margin 2 (%)</span><input type="number" min="0" value={categoryForm.defaultMargin2Percent} onChange={(event) => setCategoryForm((current) => ({ ...current, defaultMargin2Percent: Number(event.target.value) }))} /></label></div><div className="catalog-related-list"><strong>{id ? "Kategori tersedia" : "Available categories"}</strong>{data.categories.map((entry) => <button type="button" key={entry.id} onClick={() => openCategory(entry)}><span>{localizedLabel(language, entry.boqRole)} · {entry.name}</span><Pencil size={14} /></button>)}</div></>}
+        {editor === "brand" && <><label className="field select-field"><span>{id ? "Kategori" : "Category"}</span><select required value={brandForm.categoryId} onChange={(event) => setBrandForm((current) => ({ ...current, categoryId: event.target.value }))}>{data.categories.map((entry) => <option key={entry.id} value={entry.id}>{localizedLabel(language, entry.boqRole)} · {entry.name}</option>)}</select></label><label className="field"><span>{id ? "Nama merek" : "Brand name"}</span><input required value={brandForm.name} onChange={(event) => setBrandForm((current) => ({ ...current, name: event.target.value }))} /></label><div className="catalog-related-list"><strong>{id ? "Merek tersedia" : "Available brands"}</strong>{data.brands.filter((entry) => entry.categoryId === brandForm.categoryId).map((entry) => <button type="button" key={entry.id} onClick={() => openBrand(entry)}><span>{entry.name}</span><Pencil size={14} /></button>)}</div></>}
       </div><div className="catalog-editor-actions">{editingId && <button className="button danger" type="button" onClick={() => void remove(editor === "item" ? "items" : editor === "category" ? "categories" : "brands", editingId, editor)}><Trash2 size={15} /> {id ? "Hapus" : "Delete"}</button>}<button className="button primary" type="submit"><Save size={16} /> {id ? "Simpan" : "Save"}</button></div>
     </form></div>}
 
-    {aiOpen && <div className="modal-backdrop catalog-modal-backdrop" role="presentation">
-      <aside className="catalog-ai-drawer" role="dialog" aria-modal="true" aria-labelledby="catalog-ai-title">
+    {aiOpen && <div className="modal-backdrop catalog-modal-backdrop" role="presentation" onMouseDown={() => setAiOpen(false)}>
+      <aside className="catalog-ai-drawer" role="dialog" aria-modal="true" aria-labelledby="catalog-ai-title" onMouseDown={(event) => event.stopPropagation()}>
         <header className="catalog-ai-head">
           <div><span className="eyebrow"><Sparkles size={13} /> AI CATALOG ASSISTANT</span><h2 id="catalog-ai-title">{id ? "Riset perangkat lebih cepat" : "Research products faster"}</h2><p>{id ? "AI merangkum data publik. Harga akhir tetap dihitung aplikasi dan wajib ditinjau manusia." : "AI summarizes public data. Final prices remain deterministic and require human review."}</p></div>
           <button className="icon-button" type="button" onClick={() => setAiOpen(false)} aria-label={id ? "Tutup" : "Close"}><X size={18} /></button>
@@ -590,7 +604,7 @@ export function CatalogView({ language, notify }: { language: AppLanguage; notif
                 <label className="field"><span>{id ? "Spesifikasi" : "Specifications"}</span><textarea maxLength={2000} value={aiForm.specifications} onChange={(event) => setAiForm((current) => ({ ...current, specifications: event.target.value }))} /></label>
               </details>
             </section>
-            <section className="catalog-ai-classification"><label className="field select-field"><span>{id ? "Kategori katalog" : "Catalog category"}</span><select required value={aiCategoryId} onChange={(event) => { setAiCategoryId(event.target.value); setAiBrandId(""); }}><option value="">{id ? "Pilih kategori" : "Select category"}</option>{data.categories.filter((entry) => entry.status === "Aktif").map((entry) => <option key={entry.id} value={entry.id}>{entry.boqRole} · {entry.name}</option>)}</select></label><label className="field select-field"><span>{id ? "Merek" : "Brand"}{aiRequiresBrand ? " *" : ""}</span><select required={aiRequiresBrand} value={aiBrandId} onChange={(event) => setAiBrandId(event.target.value)}><option value="">{id ? "Pilih merek" : "Select brand"}</option>{data.brands.filter((entry) => entry.status === "Aktif" && entry.categoryId === aiCategoryId).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label></section>
+            <section className="catalog-ai-classification"><label className="field select-field"><span>{id ? "Kategori katalog" : "Catalog category"}</span><select required value={aiCategoryId} onChange={(event) => { setAiCategoryId(event.target.value); setAiBrandId(""); }}><option value="">{id ? "Pilih kategori" : "Select category"}</option>{data.categories.filter((entry) => entry.status === "Aktif").map((entry) => <option key={entry.id} value={entry.id}>{localizedLabel(language, entry.boqRole)} · {entry.name}</option>)}</select></label><label className="field select-field"><span>{id ? "Merek" : "Brand"}{aiRequiresBrand ? " *" : ""}</span><select required={aiRequiresBrand} value={aiBrandId} onChange={(event) => setAiBrandId(event.target.value)}><option value="">{id ? "Pilih merek" : "Select brand"}</option>{data.brands.filter((entry) => entry.status === "Aktif" && entry.categoryId === aiCategoryId).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label></section>
             {aiShowOverride && <section className="catalog-ai-section warning">
               <strong><AlertTriangle size={14} /> {id ? "Rekomendasi kedaluwarsa" : "Recommendation expired"}</strong>
               <label className="field"><span>{id ? "Alasan override (min. 5 karakter)" : "Override reason (min. 5 characters)"}</span><textarea required minLength={5} maxLength={500} value={aiOverrideReason} onChange={(event) => setAiOverrideReason(event.target.value)} placeholder={id ? "Rekomendasi lebih dari tujuh hari. Jelaskan alasan tetap menyetujui." : "This recommendation is older than seven days. Explain why you are approving anyway."} /></label>
