@@ -92,6 +92,14 @@ const analyticsConnectSources = analyticsEnabled
   : "";
 const analyticsImageSources = analyticsEnabled ? " https://*.google-analytics.com" : "";
 
+// OpenStreetMap raster tiles for the project map on the admin dashboard. Tiles
+// are PNGs, so this belongs in img-src and nowhere else: Leaflet is bundled
+// from npm, and its stylesheet and marker assets are emitted under /_next,
+// which 'self' already covers. The canonical single host is used rather than
+// the legacy a/b/c. subdomains — the OSMF tile policy asks for exactly that,
+// and it keeps the directive to one named origin instead of a wildcard.
+const openStreetMapTiles = "https://tile.openstreetmap.org";
+
 const contentSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -100,7 +108,7 @@ const contentSecurityPolicy = [
   "form-action 'self'",
   // data: covers inline SVG icons and generated QR codes; blob: covers the
   // client-side object URLs used to hand a generated PDF or XLSX to the user.
-  `img-src 'self' data: blob:${analyticsImageSources}`,
+  `img-src 'self' data: blob: ${openStreetMapTiles}${analyticsImageSources}`,
   // The brand typefaces are committed to the repo and emitted by next/font into
   // /_next/static/media, so 'self' is the whole of it — no Google origin here.
   "font-src 'self' data:",

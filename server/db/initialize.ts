@@ -136,6 +136,11 @@ CREATE TABLE IF NOT EXISTS projects (
   value INTEGER NOT NULL DEFAULT 0 CHECK (value >= 0),
   manager_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  latitude DOUBLE PRECISION CHECK (latitude BETWEEN -90 AND 90),
+  longitude DOUBLE PRECISION CHECK (longitude BETWEEN -180 AND 180),
+  coordinate_source TEXT,
+  geocoded_query TEXT,
+  geocoded_label TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -2833,6 +2838,32 @@ async function ensureItemCatalogSchema(client: DatabaseClient) {
   }
 }
 
+// Step two of the pattern in server/db/README.md for the project map.
+//
+// `coordinate_source` is what keeps a hand-placed pin alive: 'manual' means a
+// person dropped it and no geocoder may touch it again, 'geocoded' means the
+// guess is disposable, NULL means the project has never had coordinates. The
+// two `geocoded_*` columns record what was asked and what came back, so a pin
+// that landed in the wrong village can be diagnosed without re-running
+// anything — and `geocoded_query` doubles as the "we already tried this exact
+// text" marker that stops a repeated save from re-querying Nominatim.
+//
+// The range CHECKs are the same ones declared in `schemaSql`; both dialects
+// accept a column CHECK in ADD COLUMN, and every existing row is NULL, which
+// no CHECK rejects.
+async function ensureProjectCoordinateSchema(client: DatabaseClient) {
+  const columns: Array<[string, string, string]> = [
+    ["projects", "latitude", "DOUBLE PRECISION CHECK (latitude BETWEEN -90 AND 90)"],
+    ["projects", "longitude", "DOUBLE PRECISION CHECK (longitude BETWEEN -180 AND 180)"],
+    ["projects", "coordinate_source", "TEXT"],
+    ["projects", "geocoded_query", "TEXT"],
+    ["projects", "geocoded_label", "TEXT"],
+  ];
+  for (const [table, column, definition] of columns) {
+    await ensureColumn(client, table, column, definition);
+  }
+}
+
 export async function initializeDatabase(client: DatabaseClient) {
   await client.executeMultiple(schemaSql);
   await ensureCmsBilingualSchema(client);
@@ -2845,6 +2876,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureBastVoidStatus(client);
   await ensureBankReconciliationSchema(client);
   await ensureTransactionOriginColumn(client);
+  await ensureProjectCoordinateSchema(client);
   await ensureDocumentCounters(client);
   await ensureAuthHardeningSchema(client);
   await ensureTaxAndEmailSchema(client);

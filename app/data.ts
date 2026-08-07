@@ -41,6 +41,13 @@ export interface Project {
   managerId?: string;
   team: string[];
   teamNames?: string[];
+  /** Null until the location text is geocoded or somebody drops a pin. */
+  latitude?: number | null;
+  longitude?: number | null;
+  /** "manual" = placed by a person and never overwritten by a later guess. */
+  coordinateSource?: "manual" | "geocoded" | null;
+  /** What Nominatim said it matched, so a pin in the wrong village is traceable. */
+  geocodedLabel?: string | null;
 }
 
 export interface BoqItem {

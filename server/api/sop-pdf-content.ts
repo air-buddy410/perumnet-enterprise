@@ -436,6 +436,14 @@ export const chapterStart: Chapter = {
           "Choose a project in the project picker at the top of the screen. While one project is selected, every operational menu shows only that project's data. Choose All projects to see the overall picture on the Dashboard.",
         ],
         [
+          "Baca Peta proyek di bagian paling atas Dashboard untuk melihat sebaran pekerjaan. Warna titik mengikuti status: abu-abu untuk Deal-an, tosca untuk On progress, hijau untuk Selesai. Klik satu titik untuk membuka proyeknya. Peta memakai daftar proyek yang sama dengan Dashboard, jadi isinya persis sebatas hak akses Anda.",
+          "Read the Project map at the very top of the Dashboard to see where the work is. Pin colour follows the status: grey for In negotiation, teal for In progress, green for Completed. Click a pin to open that project. The map is drawn from the same project list as the rest of the Dashboard, so it shows exactly what your access allows and nothing more.",
+        ],
+        [
+          "Titik peta ditebak otomatis dari kolom Lokasi setiap kali proyek disimpan. Bila lokasi tidak dikenali, proyek tetap tersimpan tanpa titik dan jumlahnya ditulis apa adanya di bawah peta. Tekan Atur titik peta, pilih proyeknya, lalu klik posisi yang benar. Titik yang diletakkan manusia tidak akan pernah ditimpa tebakan otomatis berikutnya.",
+          "Pins are guessed from the Location field each time a project is saved. When a location cannot be recognised the project still saves without a pin, and the number of such projects is stated plainly under the map. Press Set a map pin, choose the project, and click the correct position. A pin placed by a person is never overwritten by a later automatic guess.",
+        ],
+        [
           "Bila proyek dijual dalam beberapa lingkup, pilih juga paket komersial di bagian atas BoQ Generator, Quotation & Invoice, Validasi Perangkat, dan BAST Digital. Paket pertama dibuat otomatis dengan kode PKG-01 dan judul Lingkup Utama.",
           "If the project is sold as several scopes, also choose the commercial package at the top of BoQ Generator, Quotations & Invoices, Device Validation, and Digital Handover. The first package is created automatically with the code PKG-01 and the title Main Scope.",
         ],

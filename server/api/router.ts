@@ -44,6 +44,7 @@ import {
 } from "../auth-rate-limit";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { claimSequence } from "../db/counters";
+import { geocodeLocation } from "../geocode";
 import {
   emailDeliveryConfigured,
   emailMode,
@@ -134,6 +135,11 @@ const loginSchema = z.object({
   remember: z.boolean().default(false),
 });
 
+// Ranges are checked by assertCoordinate below rather than by z.number().min()
+// so an out-of-range pin comes back as its own refusal code with a sentence the
+// operator can act on, instead of a generic VALIDATION_ERROR blob.
+const coordinateSchema = z.number().finite().nullable().optional();
+
 const projectSchema = z.object({
   name: z.string().trim().min(3).max(160),
   client: z.string().trim().min(2).max(160),
@@ -143,6 +149,8 @@ const projectSchema = z.object({
   targetDate: isoDateSchema.optional(),
   value: nonNegativeMoney.default(0),
   managerId: idSchema.optional(),
+  latitude: coordinateSchema,
+  longitude: coordinateSchema,
 });
 
 const taskSchema = z.object({
@@ -643,6 +651,113 @@ async function assertProjectAccess(user: AuthUser, projectId: string) {
   }
 }
 
+const COORDINATE_LIMIT = { latitude: 90, longitude: 180 } as const;
+
+function assertCoordinate(
+  value: number | null | undefined,
+  axis: "latitude" | "longitude",
+) {
+  if (value === null || value === undefined) return null;
+  if (!Number.isFinite(value) || Math.abs(value) > COORDINATE_LIMIT[axis]) {
+    throw new ApiError(
+      422,
+      "INVALID_COORDINATE",
+      axis === "latitude"
+        ? "Lintang (latitude) harus berada di antara -90 dan 90."
+        : "Bujur (longitude) harus berada di antara -180 dan 180.",
+    );
+  }
+  return value;
+}
+
+/**
+ * Works out what a write is doing to a project's pin.
+ *
+ * Returns `null` when the request does not mention coordinates at all — the
+ * common case, and the one where the stored pin must be left exactly as it is.
+ *
+ * A pin is one value in two fields, so it is written whole or not at all: a
+ * request carrying a latitude and no longitude is refused rather than merged
+ * with whatever longitude happened to be stored. Half of a coordinate is not a
+ * location, and quietly completing it from an old guess would move a pin the
+ * caller never asked to move.
+ */
+function resolveProjectPin(input: { latitude?: number | null; longitude?: number | null }) {
+  const hasLatitude = input.latitude !== undefined;
+  const hasLongitude = input.longitude !== undefined;
+  if (!hasLatitude && !hasLongitude) return null;
+  if (
+    hasLatitude !== hasLongitude ||
+    (input.latitude === null) !== (input.longitude === null)
+  ) {
+    throw new ApiError(
+      422,
+      "INCOMPLETE_COORDINATE",
+      "Titik peta membutuhkan lintang dan bujur sekaligus. Isi keduanya, atau kosongkan keduanya.",
+    );
+  }
+  return {
+    latitude: assertCoordinate(input.latitude, "latitude"),
+    longitude: assertCoordinate(input.longitude, "longitude"),
+  };
+}
+
+/**
+ * True when this project's location text is worth asking Nominatim about.
+ *
+ * `coordinate_source = 'manual'` is absolute: a pin somebody placed on purpose
+ * is never replaced by a guess, however the location text later changes.
+ * Otherwise the question is simply whether this exact text has already been
+ * answered — `geocoded_query` is written only alongside a successful lookup, so
+ * a text that is not recorded there has either never been tried or was tried on
+ * a day the geocoder was unreachable, and both deserve one attempt.
+ */
+function shouldGeocodeProject(
+  row: Record<string, unknown> | undefined,
+  location: string,
+) {
+  if (!row) return false;
+  if (String(row.coordinate_source ?? "") === "manual") return false;
+  return String(row.geocoded_query ?? "") !== location;
+}
+
+/**
+ * Attempts to place a guessed pin, after the project itself is already saved.
+ *
+ * Nothing in here may throw and nothing in here may be retried: the project row
+ * is committed before this runs, so the worst outcome is a project that is not
+ * on the map yet — which the dashboard counts out loud — rather than a save
+ * that failed because a third-party service was having a bad minute.
+ */
+async function geocodeProjectLocation(
+  client: DatabaseClient,
+  projectId: string,
+  location: string,
+) {
+  try {
+    const result = await geocodeLocation(location);
+    if (!result) return;
+    await client.execute({
+      sql: `UPDATE projects
+              SET latitude=?,longitude=?,coordinate_source='geocoded',
+                  geocoded_query=?,geocoded_label=?
+            WHERE id=? AND (coordinate_source IS NULL OR coordinate_source <> 'manual')`,
+      // The manual re-check in the WHERE closes the window between reading the
+      // row and writing the answer: somebody may have dropped a real pin while
+      // the lookup was in flight, and that pin wins.
+      args: [
+        result.latitude,
+        result.longitude,
+        location,
+        result.label || null,
+        projectId,
+      ],
+    });
+  } catch (error) {
+    console.error("Geocoding lokasi proyek gagal:", error);
+  }
+}
+
 async function detachOrDeleteSystemTransaction(
   client: Awaited<ReturnType<typeof getDatabase>>["client"],
   source: "Invoice" | "SPK" | "Invoice Payment" | "Invoice Payment Reversal",
@@ -1092,6 +1207,16 @@ async function listProjects(searchParams: URLSearchParams, user: AuthUser) {
         : user.preferredLanguage === "en" ? "Not specified" : "Belum ditentukan",
       startDateIso: row.start_date,
       targetDateIso: row.target_date,
+      // The dashboard map reads its pins from this list and from nothing else,
+      // so the map inherits `projectScopeCondition` above rather than opening a
+      // second, differently-scoped way to ask which projects exist.
+      latitude: row.latitude === null || row.latitude === undefined ? null : Number(row.latitude),
+      longitude: row.longitude === null || row.longitude === undefined ? null : Number(row.longitude),
+      coordinateSource:
+        row.coordinate_source === "manual" || row.coordinate_source === "geocoded"
+          ? row.coordinate_source
+          : null,
+      geocodedLabel: row.geocoded_label ? String(row.geocoded_label) : null,
       value: canViewCommercial ? asNumber(row.value) : 0,
       manager: row.manager_name
         ? String(row.manager_name)
@@ -1117,6 +1242,8 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     if (!mutationRoles("projects").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Peran Anda tidak dapat membuat proyek.");
     const input = projectSchema.parse(await jsonBody(request));
     assertDateOrder(input.startDate, input.targetDate);
+    const pin = resolveProjectPin(input);
+    const pinnedByHand = pin !== null && pin.latitude !== null;
     const id = randomUUID();
     const sequence = await claimSequence(client, "projects", "SELECT code AS value FROM projects");
     const code = `PN-${new Date().getUTCFullYear().toString().slice(-2)}${String(new Date().getUTCMonth() + 1).padStart(2, "0")}-${String(sequence).padStart(3, "0")}`;
@@ -1131,8 +1258,8 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     await client.batch(
       [
         {
-          sql: "INSERT INTO projects (id,code,name,client,location,status,start_date,target_date,value,manager_id,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-          args: [id, code, input.name, input.client, input.location, input.status, input.startDate ?? null, input.targetDate ?? null, input.value, input.managerId ?? user.id, user.id, timestamp, timestamp],
+          sql: "INSERT INTO projects (id,code,name,client,location,status,start_date,target_date,value,manager_id,created_by,latitude,longitude,coordinate_source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          args: [id, code, input.name, input.client, input.location, input.status, input.startDate ?? null, input.targetDate ?? null, input.value, input.managerId ?? user.id, user.id, pin?.latitude ?? null, pin?.longitude ?? null, pinnedByHand ? "manual" : null, timestamp, timestamp],
         },
         {
           sql: "INSERT INTO project_members (project_id,user_id,created_at) VALUES (?,?,?) ON CONFLICT (project_id,user_id) DO NOTHING",
@@ -1154,6 +1281,10 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
       subjectEn: `New project: ${input.name}`,
       messageEn: `project ${input.name} for ${input.client} has been created and is available according to your access.`,
     });
+    // The project is committed above. This can only add coordinates to it; it
+    // cannot fail the creation, and it is skipped entirely when the operator
+    // already supplied a pin of their own.
+    if (!pinnedByHand) await geocodeProjectLocation(client, id, input.location);
     const projects = await listProjects(new URLSearchParams(), user);
     return created(projects.find((project) => project.id === id));
   }
@@ -1407,8 +1538,16 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         );
       }
     }
+    const pin = resolveProjectPin(input);
+    // A request that mentions coordinates is a person moving the pin, so the
+    // result is 'manual' and no later guess may replace it. Clearing both to
+    // null also clears the geocoding record, which puts the project back in the
+    // "ask the geocoder again" state rather than stranding it with no pin and
+    // no way to get one.
+    const pinnedByHand = pin !== null && pin.latitude !== null;
+    const location = String(input.location ?? current.location);
     await client.execute({
-      sql: "UPDATE projects SET name=?,client=?,location=?,status=?,start_date=?,target_date=?,value=?,manager_id=?,updated_at=? WHERE id=?",
+      sql: "UPDATE projects SET name=?,client=?,location=?,status=?,start_date=?,target_date=?,value=?,manager_id=?,latitude=?,longitude=?,coordinate_source=?,geocoded_query=?,geocoded_label=?,updated_at=? WHERE id=?",
       args: [
         input.name ?? current.name,
         input.client ?? current.client,
@@ -1418,6 +1557,11 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         input.targetDate === undefined ? current.target_date : input.targetDate,
         input.value ?? current.value,
         input.managerId === undefined ? current.manager_id : input.managerId,
+        pin === null ? current.latitude ?? null : pin.latitude,
+        pin === null ? current.longitude ?? null : pin.longitude,
+        pin === null ? current.coordinate_source ?? null : pinnedByHand ? "manual" : null,
+        pin === null || pinnedByHand ? current.geocoded_query ?? null : null,
+        pin === null || pinnedByHand ? current.geocoded_label ?? null : null,
         now(),
         projectId,
       ],
@@ -1429,6 +1573,14 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
       });
     }
     await writeAuditLog(client, request, user, "update", "project", projectId, input);
+    // Same contract as on create: the row above is already saved, and this can
+    // only add a guess to it. A request that mentioned coordinates at all has
+    // already decided them — placing a pin, or clearing one to take the project
+    // off the map — and is left alone; a cleared project is offered to the
+    // geocoder again on its next save, not immediately re-guessed.
+    if (pin === null && shouldGeocodeProject(current, location)) {
+      await geocodeProjectLocation(client, projectId, location);
+    }
     const projects = await listProjects(new URLSearchParams(), user);
     return ok(projects.find((project) => project.id === projectId));
   }

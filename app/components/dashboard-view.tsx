@@ -16,8 +16,9 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api, messageOf } from "../api-client";
+import { ProjectMap } from "./project-map";
 import {
   formatCompactCurrency,
   formatCurrency,
@@ -179,6 +180,33 @@ export function DashboardView({
     ),
   ).slice(0, 3);
 
+  // The map hands back a point the operator clicked. Sending it as a normal
+  // project PATCH is what marks the pin as placed by a person, which is what
+  // stops a later geocode of the same location text from moving it.
+  const placePin = useCallback(
+    async (projectId: string, latitude: number, longitude: number) => {
+      try {
+        const updated = await api<Project>(`/api/projects/${encodeURIComponent(projectId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ latitude, longitude }),
+        });
+        setProjectList((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+        notify(id ? "Titik peta proyek tersimpan." : "The project's map pin was saved.");
+      } catch (error) {
+        notify(messageOf(error, language));
+      }
+    },
+    [id, language, notify],
+  );
+
+  const openProject = useCallback(
+    (projectId: string) => {
+      onSelectProject(projectId);
+      navigate("project");
+    },
+    [navigate, onSelectProject],
+  );
+
   async function addProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!projectName.trim() || !clientName.trim()) return;
@@ -220,6 +248,14 @@ export function DashboardView({
           </button>
         )}
       </section>
+
+      <ProjectMap
+        language={language}
+        projects={scopedProjects}
+        canManage={canManage}
+        onOpenProject={openProject}
+        onPlacePin={placePin}
+      />
 
       <section className="metric-grid" aria-label={id ? "Ringkasan operasional" : "Operations summary"}>
         <article className="metric-card">

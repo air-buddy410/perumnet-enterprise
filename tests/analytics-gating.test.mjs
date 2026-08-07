@@ -84,6 +84,9 @@ async function withServer(measurementId, body) {
       env: {
         ...process.env,
         NEXT_TELEMETRY_DISABLED: "1",
+        // The suite must never reach Nominatim: it is a third-party service with a
+        // one-request-per-second policy, and a test run creates dozens of projects.
+        GEOCODING_ENABLED: "false",
         TURSO_DATABASE_URL: `file:${databasePath}`,
         APP_URL: baseUrl,
         // "" and "absent" must behave identically: the demo build sets the
@@ -276,7 +279,14 @@ test(
       }
       assert.ok(directive(csp, "script-src").includes("https://challenges.cloudflare.com"), csp);
       assert.ok(directive(csp, "connect-src").includes("https://challenges.cloudflare.com"), csp);
-      assert.equal(directive(csp, "img-src"), "img-src 'self' data: blob:");
+      // Asserted whole, like style-src and font-src below: the only non-'self'
+      // origin img-src carries is the OpenStreetMap tile host the admin
+      // dashboard's project map loads its tiles from. No analytics beacon, and
+      // nothing else, may join it without coming past this line.
+      assert.equal(
+        directive(csp, "img-src"),
+        "img-src 'self' data: blob: https://tile.openstreetmap.org",
+      );
 
       // The brand typefaces are committed to the repo and served by next/font
       // from this origin, so neither Google Fonts host belongs in the policy

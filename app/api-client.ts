@@ -167,6 +167,10 @@ export function messageOf(error: unknown, language: "id" | "en" = "id") {
         "This message was cleared after its delivery attempts ran out, so it cannot be resent. Repeat the original action to generate a fresh email.",
       EMAIL_NOT_RETRYABLE:
         "That email was not found, or its status does not allow another attempt.",
+      INVALID_COORDINATE:
+        "That map point is outside the possible range. Latitude runs from -90 to 90 and longitude from -180 to 180.",
+      INCOMPLETE_COORDINATE:
+        "A map point needs both a latitude and a longitude. Provide both, or clear both to take the project off the map.",
       IMAGE_TYPE_MISMATCH: "The file type does not match the actual image contents.",
       INVALID_IMAGE: "That file is not a valid image.",
       IMAGE_DIMENSIONS: "The image may be at most 4096 × 4096 pixels.",
