@@ -4897,7 +4897,7 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
 
   if (bastId && !action && request.method === "PATCH") {
     if (!mutationRoles("bast").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah BAST.");
-    const input = bastSchema.omit({ projectId: true }).partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(bastSchema.omit({ projectId: true })).parse(await jsonBody(request));
     if (input.status === "Final") {
       throw new ApiError(409, "FINALIZE_ENDPOINT_REQUIRED", "Gunakan proses finalisasi agar cap, hash, dan QR verifikasi diterapkan.");
     }
@@ -5469,7 +5469,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
   }
 
   if (transactionId && request.method === "PATCH") {
-    const input = transactionSchema.partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(transactionSchema).parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM transactions WHERE id=?", [transactionId], "Transaksi tidak ditemukan.");
     if (current.project_id) await assertProjectAccess(user, String(current.project_id));
     if (!current.project_id && !hasGlobalProjectScope(user)) {
@@ -5716,7 +5716,7 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
   }
 
   if (userId && request.method === "PATCH") {
-    const input = userSchema.partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(userSchema).parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM users WHERE id=?", [userId], "Pengguna tidak ditemukan.");
     if (userId === user.id && input.status === "Nonaktif") throw new ApiError(409, "SELF_DEACTIVATE", "Anda tidak dapat menonaktifkan akun sendiri.");
     if (input.email) {

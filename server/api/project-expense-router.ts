@@ -1405,7 +1405,7 @@ export async function handleProjectExpenseCategories(
   });
   if (!current.rows[0]) throw new ApiError(404, "NOT_FOUND", "Kategori tidak ditemukan.");
   if (request.method === "PATCH") {
-    const input = categorySchema.partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(categorySchema).parse(await jsonBody(request));
     await client.execute({
       sql: "UPDATE project_expense_categories SET name=?,name_en=?,status=?,sort_order=?,updated_at=? WHERE id=?",
       args: [
