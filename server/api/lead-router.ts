@@ -8,6 +8,8 @@ import { writeAuditLog } from "../audit";
 import { requireUser, type AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { sendEmailDelivery } from "../email";
+import { csvCell, safeSpreadsheetText } from "../spreadsheet";
+import { isProductionRuntime } from "../runtime-env";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
 
 const statuses = ["New", "Contacted", "Qualified", "Proposal", "Won", "Lost", "Spam"] as const;
@@ -42,66 +44,179 @@ function admin(request: Request) {
   return requireUser(request, ["Admin"]);
 }
 
+/**
+ * `CF-Connecting-IP` is only worth anything when Cloudflare actually set it.
+ * Cloudflare overwrites the header on every request it proxies and always adds
+ * `CF-Ray`, so a request carrying `CF-Connecting-IP` without a `CF-Ray` reached
+ * the origin some other way and the address in it is whatever the caller typed.
+ * The audit reproduced exactly that: spoofing the header alone bought unlimited
+ * submissions.
+ */
 function clientIp(request: Request) {
+  const viaCloudflare = Boolean(request.headers.get("cf-ray"));
+  const cloudflareIp = viaCloudflare
+    ? request.headers.get("cf-connecting-ip")?.trim()
+    : undefined;
   return (
-    request.headers.get("cf-connecting-ip") ??
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    cloudflareIp ||
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
     "unknown"
   );
 }
 
-function fingerprint(request: Request) {
-  const secret =
+function leadSecret() {
+  return (
     process.env.LEAD_FINGERPRINT_SECRET ??
     process.env.SESSION_SECRET ??
     process.env.SEED_ADMIN_PASSWORD ??
-    "perumnet-local-lead-rate-limit";
-  const input = `${clientIp(request)}|${request.headers.get("user-agent") ?? "unknown"}`;
-  return createHmac("sha256", secret).update(input).digest("hex");
+    "perumnet-local-lead-rate-limit"
+  );
 }
 
-async function enforceRateLimit(client: DatabaseClient, request: Request) {
-  const hash = fingerprint(request);
-  const routeKey = "cms-lead-submit";
-  const now = new Date();
-  const current = await client.execute({
-    sql: "SELECT * FROM public_form_rate_limits WHERE fingerprint_hash=? AND route_key=? LIMIT 1",
-    args: [hash, routeKey],
-  });
-  const row = current.rows[0];
-  if (row?.blocked_until && new Date(String(row.blocked_until)) > now) {
-    throw new ApiError(429, "RATE_LIMITED", "Terlalu banyak permintaan. Silakan coba lagi nanti.");
+function fingerprint(value: string) {
+  return createHmac("sha256", leadSecret()).update(value).digest("hex");
+}
+
+/**
+ * Indonesian mobile numbers arrive as `0812…`, `62812…`, `+62 812-…` and every
+ * spacing in between. Without this the same phone counts as a new submitter for
+ * every punctuation variant, which is the same hole as rotating a header.
+ */
+function normalizedWhatsapp(value: string | undefined) {
+  const digits = (value ?? "").replace(/\D+/g, "");
+  if (digits.length < 8) return "";
+  if (digits.startsWith("62")) return `62${digits.slice(2).replace(/^0+/, "")}`;
+  if (digits.startsWith("0")) return `62${digits.replace(/^0+/, "")}`;
+  return digits;
+}
+
+// One bucket keyed on something the caller can rotate is one bucket the caller
+// can rotate past. `server/auth-rate-limit.ts` already solved this for the
+// credential endpoints by counting every attempt twice — once against the
+// network origin and once against the submitted identity — so neither input
+// alone is a way through. The public lead form gets the same treatment; it
+// writes a `cms_leads` row and sends mail on every accepted call.
+//
+// The user agent is deliberately NOT part of any key. It is pure caller input
+// with no cost to change, so including it only multiplied the number of free
+// buckets one machine owned.
+const WINDOW_MS = 15 * 60_000;
+const BLOCK_MS = 30 * 60_000;
+const IP_LIMIT = 5;
+const CONTACT_LIMIT = 5;
+
+type RateLimitScope = { routeKey: string; hash: string; limit: number };
+
+function rateLimitScopes(
+  request: Request,
+  contact: { whatsapp?: string; email?: string },
+): RateLimitScope[] {
+  const scopes: RateLimitScope[] = [
+    {
+      routeKey: "cms-lead-submit",
+      hash: fingerprint(`ip|${clientIp(request)}`),
+      limit: IP_LIMIT,
+    },
+  ];
+  const whatsapp = normalizedWhatsapp(contact.whatsapp);
+  if (whatsapp) {
+    scopes.push({
+      routeKey: "cms-lead-contact",
+      hash: fingerprint(`wa|${whatsapp}`),
+      limit: CONTACT_LIMIT,
+    });
   }
-  const windowStart = row?.window_started_at ? new Date(String(row.window_started_at)) : now;
-  const withinWindow = now.getTime() - windowStart.getTime() < 15 * 60_000;
-  const nextCount = withinWindow ? Number(row?.request_count ?? 0) + 1 : 1;
-  const blockedUntil = nextCount > 5 ? new Date(now.getTime() + 30 * 60_000).toISOString() : null;
-  await client.execute({
-    sql: `INSERT INTO public_form_rate_limits
-      (fingerprint_hash,route_key,window_started_at,request_count,blocked_until,updated_at)
-      VALUES (?,?,?,?,?,?)
-      ON CONFLICT (fingerprint_hash,route_key) DO UPDATE SET
-        window_started_at=excluded.window_started_at,
-        request_count=excluded.request_count,
-        blocked_until=excluded.blocked_until,
-        updated_at=excluded.updated_at`,
-    args: [
-      hash,
-      routeKey,
-      withinWindow ? windowStart.toISOString() : now.toISOString(),
-      nextCount,
-      blockedUntil,
-      now.toISOString(),
-    ],
-  });
-  if (blockedUntil) {
+  const email = contact.email?.trim().toLowerCase();
+  if (email) {
+    scopes.push({
+      routeKey: "cms-lead-contact",
+      hash: fingerprint(`email|${email}`),
+      limit: CONTACT_LIMIT,
+    });
+  }
+  return scopes;
+}
+
+async function enforceRateLimit(
+  client: DatabaseClient,
+  request: Request,
+  contact: { whatsapp?: string; email?: string },
+) {
+  const now = new Date();
+  const scopes = rateLimitScopes(request, contact);
+
+  // Every bucket is read before any is written, so a caller who is already
+  // blocked on one of them cannot spend the others down on the way to the
+  // refusal.
+  for (const scope of scopes) {
+    const current = await client.execute({
+      sql: "SELECT blocked_until FROM public_form_rate_limits WHERE fingerprint_hash=? AND route_key=? LIMIT 1",
+      args: [scope.hash, scope.routeKey],
+    });
+    const blockedUntil = current.rows[0]?.blocked_until;
+    if (blockedUntil && new Date(String(blockedUntil)) > now) {
+      throw new ApiError(429, "RATE_LIMITED", "Terlalu banyak permintaan. Silakan coba lagi nanti.");
+    }
+  }
+
+  let blocked = false;
+  for (const scope of scopes) {
+    const current = await client.execute({
+      sql: "SELECT window_started_at,request_count FROM public_form_rate_limits WHERE fingerprint_hash=? AND route_key=? LIMIT 1",
+      args: [scope.hash, scope.routeKey],
+    });
+    const row = current.rows[0];
+    const windowStart = row?.window_started_at ? new Date(String(row.window_started_at)) : now;
+    const withinWindow = Boolean(row) && now.getTime() - windowStart.getTime() < WINDOW_MS;
+    const nextCount = withinWindow ? Number(row?.request_count ?? 0) + 1 : 1;
+    const blockedUntil =
+      nextCount > scope.limit ? new Date(now.getTime() + BLOCK_MS).toISOString() : null;
+    if (blockedUntil) blocked = true;
+    await client.execute({
+      sql: `INSERT INTO public_form_rate_limits
+        (fingerprint_hash,route_key,window_started_at,request_count,blocked_until,updated_at)
+        VALUES (?,?,?,?,?,?)
+        ON CONFLICT (fingerprint_hash,route_key) DO UPDATE SET
+          window_started_at=excluded.window_started_at,
+          request_count=excluded.request_count,
+          blocked_until=excluded.blocked_until,
+          updated_at=excluded.updated_at`,
+      args: [
+        scope.hash,
+        scope.routeKey,
+        withinWindow ? windowStart.toISOString() : now.toISOString(),
+        nextCount,
+        blockedUntil,
+        now.toISOString(),
+      ],
+    });
+  }
+
+  if (blocked) {
     throw new ApiError(429, "RATE_LIMITED", "Terlalu banyak permintaan. Silakan coba lagi dalam 30 menit.");
   }
 }
 
+const TURNSTILE_ACTION = "customer_lead";
+
 async function verifyTurnstile(request: Request, token: string, idempotencyKey: string) {
   const secret = process.env.TURNSTILE_SECRET_KEY?.trim();
-  if (!secret) return;
+  if (!secret) {
+    // Failing open here is invisible: the widget still renders, the form still
+    // submits, and nothing anywhere says bot protection is off. One mistyped
+    // variable name in a deploy would have silently retired it.
+    if (isProductionRuntime()) {
+      console.error(
+        "TURNSTILE_SECRET_KEY is not set — refusing public lead submissions instead of accepting them unverified.",
+      );
+      throw new ApiError(
+        503,
+        "TURNSTILE_NOT_CONFIGURED",
+        "Verifikasi keamanan formulir sedang tidak aktif, jadi pesan belum bisa dikirim. Hubungi kami lewat WhatsApp atau email sementara ini.",
+      );
+    }
+    return;
+  }
   if (!token) throw new ApiError(422, "TURNSTILE_REQUIRED", "Selesaikan verifikasi keamanan terlebih dahulu.");
   const form = new FormData();
   form.set("secret", secret);
@@ -125,6 +240,16 @@ async function verifyTurnstile(request: Request, token: string, idempotencyKey: 
     .filter(Boolean);
   if (result.hostname && !allowedHosts.includes(result.hostname)) {
     throw new ApiError(422, "TURNSTILE_HOST_MISMATCH", "Verifikasi keamanan tidak sesuai dengan situs ini.");
+  }
+  // The widget declares `data-action="customer_lead"`. Without this check a
+  // token minted by any other widget on the same account — including one on a
+  // page with a far weaker challenge — is accepted here.
+  if (result.action && result.action !== TURNSTILE_ACTION) {
+    throw new ApiError(
+      422,
+      "TURNSTILE_ACTION_MISMATCH",
+      "Verifikasi keamanan tidak berasal dari formulir ini. Muat ulang halaman lalu coba lagi.",
+    );
   }
 }
 
@@ -154,7 +279,10 @@ async function submitLead(request: Request) {
   if (existing.rows[0]) {
     return ok({ id: existing.rows[0].id, received: true, duplicate: true });
   }
-  await enforceRateLimit(client, request);
+  await enforceRateLimit(client, request, {
+    whatsapp: input.whatsapp,
+    email: input.email,
+  });
   await verifyTurnstile(request, input.turnstileToken, idempotencyKey);
   const id = randomUUID();
   const timestamp = new Date().toISOString();
@@ -442,16 +570,6 @@ async function deleteLead(request: Request, id: string, user: AuthUser) {
   return noContent();
 }
 
-function safeSpreadsheetText(value: unknown) {
-  const text = value === null || value === undefined ? "" : String(value);
-  return /^[=+\-@]/.test(text) ? `'${text}` : text;
-}
-
-function csvCell(value: unknown) {
-  const safe = safeSpreadsheetText(value).replaceAll('"', '""');
-  return `"${safe}"`;
-}
-
 async function exportRows(url: URL) {
   const { client } = await getDatabase();
   await anonymizeExpiredLeads(client);
@@ -514,6 +632,9 @@ async function exportLeads(request: Request, format: "csv" | "xlsx" | "pdf", use
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename="customer-leads-${fileDate}.csv"`,
+        // The most PII-dense file this system produces. Every other export
+        // already says this; this one was the only one that did not.
+        "Cache-Control": "private, no-store",
       },
     });
   }
@@ -542,6 +663,7 @@ async function exportLeads(request: Request, format: "csv" | "xlsx" | "pdf", use
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="customer-leads-${fileDate}.xlsx"`,
+        "Cache-Control": "private, no-store",
       },
     });
   }
@@ -592,6 +714,7 @@ async function exportLeads(request: Request, format: "csv" | "xlsx" | "pdf", use
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename="customer-leads-${fileDate}.pdf"`,
+      "Cache-Control": "private, no-store",
     },
   });
 }

@@ -15,6 +15,7 @@ import {
   RotateCcw,
   Search,
   Settings2,
+  ShieldAlert,
   Trash2,
   UploadCloud,
   WalletCards,
@@ -48,6 +49,8 @@ interface Props {
   userRole: string;
   canCreate: boolean;
   canReview: boolean;
+  /** Belanja Proyek opens the menu; the bulk export also needs Pembukuan. */
+  canExport: boolean;
 }
 
 interface EligibleUser {
@@ -135,6 +138,30 @@ function StatusBadge({ language, status }: { language: AppLanguage; status: Proj
   return <span className={`status-badge ${statusTone(status)}`}><span className="badge-dot" />{workflowLabel(language, status)}</span>;
 }
 
+function advanceStatusTone(status: ProjectAdvance["status"]) {
+  if (status === "Settled") return "success";
+  if (status === "Void") return "danger";
+  return "info";
+}
+
+function advanceStatusLabel(language: AppLanguage, status: ProjectAdvance["status"]) {
+  const labels: Record<ProjectAdvance["status"], [string, string]> = {
+    Open: ["Terbuka", "Open"],
+    Settled: ["Selesai", "Settled"],
+    Void: ["Dibatalkan", "Voided"],
+  };
+  return labels[status][language === "id" ? 0 : 1];
+}
+
+// The server asks for at least five characters and writes the reason to the
+// audit trail, the same contract the procurement reason dialog captures.
+const ADVANCE_VOID_REASON_MIN = 5;
+
+// The two refusals that mean the cash genuinely left the account. Retrying
+// cannot help, so they replace the form with an explanation instead of
+// flashing past as a failed save.
+const ADVANCE_VOID_REFUSALS = ["ADVANCE_ALREADY_USED", "RECONCILIATION_LOCKED"];
+
 export function ProjectExpenseView({
   language,
   notify,
@@ -144,6 +171,7 @@ export function ProjectExpenseView({
   userRole,
   canCreate,
   canReview,
+  canExport,
 }: Props) {
   const id = language === "id";
   const [expenses, setExpenses] = useState<ProjectExpense[]>([]);
@@ -187,6 +215,9 @@ export function ProjectExpenseView({
   const [advanceRecipientId, setAdvanceRecipientId] = useState("");
   const [advanceAmount, setAdvanceAmount] = useState(0);
   const [advanceReference, setAdvanceReference] = useState("");
+  const [voidingAdvance, setVoidingAdvance] = useState<ProjectAdvance | null>(null);
+  const [advanceVoidReason, setAdvanceVoidReason] = useState("");
+  const [advanceVoidRefusal, setAdvanceVoidRefusal] = useState<string | null>(null);
 
   // Mirrors the server rule: the approver may not be the person who recorded,
   // submitted, or fronted the money for the expense. Finance is blocked
@@ -488,6 +519,15 @@ export function ProjectExpenseView({
     }
   }, [advanceOpen, advanceProjectId, loadEligible]);
 
+  useEffect(() => {
+    if (!voidingAdvance) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") closeAdvanceVoid();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [voidingAdvance]);
+
   const loadPayers = useCallback(async (targetProjectId: string) => {
     if (!targetProjectId) return;
     try {
@@ -509,6 +549,48 @@ export function ProjectExpenseView({
       void loadPayers(expenseProjectId);
     }
   }, [canCreate, expenseProjectId, formOpen, loadPayers]);
+
+  function openAdvanceVoid(advance: ProjectAdvance) {
+    setAdvanceVoidReason("");
+    setAdvanceVoidRefusal(null);
+    setVoidingAdvance(advance);
+  }
+
+  function closeAdvanceVoid() {
+    setVoidingAdvance(null);
+    setAdvanceVoidReason("");
+    setAdvanceVoidRefusal(null);
+  }
+
+  // Corrects a disbursement recorded by mistake: the reversal inflow is booked
+  // and the advance reads Void. The server keeps it narrow on purpose, and the
+  // two narrow refusals are explanations rather than failures — in both cases
+  // the money really moved, so an advance return is the honest route.
+  async function voidAdvance(event: FormEvent) {
+    event.preventDefault();
+    if (!voidingAdvance) return;
+    const reason = advanceVoidReason.trim();
+    if (reason.length < ADVANCE_VOID_REASON_MIN) return;
+    const target = voidingAdvance;
+    setBusy(true);
+    try {
+      await api(`/api/project-advances/${target.id}/void`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      });
+      closeAdvanceVoid();
+      await load();
+      notify(id
+        ? `Uang muka ${target.number} dibatalkan dan pembalik kasnya dicatat.`
+        : `Advance ${target.number} was voided and its reversing cash entry recorded.`);
+    } catch (error) {
+      if (error instanceof ApiClientError && error.code && ADVANCE_VOID_REFUSALS.includes(error.code)) {
+        setAdvanceVoidRefusal(messageOf(error, language));
+      } else {
+        notify(messageOf(error, language));
+      }
+    } finally { setBusy(false); }
+  }
 
   async function createAdvance(event: FormEvent) {
     event.preventDefault();
@@ -588,7 +670,7 @@ export function ProjectExpenseView({
       <section className="panel expense-list-panel">
         <header className="panel-head">
           <div><span className="eyebrow">{canReview ? (id ? "ANTREAN VERIFIKASI" : "VERIFICATION QUEUE") : (id ? "RIWAYAT SAYA" : "MY HISTORY")}</span><h2>{id ? "Belanja proyek" : "Project expenses"}</h2></div>
-          <div className="expense-list-actions"><div className="search-field compact"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={id ? "Cari nota, toko, proyek..." : "Search receipt, merchant, project..."} /></div><select className="expense-status-filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="All">{id ? "Semua status" : "All statuses"}</option>{["Submitted", "Draft", "Approved", "Rejected", "Void"].map((status) => <option key={status} value={status}>{workflowLabel(language, status as ProjectExpense["workflowStatus"])}</option>)}</select><button className="icon-button" title="CSV" type="button" onClick={() => void downloadApiFile(`/api/project-expenses/report.csv${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`, "Belanja-Proyek.csv")}><Download size={16} /></button><button className="icon-button" title="PDF" type="button" onClick={() => void downloadApiFile(`/api/project-expenses/report.pdf${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`, "Belanja-Proyek.pdf")}><FileText size={16} /></button></div>
+          <div className="expense-list-actions"><div className="search-field compact"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={id ? "Cari nota, toko, proyek..." : "Search receipt, merchant, project..."} /></div><select className="expense-status-filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="All">{id ? "Semua status" : "All statuses"}</option>{["Submitted", "Draft", "Approved", "Rejected", "Void"].map((status) => <option key={status} value={status}>{workflowLabel(language, status as ProjectExpense["workflowStatus"])}</option>)}</select>{canExport && <><button className="icon-button" title="CSV" type="button" onClick={() => void downloadApiFile(`/api/project-expenses/report.csv${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`, "Belanja-Proyek.csv")}><Download size={16} /></button><button className="icon-button" title="PDF" type="button" onClick={() => void downloadApiFile(`/api/project-expenses/report.pdf${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`, "Belanja-Proyek.pdf")}><FileText size={16} /></button></>}</div>
         </header>
         {loading ? <div className="expense-loading"><LoaderCircle className="spin" size={23} />{id ? "Memuat belanja..." : "Loading expenses..."}</div> : filtered.length === 0 ? <div className="empty-state compact"><ReceiptText size={28} /><strong>{id ? "Belum ada catatan belanja" : "No expense records yet"}</strong><small>{id ? "Pengajuan yang dibuat akan tampil di sini." : "Submitted expenses will appear here."}</small></div> : <div className="expense-table-wrap"><div className="expense-table expense-table-head"><span>{id ? "Nota & proyek" : "Receipt & project"}</span><span>{id ? "Tanggal / toko" : "Date / merchant"}</span><span>{id ? "Pengaju" : "Submitter"}</span><span>{id ? "Sumber dana" : "Funding"}</span><span>{id ? "Nominal" : "Amount"}</span><span>{id ? "Status" : "Status"}</span><span /></div>{filtered.map((expense) => <article className="expense-table expense-table-row" key={expense.id}><div data-label={id ? "Nota & proyek" : "Receipt & project"}><strong>{expense.number}</strong><small>{expense.projectCode} · {expense.projectName}</small></div><div data-label={id ? "Tanggal / toko" : "Date / merchant"}><strong>{localizedDate(language, expense.purchaseDate)}</strong><small>{expense.merchant} · {id ? expense.category : expense.categoryEn}</small></div><div data-label={id ? "Pengaju" : "Submitter"}><strong>{expense.creatorName}</strong><small>{settlementLabel(language, expense.settlementStatus)}</small></div><div data-label={id ? "Sumber dana" : "Funding"}><strong>{fundingLabel(language, expense.fundingSource)}</strong><small>{paymentMethodLabel(language, expense.paymentMethod)}{expense.fundingSource === "EmployeePaid" ? ` · ${expense.paidByName}` : expense.bankAccount ? ` · ${expense.bankAccount}` : ""}</small></div><div className="expense-amount" data-label={id ? "Nominal" : "Amount"}><strong>{formatCurrency(expense.totalAmount, language)}</strong>{expense.reimbursementOutstanding > 0 && <small>{id ? "Sisa utang " : "Payable "}{formatCurrency(expense.reimbursementOutstanding, language)}</small>}</div><div data-label="Status"><StatusBadge language={language} status={expense.workflowStatus} /></div><div className="expense-row-actions">{["Draft", "Rejected"].includes(expense.workflowStatus) && (expense.createdBy === userId || userRole === "Admin") && <><button className="icon-button inline" type="button" aria-label={id ? "Edit" : "Edit"} onClick={() => editExpense(expense)}><Settings2 size={15} /></button><button className="icon-button inline danger" type="button" aria-label={id ? "Hapus" : "Delete"} onClick={() => void deleteDraft(expense)}><Trash2 size={15} /></button></>}<button className="icon-button inline" type="button" aria-label={id ? "Buka detail" : "Open detail"} onClick={() => void openDetail(expense)}><ChevronRight size={17} /></button></div></article>)}</div>}
       </section>
@@ -597,7 +679,67 @@ export function ProjectExpenseView({
 
       {categoryOpen && <div className="modal-backdrop" onMouseDown={() => setCategoryOpen(false)}><section className="modal-card wide" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><header className="modal-head"><div><span className="eyebrow">MASTER DATA</span><h2>{id ? "Kategori biaya" : "Expense categories"}</h2></div><button className="icon-button" type="button" onClick={() => setCategoryOpen(false)}><X size={18} /></button></header><form className="expense-category-form" onSubmit={addCategory}><label className="field"><span>Nama Indonesia</span><input required value={categoryName} onChange={(event) => setCategoryName(event.target.value)} /></label><label className="field"><span>English name</span><input required value={categoryNameEn} onChange={(event) => setCategoryNameEn(event.target.value)} /></label><button className="button primary" type="submit" disabled={busy}><Plus size={16} />{id ? "Tambah" : "Add"}</button></form><div className="expense-category-list">{categories.map((category) => <div key={category.id}><div><strong>{category.name}</strong><small>{category.nameEn} · {category.usageCount} {id ? "pemakaian" : "uses"}</small></div><button className={`status-badge ${category.status === "Aktif" ? "success" : "neutral"}`} type="button" onClick={() => void toggleCategory(category)}>{category.status === "Aktif" ? (id ? "Aktif" : "Active") : (id ? "Nonaktif" : "Inactive")}</button></div>)}</div></section></div>}
 
-      {advanceOpen && <div className="modal-backdrop" onMouseDown={() => setAdvanceOpen(false)}><section className="modal-card wide" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><header className="modal-head"><div><span className="eyebrow">{id ? "UANG MUKA PROYEK" : "PROJECT ADVANCE"}</span><h2>{id ? "Catat pencairan baru" : "Record a disbursement"}</h2></div><button className="icon-button" type="button" onClick={() => setAdvanceOpen(false)}><X size={18} /></button></header><form className="form-grid" onSubmit={createAdvance}><label className="field full"><span>{id ? "Proyek" : "Project"}</span><select required value={advanceProjectId} onChange={(event) => setAdvanceProjectId(event.target.value)}>{projects.map((project) => <option value={project.id} key={project.id}>{project.code} · {project.name}</option>)}</select></label><p className="form-hint full">{id ? `Kas masuk dari invoice proyek ini: ${formatCurrency(advanceInvoiceCash, language)}` : `Invoice cash received for this project: ${formatCurrency(advanceInvoiceCash, language)}`}</p><label className="field full"><span>{id ? "Penerima" : "Recipient"}</span><select required value={advanceRecipientId} onChange={(event) => setAdvanceRecipientId(event.target.value)}>{eligibleUsers.map((person) => <option value={person.id} key={person.id}>{person.name} · {person.role}</option>)}</select></label><label className="field"><span>{id ? "Nominal" : "Amount"}</span><input required type="number" min={1} value={advanceAmount || ""} onChange={(event) => setAdvanceAmount(Number(event.target.value))} /></label><label className="field"><span>{id ? "Tanggal cair" : "Disbursement date"}</span><input type="date" value={settlementDate} onChange={(event) => setSettlementDate(event.target.value)} /></label><label className="field"><span>{id ? "Rekening perusahaan" : "Company account"}</span><select required value={reviewBankId} onChange={(event) => setReviewBankId(event.target.value)}>{bankAccounts.map((account) => <option value={account.id} key={account.id}>{account.bankName} · {account.accountName}</option>)}</select></label><label className="field"><span>{id ? "Referensi transfer" : "Transfer reference"}</span><input required value={advanceReference} onChange={(event) => setAdvanceReference(event.target.value)} /></label><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setAdvanceOpen(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit" disabled={busy}><CheckCircle2 size={16} />{id ? "Cairkan uang muka" : "Disburse advance"}</button></div></form>{advances.length > 0 && <div className="expense-advance-list">{advances.slice(0, 5).map((advance) => <div key={advance.id}><span><strong>{advance.number} · {advance.recipient}</strong><small>{advance.project}</small></span><span><strong>{formatCurrency(advance.outstanding, language)}</strong><small>{id ? "saldo" : "outstanding"}</small></span></div>)}</div>}</section></div>}
+      {advanceOpen && <div className="modal-backdrop" onMouseDown={() => setAdvanceOpen(false)}><section className="modal-card wide" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><header className="modal-head"><div><span className="eyebrow">{id ? "UANG MUKA PROYEK" : "PROJECT ADVANCE"}</span><h2>{id ? "Catat pencairan baru" : "Record a disbursement"}</h2></div><button className="icon-button" type="button" onClick={() => setAdvanceOpen(false)}><X size={18} /></button></header><form className="form-grid" onSubmit={createAdvance}><label className="field full"><span>{id ? "Proyek" : "Project"}</span><select required value={advanceProjectId} onChange={(event) => setAdvanceProjectId(event.target.value)}>{projects.map((project) => <option value={project.id} key={project.id}>{project.code} · {project.name}</option>)}</select></label><p className="form-hint full">{id ? `Kas masuk dari invoice proyek ini: ${formatCurrency(advanceInvoiceCash, language)}` : `Invoice cash received for this project: ${formatCurrency(advanceInvoiceCash, language)}`}</p><label className="field full"><span>{id ? "Penerima" : "Recipient"}</span><select required value={advanceRecipientId} onChange={(event) => setAdvanceRecipientId(event.target.value)}>{eligibleUsers.map((person) => <option value={person.id} key={person.id}>{person.name} · {person.role}</option>)}</select></label><label className="field"><span>{id ? "Nominal" : "Amount"}</span><input required type="number" min={1} value={advanceAmount || ""} onChange={(event) => setAdvanceAmount(Number(event.target.value))} /></label><label className="field"><span>{id ? "Tanggal cair" : "Disbursement date"}</span><input type="date" value={settlementDate} onChange={(event) => setSettlementDate(event.target.value)} /></label><label className="field"><span>{id ? "Rekening perusahaan" : "Company account"}</span><select required value={reviewBankId} onChange={(event) => setReviewBankId(event.target.value)}>{bankAccounts.map((account) => <option value={account.id} key={account.id}>{account.bankName} · {account.accountName}</option>)}</select></label><label className="field"><span>{id ? "Referensi transfer" : "Transfer reference"}</span><input required value={advanceReference} onChange={(event) => setAdvanceReference(event.target.value)} /></label><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setAdvanceOpen(false)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit" disabled={busy}><CheckCircle2 size={16} />{id ? "Cairkan uang muka" : "Disburse advance"}</button></div></form>{advances.length > 0 && <div className="expense-advance-list">{advances.slice(0, 5).map((advance) => <div key={advance.id} className={advance.status === "Void" ? "voided" : undefined}><span><strong>{advance.number} · {advance.recipient}</strong><small>{advance.project}</small>{advance.status === "Void" && <small>{id ? "Dibatalkan" : "Voided"} {localizedTimestamp(language, advance.voidedAt)}{advance.voidReason ? ` · ${advance.voidReason}` : ""}</small>}</span><span><strong>{formatCurrency(advance.status === "Void" ? advance.amount : advance.outstanding, language)}</strong><small>{advance.status === "Void" ? (id ? "nilai dibatalkan" : "voided amount") : (id ? "saldo" : "outstanding")}</small></span><span className={`status-badge ${advanceStatusTone(advance.status)}`}>{advanceStatusLabel(language, advance.status)}</span>{canReview && userRole === "Admin" && advance.status === "Open" && <button className="button secondary small danger-text" type="button" disabled={busy} onClick={() => openAdvanceVoid(advance)}><RotateCcw size={14} />{id ? "Batalkan" : "Void"}</button>}</div>)}</div>}</section></div>}
+
+      {voidingAdvance && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={closeAdvanceVoid}>
+          <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="advance-void-title" onMouseDown={(event) => event.stopPropagation()}>
+            <header className="modal-head">
+              <div>
+                <span className="eyebrow">{id ? "BATALKAN UANG MUKA" : "VOID ADVANCE"}</span>
+                <h2 id="advance-void-title">{voidingAdvance.number}</h2>
+              </div>
+              <button className="icon-button" type="button" aria-label={id ? "Tutup" : "Close"} onClick={closeAdvanceVoid}><X size={18} /></button>
+            </header>
+            {advanceVoidRefusal ? (
+              <div className="form-grid">
+                <div className="security-note attention full">
+                  <ShieldAlert size={19} />
+                  <div>
+                    <strong>{id ? "Uang muka ini tidak dapat dibatalkan" : "This advance cannot be voided"}</strong>
+                    <span>{advanceVoidRefusal}</span>
+                    <span>{id
+                      ? "Pembatalan hanya untuk pencairan yang salah catat dan belum tersentuh. Di sini uangnya benar-benar sudah keluar, jadi catat pengembalian uang muka agar kas dan saldo tetap jujur."
+                      : "Voiding is only for a disbursement recorded in error and never touched. Here the money genuinely left, so record an advance return instead and the cash and the balance stay honest."}</span>
+                  </div>
+                </div>
+                <div className="modal-actions full">
+                  <button className="button primary" type="button" onClick={closeAdvanceVoid}>{id ? "Mengerti" : "Understood"}</button>
+                </div>
+              </div>
+            ) : (
+              <form className="form-grid" onSubmit={voidAdvance}>
+                <div className="expense-advance-void-summary full">
+                  <div><span>{id ? "Penerima" : "Recipient"}</span><strong>{voidingAdvance.recipient}</strong></div>
+                  <div><span>{id ? "Nominal" : "Amount"}</span><strong>{formatCurrency(voidingAdvance.amount, language)}</strong></div>
+                  <div><span>{id ? "Tanggal cair" : "Disbursed"}</span><strong>{localizedDate(language, voidingAdvance.disbursedDate)}</strong></div>
+                </div>
+                <label className="field full">
+                  <span>{id ? `Alasan (minimal ${ADVANCE_VOID_REASON_MIN} karakter)` : `Reason (at least ${ADVANCE_VOID_REASON_MIN} characters)`}</span>
+                  <textarea
+                    autoFocus
+                    required
+                    minLength={ADVANCE_VOID_REASON_MIN}
+                    maxLength={500}
+                    value={advanceVoidReason}
+                    onChange={(event) => setAdvanceVoidReason(event.target.value)}
+                    placeholder={id ? "Contoh: pencairan tercatat pada proyek yang salah." : "Example: the disbursement was recorded against the wrong project."}
+                  />
+                </label>
+                <p className="form-hint full">{id
+                  ? "Aplikasi mencatat pembalik kasnya dan uang muka menjadi Dibatalkan. Alasan ini tercatat permanen pada jejak audit dan tidak dapat diubah. Bila uang mukanya sudah terpakai atau pencairannya sudah cocok dengan mutasi bank, pembatalan akan ditolak — gunakan pengembalian uang muka."
+                  : "The app posts the reversing cash entry and the advance reads Voided. This reason is written permanently to the audit trail and cannot be edited. If the advance has already been spent, or the disbursement is matched to a bank entry, the void is refused — record an advance return instead."}</p>
+                <div className="modal-actions full">
+                  <button className="button secondary" type="button" onClick={closeAdvanceVoid}>{id ? "Batal" : "Cancel"}</button>
+                  <button className="button danger" type="submit" disabled={busy || advanceVoidReason.trim().length < ADVANCE_VOID_REASON_MIN}>
+                    <RotateCcw size={16} />{id ? "Batalkan uang muka" : "Void advance"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </section>
+        </div>
+      )}
     </div>
   );
 }

@@ -9,10 +9,46 @@ import type { DatabaseClient } from "../db/client";
 import { getDatabase } from "../db/client";
 import { ApiError, created, jsonBody, noContent, ok, partialPatchSchema } from "./errors";
 
+export const COMMERCIAL_PACKAGE_STATUSES = [
+  "Draft",
+  "Active",
+  "Completed",
+  "Void",
+] as const;
+type CommercialPackageStatus = (typeof COMMERCIAL_PACKAGE_STATUSES)[number];
+
+// The package lifecycle. Only 'Active' accepts new commercial documents, so a
+// package created from the UI (which never sends a status) has to start there —
+// 'Draft' used to be the default and would have been a dead end. 'Void' is the
+// retirement state the DELETE refusal points at and nothing leaves it;
+// 'Completed' can be reopened when late work arrives.
+const PACKAGE_TRANSITIONS: Record<
+  CommercialPackageStatus,
+  readonly CommercialPackageStatus[]
+> = {
+  Draft: ["Active", "Void"],
+  Active: ["Completed", "Void"],
+  Completed: ["Active", "Void"],
+  Void: [],
+};
+
+function assertPackageTransition(currentStatus: string, nextStatus: string) {
+  if (currentStatus === nextStatus) return;
+  const allowed =
+    PACKAGE_TRANSITIONS[currentStatus as CommercialPackageStatus] ?? [];
+  if (!allowed.includes(nextStatus as CommercialPackageStatus)) {
+    throw new ApiError(
+      409,
+      "INVALID_PACKAGE_STATUS",
+      "Perubahan status paket tidak sesuai urutan workflow. Paket yang sudah dibatalkan (Void) tidak dapat diaktifkan kembali.",
+    );
+  }
+}
+
 const packageSchema = z.object({
   title: z.string().trim().min(2).max(160),
   code: z.string().trim().min(2).max(40).regex(/^[A-Za-z0-9._-]+$/).optional(),
-  status: z.enum(["Draft", "Active", "Completed", "Void"]).default("Draft"),
+  status: z.enum(COMMERCIAL_PACKAGE_STATUSES).default("Active"),
   sortOrder: z.number().int().min(0).max(10_000).default(0),
 });
 
@@ -84,18 +120,30 @@ export async function resolveCommercialPackageId(
   client: DatabaseClient,
   projectId: string,
   requestedPackageId?: string | null,
+  options: { requireActive?: boolean } = {},
 ) {
-  if (!requestedPackageId) {
-    return ensureDefaultCommercialPackage(client, projectId);
-  }
+  const packageId = requestedPackageId
+    ? requestedPackageId
+    : await ensureDefaultCommercialPackage(client, projectId);
   const result = await client.execute({
-    sql: "SELECT id FROM project_commercial_packages WHERE id=? AND project_id=? LIMIT 1",
-    args: [requestedPackageId, projectId],
+    sql: "SELECT id,code,title,status FROM project_commercial_packages WHERE id=? AND project_id=? LIMIT 1",
+    args: [packageId, projectId],
   });
-  if (!result.rows.length) {
+  const row = result.rows[0];
+  if (!row) {
     throw new ApiError(404, "PACKAGE_NOT_FOUND", "Paket komersial tidak ditemukan.");
   }
-  return requestedPackageId;
+  // Reading the history of a retired package always stays possible; only the
+  // writers that create new commercial documents ask for `requireActive`.
+  if (options.requireActive && String(row.status) !== "Active") {
+    throw new ApiError(
+      409,
+      "PACKAGE_NOT_ACTIVE",
+      `Paket ${String(row.code)} berstatus ${String(row.status)} sehingga tidak dapat menerima dokumen baru. Aktifkan kembali paket tersebut atau pilih paket lain.`,
+      { packageId, status: String(row.status) },
+    );
+  }
+  return packageId;
 }
 
 async function listPackages(client: DatabaseClient, projectId: string) {
@@ -208,6 +256,7 @@ export async function handleCommercialPackages(
       status: input.status ?? current.rows[0].status,
       sortOrder: input.sortOrder ?? numberValue(current.rows[0].sort_order),
     });
+    assertPackageTransition(String(current.rows[0].status), merged.status);
     await client.execute({
       sql: `UPDATE project_commercial_packages
         SET code=?,title=?,status=?,sort_order=?,updated_at=? WHERE id=?`,

@@ -41,6 +41,13 @@ export interface Project {
   managerId?: string;
   team: string[];
   teamNames?: string[];
+  /** Null until the location text is geocoded or somebody drops a pin. */
+  latitude?: number | null;
+  longitude?: number | null;
+  /** "manual" = placed by a person and never overwritten by a later guess. */
+  coordinateSource?: "manual" | "geocoded" | null;
+  /** What Nominatim said it matched, so a pin in the wrong village is traceable. */
+  geocodedLabel?: string | null;
 }
 
 export interface BoqItem {
@@ -355,6 +362,10 @@ export interface Transaction {
   category: string;
   categoryKey?: string;
   editable?: boolean;
+  // False while an imported bank mutasi is still unreconciled: show the row, but
+  // never add it to a cash total — it usually duplicates a source-document
+  // transaction that already booked the same money.
+  countsAsCash?: boolean;
 }
 
 export interface ProjectExpenseAttachment {
@@ -448,6 +459,8 @@ export interface ProjectAdvance {
   paymentReference: string;
   notes: string;
   status: "Open" | "Settled" | "Void";
+  voidedAt?: string | null;
+  voidReason?: string | null;
 }
 
 export interface BankAccount {

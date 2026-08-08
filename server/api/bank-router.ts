@@ -14,7 +14,7 @@ import {
 } from "../bank-statement";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { asNumber } from "../format";
-import { ApiError, created, jsonBody, noContent, ok } from "./errors";
+import { ApiError, created, jsonBody, noContent, ok, partialPatchSchema } from "./errors";
 
 const accountSchema = z.object({
   bankName: z.string().trim().min(2).max(80),
@@ -308,8 +308,8 @@ async function persistEntries(
       statements.push({
         sql: `
           INSERT INTO transactions
-            (id,project_id,date,type,description,amount,source,reference_id,category,created_by,created_at,updated_at)
-          VALUES (?,NULL,?,?,?,?,?,?,?,?,?,?)
+            (id,project_id,date,type,description,amount,source,reference_id,category,origin,created_by,created_at,updated_at)
+          VALUES (?,NULL,?,?,?,?,?,?,?,'system',?,?,?)
         `,
         args: [
           transactionId,
@@ -894,6 +894,8 @@ export async function handleBankAccounts(
       String(entry.transaction_source).startsWith("Bank:") &&
       String(entry.transaction_reference) === entryId;
 
+    let restoredStatus: "Matched" | "Imported" = "Imported";
+
     if (input.action === "match") {
       const targetResult = await client.execute({
         sql: `
@@ -928,7 +930,8 @@ export async function handleBankAccounts(
       statements.push({
         sql: `
           UPDATE bank_statement_entries
-          SET transaction_id=?,reconciliation_status='Matched'
+          SET transaction_id=?,excluded_transaction_id=NULL,
+            reconciliation_status='Matched'
           WHERE id=? AND bank_account_id=?
         `,
         args: [input.transactionId, entryId, accountId],
@@ -942,13 +945,23 @@ export async function handleBankAccounts(
           args: [currentTransactionId],
         });
       }
+      // A mutasi matched to a real source document (an invoice payment, a
+      // vendor payment, a tax settlement) keeps that transaction: excluding the
+      // mutasi only says "this bank line is not evidence of new cash". Remember
+      // where it was booked, because restoring it must re-attach to the very
+      // same transaction instead of inventing a second one for the same money.
       statements.push({
         sql: `
           UPDATE bank_statement_entries
-          SET transaction_id=NULL,reconciliation_status='Excluded'
+          SET transaction_id=NULL,excluded_transaction_id=?,
+            reconciliation_status='Excluded'
           WHERE id=? AND bank_account_id=?
         `,
-        args: [entryId, accountId],
+        args: [
+          currentIsGeneratedBankTransaction ? null : currentTransactionId,
+          entryId,
+          accountId,
+        ],
       });
       await client.batch(statements, "write");
     } else {
@@ -959,41 +972,74 @@ export async function handleBankAccounts(
           "Hanya mutasi yang dikecualikan yang dapat dikembalikan ke pembukuan.",
         );
       }
-      const transactionId = randomUUID();
-      const account = await findAccount(client, accountId);
-      await client.batch(
-        [
-          {
+      const priorTransactionId = entry.excluded_transaction_id
+        ? String(entry.excluded_transaction_id)
+        : null;
+      // Only re-attach when the remembered transaction still exists and has not
+      // been claimed by another mutasi in the meantime; otherwise this really is
+      // an unreconciled bank line and needs its own `Bank:` row.
+      const reattachable = priorTransactionId
+        ? await client.execute({
             sql: `
-              INSERT INTO transactions
-                (id,project_id,date,type,description,amount,source,reference_id,category,created_by,created_at,updated_at)
-              VALUES (?,NULL,?,?,?,?,?,?,?,?,?,?)
+              SELECT t.id
+              FROM transactions t
+              LEFT JOIN bank_statement_entries e
+                ON e.transaction_id=t.id AND e.id<>?
+              WHERE t.id=? AND e.id IS NULL
+              LIMIT 1
             `,
-            args: [
-              transactionId,
-              entry.date,
-              entry.type,
-              entry.description,
-              entry.amount,
-              `Bank: ${String(account.bank_name)}`,
-              entryId,
-              inferCashCategory(String(entry.description), String(entry.type) as "Pemasukan" | "Pengeluaran"),
-              user.id,
-              timestamp,
-              timestamp,
-            ],
-          },
-          {
-            sql: `
-              UPDATE bank_statement_entries
-              SET transaction_id=?,reconciliation_status='Imported'
-              WHERE id=? AND bank_account_id=?
-            `,
-            args: [transactionId, entryId, accountId],
-          },
-        ],
-        "write",
-      );
+            args: [entryId, priorTransactionId],
+          })
+        : { rows: [] as Array<Record<string, unknown>> };
+      if (reattachable.rows.length) {
+        restoredStatus = "Matched";
+        await client.execute({
+          sql: `
+            UPDATE bank_statement_entries
+            SET transaction_id=?,excluded_transaction_id=NULL,
+              reconciliation_status='Matched'
+            WHERE id=? AND bank_account_id=?
+          `,
+          args: [priorTransactionId, entryId, accountId],
+        });
+      } else {
+        const transactionId = randomUUID();
+        const account = await findAccount(client, accountId);
+        await client.batch(
+          [
+            {
+              sql: `
+                INSERT INTO transactions
+                  (id,project_id,date,type,description,amount,source,reference_id,category,origin,created_by,created_at,updated_at)
+                VALUES (?,NULL,?,?,?,?,?,?,?,'system',?,?,?)
+              `,
+              args: [
+                transactionId,
+                entry.date,
+                entry.type,
+                entry.description,
+                entry.amount,
+                `Bank: ${String(account.bank_name)}`,
+                entryId,
+                inferCashCategory(String(entry.description), String(entry.type) as "Pemasukan" | "Pengeluaran"),
+                user.id,
+                timestamp,
+                timestamp,
+              ],
+            },
+            {
+              sql: `
+                UPDATE bank_statement_entries
+                SET transaction_id=?,excluded_transaction_id=NULL,
+                  reconciliation_status='Imported'
+                WHERE id=? AND bank_account_id=?
+              `,
+              args: [transactionId, entryId, accountId],
+            },
+          ],
+          "write",
+        );
+      }
     }
     await writeAuditLog(
       client,
@@ -1009,7 +1055,7 @@ export async function handleBankAccounts(
         ? "Matched"
         : input.action === "exclude"
           ? "Excluded"
-          : "Imported" });
+          : restoredStatus });
   }
 
   if (
@@ -1057,7 +1103,10 @@ export async function handleBankAccounts(
       );
     }
     const current = await findAccount(client, accountId);
-    const input = accountSchema.partial().parse(await jsonBody(request));
+    // A plain `.partial()` reinstated every `.default()` the client omitted, so
+    // renaming a rekening wiped its currency back to IDR, its opening balance
+    // to 0, and its API linkage back to Manual.
+    const input = partialPatchSchema(accountSchema).parse(await jsonBody(request));
     const usage = await accountUsage(client, accountId);
     if (
       input.openingBalance !== undefined &&

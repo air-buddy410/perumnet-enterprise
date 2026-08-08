@@ -5,10 +5,18 @@ import ExcelJS from "exceljs";
 import { z } from "zod";
 import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
-import { calculateQuotationCommercialTotals } from "../commercial";
-import { syncProjectCommercialValue } from "./commercial-scope-router";
-import { getDatabase, type DatabaseClient } from "../db/client";
-import { ApiError, created, jsonBody, noContent, ok, partialPatchSchema } from "./errors";
+import { syncCommercialValues } from "./commercial-sync";
+import { getDatabase, rowLock, type DatabaseClient } from "../db/client";
+import { safeSpreadsheetText } from "../spreadsheet";
+import {
+  ApiError,
+  created,
+  jsonBody,
+  noContent,
+  ok,
+  partialPatchSchema,
+  refuseOnReference,
+} from "./errors";
 
 const roleSchema = z.enum(["Perangkat", "Material", "Jasa", "Mobilitas"]);
 const statusSchema = z.enum(["Aktif", "Nonaktif"]);
@@ -57,21 +65,69 @@ function manageCatalog(user: AuthUser) {
   }
 }
 
+function categoryNotFound() {
+  return new ApiError(404, "CATEGORY_NOT_FOUND", "Kategori katalog tidak ditemukan.");
+}
+
+function categoryInUse() {
+  return new ApiError(
+    409,
+    "CATEGORY_IN_USE",
+    "Kategori masih dipakai item katalog sehingga tidak dapat dihapus. Nonaktifkan kategori agar histori tetap aman.",
+  );
+}
+
+function brandInUse() {
+  return new ApiError(
+    409,
+    "BRAND_IN_USE",
+    "Merek masih dipakai item katalog sehingga tidak dapat dihapus. Nonaktifkan merek agar histori tetap aman.",
+  );
+}
+
+function itemInUse() {
+  return new ApiError(
+    409,
+    "ITEM_IN_USE",
+    "Item sudah dipakai dalam BoQ atau template BoQ sehingga tidak dapat dihapus. Nonaktifkan item agar histori tetap aman.",
+  );
+}
+
+type CatalogTable =
+  | "item_catalog_categories"
+  | "item_catalog_brands"
+  | "item_catalog_items";
+
+/**
+ * Reads a catalog row and holds it for the rest of the transaction, so nothing
+ * can attach a child row to it (or delete it) while we decide what to do. Call
+ * this as the first statement of the transaction that writes.
+ */
+async function lockCatalogRow(client: DatabaseClient, table: CatalogTable, id: string) {
+  const result = await client.execute({
+    sql: `SELECT id FROM ${table} WHERE id=? LIMIT 1${rowLock(client)}`,
+    args: [id],
+  });
+  return result.rows.length > 0;
+}
+
 async function categoryAndBrand(
   client: DatabaseClient,
   categoryId: string,
   brandId?: string | null,
+  options?: { lock?: boolean },
 ) {
+  const lock = options?.lock ? rowLock(client) : "";
   const categoryResult = await client.execute({
-    sql: "SELECT * FROM item_catalog_categories WHERE id=? LIMIT 1",
+    sql: `SELECT * FROM item_catalog_categories WHERE id=? LIMIT 1${lock}`,
     args: [categoryId],
   });
   const category = categoryResult.rows[0];
-  if (!category) throw new ApiError(404, "CATEGORY_NOT_FOUND", "Kategori katalog tidak ditemukan.");
+  if (!category) throw categoryNotFound();
   let brand: Record<string, unknown> | undefined;
   if (brandId) {
     const brandResult = await client.execute({
-      sql: "SELECT * FROM item_catalog_brands WHERE id=? AND category_id=? LIMIT 1",
+      sql: `SELECT * FROM item_catalog_brands WHERE id=? AND category_id=? LIMIT 1${lock}`,
       args: [brandId, categoryId],
     });
     brand = brandResult.rows[0];
@@ -146,95 +202,53 @@ const itemSelect = `SELECT i.*,c.boq_role,c.name AS category_name,c.name_en AS c
   JOIN item_catalog_categories c ON c.id=i.category_id
   LEFT JOIN item_catalog_brands b ON b.id=i.brand_id`;
 
-async function resetAffectedQuotations(client: DatabaseClient, catalogItemId: string) {
-  const scopes = await client.execute({
-    sql: `SELECT DISTINCT s.id,s.boq_id,q.id AS quotation_id,q.project_id,q.status AS quotation_status
+// A repriced catalog item moves the BoQ underneath every quotation that draws
+// on it. A quotation the client has already seen must never be rewritten in
+// place: this used to force a Sent quotation back to 'Draft' and overwrite its
+// totals, which left the frozen quotation_items snapshot printing pre-edit
+// lines under a post-edit total — the PDF itemised one figure and billed
+// another. syncCommercialValues is the single writer that does this correctly:
+// it supersedes the sent revision and issues a fresh Draft revision whose
+// snapshot and taxes match its numbers.
+async function resetAffectedQuotations(
+  client: DatabaseClient,
+  catalogItemId: string,
+  auditContext?: { request: Request; user: AuthUser },
+) {
+  // Accepted scopes keep their prices — syncCatalogItem never repriced them —
+  // so the invoiced work is left alone.
+  const projects = await client.execute({
+    sql: `SELECT DISTINCT b.project_id
       FROM boq_items i
-      JOIN boq_scopes s ON s.id=i.scope_id
-      LEFT JOIN quotations q ON q.scope_id=s.id AND q.status IN ('Draft','Sent')
-      WHERE i.catalog_item_id=? AND s.status<>'Accepted'`,
+      JOIN boqs b ON b.id=i.boq_id
+      LEFT JOIN boq_scopes s ON s.id=i.scope_id
+      WHERE i.catalog_item_id=? AND COALESCE(s.status,'Draft')<>'Accepted'`,
     args: [catalogItemId],
   });
-  const timestamp = new Date().toISOString();
   let quotationsReset = 0;
-  for (const scope of scopes.rows) {
-    const totalResult = await client.execute({
-      sql: "SELECT COALESCE(SUM(quantity*selling_price),0) AS total FROM boq_items WHERE scope_id=?",
-      args: [scope.id],
+  for (const project of projects.rows) {
+    if (!project.project_id) continue;
+    const projectId = String(project.project_id);
+    // Counted before the sync, because the sync is what turns each of these
+    // into a Superseded original plus a fresh Draft revision.
+    const revised = await client.execute({
+      sql: `SELECT COUNT(*) AS revised FROM quotations q
+        WHERE q.project_id=? AND q.status='Sent'
+          AND COALESCE((SELECT SUM(i.quantity*i.selling_price) FROM boq_items i
+            WHERE i.scope_id=q.scope_id),0)<>q.total`,
+      args: [projectId],
     });
-    const total = Number(totalResult.rows[0]?.total ?? 0);
-    if (scope.quotation_id) {
-      if (String(scope.quotation_status) === "Sent") {
-        quotationsReset += 1;
-        await client.execute({
-          sql: "UPDATE quotations SET status='Draft',updated_at=? WHERE id=? AND status='Sent'",
-          args: [timestamp, scope.quotation_id],
-        });
-      }
-      const quote = await client.execute({
-        sql: `SELECT discount_enabled,discount_type,discount_value,rounding_mode,
-          rounding_step,rounding_adjustment FROM quotations WHERE id=? AND status='Draft' LIMIT 1`,
-        args: [scope.quotation_id],
-      });
-      if (!quote.rows[0]) continue;
-      const commercialBeforeTax = calculateQuotationCommercialTotals({
-        subtotal: total,
-        discountEnabled: Boolean(Number(quote.rows[0].discount_enabled ?? 0)),
-        discountType: String(quote.rows[0].discount_type ?? "Nominal") as "Nominal" | "Percent",
-        discountValue: Number(quote.rows[0].discount_value ?? 0),
-        roundingMode: String(quote.rows[0].rounding_mode ?? "None") as "None" | "Up" | "Down" | "Custom",
-        roundingStep: Number(quote.rows[0].rounding_step ?? 0),
-        customRoundingAdjustment: String(quote.rows[0].rounding_mode) === "Custom"
-          ? Number(quote.rows[0].rounding_adjustment ?? 0)
-          : 0,
-      });
-      await client.execute({
-        sql: `UPDATE document_taxes
-          SET taxable_base=?,amount=ROUND(?*rate_bps/10000.0),locked=0,locked_at=NULL,updated_at=?
-          WHERE document_type='Quotation' AND document_id=?`,
-        args: [commercialBeforeTax.taxableBase, commercialBeforeTax.taxableBase, timestamp, scope.quotation_id],
-      });
-      const taxTotals = await client.execute({
-        sql: `SELECT
-          COALESCE(SUM(CASE WHEN effect='Add' THEN amount ELSE 0 END),0) AS additions,
-          COALESCE(SUM(CASE WHEN effect='Withhold' THEN amount ELSE 0 END),0) AS withholdings
-          FROM document_taxes WHERE document_type='Quotation' AND document_id=?`,
-        args: [scope.quotation_id],
-      });
-      const commercial = calculateQuotationCommercialTotals({
-        subtotal: total,
-        discountEnabled: Boolean(Number(quote.rows[0].discount_enabled ?? 0)),
-        discountType: String(quote.rows[0].discount_type ?? "Nominal") as "Nominal" | "Percent",
-        discountValue: Number(quote.rows[0].discount_value ?? 0),
-        taxAdditions: Number(taxTotals.rows[0]?.additions ?? 0),
-        taxWithholdings: Number(taxTotals.rows[0]?.withholdings ?? 0),
-        roundingMode: String(quote.rows[0].rounding_mode ?? "None") as "None" | "Up" | "Down" | "Custom",
-        roundingStep: Number(quote.rows[0].rounding_step ?? 0),
-        customRoundingAdjustment: String(quote.rows[0].rounding_mode) === "Custom"
-          ? Number(quote.rows[0].rounding_adjustment ?? 0)
-          : 0,
-      });
-      await client.execute({
-        sql: `UPDATE quotations SET total=?,discount_amount=?,taxable_base=?,tax_additions_snapshot=?,
-          tax_withholdings_snapshot=?,rounding_adjustment=?,grand_total=?,updated_at=?
-          WHERE id=? AND status='Draft'`,
-        args: [commercial.subtotal, commercial.discountAmount, commercial.taxableBase,
-          commercial.taxAdditions, commercial.taxWithholdings, commercial.roundingAdjustment,
-          commercial.grandTotal, timestamp, scope.quotation_id],
-      });
-    }
-    await client.execute({
-      sql: "UPDATE boq_scopes SET status=CASE WHEN status='Sent' THEN 'Draft' ELSE status END,updated_at=? WHERE id=?",
-      args: [timestamp, scope.id],
-    });
-    if (scope.project_id) {
-      await syncProjectCommercialValue(client, String(scope.project_id));
-    }
+    quotationsReset += Number(revised.rows[0]?.revised ?? 0);
+    await syncCommercialValues(client, projectId, auditContext);
   }
   return quotationsReset;
 }
 
-async function syncCatalogItem(client: DatabaseClient, itemId: string) {
+async function syncCatalogItem(
+  client: DatabaseClient,
+  itemId: string,
+  auditContext?: { request: Request; user: AuthUser },
+) {
   const result = await client.execute({ sql: `${itemSelect} WHERE i.id=? LIMIT 1`, args: [itemId] });
   const row = result.rows[0];
   if (!row) return { boqRows: 0, quotationsReset: 0 };
@@ -270,7 +284,10 @@ async function syncCatalogItem(client: DatabaseClient, itemId: string) {
       WHERE catalog_item_id=?`,
     args: [row.boq_role, description, row.unit, row.cost_price, row.revision, price2, price1, timestamp, itemId],
   });
-  return { boqRows: activeRows.rows.length, quotationsReset: await resetAffectedQuotations(client, itemId) };
+  return {
+    boqRows: activeRows.rows.length,
+    quotationsReset: await resetAffectedQuotations(client, itemId, auditContext),
+  };
 }
 
 async function assertCatalogPriceUpdateCoversInvoices(
@@ -373,9 +390,26 @@ async function exportCatalog(request: Request, user: AuthUser) {
   sheet.columns = columns.map(([header, width], index) => ({ header, key: `c${index}`, width }));
   sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
   sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF078E87" } };
+  // Every text cell is neutralised before it is written. This workbook is the
+  // one export that round-trips: `importCatalog` below creates categories and
+  // brands verbatim from an uploaded file, so a formula pasted into a vendor's
+  // sheet comes back in as a category name and leaves again in the next export
+  // — into a file that is normally emailed straight to a vendor. The numeric
+  // columns pass through untouched so the price maths still sums.
   for (const row of rows.rows.map(mapItem)) {
-    sheet.addRow([row.boqRole, row.category, row.brand ?? "", row.sku, row.name, row.nameEn, row.model,
-      row.specifications, row.unit, row.costPrice, row.margin1Percent, row.price1, row.margin2Percent, row.price2, row.status]);
+    sheet.addRow([
+      safeSpreadsheetText(row.boqRole),
+      safeSpreadsheetText(row.category),
+      safeSpreadsheetText(row.brand ?? ""),
+      safeSpreadsheetText(row.sku),
+      safeSpreadsheetText(row.name),
+      safeSpreadsheetText(row.nameEn),
+      safeSpreadsheetText(row.model),
+      safeSpreadsheetText(row.specifications),
+      safeSpreadsheetText(row.unit),
+      row.costPrice, row.margin1Percent, row.price1, row.margin2Percent, row.price2,
+      safeSpreadsheetText(row.status),
+    ]);
   }
   [10, 12, 14].forEach((column) => { sheet.getColumn(column).numFmt = "#,##0"; });
   const buffer = await workbook.xlsx.writeBuffer();
@@ -462,7 +496,9 @@ async function importCatalog(request: Request, user: AuthUser) {
     }
   });
   let synchronized = 0;
-  for (const item of prepared) synchronized += (await syncCatalogItem(client, item.id)).boqRows;
+  for (const item of prepared) {
+    synchronized += (await syncCatalogItem(client, item.id, { request, user })).boqRows;
+  }
   await writeAuditLog(client, request, user, "import", "item_catalog", undefined, { items: prepared.length, synchronized });
   return created({ imported: prepared.length, synchronized });
 }
@@ -500,25 +536,41 @@ export async function handleCatalog(request: Request, path: string[], user: Auth
     return ok({ id });
   }
   if (child === "categories" && id && request.method === "DELETE") {
-    const usage = await client.execute({ sql: "SELECT id FROM item_catalog_items WHERE category_id=? LIMIT 1", args: [id] });
-    if (usage.rows.length) throw new ApiError(409, "CATEGORY_IN_USE", "Kategori sudah memiliki item. Nonaktifkan kategori agar histori tetap aman.");
-    await client.batch([
-      { sql: "DELETE FROM item_catalog_brands WHERE category_id=?", args: [id] },
-      { sql: "DELETE FROM item_catalog_categories WHERE id=?", args: [id] },
-    ], "write");
+    // The usage guard used to run on its own, outside the transaction that
+    // deletes. Another request could then add an item or a brand to the
+    // category in that window, and the delete died with a raw foreign-key
+    // error. Lock the category first, then check and delete against the same
+    // locked state.
+    await refuseOnReference(
+      client.transaction(async (tx) => {
+        if (!(await lockCatalogRow(tx, "item_catalog_categories", id))) return;
+        const usage = await tx.execute({
+          sql: "SELECT id FROM item_catalog_items WHERE category_id=? LIMIT 1",
+          args: [id],
+        });
+        if (usage.rows.length) throw categoryInUse();
+        await tx.execute({ sql: "DELETE FROM item_catalog_brands WHERE category_id=?", args: [id] });
+        await tx.execute({ sql: "DELETE FROM item_catalog_categories WHERE id=?", args: [id] });
+      }),
+      categoryInUse,
+    );
     await writeAuditLog(client, request, user, "delete", "item_catalog_category", id);
     return noContent();
   }
   if (child === "brands" && request.method === "POST" && !id) {
     const input = brandSchema.parse(await jsonBody(request));
-    await categoryAndBrand(client, input.categoryId, null).catch((error) => {
-      if (error instanceof ApiError && error.code === "BRAND_REQUIRED") return undefined;
-      throw error;
-    });
     const brandId = randomUUID(); const timestamp = new Date().toISOString();
-    await client.execute({ sql: `INSERT INTO item_catalog_brands
-      (id,category_id,name,status,sort_order,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`,
-      args: [brandId,input.categoryId,input.name,input.status,input.sortOrder,user.id,timestamp,timestamp] });
+    await refuseOnReference(
+      client.transaction(async (tx) => {
+        if (!(await lockCatalogRow(tx, "item_catalog_categories", input.categoryId))) {
+          throw categoryNotFound();
+        }
+        await tx.execute({ sql: `INSERT INTO item_catalog_brands
+          (id,category_id,name,status,sort_order,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`,
+          args: [brandId,input.categoryId,input.name,input.status,input.sortOrder,user.id,timestamp,timestamp] });
+      }),
+      categoryNotFound,
+    );
     await writeAuditLog(client, request, user, "create", "item_catalog_brand", brandId, input);
     return created({ id: brandId });
   }
@@ -526,24 +578,49 @@ export async function handleCatalog(request: Request, path: string[], user: Auth
     const current = (await client.execute({ sql: "SELECT * FROM item_catalog_brands WHERE id=?", args: [id] })).rows[0];
     if (!current) throw new ApiError(404, "NOT_FOUND", "Merek tidak ditemukan.");
     const input = partialPatchSchema(brandSchema).parse(await jsonBody(request));
-    await client.execute({ sql: "UPDATE item_catalog_brands SET category_id=?,name=?,status=?,sort_order=?,updated_at=? WHERE id=?",
-      args: [input.categoryId ?? current.category_id,input.name ?? current.name,input.status ?? current.status,input.sortOrder ?? current.sort_order,new Date().toISOString(),id] });
+    // The target category was never checked here, so a stale or mistyped id
+    // reached the driver and came back as a raw foreign-key 500.
+    const nextCategoryId = String(input.categoryId ?? current.category_id);
+    await refuseOnReference(
+      client.transaction(async (tx) => {
+        if (!(await lockCatalogRow(tx, "item_catalog_categories", nextCategoryId))) {
+          throw categoryNotFound();
+        }
+        await tx.execute({ sql: "UPDATE item_catalog_brands SET category_id=?,name=?,status=?,sort_order=?,updated_at=? WHERE id=?",
+          args: [nextCategoryId,input.name ?? current.name,input.status ?? current.status,input.sortOrder ?? current.sort_order,new Date().toISOString(),id] });
+      }),
+      categoryNotFound,
+    );
     await writeAuditLog(client, request, user, "update", "item_catalog_brand", id, input); return ok({ id });
   }
   if (child === "brands" && id && request.method === "DELETE") {
-    const usage = await client.execute({ sql: "SELECT id FROM item_catalog_items WHERE brand_id=? LIMIT 1", args: [id] });
-    if (usage.rows.length) throw new ApiError(409, "BRAND_IN_USE", "Merek sudah digunakan. Nonaktifkan merek agar histori tetap aman.");
-    await client.execute({ sql: "DELETE FROM item_catalog_brands WHERE id=?", args: [id] });
+    await refuseOnReference(
+      client.transaction(async (tx) => {
+        if (!(await lockCatalogRow(tx, "item_catalog_brands", id))) return;
+        const usage = await tx.execute({
+          sql: "SELECT id FROM item_catalog_items WHERE brand_id=? LIMIT 1",
+          args: [id],
+        });
+        if (usage.rows.length) throw brandInUse();
+        await tx.execute({ sql: "DELETE FROM item_catalog_brands WHERE id=?", args: [id] });
+      }),
+      brandInUse,
+    );
     await writeAuditLog(client, request, user, "delete", "item_catalog_brand", id); return noContent();
   }
   if (child === "items" && request.method === "POST" && !id) {
     const input = itemSchema.parse(await jsonBody(request));
-    await categoryAndBrand(client, input.categoryId, input.brandId);
     const itemId = randomUUID(); const timestamp = new Date().toISOString();
-    await client.execute({ sql: `INSERT INTO item_catalog_items
-      (id,category_id,brand_id,sku,name,name_en,model,specifications,unit,cost_price,margin_1_bps,margin_2_bps,status,revision,created_by,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)`, args: [itemId,input.categoryId,input.brandId ?? null,input.sku,input.name,input.nameEn,
-      input.model,input.specifications,input.unit,input.costPrice,bps(input.margin1Percent),bps(input.margin2Percent),input.status,user.id,timestamp,timestamp] });
+    await refuseOnReference(
+      client.transaction(async (tx) => {
+        await categoryAndBrand(tx, input.categoryId, input.brandId, { lock: true });
+        await tx.execute({ sql: `INSERT INTO item_catalog_items
+          (id,category_id,brand_id,sku,name,name_en,model,specifications,unit,cost_price,margin_1_bps,margin_2_bps,status,revision,created_by,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)`, args: [itemId,input.categoryId,input.brandId ?? null,input.sku,input.name,input.nameEn,
+          input.model,input.specifications,input.unit,input.costPrice,bps(input.margin1Percent),bps(input.margin2Percent),input.status,user.id,timestamp,timestamp] });
+      }),
+      categoryNotFound,
+    );
     await writeAuditLog(client, request, user, "create", "item_catalog_item", itemId, input); return created({ id: itemId });
   }
   if (child === "items" && id && request.method === "PATCH") {
@@ -567,19 +644,32 @@ export async function handleCatalog(request: Request, path: string[], user: Auth
       nextMargin1Bps,
       nextMargin2Bps,
     );
-    await client.execute({ sql: `UPDATE item_catalog_items SET category_id=?,brand_id=?,sku=?,name=?,name_en=?,model=?,specifications=?,unit=?,
+    await refuseOnReference(client.execute({ sql: `UPDATE item_catalog_items SET category_id=?,brand_id=?,sku=?,name=?,name_en=?,model=?,specifications=?,unit=?,
       cost_price=?,margin_1_bps=?,margin_2_bps=?,status=?,revision=revision+1,updated_at=? WHERE id=?`, args: [nextCategoryId,nextBrandId,
       input.sku ?? current.sku,input.name ?? current.name,input.nameEn ?? current.name_en,input.model ?? current.model,input.specifications ?? current.specifications,
       input.unit ?? current.unit,nextCostPrice,nextMargin1Bps,
-      nextMargin2Bps,input.status ?? current.status,new Date().toISOString(),id] });
-    const sync = await syncCatalogItem(client, id);
+      nextMargin2Bps,input.status ?? current.status,new Date().toISOString(),id] }), categoryNotFound);
+    const sync = await syncCatalogItem(client, id, { request, user });
     await writeAuditLog(client, request, user, "update", "item_catalog_item", id, { ...input, sync }); return ok({ id, ...sync });
   }
   if (child === "items" && id && request.method === "DELETE") {
-    const usage = await client.execute({ sql: `SELECT id FROM boq_items WHERE catalog_item_id=? UNION ALL
-      SELECT id FROM standalone_boq_items WHERE catalog_item_id=? LIMIT 1`, args: [id,id] });
-    if (usage.rows.length) throw new ApiError(409, "ITEM_IN_USE", "Item sudah dipakai dalam BoQ. Nonaktifkan item agar histori tetap aman.");
-    await client.execute({ sql: "DELETE FROM item_catalog_items WHERE id=?", args: [id] });
+    await refuseOnReference(
+      client.transaction(async (tx) => {
+        if (!(await lockCatalogRow(tx, "item_catalog_items", id))) return;
+        // boq_template_items also references the item with ON DELETE RESTRICT,
+        // and it was missing from this guard: an item used only by a BoQ
+        // template failed the delete with a raw foreign-key error.
+        const usage = await tx.execute({
+          sql: `SELECT id FROM boq_items WHERE catalog_item_id=? UNION ALL
+            SELECT id FROM boq_template_items WHERE catalog_item_id=? UNION ALL
+            SELECT id FROM standalone_boq_items WHERE catalog_item_id=? LIMIT 1`,
+          args: [id, id, id],
+        });
+        if (usage.rows.length) throw itemInUse();
+        await tx.execute({ sql: "DELETE FROM item_catalog_items WHERE id=?", args: [id] });
+      }),
+      itemInUse,
+    );
     await writeAuditLog(client, request, user, "delete", "item_catalog_item", id); return noContent();
   }
   throw new ApiError(404, "NOT_FOUND", "Endpoint katalog tidak ditemukan.");

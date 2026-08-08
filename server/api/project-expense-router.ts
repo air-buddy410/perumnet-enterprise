@@ -9,6 +9,7 @@ import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { claimSequence } from "../db/counters";
 import { asNumber } from "../format";
+import { csvCell } from "../spreadsheet";
 import {
   deleteStoredFile,
   readStoredFile,
@@ -102,21 +103,40 @@ function bool(value: unknown) {
   return value === true || Number(value) === 1;
 }
 
+// Project Expenses used to open for `projects` OR `finance`, which meant no
+// administrator could grant one without the other and nobody could describe the
+// rule in one sentence. It is its own module now, so the answer to "may this
+// person open Belanja Proyek" is a single stored value an Admin can see and
+// change on the Users & Access page.
 function assertExpenseView(user: AuthUser) {
-  if (
-    !canAccess(user.permissions, "projects", "view") &&
-    !canAccess(user.permissions, "finance", "view")
-  ) {
+  if (!canAccess(user.permissions, "expenses", "view")) {
     throw new ApiError(403, "FORBIDDEN", "Akun tidak memiliki akses belanja proyek.");
   }
 }
 
 function assertExpenseCreate(user: AuthUser) {
-  if (
-    !canAccess(user.permissions, "projects", "manage") &&
-    !canAccess(user.permissions, "finance", "manage")
-  ) {
+  if (!canAccess(user.permissions, "expenses", "manage")) {
     throw new ApiError(403, "FORBIDDEN", "Akun tidak dapat mencatat belanja proyek.");
+  }
+}
+
+/**
+ * The bulk export is a finance artefact, not a field one.
+ *
+ * Recording a receipt needs the receipt in front of you; the CSV and the PDF
+ * are every receipt on every project the account can reach, carrying the
+ * company account that paid, who is still owed their own money, and how much.
+ * An Engineer records receipts all day and never needs that sheet, so the
+ * download asks for Pembukuan on top of Belanja Proyek. An Admin who genuinely
+ * wants an Engineer to have it raises that one permission deliberately.
+ */
+function assertExpenseReport(user: AuthUser) {
+  if (!canAccess(user.permissions, "finance", "view")) {
+    throw new ApiError(
+      403,
+      "EXPENSE_REPORT_FORBIDDEN",
+      "Laporan belanja proyek memuat rekening perusahaan dan utang reimbursement, sehingga memerlukan izin Pembukuan minimal Lihat. Mintakan izin itu kepada Admin bila Anda memang perlu mengunduhnya.",
+    );
   }
 }
 
@@ -440,6 +460,35 @@ async function outstandingAdvanceTotal(
   return asNumber(result.rows[0]?.outstanding);
 }
 
+/**
+ * Puts a 'Settled' advance back to 'Open' when it holds an unspent balance
+ * again — the mirror of the `allocated >= available` close in the approval path.
+ *
+ * Without it, voiding the receipt that consumed an advance restored the balance
+ * everywhere it is *reported* (mapAdvance, outstandingAdvanceTotal) while the
+ * approval gate, which requires `status='Open'`, refused to spend it. A void
+ * left the money visibly available and permanently unusable.
+ *
+ * A voided advance stays voided: only 'Settled' reopens.
+ */
+async function reopenAdvanceIfFunded(client: DatabaseClient, advanceId: string) {
+  const result = await client.execute({
+    sql: `SELECT a.amount,a.status,
+        COALESCE((SELECT SUM(s.amount) FROM project_expense_settlements s
+          WHERE s.advance_id=a.id AND s.status='Posted'
+            AND s.settlement_type IN ('AdvanceAllocation','AdvanceReturn')),0) AS used
+      FROM project_advances a WHERE a.id=? LIMIT 1`,
+    args: [advanceId],
+  });
+  const advance = result.rows[0];
+  if (!advance || String(advance.status) !== "Settled") return;
+  if (asNumber(advance.amount) - asNumber(advance.used) <= 0) return;
+  await client.execute({
+    sql: "UPDATE project_advances SET status='Open',updated_at=? WHERE id=?",
+    args: [now(), advanceId],
+  });
+}
+
 // Decision context for the disbursement modal only — never a gate.
 async function invoiceCashReceived(client: DatabaseClient, projectId: string) {
   const result = await client.execute({
@@ -526,6 +575,10 @@ async function createSettlement(
     description: string;
     transactionType?: "Pemasukan" | "Pengeluaran";
     createTransaction?: boolean;
+    // Overrides the ledger `source` derived from `type`. Used by the advance
+    // void so its reversal reads "Project Advance Reversal" rather than
+    // borrowing the receipt wording.
+    transactionSource?: string;
   },
 ) {
   const settlementId = randomUUID();
@@ -534,8 +587,8 @@ async function createSettlement(
     transactionId = randomUUID();
     await client.execute({
       sql: `INSERT INTO transactions
-        (id,project_id,date,type,description,amount,source,reference_id,category,created_by,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        (id,project_id,date,type,description,amount,source,reference_id,category,origin,created_by,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
       args: [
         transactionId,
         input.projectId,
@@ -543,13 +596,14 @@ async function createSettlement(
         input.transactionType ?? "Pengeluaran",
         input.description,
         input.amount,
-        input.type === "Reimbursement"
-          ? "Project Expense Reimbursement"
-          : input.type === "AdvanceReturn"
-            ? "Project Advance Return"
-            : input.type === "Reversal"
-              ? "Project Expense Reversal"
-              : "Project Expense",
+        input.transactionSource ??
+          (input.type === "Reimbursement"
+            ? "Project Expense Reimbursement"
+            : input.type === "AdvanceReturn"
+              ? "Project Advance Return"
+              : input.type === "Reversal"
+                ? "Project Expense Reversal"
+                : "Project Expense"),
         settlementId,
         "Operasional",
         user.id,
@@ -768,7 +822,6 @@ async function expenseReports(
   const rows = await listRows(client, user, request);
   const english = user.preferredLanguage === "en";
   if (format === "csv") {
-    const cell = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
     const lines = [
       [
         english ? "Number" : "Nomor",
@@ -785,7 +838,7 @@ async function expenseReports(
         english ? "Settlement status" : "Status penyelesaian",
         "Amount (IDR)",
         english ? "Reimbursement payable (IDR)" : "Utang reimbursement (IDR)",
-      ].map(cell).join(","),
+      ].map(csvCell).join(","),
       ...rows.map((row) => [
         row.number,
         row.purchaseDate,
@@ -801,7 +854,7 @@ async function expenseReports(
         row.settlementStatus,
         row.totalAmount,
         row.reimbursementOutstanding,
-      ].map(cell).join(",")),
+      ].map(csvCell).join(",")),
     ];
     return new Response(`\uFEFF${lines.join("\r\n")}`, {
       headers: {
@@ -877,8 +930,15 @@ export async function handleProjectExpenses(
   assertExpenseView(user);
   const expenseId = path[1];
   const action = path[2];
-  if (expenseId === "report.csv") return expenseReports(request, user, "csv");
-  if (expenseId === "report.pdf") return expenseReports(request, user, "pdf");
+  // Both reports dispatched before any method test, so a POST or a DELETE to
+  // /api/project-expenses/report.csv returned the whole export.
+  if (expenseId === "report.csv" || expenseId === "report.pdf") {
+    if (request.method !== "GET") {
+      throw new ApiError(405, "METHOD_NOT_ALLOWED", "Laporan belanja proyek hanya dapat diunduh.");
+    }
+    assertExpenseReport(user);
+    return expenseReports(request, user, expenseId === "report.csv" ? "csv" : "pdf");
+  }
   if (expenseId && action === "attachments") {
     return handleAttachment(request, path, user);
   }
@@ -1303,26 +1363,35 @@ export async function handleProjectExpenses(
       throw new ApiError(409, "INVALID_STATUS", "Hanya belanja Disetujui yang dapat di-void.");
     }
     const input = voidSchema.parse(await jsonBody(request));
-    const settlements = await client.execute({
-      sql: `SELECT * FROM project_expense_settlements
-        WHERE expense_id=? AND status='Posted' ORDER BY created_at`,
-      args: [expenseId],
-    });
-    const transactionIds = settlements.rows
-      .map((row) => row.transaction_id)
-      .filter(Boolean);
-    if (transactionIds.length) {
-      const reconciled = await client.execute({
-        sql: `SELECT id FROM bank_statement_entries
-          WHERE transaction_id IN (${transactionIds.map(() => "?").join(",")})
-            AND reconciliation_status='Matched' LIMIT 1`,
-        args: transactionIds,
-      });
-      if (reconciled.rows.length) {
-        throw new ApiError(409, "RECONCILIATION_LOCKED", "Lepaskan rekonsiliasi bank sebelum melakukan void.");
-      }
-    }
     await client.transaction(async (tx) => {
+      // Read the settlements and the reconciliation guard inside the write
+      // transaction. Reading them outside is safe only because SQLite
+      // serialises writers; on PostgreSQL a concurrent reconciliation could
+      // land between the check and the void.
+      const settlements = await tx.execute({
+        sql: `SELECT * FROM project_expense_settlements
+          WHERE expense_id=? AND status='Posted' ORDER BY created_at`,
+        args: [expenseId],
+      });
+      const transactionIds = settlements.rows
+        .map((row) => row.transaction_id)
+        .filter(Boolean);
+      if (transactionIds.length) {
+        const reconciled = await tx.execute({
+          sql: `SELECT id FROM bank_statement_entries
+            WHERE transaction_id IN (${transactionIds.map(() => "?").join(",")})
+              AND reconciliation_status='Matched' LIMIT 1`,
+          args: transactionIds,
+        });
+        if (reconciled.rows.length) {
+          throw new ApiError(409, "RECONCILIATION_LOCKED", "Lepaskan rekonsiliasi bank sebelum melakukan void.");
+        }
+      }
+      const touchedAdvances = new Set(
+        settlements.rows
+          .filter((row) => row.advance_id)
+          .map((row) => String(row.advance_id)),
+      );
       for (const settlement of settlements.rows) {
         if (settlement.transaction_id) {
           const transaction = await tx.execute({
@@ -1350,6 +1419,14 @@ export async function handleProjectExpenses(
           sql: "UPDATE project_expense_settlements SET status='Void',updated_at=? WHERE id=?",
           args: [now(), settlement.id],
         });
+      }
+      // Voiding the allocation gives the money back to the advance, but the
+      // advance itself was closed as 'Settled' the moment it was fully drawn
+      // and nothing ever reopened it — so the restored balance was reported as
+      // available while approval, which requires status='Open', kept refusing
+      // it. Reopen every advance this void put back in funds.
+      for (const advanceId of touchedAdvances) {
+        await reopenAdvanceIfFunded(tx, advanceId);
       }
       await tx.execute({
         sql: `UPDATE project_expenses SET workflow_status='Void',settlement_status='Void',
@@ -1405,7 +1482,9 @@ export async function handleProjectExpenseCategories(
   });
   if (!current.rows[0]) throw new ApiError(404, "NOT_FOUND", "Kategori tidak ditemukan.");
   if (request.method === "PATCH") {
-    const input = categorySchema.partial().parse(await jsonBody(request));
+    // A plain `.partial()` re-applied the "Aktif" default, so renaming a
+    // retired expense category quietly brought it back into circulation.
+    const input = partialPatchSchema(categorySchema).parse(await jsonBody(request));
     await client.execute({
       sql: "UPDATE project_expense_categories SET name=?,name_en=?,status=?,sort_order=?,updated_at=? WHERE id=?",
       args: [
@@ -1461,6 +1540,8 @@ async function mapAdvance(client: DatabaseClient, row: Record<string, unknown>) 
     paymentReference: String(row.payment_reference),
     notes: row.notes ? String(row.notes) : "",
     status: String(row.status),
+    voidedAt: row.voided_at ? String(row.voided_at) : null,
+    voidReason: row.void_reason ? String(row.void_reason) : null,
   };
 }
 
@@ -1541,8 +1622,8 @@ export async function handleProjectAdvances(
     await client.transaction(async (tx) => {
       await tx.execute({
         sql: `INSERT INTO transactions
-          (id,project_id,date,type,description,amount,source,reference_id,category,created_by,created_at,updated_at)
-          VALUES (?,? ,?,'Pengeluaran',?,?,'Project Advance',?,'Operasional',?,?,?)`,
+          (id,project_id,date,type,description,amount,source,reference_id,category,origin,created_by,created_at,updated_at)
+          VALUES (?,? ,?,'Pengeluaran',?,?,'Project Advance',?,'Operasional','system',?,?,?)`,
         args: [transactionId, input.projectId, input.disbursedDate, `Uang muka proyek ${number}`, input.amount, id, user.id, now(), now()],
       });
       await tx.execute({
@@ -1600,6 +1681,80 @@ export async function handleProjectAdvances(
       }
     });
     await writeAuditLog(client, request, user, "return", "project_advance", advanceId, input);
+    const updated = await client.execute({
+      sql: `SELECT a.*,p.name AS project_name,u.name AS recipient_name
+        FROM project_advances a JOIN projects p ON p.id=a.project_id
+        JOIN users u ON u.id=a.recipient_user_id WHERE a.id=?`,
+      args: [advanceId],
+    });
+    return ok(await mapAdvance(client, updated.rows[0]));
+  }
+  // `project_advances` has carried voided_by/voided_at/void_reason and a 'Void'
+  // status since the table was created, but no endpoint ever wrote them: a
+  // disbursement recorded by mistake could only be closed by making the
+  // recipient hand back cash they may never have received. This is the missing
+  // half. It is deliberately narrow — it corrects the *record*, so it refuses
+  // once any of the money has been accounted for (an allocation or a partial
+  // return), and refuses while the disbursement is matched to a bank line,
+  // because then the cash really did move and a return is the honest route.
+  if (request.method === "POST" && action === "void") {
+    if (user.role !== "Admin" || !canAccess(user.permissions, "finance", "manage")) {
+      throw new ApiError(403, "FORBIDDEN", "Hanya Admin yang dapat membatalkan uang muka.");
+    }
+    const input = voidSchema.parse(await jsonBody(request));
+    await client.transaction(async (tx) => {
+      const locked = await tx.execute({
+        sql: `SELECT a.id,a.number,a.amount,a.project_id,a.status,a.transaction_id,
+            COALESCE((SELECT SUM(s.amount) FROM project_expense_settlements s
+              WHERE s.advance_id=a.id AND s.status='Posted'),0) AS settled
+          FROM project_advances a WHERE a.id=? LIMIT 1`,
+        args: [advanceId],
+      });
+      const row = locked.rows[0];
+      if (!row) throw new ApiError(404, "NOT_FOUND", "Uang muka tidak ditemukan.");
+      if (String(row.status) !== "Open") {
+        throw new ApiError(409, "INVALID_STATUS", "Hanya uang muka yang masih terbuka yang dapat dibatalkan.");
+      }
+      if (asNumber(row.settled) > 0) {
+        throw new ApiError(
+          409,
+          "ADVANCE_ALREADY_USED",
+          "Uang muka ini sudah terpakai atau sebagian sudah dikembalikan, jadi tidak dapat dibatalkan. Gunakan pengembalian uang muka untuk menutup sisanya.",
+        );
+      }
+      if (row.transaction_id) {
+        const reconciled = await tx.execute({
+          sql: `SELECT 1 FROM bank_statement_entries
+            WHERE transaction_id=? AND reconciliation_status='Matched' LIMIT 1`,
+          args: [row.transaction_id],
+        });
+        if (reconciled.rows.length) {
+          throw new ApiError(
+            409,
+            "RECONCILIATION_LOCKED",
+            "Pencairan ini sudah dicocokkan dengan mutasi bank, jadi uangnya benar-benar keluar. Catat pengembalian uang muka, bukan pembatalan.",
+          );
+        }
+        await createSettlement(tx, user, {
+          advanceId,
+          type: "Reversal",
+          amount: asNumber(row.amount),
+          date: new Date().toISOString().slice(0, 10),
+          reference: `VOID-${String(row.number)}`,
+          projectId: String(row.project_id),
+          description: `Pembatalan uang muka ${String(row.number)} · ${input.reason}`,
+          transactionType: "Pemasukan",
+          transactionSource: "Project Advance Reversal",
+          createTransaction: true,
+        });
+      }
+      await tx.execute({
+        sql: `UPDATE project_advances SET status='Void',voided_by=?,voided_at=?,
+          void_reason=?,updated_at=? WHERE id=?`,
+        args: [user.id, now(), input.reason, now(), advanceId],
+      });
+    });
+    await writeAuditLog(client, request, user, "void", "project_advance", advanceId, input);
     const updated = await client.execute({
       sql: `SELECT a.*,p.name AS project_name,u.name AS recipient_name
         FROM project_advances a JOIN projects p ON p.id=a.project_id

@@ -5,6 +5,7 @@ import { compare, hash } from "bcryptjs";
 import sharp from "sharp";
 import { z } from "zod";
 import {
+  accessModules,
   canAccess,
   defaultPermissions,
   normalizePermissions,
@@ -15,15 +16,20 @@ import { writeAuditLog } from "../audit";
 import {
   calculateInvoiceAllocation,
   calculateQuotationCommercialTotals,
+  customRoundingLimit,
 } from "../commercial";
 import { snapshotQuotationItems } from "../quotation-snapshot";
 import {
   avatarUrlForUser,
+  createEmailChangeToken,
   createPasswordResetToken,
   createSession,
+  emailChangeTokenMinutes,
   getSessionUser,
   hashResetToken,
   requireUser,
+  revokeAllSessions,
+  revokeOtherSessions,
   revokeSession,
   verifyCredentials,
   withClearedSessionCookie,
@@ -31,8 +37,14 @@ import {
   type AuthUser,
   type UserRole,
 } from "../auth";
+import {
+  assertAuthRateLimit,
+  clearAuthRateLimit,
+  recordAuthFailure,
+} from "../auth-rate-limit";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { claimSequence } from "../db/counters";
+import { geocodeLocation } from "../geocode";
 import {
   emailDeliveryConfigured,
   emailMode,
@@ -40,9 +52,19 @@ import {
   notifyProjectStakeholders,
   retryEmailOutbox,
   sendAccountCreatedEmail,
+  sendEmailChangeConfirmationEmail,
+  sendEmailChangedEmail,
+  sendEmailChangeRequestedEmail,
   sendPasswordResetEmail,
   sendTestEmail,
+  securityMailUndeliverable,
 } from "../email";
+import {
+  countsAsCashCondition,
+  grossExpenseSum,
+  grossIncomeSum,
+  unreconciledImportCondition,
+} from "../cash-ledger";
 import { asNumber, formatDate, initials, parseJson } from "../format";
 import {
   calculateTaxAmount,
@@ -50,6 +72,8 @@ import {
   lockDocumentTaxes,
 } from "../tax";
 import { deleteProjectFile, readProjectFile, storeProjectFile } from "../storage";
+import { csvCell } from "../spreadsheet";
+import { isProductionRuntime } from "../runtime-env";
 import {
   ApiError,
   assertSameOrigin,
@@ -72,6 +96,12 @@ import {
   resolveCommercialPackageId,
 } from "./commercial-package-router";
 import {
+  assertBoqTotalCoversInvoices,
+  resetProjectValidation,
+  syncCommercialValues,
+} from "./commercial-sync";
+import {
+  assertQuotationTransition,
   handleBoqScopes,
   handleQuotationLifecycle,
 } from "./commercial-scope-router";
@@ -105,6 +135,11 @@ const loginSchema = z.object({
   remember: z.boolean().default(false),
 });
 
+// Ranges are checked by assertCoordinate below rather than by z.number().min()
+// so an out-of-range pin comes back as its own refusal code with a sentence the
+// operator can act on, instead of a generic VALIDATION_ERROR blob.
+const coordinateSchema = z.number().finite().nullable().optional();
+
 const projectSchema = z.object({
   name: z.string().trim().min(3).max(160),
   client: z.string().trim().min(2).max(160),
@@ -114,6 +149,8 @@ const projectSchema = z.object({
   targetDate: isoDateSchema.optional(),
   value: nonNegativeMoney.default(0),
   managerId: idSchema.optional(),
+  latitude: coordinateSchema,
+  longitude: coordinateSchema,
 });
 
 const taskSchema = z.object({
@@ -286,16 +323,6 @@ const vendorSchema = z.object({
   status: z.enum(["Aktif", "Nonaktif"]).default("Aktif"),
 });
 
-const spkSchema = z.object({
-  vendorId: idSchema,
-  projectId: idSchema,
-  scope: z.string().trim().min(5).max(2_000),
-  cost: positiveMoney,
-  status: z.enum(["Draft", "Dikirim", "Dikerjakan", "Selesai"]).default("Draft"),
-  startDate: isoDateSchema.optional(),
-  endDate: isoDateSchema.optional(),
-});
-
 const transactionSchema = z.object({
   projectId: idSchema.optional(),
   date: isoDateSchema.default(() => new Date().toISOString().slice(0, 10)),
@@ -351,26 +378,29 @@ const bastSealSchema = z.object({
   sealContentBase64: z.string().max(3_000_000).optional().nullable(),
 });
 
+const accessLevelSchema = z.enum(["none", "view", "manage"]);
+
+// Derived from `accessModules`, never typed out again. This used to be a
+// hand-kept copy of the module list, and zod strips unknown keys: a module
+// added to shared/access.ts was happily submitted by the Users & Access page,
+// silently dropped here, and never stored — so the Admin's choice reverted to
+// the role default on the next read with no error anywhere.
+const permissionsSchema = z
+  .object(
+    Object.fromEntries(
+      accessModules.map((accessModule) => [accessModule, accessLevelSchema]),
+    ) as Record<AccessModule, typeof accessLevelSchema>,
+  )
+  .partial()
+  .optional();
+
 const userSchema = z.object({
   name: z.string().trim().min(2).max(120),
   email: emailSchema,
   role: z.enum(["Admin", "Project Manager", "Engineer", "Finance"]),
   status: z.enum(["Aktif", "Nonaktif"]).default("Aktif"),
   password: z.string().min(10).max(128).optional(),
-  permissions: z
-    .object({
-      dashboard: z.enum(["none", "view", "manage"]),
-      projects: z.enum(["none", "view", "manage"]),
-      boq: z.enum(["none", "view", "manage"]),
-      billing: z.enum(["none", "view", "manage"]),
-      procurement: z.enum(["none", "view", "manage"]),
-      bast: z.enum(["none", "view", "manage"]),
-      finance: z.enum(["none", "view", "manage"]),
-      users: z.enum(["none", "view", "manage"]),
-      settings: z.enum(["none", "view", "manage"]),
-    })
-    .partial()
-    .optional(),
+  permissions: permissionsSchema,
 });
 
 const profileSchema = z.object({
@@ -520,6 +550,11 @@ function mutationRoles(resource: string): UserRole[] {
   return ["Admin", "Project Manager", "Engineer", "Finance"];
 }
 
+// Every resource dispatched below must appear here, or the generic gate in
+// `dispatchApi` never runs for it and the only access check left is whatever
+// the individual router happens to do. `project-expenses` and `tax` were both
+// missing, which is how an Engineer reached the project-expense export and the
+// per-document tax position with no module check at all.
 const resourceModules: Record<string, AccessModule> = {
   projects: "projects",
   boq: "boq",
@@ -531,10 +566,14 @@ const resourceModules: Record<string, AccessModule> = {
   spks: "procurement",
   "procurement-orders": "procurement",
   bast: "bast",
+  "project-expenses": "expenses",
+  "project-expense-categories": "expenses",
+  "project-advances": "expenses",
   transactions: "finance",
   finance: "finance",
+  tax: "finance",
   "bank-accounts": "finance",
-  "profit-shares": "finance",
+  "profit-shares": "margin",
   users: "users",
   "audit-logs": "users",
   notifications: "settings",
@@ -598,31 +637,6 @@ function projectScopeCondition(user: AuthUser, projectAlias = "p") {
   };
 }
 
-async function resetProjectValidation(
-  client: Awaited<ReturnType<typeof getDatabase>>["client"],
-  projectId: string,
-  packageId?: string,
-) {
-  const timestamp = now();
-  const packageFilter = packageId ? " AND package_id=?" : "";
-  const args = packageId ? [projectId, packageId] : [projectId];
-  await client.batch(
-    [
-      {
-        sql: `DELETE FROM project_validation_items WHERE validation_id IN
-          (SELECT id FROM project_validations WHERE project_id=?${packageFilter})`,
-        args,
-      },
-      {
-        sql: `UPDATE project_validations SET status='Draft',validated_by=NULL,
-          completed_at=NULL,updated_at=? WHERE project_id=?${packageFilter}`,
-        args: [timestamp, ...args],
-      },
-    ],
-    "write",
-  );
-}
-
 async function assertProjectAccess(user: AuthUser, projectId: string) {
   const { client } = await getDatabase();
   const scope = projectScopeCondition(user, "p");
@@ -637,155 +651,110 @@ async function assertProjectAccess(user: AuthUser, projectId: string) {
   }
 }
 
-async function syncCommercialValues(
-  client: Awaited<ReturnType<typeof getDatabase>>["client"],
-  projectId: string,
-  auditContext?: { request: Request; user: AuthUser },
+const COORDINATE_LIMIT = { latitude: 90, longitude: 180 } as const;
+
+function assertCoordinate(
+  value: number | null | undefined,
+  axis: "latitude" | "longitude",
 ) {
-  const sentChanges = await client.execute({
-    sql: `SELECT q.*,
-      COALESCE((SELECT SUM(i.quantity*i.selling_price) FROM boq_items i
-        WHERE i.scope_id=q.scope_id),0) AS live_total
-      FROM quotations q
-      WHERE q.project_id=? AND q.status='Sent'
-        AND COALESCE((SELECT SUM(i.quantity*i.selling_price) FROM boq_items i
-          WHERE i.scope_id=q.scope_id),0)<>q.total`,
-    args: [projectId],
-  });
-  for (const oldQuote of sentChanges.rows) {
-    const timestamp = now();
-    const quotationId = randomUUID();
-    const revisionNo = asNumber(oldQuote.revision_no) + 1;
-    await snapshotQuotationItems(client, String(oldQuote.id));
-    await client.transaction(async (tx) => {
-      await tx.execute({
-        sql: "UPDATE quotations SET status='Superseded',updated_at=? WHERE id=? AND status='Sent'",
-        args: [timestamp, oldQuote.id],
-      });
-      await tx.execute({
-        sql: `INSERT INTO quotations
-          (id,project_id,package_id,scope_id,number,status,issued_at,valid_until,
-           total,revision_no,supersedes_id,discount_enabled,discount_type,
-           discount_value,discount_amount,taxable_base,tax_enabled,tax_revision,
-           rounding_mode,rounding_step,rounding_adjustment,rounding_reason,
-           grand_total,created_at,updated_at)
-          VALUES (?,?,?,?,?,'Draft',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        args: [
-          quotationId, oldQuote.project_id, oldQuote.package_id, oldQuote.scope_id,
-          `${String(oldQuote.number).replace(/-R\d+$/, "")}-R${revisionNo}`,
-          oldQuote.issued_at, oldQuote.valid_until, asNumber(oldQuote.live_total), revisionNo,
-          oldQuote.id, oldQuote.discount_enabled, oldQuote.discount_type,
-          oldQuote.discount_value, 0, 0, oldQuote.tax_enabled,
-          asNumber(oldQuote.tax_revision) + 1, oldQuote.rounding_mode,
-          oldQuote.rounding_step, oldQuote.rounding_adjustment, oldQuote.rounding_reason,
-          0, timestamp, timestamp,
-        ],
-      });
-      const taxes = await tx.execute({
-        sql: "SELECT * FROM document_taxes WHERE document_type='Quotation' AND document_id=?",
-        args: [oldQuote.id],
-      });
-      for (const tax of taxes.rows) {
-        await tx.execute({
-          sql: `INSERT INTO document_taxes
-            (id,document_type,document_id,project_id,rule_id,rule_code,rule_name,
-             rule_name_en,scope,effect,accounting_treatment,rate_bps,taxable_base,
-             amount,locked,created_by,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)`,
-          args: [
-            `document-tax-${randomUUID()}`, "Quotation", quotationId, oldQuote.project_id,
-            tax.rule_id, tax.rule_code, tax.rule_name, tax.rule_name_en, tax.scope,
-            tax.effect, tax.accounting_treatment, tax.rate_bps, 0, 0,
-            auditContext?.user.id ?? null, timestamp, timestamp,
-          ],
-        });
-      }
-    });
-    if (auditContext) {
-      await writeAuditLog(
-        client,
-        auditContext.request,
-        auditContext.user,
-        "revise",
-        "quotation",
-        quotationId,
-        { supersedesId: oldQuote.id, revisionNo, reason: "BoQ changed after quotation was sent" },
-      );
-    }
+  if (value === null || value === undefined) return null;
+  if (!Number.isFinite(value) || Math.abs(value) > COORDINATE_LIMIT[axis]) {
+    throw new ApiError(
+      422,
+      "INVALID_COORDINATE",
+      axis === "latitude"
+        ? "Lintang (latitude) harus berada di antara -90 dan 90."
+        : "Bujur (longitude) harus berada di antara -180 dan 180.",
+    );
   }
-  const totalResult = await client.execute({
-    sql: `
-      SELECT
-        COALESCE(SUM(i.quantity * i.selling_price), 0) AS boq_total,
-        COALESCE((
-          SELECT SUM(CASE WHEN q.grand_total>0 THEN q.grand_total ELSE q.total END)
-          FROM quotations q
-          WHERE q.project_id=? AND q.status='Accepted'
-        ),0) AS accepted_total
-      FROM boq_items i
-      JOIN boqs b ON b.id = i.boq_id
-      WHERE b.project_id = ?
-    `,
-    args: [projectId, projectId],
-  });
-  const acceptedTotal = asNumber(totalResult.rows[0]?.accepted_total);
-  const total =
-    acceptedTotal > 0
-      ? acceptedTotal
-      : asNumber(totalResult.rows[0]?.boq_total);
-  const timestamp = now();
-  await client.batch(
-    [
-      {
-        sql: "UPDATE projects SET value=?,updated_at=? WHERE id=?",
-        args: [total, timestamp, projectId],
-      },
-      {
-        sql: `UPDATE quotations SET total=COALESCE((
-          SELECT SUM(i.quantity*i.selling_price)
-          FROM boq_items i WHERE i.scope_id=quotations.scope_id
-        ),0),updated_at=? WHERE project_id=? AND status='Draft'`,
-        args: [timestamp, projectId],
-      },
-      {
-        sql: `UPDATE boq_scopes SET status='Draft',updated_at=?
-          WHERE id IN (
-            SELECT q.scope_id FROM quotations q
-            WHERE q.project_id=? AND q.status='Draft'
-          )`,
-        args: [timestamp, projectId],
-      },
-    ],
-    "write",
-  );
-  const draftQuotations = await client.execute({
-    sql: "SELECT id FROM quotations WHERE project_id=? AND status='Draft'",
-    args: [projectId],
-  });
-  for (const quotation of draftQuotations.rows) {
-    await refreshQuotationCommercialSnapshot(client, String(quotation.id));
-  }
-  return total;
+  return value;
 }
 
-async function assertBoqTotalCoversInvoices(
-  client: Awaited<ReturnType<typeof getDatabase>>["client"],
-  projectId: string,
-  proposedTotal: number,
-  packageId?: string,
-) {
-  const result = await client.execute({
-    sql: `SELECT COALESCE(SUM(amount),0) AS total FROM invoices
-      WHERE project_id=?${packageId ? " AND package_id=?" : ""}`,
-    args: packageId ? [projectId, packageId] : [projectId],
-  });
-  const invoicedTotal = asNumber(result.rows[0]?.total);
-  if (proposedTotal < invoicedTotal) {
+/**
+ * Works out what a write is doing to a project's pin.
+ *
+ * Returns `null` when the request does not mention coordinates at all — the
+ * common case, and the one where the stored pin must be left exactly as it is.
+ *
+ * A pin is one value in two fields, so it is written whole or not at all: a
+ * request carrying a latitude and no longitude is refused rather than merged
+ * with whatever longitude happened to be stored. Half of a coordinate is not a
+ * location, and quietly completing it from an old guess would move a pin the
+ * caller never asked to move.
+ */
+function resolveProjectPin(input: { latitude?: number | null; longitude?: number | null }) {
+  const hasLatitude = input.latitude !== undefined;
+  const hasLongitude = input.longitude !== undefined;
+  if (!hasLatitude && !hasLongitude) return null;
+  if (
+    hasLatitude !== hasLongitude ||
+    (input.latitude === null) !== (input.longitude === null)
+  ) {
     throw new ApiError(
-      409,
-      "BOQ_BELOW_INVOICED_TOTAL",
-      `Nilai BoQ tidak boleh lebih kecil dari total Invoice yang sudah diterbitkan (${invoicedTotal}). Edit atau hapus Invoice terlebih dahulu.`,
+      422,
+      "INCOMPLETE_COORDINATE",
+      "Titik peta membutuhkan lintang dan bujur sekaligus. Isi keduanya, atau kosongkan keduanya.",
     );
+  }
+  return {
+    latitude: assertCoordinate(input.latitude, "latitude"),
+    longitude: assertCoordinate(input.longitude, "longitude"),
+  };
+}
+
+/**
+ * True when this project's location text is worth asking Nominatim about.
+ *
+ * `coordinate_source = 'manual'` is absolute: a pin somebody placed on purpose
+ * is never replaced by a guess, however the location text later changes.
+ * Otherwise the question is simply whether this exact text has already been
+ * answered — `geocoded_query` is written only alongside a successful lookup, so
+ * a text that is not recorded there has either never been tried or was tried on
+ * a day the geocoder was unreachable, and both deserve one attempt.
+ */
+function shouldGeocodeProject(
+  row: Record<string, unknown> | undefined,
+  location: string,
+) {
+  if (!row) return false;
+  if (String(row.coordinate_source ?? "") === "manual") return false;
+  return String(row.geocoded_query ?? "") !== location;
+}
+
+/**
+ * Attempts to place a guessed pin, after the project itself is already saved.
+ *
+ * Nothing in here may throw and nothing in here may be retried: the project row
+ * is committed before this runs, so the worst outcome is a project that is not
+ * on the map yet — which the dashboard counts out loud — rather than a save
+ * that failed because a third-party service was having a bad minute.
+ */
+async function geocodeProjectLocation(
+  client: DatabaseClient,
+  projectId: string,
+  location: string,
+) {
+  try {
+    const result = await geocodeLocation(location);
+    if (!result) return;
+    await client.execute({
+      sql: `UPDATE projects
+              SET latitude=?,longitude=?,coordinate_source='geocoded',
+                  geocoded_query=?,geocoded_label=?
+            WHERE id=? AND (coordinate_source IS NULL OR coordinate_source <> 'manual')`,
+      // The manual re-check in the WHERE closes the window between reading the
+      // row and writing the answer: somebody may have dropped a real pin while
+      // the lookup was in flight, and that pin wins.
+      args: [
+        result.latitude,
+        result.longitude,
+        location,
+        result.label || null,
+        projectId,
+      ],
+    });
+  } catch (error) {
+    console.error("Geocoding lokasi proyek gagal:", error);
   }
 }
 
@@ -848,140 +817,22 @@ async function detachOrDeleteSystemTransaction(
   );
 }
 
-async function reattachImportedBankTransaction(
-  client: Awaited<ReturnType<typeof getDatabase>>["client"],
-  input: {
-    projectId: string;
-    date: string;
-    type: "Pemasukan" | "Pengeluaran";
-    amount: number;
-    source: "Invoice" | "SPK";
-    referenceId: string;
-    description: string;
-    category: string;
-  },
-) {
-  const result = await client.execute({
-    sql: `
-      SELECT t.id,e.id AS entry_id,e.date AS entry_date
-      FROM transactions t
-      JOIN bank_statement_entries e ON e.transaction_id=t.id
-      WHERE t.project_id=? AND t.type=? AND t.amount=?
-        AND t.source LIKE 'Bank:%'
-        AND e.reconciliation_status='Imported'
-      ORDER BY e.date DESC,e.created_at DESC
-      LIMIT 50
-    `,
-    args: [input.projectId, input.type, input.amount],
-  });
-  const candidates = result.rows.filter((candidate) => {
-    const left = Date.parse(`${input.date}T00:00:00.000Z`);
-    const right = Date.parse(`${String(candidate.entry_date)}T00:00:00.000Z`);
-    return Math.abs(left - right) / 86_400_000 <= 14;
-  });
-  if (candidates.length !== 1) return false;
-  const candidate = candidates[0];
-  await client.batch(
-    [
-      {
-        sql: `
-          UPDATE transactions SET
-            project_id=?,date=?,type=?,description=?,amount=?,source=?,
-            reference_id=?,category=?,updated_at=?
-          WHERE id=?
-        `,
-        args: [
-          input.projectId,
-          input.date,
-          input.type,
-          input.description,
-          input.amount,
-          input.source,
-          input.referenceId,
-          input.category,
-          now(),
-          candidate.id,
-        ],
-      },
-      {
-        sql: `
-          UPDATE bank_statement_entries
-          SET reconciliation_status='Matched'
-          WHERE id=?
-        `,
-        args: [candidate.entry_id],
-      },
-    ],
-    "write",
-  );
-  return true;
-}
-
-async function syncSpkTransaction(
-  client: Awaited<ReturnType<typeof getDatabase>>["client"],
-  spkId: string,
-  userId: string,
-) {
-  const spk = await ensureExists(
-    "SELECT * FROM spks WHERE id=?",
-    [spkId],
-    "SPK tidak ditemukan.",
-  );
-  if (spk.payment_status !== "Dibayar") {
-    await detachOrDeleteSystemTransaction(client, "SPK", spkId);
-    return;
-  }
-  const timestamp = now();
-  const transactionDate = spk.paid_date ?? timestamp.slice(0, 10);
-  const existing = await client.execute({
-    sql: "SELECT id FROM transactions WHERE source='SPK' AND reference_id=? LIMIT 1",
-    args: [spkId],
-  });
-  if (existing.rows[0]) {
-    await client.execute({
-      sql: "UPDATE transactions SET project_id=?,date=?,type='Pengeluaran',description=?,amount=?,category='Vendor',updated_at=? WHERE id=?",
-      args: [
-        spk.project_id,
-        transactionDate,
-        `Pembayaran vendor ${spk.number}`,
-        spk.cost,
-        timestamp,
-        existing.rows[0].id,
-      ],
-    });
-    return;
-  }
-  if (
-    await reattachImportedBankTransaction(client, {
-      projectId: String(spk.project_id),
-      date: String(transactionDate),
-      type: "Pengeluaran",
-      amount: asNumber(spk.cost),
-      source: "SPK",
-      referenceId: spkId,
-      description: `Pembayaran vendor ${String(spk.number)}`,
-      category: "Vendor",
-    })
-  ) {
-    return;
-  }
-  await client.execute({
-    sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,reference_id,category,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-    args: [
-      randomUUID(),
-      spk.project_id,
-      transactionDate,
-      "Pengeluaran",
-      `Pembayaran vendor ${spk.number}`,
-      spk.cost,
-      "SPK",
-      spkId,
-      "Vendor",
-      userId,
-      timestamp,
-      timestamp,
-    ],
-  });
+/**
+ * Whether a raw recovery token may be handed back in an HTTP response.
+ *
+ * A password-reset token in a JSON body is an unauthenticated account takeover:
+ * ask for a reset, read the token out of the reply, reset the password, sign in
+ * as Admin. It exists at all so a developer with no mail provider can finish the
+ * flow locally, and it is allowed only when BOTH of those are true — the process
+ * is not a production one, and no security mail could have been delivered
+ * anyway. Either alone has already failed once: the old test paired NODE_ENV
+ * with `RESEND_API_KEY`, which is permanently empty here because mail goes over
+ * SMTP, so NODE_ENV was carrying the whole thing by itself — and NODE_ENV read
+ * through the compiler-inlined `process.env.NODE_ENV` was not even reading the
+ * operator's value (see server/runtime-env.ts).
+ */
+function developmentTokensAllowed() {
+  return !isProductionRuntime() && securityMailUndeliverable();
 }
 
 async function handleAuth(request: Request, path: string[]) {
@@ -992,7 +843,23 @@ async function handleAuth(request: Request, path: string[]) {
 
   if (request.method === "POST" && action === "login") {
     const input = loginSchema.parse(await jsonBody(request));
-    const user = await verifyCredentials(input.email, input.password);
+    const { client } = await getDatabase();
+    // Checked before any hashing, so a caller who is already blocked cannot
+    // keep the server busy running bcrypt on their behalf.
+    await assertAuthRateLimit(client, request, "login", input.email);
+    let user: AuthUser;
+    try {
+      user = await verifyCredentials(input.email, input.password);
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        ["INVALID_CREDENTIALS", "ACCOUNT_INACTIVE"].includes(error.code)
+      ) {
+        await recordAuthFailure(client, request, "login", input.email);
+      }
+      throw error;
+    }
+    await clearAuthRateLimit(client, request, "login", input.email);
     const session = await createSession(user.id, input.remember);
     return withSessionCookie(ok({ user }), session.token, session.maxAge);
   }
@@ -1008,6 +875,12 @@ async function handleAuth(request: Request, path: string[]) {
       surface: z.enum(["admin", "panel"]).optional().default("admin"),
     }).parse(await jsonBody(request));
     const { client } = await getDatabase();
+    // Recovery is throttled on its own bucket, and every request counts —
+    // whether or not an account matched, so the throttle itself cannot be used
+    // to tell registered addresses from unregistered ones, and so a successful
+    // request cannot be repeated into a mail flood at the owner's address.
+    await assertAuthRateLimit(client, request, "forgot-password", input.email);
+    await recordAuthFailure(client, request, "forgot-password", input.email);
     const result = await client.execute({
       sql: `
         SELECT u.id,u.email,u.role,
@@ -1039,7 +912,11 @@ async function handleAuth(request: Request, path: string[]) {
         token,
         input.surface,
       );
-      if (process.env.NODE_ENV !== "production" && !process.env.RESEND_API_KEY) {
+      // Two independent conditions, both required. The mail state is the real
+      // question — a token only needs handing back when no mail can carry it —
+      // and NODE_ENV is the backstop that keeps the answer from ever mattering
+      // in a production process, whatever the mail configuration says.
+      if (developmentTokensAllowed()) {
         developmentToken = token;
       }
     }
@@ -1054,12 +931,20 @@ async function handleAuth(request: Request, path: string[]) {
       .object({ token: z.string().min(32).max(200), password: z.string().min(8).max(128) })
       .parse(await jsonBody(request));
     const { client } = await getDatabase();
+    // Throttled on the IP alone — the reset token is the only identifier the
+    // caller sends, and keying on it would let an attacker who guessed one
+    // token lock out nobody but themselves.
+    await assertAuthRateLimit(client, request, "reset-password");
     const result = await client.execute({
       sql: "SELECT id,user_id FROM password_reset_tokens WHERE token_hash = ? AND used_at IS NULL AND expires_at > ? LIMIT 1",
       args: [hashResetToken(input.token), now()],
     });
     const reset = result.rows[0];
-    if (!reset) throw new ApiError(400, "INVALID_RESET_TOKEN", "Tautan reset tidak valid atau sudah kedaluwarsa.");
+    if (!reset) {
+      await recordAuthFailure(client, request, "reset-password");
+      throw new ApiError(400, "INVALID_RESET_TOKEN", "Tautan reset tidak valid atau sudah kedaluwarsa.");
+    }
+    await clearAuthRateLimit(client, request, "reset-password");
     const passwordHash = await hash(input.password, 12);
     const timestamp = now();
     await client.batch(
@@ -1076,13 +961,166 @@ async function handleAuth(request: Request, path: string[]) {
           sql: "DELETE FROM sessions WHERE user_id = ?",
           args: [reset.user_id],
         },
+        // Recovering the account also cancels any email change an intruder
+        // asked for while they held the session.
+        {
+          sql: "DELETE FROM email_change_requests WHERE user_id = ?",
+          args: [reset.user_id],
+        },
       ],
       "write",
     );
     return ok({ success: true });
   }
 
+  if (action === "confirm-email-change" && ["GET", "POST"].includes(request.method)) {
+    const landing = (outcome: "confirmed" | "invalid") =>
+      new URL(
+        applicationPath(`/admin?emailChange=${outcome}`),
+        new URL(request.url).origin,
+      ).toString();
+    const token =
+      request.method === "GET"
+        ? new URL(request.url).searchParams.get("token") ?? ""
+        : z
+            .object({ token: z.string().min(32).max(200) })
+            .parse(await jsonBody(request)).token;
+    // The link lands here from a mail client, so a GET has to be able to
+    // complete it. The token is a single-use 32-byte secret that expires, which
+    // is what carries the authority — there is no ambient session to abuse.
+    if (request.method === "GET" && (token.length < 32 || token.length > 200)) {
+      return Response.redirect(landing("invalid"), 302);
+    }
+    try {
+      const result = await confirmEmailChange(token);
+      if (request.method === "GET") return Response.redirect(landing("confirmed"), 302);
+      return ok(result);
+    } catch (error) {
+      if (request.method === "GET" && error instanceof ApiError) {
+        return Response.redirect(landing("invalid"), 302);
+      }
+      throw error;
+    }
+  }
+
   throw new ApiError(404, "NOT_FOUND", "Endpoint autentikasi tidak ditemukan.");
+}
+
+/**
+ * Applies a pending email change once the confirmation link comes back from the
+ * NEW address, then ends every session on the account. A session that was alive
+ * before the address moved has to die with it: otherwise a stolen cookie
+ * survives the very event that was supposed to expose it.
+ */
+async function confirmEmailChange(rawToken: string) {
+  const { client } = await getDatabase();
+  const result = await client.execute({
+    sql: `SELECT id,user_id,current_email,new_email FROM email_change_requests
+      WHERE token_hash = ? AND confirmed_at IS NULL AND expires_at > ? LIMIT 1`,
+    args: [hashResetToken(rawToken), now()],
+  });
+  const pending = result.rows[0];
+  if (!pending) {
+    throw new ApiError(
+      400,
+      "INVALID_EMAIL_CHANGE_TOKEN",
+      "Tautan konfirmasi email tidak valid atau sudah kedaluwarsa.",
+    );
+  }
+  const userId = String(pending.user_id);
+  const newEmail = String(pending.new_email);
+  const duplicate = await client.execute({
+    sql: "SELECT id FROM users WHERE lower(email)=lower(?) AND id<>?",
+    args: [newEmail, userId],
+  });
+  if (duplicate.rows.length) {
+    throw new ApiError(409, "EMAIL_EXISTS", "Email sudah digunakan oleh pengguna lain.");
+  }
+  const account = await client.execute({
+    sql: `SELECT u.email,COALESCE(p.preferred_language,'id') AS preferred_language
+      FROM users u LEFT JOIN user_profiles p ON p.user_id=u.id WHERE u.id=? LIMIT 1`,
+    args: [userId],
+  });
+  const previousEmail = account.rows[0]
+    ? String(account.rows[0].email)
+    : String(pending.current_email);
+  const timestamp = now();
+  await client.batch(
+    [
+      {
+        sql: "UPDATE users SET email=?,updated_at=? WHERE id=?",
+        args: [newEmail, timestamp, userId],
+      },
+      {
+        sql: "UPDATE email_change_requests SET confirmed_at=? WHERE id=?",
+        args: [timestamp, pending.id],
+      },
+      {
+        sql: "DELETE FROM email_change_requests WHERE user_id=? AND id<>?",
+        args: [userId, pending.id],
+      },
+      { sql: "DELETE FROM sessions WHERE user_id=?", args: [userId] },
+      // Reset links issued to the old address stop working the moment the
+      // address stops belonging to the account.
+      { sql: "DELETE FROM password_reset_tokens WHERE user_id=?", args: [userId] },
+    ],
+    "write",
+  );
+  await sendEmailChangedEmail(
+    client,
+    {
+      id: userId,
+      preferredLanguage:
+        String(account.rows[0]?.preferred_language) === "en" ? "en" : "id",
+    },
+    previousEmail,
+    newEmail,
+  );
+  return { success: true, email: newEmail };
+}
+
+/**
+ * Starts a verified email change: the account keeps its current address, the
+ * confirmation link goes to the new one, and the current address is told that
+ * somebody asked. Returns the raw token only when `developmentTokensAllowed()`
+ * agrees, mirroring how forgot-password exposes its reset token in dev.
+ */
+async function requestEmailChange(
+  client: DatabaseClient,
+  target: { id: string; email: string; preferredLanguage: AuthUser["preferredLanguage"] },
+  newEmail: string,
+  requestedBy: string,
+) {
+  const duplicate = await client.execute({
+    sql: "SELECT id FROM users WHERE lower(email)=lower(?) AND id<>?",
+    args: [newEmail, target.id],
+  });
+  if (duplicate.rows.length) {
+    throw new ApiError(409, "EMAIL_EXISTS", "Email sudah digunakan oleh pengguna lain.");
+  }
+  const token = await createEmailChangeToken(client, {
+    userId: target.id,
+    currentEmail: target.email,
+    newEmail,
+    requestedBy,
+  });
+  await sendEmailChangeConfirmationEmail(
+    client,
+    { id: target.id, email: target.email, preferredLanguage: target.preferredLanguage },
+    newEmail,
+    token,
+    emailChangeTokenMinutes(),
+  );
+  await sendEmailChangeRequestedEmail(
+    client,
+    { id: target.id, email: target.email, preferredLanguage: target.preferredLanguage },
+    newEmail,
+  );
+  return {
+    pendingEmail: newEmail,
+    expiresInMinutes: emailChangeTokenMinutes(),
+    ...(developmentTokensAllowed() ? { confirmationToken: token } : {}),
+  };
 }
 
 async function listProjects(searchParams: URLSearchParams, user: AuthUser) {
@@ -1169,6 +1207,16 @@ async function listProjects(searchParams: URLSearchParams, user: AuthUser) {
         : user.preferredLanguage === "en" ? "Not specified" : "Belum ditentukan",
       startDateIso: row.start_date,
       targetDateIso: row.target_date,
+      // The dashboard map reads its pins from this list and from nothing else,
+      // so the map inherits `projectScopeCondition` above rather than opening a
+      // second, differently-scoped way to ask which projects exist.
+      latitude: row.latitude === null || row.latitude === undefined ? null : Number(row.latitude),
+      longitude: row.longitude === null || row.longitude === undefined ? null : Number(row.longitude),
+      coordinateSource:
+        row.coordinate_source === "manual" || row.coordinate_source === "geocoded"
+          ? row.coordinate_source
+          : null,
+      geocodedLabel: row.geocoded_label ? String(row.geocoded_label) : null,
       value: canViewCommercial ? asNumber(row.value) : 0,
       manager: row.manager_name
         ? String(row.manager_name)
@@ -1194,6 +1242,8 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     if (!mutationRoles("projects").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Peran Anda tidak dapat membuat proyek.");
     const input = projectSchema.parse(await jsonBody(request));
     assertDateOrder(input.startDate, input.targetDate);
+    const pin = resolveProjectPin(input);
+    const pinnedByHand = pin !== null && pin.latitude !== null;
     const id = randomUUID();
     const sequence = await claimSequence(client, "projects", "SELECT code AS value FROM projects");
     const code = `PN-${new Date().getUTCFullYear().toString().slice(-2)}${String(new Date().getUTCMonth() + 1).padStart(2, "0")}-${String(sequence).padStart(3, "0")}`;
@@ -1208,8 +1258,8 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     await client.batch(
       [
         {
-          sql: "INSERT INTO projects (id,code,name,client,location,status,start_date,target_date,value,manager_id,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-          args: [id, code, input.name, input.client, input.location, input.status, input.startDate ?? null, input.targetDate ?? null, input.value, input.managerId ?? user.id, user.id, timestamp, timestamp],
+          sql: "INSERT INTO projects (id,code,name,client,location,status,start_date,target_date,value,manager_id,created_by,latitude,longitude,coordinate_source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          args: [id, code, input.name, input.client, input.location, input.status, input.startDate ?? null, input.targetDate ?? null, input.value, input.managerId ?? user.id, user.id, pin?.latitude ?? null, pin?.longitude ?? null, pinnedByHand ? "manual" : null, timestamp, timestamp],
         },
         {
           sql: "INSERT INTO project_members (project_id,user_id,created_at) VALUES (?,?,?) ON CONFLICT (project_id,user_id) DO NOTHING",
@@ -1231,6 +1281,10 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
       subjectEn: `New project: ${input.name}`,
       messageEn: `project ${input.name} for ${input.client} has been created and is available according to your access.`,
     });
+    // The project is committed above. This can only add coordinates to it; it
+    // cannot fail the creation, and it is skipped entirely when the operator
+    // already supplied a pin of their own.
+    if (!pinnedByHand) await geocodeProjectLocation(client, id, input.location);
     const projects = await listProjects(new URLSearchParams(), user);
     return created(projects.find((project) => project.id === id));
   }
@@ -1465,8 +1519,35 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
       input.startDate === undefined ? current.start_date : input.startDate,
       input.targetDate === undefined ? current.target_date : input.targetDate,
     );
+    // Once a quotation is accepted the project value IS the contract:
+    // syncProjectCommercialValue derives it from the accepted grand total and
+    // rewrites it on the next BoQ edit. Accepting a typed value here only
+    // created a window in which dashboards and portfolio totals disagreed with
+    // the signed documents. A project with no accepted quotation keeps the
+    // manual field, because that is how a project starts.
+    if (input.value !== undefined && asNumber(input.value) !== asNumber(current.value)) {
+      const accepted = await client.execute({
+        sql: "SELECT id FROM quotations WHERE project_id=? AND status='Accepted' LIMIT 1",
+        args: [projectId],
+      });
+      if (accepted.rows.length) {
+        throw new ApiError(
+          409,
+          "PROJECT_VALUE_DERIVED",
+          "Nilai proyek ini mengikuti Quotation yang sudah diterima klien dan tidak dapat diketik manual. Terbitkan Addendum bila nilai kontraknya berubah.",
+        );
+      }
+    }
+    const pin = resolveProjectPin(input);
+    // A request that mentions coordinates is a person moving the pin, so the
+    // result is 'manual' and no later guess may replace it. Clearing both to
+    // null also clears the geocoding record, which puts the project back in the
+    // "ask the geocoder again" state rather than stranding it with no pin and
+    // no way to get one.
+    const pinnedByHand = pin !== null && pin.latitude !== null;
+    const location = String(input.location ?? current.location);
     await client.execute({
-      sql: "UPDATE projects SET name=?,client=?,location=?,status=?,start_date=?,target_date=?,value=?,manager_id=?,updated_at=? WHERE id=?",
+      sql: "UPDATE projects SET name=?,client=?,location=?,status=?,start_date=?,target_date=?,value=?,manager_id=?,latitude=?,longitude=?,coordinate_source=?,geocoded_query=?,geocoded_label=?,updated_at=? WHERE id=?",
       args: [
         input.name ?? current.name,
         input.client ?? current.client,
@@ -1476,6 +1557,11 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         input.targetDate === undefined ? current.target_date : input.targetDate,
         input.value ?? current.value,
         input.managerId === undefined ? current.manager_id : input.managerId,
+        pin === null ? current.latitude ?? null : pin.latitude,
+        pin === null ? current.longitude ?? null : pin.longitude,
+        pin === null ? current.coordinate_source ?? null : pinnedByHand ? "manual" : null,
+        pin === null || pinnedByHand ? current.geocoded_query ?? null : null,
+        pin === null || pinnedByHand ? current.geocoded_label ?? null : null,
         now(),
         projectId,
       ],
@@ -1487,6 +1573,14 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
       });
     }
     await writeAuditLog(client, request, user, "update", "project", projectId, input);
+    // Same contract as on create: the row above is already saved, and this can
+    // only add a guess to it. A request that mentioned coordinates at all has
+    // already decided them — placing a pin, or clearing one to take the project
+    // off the map — and is left alone; a cleared project is offered to the
+    // geocoder again on its next save, not immediately re-guessed.
+    if (pin === null && shouldGeocodeProject(current, location)) {
+      await geocodeProjectLocation(client, projectId, location);
+    }
     const projects = await listProjects(new URLSearchParams(), user);
     return ok(projects.find((project) => project.id === projectId));
   }
@@ -1496,6 +1590,45 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
       throw new ApiError(403, "FORBIDDEN", "Hanya Admin yang dapat menghapus proyek.");
     }
     await assertProjectAccess(user, projectId);
+    // Deleting a project used to hard-wipe its cash: transactions, invoice and
+    // vendor payments, expense and tax settlements all disappeared with no
+    // trace beyond a bare audit line. Recorded money is never deletable — such
+    // a project is closed or archived, not removed.
+    const financialHistory = await client.execute({
+      sql: `SELECT
+        (SELECT COUNT(*) FROM invoice_payments ip
+          JOIN invoices i ON i.id=ip.invoice_id
+          WHERE i.project_id=? AND ip.status='Posted') AS invoice_payments,
+        (SELECT COUNT(*) FROM spk_payments sp
+          JOIN spks s ON s.id=sp.spk_id
+          WHERE s.project_id=? AND sp.status='Posted') AS spk_payments,
+        (SELECT COUNT(*) FROM project_expense_settlements
+          WHERE expense_id IN (SELECT id FROM project_expenses WHERE project_id=?)
+             OR advance_id IN (SELECT id FROM project_advances WHERE project_id=?)
+        ) AS expense_settlements,
+        (SELECT COUNT(*) FROM tax_settlements WHERE obligation_id IN (
+          SELECT o.id FROM tax_obligations o
+          JOIN document_taxes dt ON dt.id=o.document_tax_id
+          WHERE dt.project_id=?
+        )) AS tax_settlements,
+        (SELECT COUNT(*) FROM transactions WHERE project_id=?) AS transactions`,
+      args: [projectId, projectId, projectId, projectId, projectId, projectId],
+    });
+    const posted = {
+      invoicePayments: asNumber(financialHistory.rows[0]?.invoice_payments),
+      spkPayments: asNumber(financialHistory.rows[0]?.spk_payments),
+      expenseSettlements: asNumber(financialHistory.rows[0]?.expense_settlements),
+      taxSettlements: asNumber(financialHistory.rows[0]?.tax_settlements),
+      transactions: asNumber(financialHistory.rows[0]?.transactions),
+    };
+    if (Object.values(posted).some((count) => count > 0)) {
+      throw new ApiError(
+        409,
+        "PROJECT_HAS_FINANCIAL_HISTORY",
+        "Proyek ini sudah memiliki riwayat kas yang tercatat (pembayaran, penyelesaian, atau transaksi) sehingga tidak dapat dihapus. Tutup atau arsipkan proyek agar catatan keuangannya tetap utuh.",
+        posted,
+      );
+    }
     const documents = await client.execute({
       sql: "SELECT storage_url FROM project_documents WHERE project_id=?",
       args: [projectId],
@@ -1505,8 +1638,33 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         JOIN project_expenses e ON e.id=a.expense_id WHERE e.project_id=?`,
       args: [projectId],
     });
+    // What the deletion actually removes, recorded for the audit trail — a bare
+    // "delete project" line cannot be reconciled against later.
+    const removedCounts = await client.execute({
+      sql: `SELECT
+        (SELECT COUNT(*) FROM invoices WHERE project_id=?) AS invoices,
+        (SELECT COUNT(*) FROM spks WHERE project_id=?) AS spks,
+        (SELECT COUNT(*) FROM basts WHERE project_id=?) AS basts,
+        (SELECT COUNT(*) FROM quotations WHERE project_id=?) AS quotations,
+        (SELECT COUNT(*) FROM project_validations WHERE project_id=?) AS validations,
+        (SELECT COUNT(*) FROM project_expenses WHERE project_id=?) AS expenses,
+        (SELECT COUNT(*) FROM project_advances WHERE project_id=?) AS advances,
+        (SELECT COUNT(*) FROM project_documents WHERE project_id=?) AS documents,
+        (SELECT COUNT(*) FROM project_commercial_packages WHERE project_id=?) AS packages,
+        (SELECT COUNT(*) FROM document_taxes WHERE project_id=?) AS document_taxes`,
+      args: Array.from({ length: 10 }, () => projectId),
+    });
     await client.batch(
       [
+        // bank_statement_entries.transaction_id is ON DELETE SET NULL, but the
+        // reconciliation flag is not — an entry would stay 'Matched' while
+        // pointing at nothing. Release it back to the unmatched pool instead.
+        {
+          sql: `UPDATE bank_statement_entries
+            SET reconciliation_status='Imported',transaction_id=NULL
+            WHERE transaction_id IN (SELECT id FROM transactions WHERE project_id=?)`,
+          args: [projectId],
+        },
         {
           sql: `DELETE FROM tax_settlements WHERE obligation_id IN (
             SELECT o.id FROM tax_obligations o
@@ -1608,7 +1766,15 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         deleteProjectFile(document.storage_url ? String(document.storage_url) : null),
       ),
     );
-    await writeAuditLog(client, request, user, "delete", "project", projectId);
+    await writeAuditLog(client, request, user, "delete", "project", projectId, {
+      removed: Object.fromEntries(
+        Object.entries(removedCounts.rows[0] ?? {}).map(([key, value]) => [
+          key,
+          asNumber(value),
+        ]),
+      ),
+      financialHistory: posted,
+    });
     return noContent();
   }
 
@@ -1858,7 +2024,12 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
     throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
   }
   await assertProjectAccess(user, projectId);
-  const selectedPackageId = await resolveCommercialPackageId(client, projectId, packageId);
+  const selectedPackageId = await resolveCommercialPackageId(
+    client,
+    projectId,
+    packageId,
+    { requireActive: request.method !== "GET" },
+  );
 
   if (request.method === "GET" && !child) {
     return ok(await getBoq(projectId, selectedPackageId));
@@ -2106,6 +2277,7 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
 async function quotationResponse(
   client: Awaited<ReturnType<typeof getDatabase>>["client"],
   row: Record<string, unknown>,
+  language: "id" | "en" = "id",
 ) {
   const taxableBase = asNumber(row.taxable_base) || asNumber(row.total);
   const tax = await documentTaxSummary(client, "Quotation", String(row.id), taxableBase);
@@ -2126,7 +2298,9 @@ async function quotationResponse(
     id: String(row.id),
     projectId: String(row.project_id),
     packageId: row.package_id ? String(row.package_id) : null,
-    packageTitle: row.package_title ? String(row.package_title) : null,
+    packageTitle: row.package_title
+      ? localizedPackageTitle(row.package_title, language)
+      : null,
     scopeId: row.scope_id ? String(row.scope_id) : null,
     number: String(row.number),
     status: String(row.status),
@@ -2163,6 +2337,7 @@ async function quotationResponse(
 async function refreshQuotationCommercialSnapshot(
   client: Awaited<ReturnType<typeof getDatabase>>["client"],
   quotationId: string,
+  language: "id" | "en" = "id",
 ) {
   const result = await client.execute({
     sql: "SELECT * FROM quotations WHERE id=? LIMIT 1",
@@ -2227,7 +2402,24 @@ async function refreshQuotationCommercialSnapshot(
       WHERE q.id=? LIMIT 1`,
     args: [quotationId],
   });
-  return quotationResponse(client, refreshed.rows[0]);
+  return quotationResponse(client, refreshed.rows[0], language);
+}
+
+// Every project is seeded with one commercial package carrying this exact
+// Indonesian title (server/api/commercial-package-router.ts and
+// server/db/initialize.ts), and the same literal is the fallback for a project
+// whose package row predates the feature. Both reached the English UI verbatim.
+// A title somebody actually typed is a proper noun and is returned untouched;
+// only the untouched seeded default is translated. Mirrors
+// `localizedPackageTitle` in server/api/pdf.ts, which solved this for the
+// printed documents.
+const SEEDED_PACKAGE_TITLE = "Lingkup Utama";
+
+function localizedPackageTitle(value: unknown, language: "id" | "en") {
+  const title = String(value ?? "").trim() || SEEDED_PACKAGE_TITLE;
+  return title === SEEDED_PACKAGE_TITLE && language === "en"
+    ? "Main Scope"
+    : title;
 }
 
 async function handleQuotations(request: Request, user: AuthUser) {
@@ -2236,7 +2428,12 @@ async function handleQuotations(request: Request, user: AuthUser) {
   const projectId = searchParams.get("projectId");
   if (!projectId) throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
   await assertProjectAccess(user, projectId);
-  const packageId = await resolveCommercialPackageId(client, projectId, searchParams.get("packageId"));
+  const packageId = await resolveCommercialPackageId(
+    client,
+    projectId,
+    searchParams.get("packageId"),
+    { requireActive: request.method !== "GET" },
+  );
 
   if (request.method === "GET") {
     const result = await client.execute({
@@ -2246,13 +2443,20 @@ async function handleQuotations(request: Request, user: AuthUser) {
         ORDER BY q.revision_no DESC,q.created_at DESC LIMIT 1`,
       args: [projectId, packageId],
     });
-    if (result.rows[0]) return ok(await quotationResponse(client, result.rows[0]));
+    if (result.rows[0]) {
+      return ok(
+        await quotationResponse(client, result.rows[0], user.preferredLanguage),
+      );
+    }
     const boq = await getBoq(projectId, packageId);
     return ok({
       id: null,
       projectId,
       packageId,
-      packageTitle: boq.package?.title ?? "Lingkup Utama",
+      packageTitle: localizedPackageTitle(
+        boq.package?.title,
+        user.preferredLanguage,
+      ),
       number: null,
       status: "Draft",
       revisionNo: 1,
@@ -2321,6 +2525,14 @@ async function handleQuotations(request: Request, user: AuthUser) {
       !["Rejected", "Void"].includes(String(input.status ?? "")),
     );
     const requestedStatus = String(input.status ?? current?.status ?? "Draft");
+    // One lifecycle rule for both writers. Without it this endpoint accepted
+    // any enum value behind a lone "Accepted" guard, so PATCH {status:"Sent"}
+    // resurrected a Void or Rejected quotation and re-notified the client.
+    assertQuotationTransition(
+      current ? String(current.status) : null,
+      requestedStatus,
+      { allowSameStatus: true },
+    );
     // rounding_adjustment is dual-purpose: it stores the computed delta for the
     // Up/Down modes and the user-supplied value for Custom. When the mode
     // transitions to Custom without an explicit adjustment in the request, the
@@ -2332,6 +2544,41 @@ async function handleQuotations(request: Request, user: AuthUser) {
       (nextRoundingMode === "Custom" && currentRoundingMode !== "Custom"
         ? 0
         : asNumber(current?.rounding_adjustment));
+    if (nextRoundingMode === "Custom") {
+      // "Pembulatan" must stay a rounding. Without a cap this field was an
+      // unlimited price override that flowed straight into invoice snapshots.
+      const currentTax = current
+        ? await documentTaxSummary(
+            client,
+            "Quotation",
+            String(current.id),
+            asNumber(current.taxable_base) || boq.totals.selling,
+          )
+        : { taxAdditions: 0, taxWithholdings: 0 };
+      const preliminary = calculateQuotationCommercialTotals({
+        subtotal: boq.totals.selling,
+        discountEnabled:
+          input.discountEnabled === undefined
+            ? Number(current?.discount_enabled) === 1
+            : input.discountEnabled,
+        discountType:
+          (input.discountType ?? String(current?.discount_type)) === "Percent"
+            ? "Percent"
+            : "Nominal",
+        discountValue: input.discountValue ?? asNumber(current?.discount_value),
+        taxAdditions: currentTax.taxAdditions,
+        taxWithholdings: currentTax.taxWithholdings,
+      });
+      const limit = customRoundingLimit(preliminary.beforeRounding);
+      if (Math.abs(roundingAdjustmentValue) > limit) {
+        throw new ApiError(
+          422,
+          "ROUNDING_ADJUSTMENT_TOO_LARGE",
+          `Pembulatan khusus maksimal Rp ${limit.toLocaleString("id-ID")} untuk nilai ini. Gunakan kolom diskon atau pajak untuk perubahan harga yang lebih besar.`,
+          { limit, requested: roundingAdjustmentValue },
+        );
+      }
+    }
     if (requestedStatus === "Sent" && current && Number(current.tax_enabled) === 1) {
       const selectedTaxes = await client.execute({
         sql: "SELECT 1 FROM document_taxes WHERE document_type='Quotation' AND document_id=? LIMIT 1",
@@ -2477,7 +2724,11 @@ async function handleQuotations(request: Request, user: AuthUser) {
       });
     }
 
-    let response = await refreshQuotationCommercialSnapshot(client, quotationId);
+    let response = await refreshQuotationCommercialSnapshot(
+      client,
+      quotationId,
+      user.preferredLanguage,
+    );
     if (response.status === "Sent" && response.taxEnabled && !response.taxes.length) {
       throw new ApiError(409, "TAX_RULE_REQUIRED", "Pilih minimal satu aturan pajak sebelum mengirim Quotation.");
     }
@@ -2793,9 +3044,12 @@ async function invoiceQuotationSource(
   input: { projectId: string; packageId?: string; quotationId?: string },
   requireAccepted: boolean,
 ) {
-  const packageId = input.packageId
-    ? await resolveCommercialPackageId(client, input.projectId, input.packageId)
-    : await resolveCommercialPackageId(client, input.projectId, null);
+  const packageId = await resolveCommercialPackageId(
+    client,
+    input.projectId,
+    input.packageId ?? null,
+    { requireActive: true },
+  );
   const result = await client.execute({
     sql: input.quotationId
       ? `SELECT q.*,cp.title AS package_title FROM quotations q
@@ -3151,8 +3405,8 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
         await tx.execute({
           sql: `INSERT INTO transactions
             (id,project_id,date,type,description,amount,source,reference_id,
-             category,created_by,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+             category,origin,created_by,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
           args: [
             transactionId,
             invoice.project_id,
@@ -3242,34 +3496,47 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
       .object({ reason: z.string().trim().min(5).max(500) })
       .parse(await jsonBody(request));
     const paymentId = path[3];
-    const paymentResult = await client.execute({
-      sql: `SELECT pay.*,i.project_id,i.number,i.amount AS invoice_amount
-        FROM invoice_payments pay
+    const scopeCheck = await client.execute({
+      sql: `SELECT i.project_id FROM invoice_payments pay
         JOIN invoices i ON i.id=pay.invoice_id
-        WHERE pay.id=? AND pay.invoice_id=? AND pay.status='Posted' LIMIT 1`,
+        WHERE pay.id=? AND pay.invoice_id=? LIMIT 1`,
       args: [paymentId, invoiceId],
     });
-    const payment = paymentResult.rows[0];
-    if (!payment) {
+    if (!scopeCheck.rows[0]) {
       throw new ApiError(404, "NOT_FOUND", "Pembayaran aktif tidak ditemukan.");
     }
-    await assertProjectAccess(user, String(payment.project_id));
-    if (payment.transaction_id) {
-      const reconciled = await client.execute({
-        sql: `SELECT 1 FROM bank_statement_entries
-          WHERE transaction_id=? AND reconciliation_status='Matched' LIMIT 1`,
-        args: [payment.transaction_id],
-      });
-      if (reconciled.rows.length) {
-        throw new ApiError(
-          409,
-          "PAYMENT_RECONCILED",
-          "Lepaskan rekonsiliasi bank sebelum membatalkan pembayaran.",
-        );
-      }
-    }
+    await assertProjectAccess(user, String(scopeCheck.rows[0].project_id));
     const timestamp = now();
     await client.transaction(async (tx) => {
+      // The payment row and the reconciliation guard are read inside the write
+      // transaction. Outside it, only SQLite's serialised writers stopped a
+      // reconciliation committed in between from surviving the void; on
+      // PostgreSQL it would leave a matched bank line on reversed cash.
+      const paymentResult = await tx.execute({
+        sql: `SELECT pay.*,i.project_id,i.number,i.amount AS invoice_amount
+          FROM invoice_payments pay
+          JOIN invoices i ON i.id=pay.invoice_id
+          WHERE pay.id=? AND pay.invoice_id=? AND pay.status='Posted' LIMIT 1`,
+        args: [paymentId, invoiceId],
+      });
+      const payment = paymentResult.rows[0];
+      if (!payment) {
+        throw new ApiError(404, "NOT_FOUND", "Pembayaran aktif tidak ditemukan.");
+      }
+      if (payment.transaction_id) {
+        const reconciled = await tx.execute({
+          sql: `SELECT 1 FROM bank_statement_entries
+            WHERE transaction_id=? AND reconciliation_status='Matched' LIMIT 1`,
+          args: [payment.transaction_id],
+        });
+        if (reconciled.rows.length) {
+          throw new ApiError(
+            409,
+            "PAYMENT_RECONCILED",
+            "Lepaskan rekonsiliasi bank sebelum membatalkan pembayaran.",
+          );
+        }
+      }
       await tx.execute({
         sql: `UPDATE invoice_payments SET status='Void',voided_by=?,voided_at=?,
           void_reason=?,updated_at=? WHERE id=?`,
@@ -3279,8 +3546,8 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
         await tx.execute({
           sql: `INSERT INTO transactions
             (id,project_id,date,type,description,amount,source,reference_id,
-             category,created_by,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+             category,origin,created_by,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,'system',?,?,?)`,
           args: [
             randomUUID(),
             payment.project_id,
@@ -3324,131 +3591,27 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
     return ok(await getInvoice(client, invoiceId));
   }
 
+  // The legacy singular /payment endpoint is retired.
+  //
+  // It marked an invoice Lunas by fabricating an `invoice_payments` row with a
+  // `LEGACY-` reference and a hardcoded 27-byte `text/plain` stub as its
+  // "attachment", which is exactly the evidence requirement the real endpoint
+  // exists to enforce: POST /api/invoices/:id/payments demands a reference, a
+  // method, an amount that fits the outstanding balance and a genuine PDF or
+  // image proof, and its void counterpart books a reversal. Nothing in the app
+  // called this route; the billing view has used /payments and
+  // /payments/:id/void throughout. Kept reachable as a friendly 410 rather than
+  // a 404 so any old client learns why, mirroring the retired /api/spks writes.
   if (
     invoiceId &&
     action === "payment" &&
     ["POST", "PATCH"].includes(request.method)
   ) {
-    if (!mutationRoles("invoices").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengonfirmasi pembayaran.");
-    assertAccess(user, "finance", "manage");
-    const invoice = await ensureExists(
-      "SELECT * FROM invoices WHERE id=?",
-      [invoiceId],
-      "Invoice tidak ditemukan.",
+    throw new ApiError(
+      410,
+      "LEGACY_INVOICE_PAYMENT_RETIRED",
+      "Endpoint konfirmasi pembayaran lama sudah tidak berlaku. Catat pembayaran melalui histori pembayaran invoice agar referensi, metode, dan bukti pembayarannya lengkap.",
     );
-    await assertProjectAccess(user, String(invoice.project_id));
-    const input = z
-      .object({
-        status: z.enum(["Belum Lunas", "Lunas"]).default("Lunas"),
-        paidDate: isoDateSchema.optional(),
-      })
-      .parse(await jsonBody(request));
-    const paidDate =
-      input.paidDate ?? invoice.paid_date ?? now().slice(0, 10);
-    const timestamp = now();
-    const current = await getInvoice(client, invoiceId);
-    if (input.status === "Belum Lunas") {
-      if (current.payments.some((payment) => payment.status === "Posted")) {
-        throw new ApiError(
-          409,
-          "PAYMENT_VOID_REQUIRED",
-          "Batalkan setiap pembayaran aktif melalui histori pembayaran.",
-        );
-      }
-      await detachOrDeleteSystemTransaction(client, "Invoice", invoiceId);
-      await client.execute({
-        sql: "UPDATE invoices SET status='Belum Lunas',paid_date=NULL,updated_at=? WHERE id=?",
-        args: [timestamp, invoiceId],
-      });
-    } else if (current.outstanding > 0) {
-      const withholdingAmount = Math.min(
-        current.outstanding,
-        Math.max(0, current.taxWithholdings - current.withheldTax),
-      );
-      const cashAmount = current.outstanding - withholdingAmount;
-      const paymentId = `invoice-payment-${randomUUID()}`;
-      const transactionId = cashAmount > 0 ? randomUUID() : null;
-      await client.transaction(async (tx) => {
-        await lockDocumentTaxes(
-          tx,
-          "Invoice",
-          invoiceId,
-          String(invoice.due_date),
-        );
-        if (transactionId) {
-          await tx.execute({
-            sql: `INSERT INTO transactions
-              (id,project_id,date,type,description,amount,source,reference_id,
-               category,created_by,created_at,updated_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-            args: [
-              transactionId,
-              invoice.project_id,
-              paidDate,
-              "Pemasukan",
-              `Pembayaran ${String(invoice.number)}`,
-              cashAmount,
-              "Invoice Payment",
-              paymentId,
-              "Penjualan",
-              user.id,
-              timestamp,
-              timestamp,
-            ],
-          });
-        }
-        await tx.execute({
-          sql: `INSERT INTO invoice_payments
-            (id,invoice_id,gross_amount,cash_amount,withholding_amount,paid_date,
-             payment_reference,payment_method,attachment_name,
-             attachment_mime_type,attachment_content_base64,status,
-             transaction_id,created_by,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,'Posted',?,?,?,?)`,
-          args: [
-            paymentId,
-            invoiceId,
-            current.outstanding,
-            cashAmount,
-            withholdingAmount,
-            paidDate,
-            `LEGACY-${String(invoice.number)}`,
-            "Lainnya",
-            "Konfirmasi pembayaran kompatibilitas",
-            "text/plain",
-            "S29uZmlybWFzaSBwZW1iYXlhcmFu",
-            transactionId,
-            user.id,
-            timestamp,
-            timestamp,
-          ],
-        });
-        await tx.execute({
-          sql: "UPDATE invoices SET status='Lunas',paid_date=?,updated_at=? WHERE id=?",
-          args: [paidDate, timestamp, invoiceId],
-        });
-      });
-    }
-    await writeAuditLog(
-      client,
-      request,
-      user,
-      input.status === "Lunas" ? "confirm_payment" : "cancel_payment",
-      "invoice",
-      invoiceId,
-      { status: input.status, paidDate },
-    );
-    if (input.status === "Lunas" && invoice.status !== "Lunas") {
-      await notifyProjectStakeholders(client, {
-        projectId: String(invoice.project_id),
-        eventType: "invoice_paid",
-        subject: `Pembayaran ${String(invoice.number)} diterima`,
-        message: `pembayaran invoice ${String(invoice.number)} sebesar Rp ${asNumber(invoice.amount).toLocaleString("id-ID")} telah dikonfirmasi.`,
-        subjectEn: `Payment for ${String(invoice.number)} received`,
-        messageEn: `invoice ${String(invoice.number)} payment of IDR ${asNumber(invoice.amount).toLocaleString("en-US")} has been confirmed.`,
-        includeFinance: true,
-      });
-    }
-    return ok(await getInvoice(client, invoiceId));
   }
 
   if (invoiceId && !action && request.method === "GET") {
@@ -3480,7 +3643,7 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
           WHERE dt.document_type='Invoice' AND dt.document_id=?
             AND (
               o.settled_amount>0
-              OR o.status NOT IN ('Outstanding','Void')
+              OR o.status<>'Outstanding'
               OR o.reporting_status NOT IN ('Candidate','Void')
               OR EXISTS(SELECT 1 FROM tax_settlements s WHERE s.obligation_id=o.id)
             )
@@ -3621,7 +3784,7 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
           WHERE dt.document_type='Invoice' AND dt.document_id=?
             AND (
               o.settled_amount>0
-              OR o.status NOT IN ('Outstanding','Void')
+              OR o.status<>'Outstanding'
               OR o.reporting_status NOT IN ('Candidate','Void')
               OR EXISTS(SELECT 1 FROM tax_settlements s WHERE s.obligation_id=o.id)
             )
@@ -3986,16 +4149,21 @@ async function getSpk(id: string) {
   return mapSpk(result.rows[0] as Record<string, unknown>);
 }
 
+// The legacy /api/spks surface is read-only. Its mutation handlers used to post
+// a `source='SPK'` outflow of the entire contract value whenever
+// `spks.payment_status` read 'Dibayar' — a flag the modern procurement flow also
+// sets once every spk_payment is posted — so marking a work order "Selesai"
+// after paying it through /api/procurement-orders booked the same money twice,
+// and voiding the real payment left the phantom outflow behind. Creating,
+// editing, paying, and deleting a work order all live in
+// /api/procurement-orders, where approval, verification, payment evidence, and
+// the audit trail are complete.
 async function handleSpks(request: Request, path: string[], user: AuthUser) {
   const { client } = await getDatabase();
   const spkId = path[1];
   const action = path[2];
 
-  if (
-    request.method !== "GET" &&
-    process.env.NODE_ENV === "production" &&
-    process.env.ALLOW_LEGACY_SPK_MUTATIONS !== "true"
-  ) {
+  if (request.method !== "GET") {
     throw new ApiError(
       410,
       "LEGACY_ENDPOINT_READ_ONLY",
@@ -4003,7 +4171,7 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
     );
   }
 
-  if (request.method === "GET" && !spkId) {
+  if (!spkId) {
     const projectId = new URL(request.url).searchParams.get("projectId");
     if (projectId) await assertProjectAccess(user, projectId);
     const scope = projectScopeCondition(user, "p");
@@ -4029,197 +4197,16 @@ async function handleSpks(request: Request, path: string[], user: AuthUser) {
     return ok(result.rows.map((row) => mapSpk(row as Record<string, unknown>)));
   }
 
-  if (request.method === "POST" && !spkId) {
-    if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat membuat SPK.");
-    const input = spkSchema.parse(await jsonBody(request));
-    assertDateOrder(input.startDate, input.endDate);
-    await ensureExists("SELECT id FROM vendors WHERE id=? AND status='Aktif'", [input.vendorId], "Vendor aktif tidak ditemukan.");
-    await assertProjectAccess(user, input.projectId);
-    const sequence = await claimSequence(client, "spks", "SELECT number AS value FROM spks");
-    const id = randomUUID();
-    const number = makeSequence("SPK", sequence);
-    const timestamp = now();
-    await client.execute({
-      sql: "INSERT INTO spks (id,number,vendor_id,project_id,scope,cost,status,start_date,end_date,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-      args: [id, number, input.vendorId, input.projectId, input.scope, input.cost, input.status, input.startDate ?? null, input.endDate ?? null, timestamp, timestamp],
-    });
-    await writeAuditLog(client, request, user, "create", "spk", id, input);
-    await notifyProjectStakeholders(client, {
-      projectId: input.projectId,
-      eventType: "spk_created",
-      subject: `SPK ${number} dibuat`,
-      message: `SPK ${number} untuk vendor telah dibuat dengan nilai Rp ${input.cost.toLocaleString("id-ID")}.`,
-      subjectEn: `Work Order ${number} created`,
-      messageEn: `Work Order ${number} was created for a vendor with a value of IDR ${input.cost.toLocaleString("en-US")}.`,
-      includeFinance: true,
-    });
-    return created(await getSpk(id));
-  }
-
-  if (spkId && action === "pdf" && request.method === "GET") {
+  if (action === "pdf") {
     const spk = await ensureExists("SELECT project_id,status,number FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
     await assertProjectAccess(user, String(spk.project_id));
     return renderBusinessPdf("spk", spkId, user.preferredLanguage);
   }
 
-  if (spkId && action === "payment" && request.method === "PATCH") {
-    if (!mutationRoles("procurement").includes(user.role)) {
-      throw new ApiError(
-        403,
-        "FORBIDDEN",
-        "Anda tidak dapat mengubah status pembayaran SPK.",
-      );
-    }
-    assertAccess(user, "finance", "manage");
-    const input = z
-      .object({
-        status: z.enum(["Belum Dibayar", "Dibayar"]),
-        paidDate: isoDateSchema.optional(),
-      })
-      .parse(await jsonBody(request));
-    const spk = await ensureExists(
-      "SELECT project_id,number,cost,payment_status FROM spks WHERE id=?",
-      [spkId],
-      "SPK tidak ditemukan.",
-    );
-    await assertProjectAccess(user, String(spk.project_id));
-    const paidDate =
-      input.status === "Dibayar"
-        ? input.paidDate ?? now().slice(0, 10)
-        : null;
-    await client.execute({
-      sql: "UPDATE spks SET payment_status=?,paid_date=?,updated_at=? WHERE id=?",
-      args: [input.status, paidDate, now(), spkId],
-    });
-    await syncSpkTransaction(client, spkId, user.id);
-    await writeAuditLog(
-      client,
-      request,
-      user,
-      input.status === "Dibayar" ? "confirm_payment" : "cancel_payment",
-      "spk",
-      spkId,
-      { status: input.status, paidDate },
-    );
-    if (
-      input.status === "Dibayar" &&
-      String(spk.payment_status) !== "Dibayar"
-    ) {
-      await notifyProjectStakeholders(client, {
-        projectId: String(spk.project_id),
-        eventType: "spk_paid",
-        subject: `Pembayaran SPK ${String(spk.number)} dikonfirmasi`,
-        message: `pembayaran vendor sebesar Rp ${asNumber(spk.cost).toLocaleString("id-ID")} untuk SPK ${String(spk.number)} telah dicatat.`,
-        subjectEn: `Work Order ${String(spk.number)} payment confirmed`,
-        messageEn: `vendor payment of IDR ${asNumber(spk.cost).toLocaleString("en-US")} for Work Order ${String(spk.number)} was recorded.`,
-        includeFinance: true,
-      });
-    }
-    return ok(await getSpk(spkId));
-  }
-
-  if (spkId && action === "status" && request.method === "PATCH") {
-    if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah status SPK.");
-    const input = z.object({ status: z.enum(["Draft", "Dikirim", "Dikerjakan", "Selesai"]) }).parse(await jsonBody(request));
-    const spk = await ensureExists(
-      "SELECT project_id,status,number FROM spks WHERE id=?",
-      [spkId],
-      "SPK tidak ditemukan.",
-    );
-    await assertProjectAccess(user, String(spk.project_id));
-    await client.execute({ sql: "UPDATE spks SET status=?,updated_at=? WHERE id=?", args: [input.status, now(), spkId] });
-    await syncSpkTransaction(client, spkId, user.id);
-    await writeAuditLog(client, request, user, "update_status", "spk", spkId, input);
-    if (
-      input.status !== String(spk.status) &&
-      ["Dikirim", "Selesai"].includes(input.status)
-    ) {
-      await notifyProjectStakeholders(client, {
-        projectId: String(spk.project_id),
-        eventType: input.status === "Selesai" ? "spk_completed" : "spk_sent",
-        subject:
-          input.status === "Selesai"
-            ? `SPK ${String(spk.number)} selesai`
-            : `SPK ${String(spk.number)} dikirim`,
-        message:
-          input.status === "Selesai"
-            ? `pekerjaan pada SPK ${String(spk.number)} telah ditandai selesai.`
-            : `SPK ${String(spk.number)} telah dikirim untuk pelaksanaan.`,
-        subjectEn:
-          input.status === "Selesai"
-            ? `Work Order ${String(spk.number)} completed`
-            : `Work Order ${String(spk.number)} sent`,
-        messageEn:
-          input.status === "Selesai"
-            ? `the work in Work Order ${String(spk.number)} has been marked completed.`
-            : `Work Order ${String(spk.number)} has been sent for execution.`,
-        includeFinance: true,
-      });
-    }
-    return ok(await getSpk(spkId));
-  }
-
-  if (spkId && !action && request.method === "GET") {
+  if (!action) {
     const spk = await ensureExists("SELECT project_id FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
     await assertProjectAccess(user, String(spk.project_id));
     return ok(await getSpk(spkId));
-  }
-
-  if (spkId && !action && request.method === "PATCH") {
-    if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah SPK.");
-    const input = partialPatchSchema(spkSchema).parse(await jsonBody(request));
-    const current = await ensureExists("SELECT * FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
-    if (current.payment_status === "Dibayar") {
-      assertAccess(user, "finance", "manage");
-    }
-    await assertProjectAccess(user, String(current.project_id));
-    assertDateOrder(
-      input.startDate === undefined ? current.start_date : input.startDate,
-      input.endDate === undefined ? current.end_date : input.endDate,
-    );
-    if (input.projectId && input.projectId !== current.project_id) {
-      await assertProjectAccess(user, input.projectId);
-    }
-    if (input.vendorId) {
-      await ensureExists(
-        "SELECT id FROM vendors WHERE id=? AND status='Aktif'",
-        [input.vendorId],
-        "Vendor aktif tidak ditemukan.",
-      );
-    }
-    await client.execute({
-      sql: "UPDATE spks SET vendor_id=?,project_id=?,scope=?,cost=?,status=?,start_date=?,end_date=?,updated_at=? WHERE id=?",
-      args: [
-        input.vendorId ?? current.vendor_id,
-        input.projectId ?? current.project_id,
-        input.scope ?? current.scope,
-        input.cost ?? current.cost,
-        input.status ?? current.status,
-        input.startDate === undefined ? current.start_date : input.startDate,
-        input.endDate === undefined ? current.end_date : input.endDate,
-        now(),
-        spkId,
-      ],
-    });
-    await syncSpkTransaction(client, spkId, user.id);
-    await writeAuditLog(client, request, user, "update", "spk", spkId, input);
-    return ok(await getSpk(spkId));
-  }
-
-  if (spkId && !action && request.method === "DELETE") {
-    if (!mutationRoles("procurement").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menghapus SPK.");
-    const spk = await ensureExists("SELECT project_id,payment_status FROM spks WHERE id=?", [spkId], "SPK tidak ditemukan.");
-    if (spk.payment_status === "Dibayar") {
-      assertAccess(user, "finance", "manage");
-    }
-    await assertProjectAccess(user, String(spk.project_id));
-    await detachOrDeleteSystemTransaction(client, "SPK", spkId);
-    await client.execute({
-      sql: "DELETE FROM spks WHERE id=?",
-      args: [spkId],
-    });
-    await writeAuditLog(client, request, user, "delete", "spk", spkId);
-    return noContent();
   }
 
   throw new ApiError(404, "NOT_FOUND", "Endpoint SPK tidak ditemukan.");
@@ -4371,10 +4358,21 @@ async function ensureValidation(
   const missing = boqItems.filter((item) => !known.has(String(item.id)));
   if (missing.length) {
     await client.batch(
-      missing.map((item) => ({
-        sql: "INSERT INTO project_validation_items (id,validation_id,boq_item_id,category,description,quantity,unit,checked,notes,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        args: [randomUUID(), validationId, item.id, item.category, item.description, item.quantity, item.unit, 0, "", item.sort_order, timestamp, timestamp],
-      })),
+      [
+        ...missing.map((item) => ({
+          sql: "INSERT INTO project_validation_items (id,validation_id,boq_item_id,category,description,quantity,unit,checked,notes,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+          args: [randomUUID(), validationId, item.id, item.category, item.description, item.quantity, item.unit, 0, "", item.sort_order, timestamp, timestamp],
+        })),
+        // New rows always land unchecked. A checklist that still reported
+        // 'Completed' would satisfy the BAST guard while carrying items nobody
+        // ever verified, so re-syncing an already-completed checklist sends it
+        // back to Draft.
+        {
+          sql: `UPDATE project_validations SET status='Draft',validated_by=NULL,
+            completed_at=NULL,updated_at=? WHERE id=? AND status<>'Draft'`,
+          args: [timestamp, validationId],
+        },
+      ],
       "write",
     );
   }
@@ -4414,6 +4412,28 @@ async function projectHandoverComplete(
   return delivering === 0 || handedOver >= delivering;
 }
 
+// Revoking a BAST undoes the handover that closed the project. Re-evaluate the
+// same rule finalization uses and re-open the project when a package is back in
+// delivery — leaving it on 'Selesai' would report work as delivered against a
+// document that no longer exists.
+async function reopenProjectIfHandoverIncomplete(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  projectId: string,
+  timestamp: string,
+) {
+  if (await projectHandoverComplete(client, projectId)) return false;
+  const project = await client.execute({
+    sql: "SELECT status FROM projects WHERE id=? LIMIT 1",
+    args: [projectId],
+  });
+  if (String(project.rows[0]?.status ?? "") !== "Selesai") return false;
+  await client.execute({
+    sql: "UPDATE projects SET status='Aktif',updated_at=? WHERE id=?",
+    args: [timestamp, projectId],
+  });
+  return true;
+}
+
 async function assertCompletedValidation(
   projectId: string,
   packageId: string,
@@ -4430,6 +4450,29 @@ async function assertCompletedValidation(
       409,
       "VALIDATION_REQUIRED",
       "Selesaikan checklist validasi Perangkat dan Material sebelum BAST diterbitkan.",
+    );
+  }
+  // 'Completed' alone only says the checklist was signed off at some point. An
+  // addendum accepted afterwards adds Perangkat/Material rows the checklist
+  // never covered, so the live BoQ of the package is compared against it.
+  const uncovered = await client.execute({
+    sql: `SELECT COUNT(*) AS count
+      FROM boq_items i
+      JOIN boqs b ON b.id=i.boq_id
+      JOIN boq_scopes s ON s.id=i.scope_id
+      WHERE b.project_id=? AND s.package_id=?
+        AND i.category IN ('Perangkat','Material')
+        AND NOT EXISTS (
+          SELECT 1 FROM project_validation_items vi
+          WHERE vi.validation_id=? AND vi.boq_item_id=i.id AND vi.checked=1
+        )`,
+    args: [projectId, packageId, String(result.rows[0].id)],
+  });
+  if (asNumber(uncovered.rows[0]?.count) > 0) {
+    throw new ApiError(
+      409,
+      "VALIDATION_STALE",
+      "BoQ paket ini berubah setelah checklist validasi diselesaikan. Sinkronkan dan centang ulang seluruh Perangkat dan Material sebelum BAST diterbitkan.",
     );
   }
 }
@@ -4453,7 +4496,12 @@ async function handleValidations(request: Request, path: string[], user: AuthUse
     assertAccess(user, "bast", "manage");
     if (!projectId) throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
     await assertProjectAccess(user, projectId);
-    const packageId = await resolveCommercialPackageId(client, projectId, searchParams.get("packageId"));
+    const packageId = await resolveCommercialPackageId(
+      client,
+      projectId,
+      searchParams.get("packageId"),
+      { requireActive: true },
+    );
     const validation = await ensureValidation(projectId, packageId, deliveryCycle, user.id);
     await writeAuditLog(client, request, user, "create_or_sync", "project_validation", String(validation.id), { projectId, packageId, deliveryCycle });
     return created(validation);
@@ -4481,30 +4529,63 @@ async function handleValidations(request: Request, path: string[], user: AuthUse
     if (input.items.some((item) => !allowed.has(item.id))) {
       throw new ApiError(422, "INVALID_VALIDATION_ITEM", "Item validasi tidak sesuai dengan BoQ proyek.");
     }
-    const timestamp = now();
-    await client.batch(
-      input.items.map((item) => ({
-        sql: "UPDATE project_validation_items SET checked=?,notes=?,updated_at=? WHERE id=? AND validation_id=?",
-        args: [item.checked ? 1 : 0, item.notes, timestamp, item.id, validationId],
-      })),
-      "write",
-    );
-    if (input.status === "Completed") {
-      const incomplete = await client.execute({
-        sql: "SELECT COUNT(*) AS count FROM project_validation_items WHERE validation_id=? AND checked=0",
-        args: [validationId],
+    // A completed checklist is the evidence a finalized BAST was issued against.
+    // Reverting it to Draft — or unchecking items underneath it — used to be
+    // accepted with no guard at all, which quietly withdrew the evidence for a
+    // handover document that was already signed and sealed. Only a Final BAST
+    // locks it: a Draft one re-runs assertCompletedValidation at finalization,
+    // and a revoked one reads 'Void'. The addendum flow still demotes the
+    // checklist, but through ensureValidation/resetProjectValidation when the
+    // BoQ genuinely changes, not through a user edit.
+    if (String(validation.status) === "Completed") {
+      const issued = await client.execute({
+        sql: `SELECT id FROM basts
+          WHERE project_id=? AND package_id=? AND delivery_cycle=?
+            AND status='Final' LIMIT 1`,
+        args: [
+          validation.project_id,
+          validation.package_id,
+          asNumber(validation.delivery_cycle) || 1,
+        ],
       });
-      const total = await client.execute({
-        sql: "SELECT COUNT(*) AS count FROM project_validation_items WHERE validation_id=?",
-        args: [validationId],
-      });
-      if (!asNumber(total.rows[0]?.count) || asNumber(incomplete.rows[0]?.count)) {
-        throw new ApiError(409, "VALIDATION_INCOMPLETE", "Centang seluruh Perangkat dan Material sebelum validasi diselesaikan.");
+      if (issued.rows.length) {
+        throw new ApiError(
+          409,
+          "VALIDATION_LOCKED_BY_BAST",
+          "Checklist ini sudah menjadi dasar BAST yang diterbitkan, jadi tidak dapat diubah atau dikembalikan ke Draft. Void BAST tersebut terlebih dahulu.",
+        );
       }
     }
-    await client.execute({
-      sql: "UPDATE project_validations SET status=?,notes=?,validated_by=?,completed_at=?,updated_at=? WHERE id=?",
-      args: [input.status, input.notes ?? validation.notes ?? "", user.id, input.status === "Completed" ? timestamp : null, timestamp, validationId],
+    const timestamp = now();
+    // Items and status move together. The completeness check used to run after
+    // the item batch had already been committed, so a request that ended in 409
+    // left the record inconsistent: unchecked items under a status still
+    // reading 'Completed'. Inside the transaction the throw rolls both back.
+    await client.transaction(async (tx) => {
+      if (input.items.length) {
+        await tx.batch(
+          input.items.map((item) => ({
+            sql: "UPDATE project_validation_items SET checked=?,notes=?,updated_at=? WHERE id=? AND validation_id=?",
+            args: [item.checked ? 1 : 0, item.notes, timestamp, item.id, validationId],
+          })),
+          "write",
+        );
+      }
+      if (input.status === "Completed") {
+        const counts = await tx.execute({
+          sql: `SELECT COUNT(*) AS total,
+            COALESCE(SUM(CASE WHEN checked=0 THEN 1 ELSE 0 END),0) AS incomplete
+            FROM project_validation_items WHERE validation_id=?`,
+          args: [validationId],
+        });
+        if (!asNumber(counts.rows[0]?.total) || asNumber(counts.rows[0]?.incomplete)) {
+          throw new ApiError(409, "VALIDATION_INCOMPLETE", "Centang seluruh Perangkat dan Material sebelum validasi diselesaikan.");
+        }
+      }
+      await tx.execute({
+        sql: "UPDATE project_validations SET status=?,notes=?,validated_by=?,completed_at=?,updated_at=? WHERE id=?",
+        args: [input.status, input.notes ?? validation.notes ?? "", user.id, input.status === "Completed" ? timestamp : null, timestamp, validationId],
+      });
     });
     await writeAuditLog(client, request, user, input.status === "Completed" ? "complete" : "update", "project_validation", validationId, {
       checked: input.items.filter((item) => item.checked).length,
@@ -4704,7 +4785,12 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
       throw new ApiError(409, "FINALIZE_ENDPOINT_REQUIRED", "Simpan BAST sebagai Draft, lalu gunakan proses finalisasi agar cap, hash, dan QR verifikasi diterapkan.");
     }
     await assertProjectAccess(user, input.projectId);
-    const packageId = await resolveCommercialPackageId(client, input.projectId, input.packageId ?? null);
+    const packageId = await resolveCommercialPackageId(
+      client,
+      input.projectId,
+      input.packageId ?? null,
+      { requireActive: true },
+    );
     await assertCompletedValidation(input.projectId, packageId, input.deliveryCycle);
     const existing = await client.execute({
       sql: `SELECT id FROM basts WHERE project_id=? AND package_id=?
@@ -4722,15 +4808,24 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
     const id = randomUUID();
     const number = makeSequence("BAST", sequence);
     const timestamp = now();
+    // Never hardcode revision_no=1: re-issuing after a void leaves the revoked
+    // document in place, so a fresh revision 1 would collide with
+    // UNIQUE(package_id,delivery_cycle,revision_no) and surface as a raw 500.
+    const maxRevision = await client.execute({
+      sql: `SELECT COALESCE(MAX(revision_no),0) AS max_revision FROM basts
+        WHERE package_id=? AND delivery_cycle=?`,
+      args: [packageId, input.deliveryCycle],
+    });
+    const revisionNo = asNumber(maxRevision.rows[0]?.max_revision) + 1;
     await client.execute({
       sql: `INSERT INTO basts
         (id,number,project_id,package_id,delivery_cycle,revision_no,completion_date,
          notes,installed_items_json,client_name,client_role,client_signature,
          engineer_name,engineer_role,engineer_signature,status,created_at,updated_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      args: [id, number, input.projectId, packageId, input.deliveryCycle, 1, input.completionDate, input.notes, JSON.stringify(input.installedItems), input.clientName, input.clientRole, input.clientSignature ?? null, input.engineerName, input.engineerRole ?? "Project Manager", input.engineerSignature ?? null, input.status, timestamp, timestamp],
+      args: [id, number, input.projectId, packageId, input.deliveryCycle, revisionNo, input.completionDate, input.notes, JSON.stringify(input.installedItems), input.clientName, input.clientRole, input.clientSignature ?? null, input.engineerName, input.engineerRole ?? "Project Manager", input.engineerSignature ?? null, input.status, timestamp, timestamp],
     });
-    await writeAuditLog(client, request, user, "create", "bast", id, { projectId: input.projectId, packageId, deliveryCycle: input.deliveryCycle, status: input.status });
+    await writeAuditLog(client, request, user, "create", "bast", id, { projectId: input.projectId, packageId, deliveryCycle: input.deliveryCycle, revisionNo, status: input.status });
     return created(await getBast(id));
   }
 
@@ -4885,7 +4980,15 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
         revocation_reason=?,updated_at=? WHERE id=?`,
       args: [timestamp, user.id, input.reason, timestamp, bastId],
     });
-    await writeAuditLog(client, request, user, "void", "bast", bastId, input);
+    const projectReopened = await reopenProjectIfHandoverIncomplete(
+      client,
+      String(bast.project_id),
+      timestamp,
+    );
+    await writeAuditLog(client, request, user, "void", "bast", bastId, {
+      ...input,
+      projectReopened,
+    });
     return ok(await getBast(bastId));
   }
 
@@ -4897,7 +5000,9 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
 
   if (bastId && !action && request.method === "PATCH") {
     if (!mutationRoles("bast").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat mengubah BAST.");
-    const input = bastSchema.omit({ projectId: true }).partial().parse(await jsonBody(request));
+    const input = partialPatchSchema(bastSchema.omit({ projectId: true })).parse(
+      await jsonBody(request),
+    );
     if (input.status === "Final") {
       throw new ApiError(409, "FINALIZE_ENDPOINT_REQUIRED", "Gunakan proses finalisasi agar cap, hash, dan QR verifikasi diterapkan.");
     }
@@ -4942,23 +5047,38 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
   throw new ApiError(404, "NOT_FOUND", "Endpoint BAST tidak ditemukan.");
 }
 
+// A transaction is manual only when it was typed in through POST
+// /api/transactions. Everything the system posts on behalf of a document carries
+// origin='system' and is off limits to manual CRUD, whatever its source string
+// happens to be.
+function isManualTransaction(row: Record<string, unknown>) {
+  return String(row.origin ?? "system") === "manual";
+}
+
+async function assertManualTransaction(
+  client: DatabaseClient,
+  row: Record<string, unknown>,
+  systemMessage: string,
+  reconciledMessage: string,
+) {
+  if (!isManualTransaction(row)) {
+    throw new ApiError(409, "SYSTEM_TRANSACTION", systemMessage);
+  }
+  // Even a manual row becomes evidence once a bank mutasi points at it:
+  // rewriting or deleting it silently breaks the reconciliation.
+  const reconciled = await client.execute({
+    sql: "SELECT id FROM bank_statement_entries WHERE transaction_id=? LIMIT 1",
+    args: [String(row.id)],
+  });
+  if (reconciled.rows.length) {
+    throw new ApiError(409, "TRANSACTION_RECONCILED", reconciledMessage);
+  }
+}
+
 function mapTransaction(
   row: Record<string, unknown>,
   language: AuthUser["preferredLanguage"] = "id",
 ) {
-  const source = String(row.source);
-  const isSystemTransaction =
-    source.startsWith("Bank:") ||
-    source === "Profit Share" ||
-    source === "Profit Share Reversal" ||
-    source === "Procurement Payment" ||
-    source === "Procurement Reversal" ||
-    source === "Invoice Payment" ||
-    source === "Invoice Payment Reversal" ||
-    source === "Tax Settlement" ||
-    source === "Tax Settlement Reversal" ||
-    (Boolean(row.reference_id) &&
-      (source === "Invoice" || source === "SPK"));
   return {
     id: String(row.id),
     date: localizedApiDate(row.date, language),
@@ -4968,10 +5088,14 @@ function mapTransaction(
     project: row.project_name ? String(row.project_name) : "Umum",
     description: localizedTransactionDescription(row.description, language),
     amount: asNumber(row.amount),
-    source,
+    source: String(row.source),
     categoryKey: String(row.category ?? "Lainnya"),
     category: localizedTransactionCategory(row.category, language),
-    editable: !isSystemTransaction,
+    editable: isManualTransaction(row),
+    // False while an imported bank mutasi has not been reconciled yet: the row
+    // is shown, but it must not be counted as cash (it usually duplicates a
+    // source-document transaction that already booked the same money).
+    countsAsCash: !Boolean(row.unreconciled_import),
   };
 }
 
@@ -5011,7 +5135,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       args.push(to);
     }
     const result = await client.execute({
-      sql: `SELECT t.*,p.name AS project_name FROM transactions t LEFT JOIN projects p ON p.id=t.project_id ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY t.date DESC,t.created_at DESC`,
+      sql: `SELECT t.*,p.name AS project_name,
+        CASE WHEN ${unreconciledImportCondition("t")} THEN 1 ELSE 0 END AS unreconciled_import
+        FROM transactions t LEFT JOIN projects p ON p.id=t.project_id ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY t.date DESC,t.created_at DESC`,
       args: args as never[],
     });
     const transactions = result.rows.map((row) =>
@@ -5049,16 +5175,27 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       profitConditions.push(profitScope.sql);
       profitArgs.push(...profitScope.args);
     }
-    const profitResult = await client.execute({
+    // Opening the cash ledger and reading the company's margin are two
+    // different questions, so they are two different permissions. `finance:
+    // view` answers the first: what money moved, on the projects this account
+    // can already see. The blocks below answer the second — base net profit,
+    // retained profit, and BoQ budget against vendor commitment — which is the
+    // margin on the job and follows `margin`. Withheld exactly the way the bank
+    // balances above are: the report still downloads, the section simply is not
+    // in it, so a Project Manager exporting their own ledger is never met with
+    // a refusal for a report they are entitled to.
+    const canSeeMargin = canAccess(user.permissions, "margin", "view");
+    const profitRows = canSeeMargin ? (await client.execute({
       sql: `
         SELECT p.id,p.code,p.name,
           COALESCE((
             SELECT SUM(CASE
+              WHEN t.source IN ('Profit Share','Profit Share Reversal') THEN 0
               WHEN t.type='Pemasukan' THEN t.amount
-              WHEN t.type='Pengeluaran' AND t.source NOT IN ('Profit Share','Profit Share Reversal') THEN -t.amount
+              WHEN t.type='Pengeluaran' THEN -t.amount
               ELSE 0 END)
             FROM transactions t
-            WHERE t.project_id=p.id
+            WHERE t.project_id=p.id AND ${countsAsCashCondition("t")}
           ),0) AS net_profit,
           COALESCE((
             SELECT SUM(s.amount)
@@ -5117,8 +5254,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         ORDER BY p.code
       `,
       args: profitArgs as never[],
-    });
-    const profitRows = profitResult.rows
+    })).rows
       .map((row) => {
         const netProfit = asNumber(row.net_profit);
         const allocatedAmount = asNumber(row.allocated_amount);
@@ -5156,7 +5292,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           row.committedVendorCost !== 0 ||
           row.outstandingReimbursement !== 0 ||
           row.acceptedAddenda !== 0,
-      );
+      ) : [];
     const taxResult = await client.execute({
       sql: `SELECT p.code,p.name,dt.rule_name,dt.rule_name_en,o.direction,
         o.amount,o.settled_amount,o.status
@@ -5232,7 +5368,6 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     }));
     if (transactionId === "report.csv") {
       const en = user.preferredLanguage === "en";
-      const csvCell = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
       const headers = en
         ? ["Date", "Type", "Project", "Category", "Description", "Source", "Amount (IDR)"]
         : ["Tanggal", "Jenis", "Proyek", "Kategori", "Deskripsi", "Sumber", "Nominal (IDR)"];
@@ -5410,6 +5545,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           amount: transaction.amount,
           source: transaction.source,
           category: transaction.category,
+          countsAsCash: transaction.countsAsCash,
         })),
         scopeLabel,
         user.preferredLanguage,
@@ -5460,7 +5596,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     const id = randomUUID();
     const timestamp = now();
     await client.execute({
-      sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,category,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      sql: "INSERT INTO transactions (id,project_id,date,type,description,amount,source,category,origin,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,'manual',?,?,?)",
       args: [id, input.projectId ?? null, input.date, input.type, input.description, input.amount, input.source, input.category, user.id, timestamp, timestamp],
     });
     await writeAuditLog(client, request, user, "create", "transaction", id, input);
@@ -5469,7 +5605,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
   }
 
   if (transactionId && request.method === "PATCH") {
-    const input = transactionSchema.partial().parse(await jsonBody(request));
+    // A plain `.partial()` re-dated the transaction to today and reset its
+    // category whenever the client patched only the description.
+    const input = partialPatchSchema(transactionSchema).parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM transactions WHERE id=?", [transactionId], "Transaksi tidak ditemukan.");
     if (current.project_id) await assertProjectAccess(user, String(current.project_id));
     if (!current.project_id && !hasGlobalProjectScope(user)) {
@@ -5493,23 +5631,15 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         "Sumber Invoice, SPK, dan Bank hanya dibuat oleh sistem.",
       );
     }
-    if (
-      (current.reference_id &&
-        (current.source === "Invoice" || current.source === "SPK")) ||
-      String(current.source).startsWith("Bank:") ||
-      String(current.source).startsWith("Profit Share") ||
-      String(current.source).startsWith("Procurement ") ||
-      String(current.source).startsWith("Invoice Payment") ||
-      String(current.source).startsWith("Tax Settlement") ||
-      String(current.source).startsWith("Project Expense") ||
-      String(current.source).startsWith("Project Advance")
-    ) {
-      throw new ApiError(
-        409,
-        "SYSTEM_TRANSACTION",
-        "Transaksi otomatis harus diperbarui dari dokumen asal atau rekonsiliasi bank.",
-      );
-    }
+    // Allowlist, not denylist: only a row a human typed in through this very
+    // endpoint is editable. A denylist of source prefixes left every new system
+    // source tamperable until somebody remembered to extend it.
+    await assertManualTransaction(
+      client,
+      current,
+      "Transaksi otomatis harus diperbarui dari dokumen asal atau rekonsiliasi bank.",
+      "Transaksi ini sudah dicocokkan dengan mutasi bank. Lepaskan rekonsiliasinya terlebih dahulu.",
+    );
     if (input.projectId) await assertProjectAccess(user, input.projectId);
     await client.execute({
       sql: "UPDATE transactions SET project_id=?,date=?,type=?,description=?,amount=?,source=?,category=?,updated_at=? WHERE id=?",
@@ -5536,23 +5666,12 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     if (!current.project_id && !hasGlobalProjectScope(user)) {
       throw new ApiError(404, "NOT_FOUND", "Transaksi tidak ditemukan.");
     }
-    if (
-      (current.reference_id &&
-        (current.source === "Invoice" || current.source === "SPK")) ||
-      String(current.source).startsWith("Bank:") ||
-      String(current.source).startsWith("Profit Share") ||
-      String(current.source).startsWith("Procurement ") ||
-      String(current.source).startsWith("Invoice Payment") ||
-      String(current.source).startsWith("Tax Settlement") ||
-      String(current.source).startsWith("Project Expense") ||
-      String(current.source).startsWith("Project Advance")
-    ) {
-      throw new ApiError(
-        409,
-        "SYSTEM_TRANSACTION",
-        "Transaksi otomatis hanya dapat dihapus dari dokumen asal atau rekonsiliasi bank.",
-      );
-    }
+    await assertManualTransaction(
+      client,
+      current,
+      "Transaksi otomatis hanya dapat dihapus dari dokumen asal atau rekonsiliasi bank.",
+      "Transaksi ini sudah dicocokkan dengan mutasi bank. Lepaskan rekonsiliasinya terlebih dahulu.",
+    );
     await client.execute({ sql: "DELETE FROM transactions WHERE id=?", args: [transactionId] });
     await writeAuditLog(client, request, user, "delete", "transaction", transactionId);
     return noContent();
@@ -5591,13 +5710,29 @@ async function handleFinance(request: Request, user: AuthUser) {
     conditions.push("date<=?");
     args.push(to);
   }
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  // Reported cash never includes a bank line that has not been reconciled yet;
+  // that figure is returned separately so it stays visible instead of hidden.
+  const reportedWhere = conditions.length
+    ? `WHERE ${[...conditions, countsAsCashCondition()].join(" AND ")}`
+    : `WHERE ${countsAsCashCondition()}`;
+  const pendingWhere = conditions.length
+    ? `WHERE ${[...conditions, unreconciledImportCondition()].join(" AND ")}`
+    : `WHERE ${unreconciledImportCondition()}`;
+  // A void books a reversal in the opposite direction. Netting it against the
+  // side it undoes keeps gross income and gross expense at their pre-void
+  // figures instead of inflating both of them forever.
+  const grossIncome = grossIncomeSum();
+  const grossExpense = grossExpenseSum();
   const totals = await client.execute({
-    sql: `SELECT COALESCE(SUM(CASE WHEN type='Pemasukan' THEN amount ELSE 0 END),0) AS income,COALESCE(SUM(CASE WHEN type='Pengeluaran' THEN amount ELSE 0 END),0) AS expense FROM transactions ${where}`,
+    sql: `SELECT ${grossIncome} AS income,${grossExpense} AS expense FROM transactions ${reportedWhere}`,
+    args: args as never[],
+  });
+  const pending = await client.execute({
+    sql: `SELECT COUNT(*) AS entries,${grossIncome} AS income,${grossExpense} AS expense FROM transactions ${pendingWhere}`,
     args: args as never[],
   });
   const monthly = await client.execute({
-    sql: `SELECT substr(date,1,7) AS month,COALESCE(SUM(CASE WHEN type='Pemasukan' THEN amount ELSE 0 END),0) AS income,COALESCE(SUM(CASE WHEN type='Pengeluaran' THEN amount ELSE 0 END),0) AS expense FROM transactions ${where} GROUP BY substr(date,1,7) ORDER BY month`,
+    sql: `SELECT substr(date,1,7) AS month,${grossIncome} AS income,${grossExpense} AS expense FROM transactions ${reportedWhere} GROUP BY substr(date,1,7) ORDER BY month`,
     args: args as never[],
   });
   const income = asNumber(totals.rows[0]?.income);
@@ -5607,6 +5742,11 @@ async function handleFinance(request: Request, user: AuthUser) {
     expense,
     netCash: income - expense,
     cashRatio: income ? ((income - expense) / income) * 100 : 0,
+    unreconciled: {
+      entries: asNumber(pending.rows[0]?.entries),
+      income: asNumber(pending.rows[0]?.income),
+      expense: asNumber(pending.rows[0]?.expense),
+    },
     monthly: monthly.rows.map((row) => ({
       month: String(row.month),
       income: asNumber(row.income),
@@ -5716,7 +5856,10 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
   }
 
   if (userId && request.method === "PATCH") {
-    const input = userSchema.partial().parse(await jsonBody(request));
+    // A plain `.partial()` here materialised every `.default()` the client did
+    // not send, so renaming a user silently rewrote `status` back to "Aktif" —
+    // a rename reactivated a revoked account. See partialPatchSchema().
+    const input = partialPatchSchema(userSchema).parse(await jsonBody(request));
     const current = await ensureExists("SELECT * FROM users WHERE id=?", [userId], "Pengguna tidak ditemukan.");
     if (userId === user.id && input.status === "Nonaktif") throw new ApiError(409, "SELF_DEACTIVATE", "Anda tidak dapat menonaktifkan akun sendiri.");
     if (input.email) {
@@ -5726,6 +5869,41 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
       });
       if (duplicate.rows.length) throw new ApiError(409, "EMAIL_EXISTS", "Email sudah digunakan oleh pengguna lain.");
     }
+    // Nobody moves their own recovery address without proving they own the new
+    // inbox, Admin included — otherwise this endpoint is a second, unguarded
+    // door to the takeover that /api/profile just closed. An Admin editing
+    // *someone else's* address still applies immediately (that is what account
+    // administration is for), but it ends that person's sessions and tells
+    // their old address, so a silent takeover is impossible either way.
+    const selfEmailChange =
+      userId === user.id &&
+      Boolean(input.email) &&
+      String(input.email).toLowerCase() !== String(current.email).toLowerCase();
+    const adminEmailChange =
+      userId !== user.id &&
+      Boolean(input.email) &&
+      String(input.email).toLowerCase() !== String(current.email).toLowerCase();
+    const currentLanguage = await client.execute({
+      sql: "SELECT preferred_language FROM user_profiles WHERE user_id=? LIMIT 1",
+      args: [userId],
+    });
+    const targetLanguage =
+      String(currentLanguage.rows[0]?.preferred_language) === "en" ? "en" : "id";
+    const pendingEmailChange = selfEmailChange
+      ? await requestEmailChange(
+          client,
+          {
+            id: userId,
+            email: String(current.email),
+            preferredLanguage: targetLanguage,
+          },
+          String(input.email),
+          user.id,
+        )
+      : undefined;
+    const nextEmail = selfEmailChange
+      ? String(current.email)
+      : input.email ?? current.email;
     const passwordHash = input.password ? await hash(input.password, 12) : current.password_hash;
     const nextRole = (input.role ?? current.role) as UserRole;
     const currentPermissionResult = await client.execute({
@@ -5753,7 +5931,7 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
       [
         {
           sql: "UPDATE users SET name=?,email=?,password_hash=?,role=?,status=?,updated_at=? WHERE id=?",
-          args: [input.name ?? current.name, input.email ?? current.email, passwordHash, nextRole, input.status ?? current.status, timestamp, userId],
+          args: [input.name ?? current.name, nextEmail, passwordHash, nextRole, input.status ?? current.status, timestamp, userId],
         },
         {
           sql: `
@@ -5765,16 +5943,37 @@ async function handleUsers(request: Request, path: string[], user: AuthUser) {
       ],
       "write",
     );
-    if (input.status === "Nonaktif" || input.password) {
-      await client.execute({ sql: "DELETE FROM sessions WHERE user_id=?", args: [userId] });
+    if (input.status === "Nonaktif" || input.password || adminEmailChange) {
+      await revokeAllSessions(client, userId);
     }
-    await writeAuditLog(client, request, user, "update", "user", userId, { ...input, password: input.password ? "[updated]" : undefined });
+    if (adminEmailChange) {
+      // The person who owned the old address has to hear about it from the old
+      // address, or an Admin takeover leaves no trace they can see.
+      await sendEmailChangedEmail(
+        client,
+        { id: userId, preferredLanguage: targetLanguage },
+        String(current.email),
+        String(input.email),
+      );
+      await client.execute({
+        sql: "DELETE FROM password_reset_tokens WHERE user_id=?",
+        args: [userId],
+      });
+    }
+    await writeAuditLog(client, request, user, "update", "user", userId, {
+      ...input,
+      password: input.password ? "[updated]" : undefined,
+      ...(selfEmailChange ? { email: undefined, pendingEmail: input.email } : {}),
+    });
     const updated = await ensureExists(
       "SELECT u.*,up.permissions_json,p.avatar_mime_type,p.updated_at AS profile_updated_at FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id LEFT JOIN user_profiles p ON p.user_id=u.id WHERE u.id=?",
       [userId],
       "Pengguna tidak ditemukan.",
     );
-    return ok(mapUser(updated as Record<string, unknown>, user.preferredLanguage));
+    return ok({
+      ...mapUser(updated as Record<string, unknown>, user.preferredLanguage),
+      ...(pendingEmailChange ? { pendingEmailChange } : {}),
+    });
   }
 
   if (userId && request.method === "DELETE") {
@@ -5938,12 +6137,28 @@ async function handleProfile(request: Request, path: string[], user: AuthUser) {
       args: [input.email, user.id],
     });
     if (duplicate.rows.length) throw new ApiError(409, "EMAIL_EXISTS", "Email sudah digunakan pengguna lain.");
+    // The address stays put until the new one confirms. An unverified change
+    // here was a full account takeover: whoever held the session pointed the
+    // account at their own inbox, ran forgot-password, and owned it for good.
+    const emailChanged = input.email.toLowerCase() !== user.email.toLowerCase();
+    const pendingEmailChange = emailChanged
+      ? await requestEmailChange(
+          client,
+          {
+            id: user.id,
+            email: user.email,
+            preferredLanguage: user.preferredLanguage,
+          },
+          input.email,
+          user.id,
+        )
+      : undefined;
     const timestamp = now();
     await client.batch(
       [
         {
-          sql: "UPDATE users SET name=?,email=?,updated_at=? WHERE id=?",
-          args: [input.name, input.email, timestamp, user.id],
+          sql: "UPDATE users SET name=?,updated_at=? WHERE id=?",
+          args: [input.name, timestamp, user.id],
         },
         {
           sql: `
@@ -5957,8 +6172,14 @@ async function handleProfile(request: Request, path: string[], user: AuthUser) {
       ],
       "write",
     );
-    await writeAuditLog(client, request, user, "update_profile", "user", user.id);
-    return ok(await getProfile(user.id));
+    await writeAuditLog(client, request, user, "update_profile", "user", user.id, {
+      name: input.name,
+      ...(pendingEmailChange ? { pendingEmail: pendingEmailChange.pendingEmail } : {}),
+    });
+    return ok({
+      ...(await getProfile(user.id)),
+      ...(pendingEmailChange ? { pendingEmailChange } : {}),
+    });
   }
 
   if (action === "password" && request.method === "PATCH") {
@@ -5974,8 +6195,12 @@ async function handleProfile(request: Request, path: string[], user: AuthUser) {
       sql: "UPDATE users SET password_hash=?,updated_at=? WHERE id=?",
       args: [await hash(input.newPassword, 12), now(), user.id],
     });
+    // Changing your password is the first thing anyone does after suspecting a
+    // compromise, so it has to evict the intruder. Everything but the session
+    // making this request goes.
+    await revokeOtherSessions(client, request, user.id);
     await writeAuditLog(client, request, user, "change_password", "user", user.id);
-    return ok({ success: true });
+    return ok({ success: true, otherSessionsRevoked: true });
   }
 
   throw new ApiError(404, "NOT_FOUND", "Endpoint profil tidak ditemukan.");
@@ -6096,11 +6321,18 @@ async function handleNotifications(
       throw new ApiError(403, "FORBIDDEN", "Hanya Admin yang dapat mencoba ulang email.");
     }
     const retry = await retryEmailOutbox(client, path[2]);
-    if (!retry) {
+    if (retry === "not-found") {
       throw new ApiError(
         409,
         "EMAIL_NOT_RETRYABLE",
         "Email tidak ditemukan atau statusnya tidak dapat dicoba ulang.",
+      );
+    }
+    if (retry === "body-purged") {
+      throw new ApiError(
+        409,
+        "EMAIL_BODY_PURGED",
+        "Isi email ini sudah dihapus setelah percobaan pengiriman habis, jadi tidak dapat dikirim ulang. Ulangi tindakan aslinya agar email baru dibuat.",
       );
     }
     await writeAuditLog(

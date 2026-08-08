@@ -5,19 +5,26 @@ import {
   CalendarDays,
   CheckCircle2,
   CircleDollarSign,
-  Clock3,
   FileSpreadsheet,
   FileText,
-  FolderKanban,
   MapPin,
   Plus,
   Search,
-  TrendingUp,
   UsersRound,
+  Wallet,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api, messageOf } from "../api-client";
+import { ProjectMap, STATUS_COLOUR, STATUS_LABEL, STATUS_ORDER } from "./project-map";
+import {
+  attentionQueue,
+  businessDay,
+  dashboardMoney,
+  projectStateFigures,
+  scopeProjects,
+  type ProjectStateFigure,
+} from "../dashboard-metrics";
 import {
   formatCompactCurrency,
   formatCurrency,
@@ -53,6 +60,40 @@ function paymentClass(payment: Project["payment"]) {
   if (payment === "Sebagian") return "warning";
   if (payment === "Belum Dibayar") return "danger";
   return "neutral";
+}
+
+/** How many rows of the follow-up queue the side panel has room for. */
+const ATTENTION_ROWS = 3;
+
+interface ScheduleWording {
+  /** Not one project in this state carries the date it is judged by. */
+  missing: string;
+  /** Some do and some do not, and none of the dated ones has slipped. */
+  untimed: (count: number) => string;
+  /** Every one carries the date, and none has slipped. */
+  clear: string;
+  /** How many have gone past it. Outranks everything above. */
+  overdue: (count: number) => string;
+}
+
+/**
+ * The single line of small print under a project state.
+ *
+ * Returns null rather than a reassurance whenever the page cannot support one:
+ * no projects in the state, or the server's own day not fetched yet. This is
+ * the function that replaces "Tepat waktu" — a string that sat under Proyek
+ * selesai claiming everything was on time no matter how late anything was — so
+ * an empty result is a correct result, and the space it leaves is reserved in
+ * the stylesheet rather than filled.
+ */
+function scheduleFact(figure: ProjectStateFigure, today: string | null, wording: ScheduleWording) {
+  if (!figure.count || !today) return null;
+  if (!figure.dated) return { text: wording.missing, urgent: false };
+  if (figure.overdue) return { text: wording.overdue(figure.overdue), urgent: true };
+  if (figure.dated < figure.count) {
+    return { text: wording.untimed(figure.count - figure.dated), urgent: false };
+  }
+  return { text: wording.clear, urgent: false };
 }
 
 export function DashboardView({
@@ -144,33 +185,64 @@ export function DashboardView({
     });
   }, [filter, projectList, query, selectedProjectId]);
 
-  const stats = useMemo(() => {
-    const scopedProjects = selectedProjectId
-      ? projectList.filter((project) => project.id === selectedProjectId)
-      : projectList;
-    const active = scopedProjects.filter((project) => project.status === "Aktif").length;
-    const completed = scopedProjects.filter((project) => project.status === "Selesai").length;
-    const value = scopedProjects
-      .filter((project) => project.status === "Aktif")
-      .reduce((sum, project) => sum + project.value, 0);
-    const paid = scopedProjects.reduce(
-      (sum, project) => sum + project.value * (project.paidRatio / 100),
-      0,
-    );
-    return { active, completed, value, paid };
-  }, [projectList, selectedProjectId]);
-  const scopedProjects = selectedProjectId
-    ? projectList.filter((project) => project.id === selectedProjectId)
-    : projectList;
-  const attentionProjects = scopedProjects
-    .filter(
-      (project) =>
-        project.status !== "Selesai" &&
-        (project.payment === "Belum Dibayar" ||
-          project.payment === "Sebagian" ||
-          project.progress < 100),
-    )
-    .slice(0, 3);
+  // Narrowed once, here, and handed to every figure below. The project picker
+  // at the top of the page has to reach all of them or the page argues with
+  // itself the moment a single project is selected.
+  const scopedProjects = useMemo(
+    () => scopeProjects(projectList, selectedProjectId),
+    [projectList, selectedProjectId],
+  );
+
+  // The server's own calendar day in WITA. Null until /api/system/time answers,
+  // which is what keeps a browser with the wrong date from deciding which
+  // projects are late.
+  const today = serverNow ? businessDay(serverNow) : null;
+
+  const states = useMemo(
+    () => projectStateFigures(scopedProjects, today),
+    [scopedProjects, today],
+  );
+  const money = useMemo(() => dashboardMoney(scopedProjects), [scopedProjects]);
+
+  // Keyed by status and rendered through STATUS_ORDER, so this block and the
+  // map legend directly above it can never fall into different orders.
+  const stateCards: Record<
+    ProjectStatus,
+    { count: number; fact: { text: string; urgent: boolean } | null }
+  > = {
+    Draft: {
+      count: states.draft.count,
+      fact: scheduleFact(states.draft, today, {
+        missing: id ? "Tanggal mulai belum diisi" : "No planned start recorded",
+        untimed: (count) =>
+          id ? `${count} tanpa tanggal mulai` : `${count} with no planned start`,
+        clear: id ? "Belum ada yang lewat rencana mulai" : "None past its planned start",
+        overdue: (count) =>
+          id ? `${count} lewat rencana mulai` : `${count} past the planned start`,
+      }),
+    },
+    Aktif: {
+      count: states.active.count,
+      fact: scheduleFact(states.active, today, {
+        missing: id ? "Tanggal target belum diisi" : "No target date recorded",
+        untimed: (count) =>
+          id ? `${count} tanpa tanggal target` : `${count} with no target date`,
+        clear: id ? "Belum ada yang lewat target" : "None past its target date",
+        overdue: (count) =>
+          id ? `${count} lewat tanggal target` : `${count} past the target date`,
+      }),
+    },
+    Selesai: {
+      count: states.completed.count,
+      // Left empty on purpose. Nothing in the data records when a project was
+      // finished, so neither "selesai bulan ini" nor the "Tepat waktu" that
+      // used to sit here can be computed from this page. An empty line is the
+      // honest one; see the note at the top of app/dashboard-metrics.ts.
+      fact: null,
+    },
+  };
+
+  const attentionProjects = attentionQueue(scopedProjects);
   const visibleTeam = Array.from(
     new Set(
       scopedProjects.flatMap(
@@ -178,6 +250,33 @@ export function DashboardView({
       ),
     ),
   ).slice(0, 3);
+
+  // The map hands back a point the operator clicked. Sending it as a normal
+  // project PATCH is what marks the pin as placed by a person, which is what
+  // stops a later geocode of the same location text from moving it.
+  const placePin = useCallback(
+    async (projectId: string, latitude: number, longitude: number) => {
+      try {
+        const updated = await api<Project>(`/api/projects/${encodeURIComponent(projectId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ latitude, longitude }),
+        });
+        setProjectList((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+        notify(id ? "Titik peta proyek tersimpan." : "The project's map pin was saved.");
+      } catch (error) {
+        notify(messageOf(error, language));
+      }
+    },
+    [id, language, notify],
+  );
+
+  const openProject = useCallback(
+    (projectId: string) => {
+      onSelectProject(projectId);
+      navigate("project");
+    },
+    [navigate, onSelectProject],
+  );
 
   async function addProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -221,39 +320,35 @@ export function DashboardView({
         )}
       </section>
 
-      <section className="metric-grid" aria-label={id ? "Ringkasan operasional" : "Operations summary"}>
-        <article className="metric-card">
-          <span className="metric-icon teal"><FolderKanban size={20} /></span>
-          <div className="metric-main">
-            <span>{id ? "Proyek aktif" : "Active projects"}</span>
-            <strong>{stats.active}</strong>
-          </div>
-          <span className="metric-change positive"><TrendingUp size={13} /> {id ? "2 bulan ini" : "2 this month"}</span>
-        </article>
-        <article className="metric-card">
-          <span className="metric-icon blue"><CircleDollarSign size={20} /></span>
-          <div className="metric-main">
-            <span>{id ? "Nilai proyek berjalan" : "Active project value"}</span>
-            <strong>{formatCompactCurrency(stats.value, language)}</strong>
-          </div>
-          <span className="metric-change">{stats.active} {id ? "kontrak berjalan" : "active contracts"}</span>
-        </article>
-        <article className="metric-card">
-          <span className="metric-icon orange"><Clock3 size={20} /></span>
-          <div className="metric-main">
-            <span>{id ? "Piutang diterima" : "Receivables collected"}</span>
-            <strong>{formatCompactCurrency(stats.paid, language)}</strong>
-          </div>
-          <span className="metric-change warning-text">{id ? "Sesuai pembayaran terkonfirmasi" : "Based on confirmed payments"}</span>
-        </article>
-        <article className="metric-card">
-          <span className="metric-icon green"><CheckCircle2 size={20} /></span>
-          <div className="metric-main">
-            <span>{id ? "Proyek selesai" : "Completed projects"}</span>
-            <strong>{stats.completed}</strong>
-          </div>
-          <span className="metric-change positive">{id ? "Tepat waktu" : "On schedule"}</span>
-        </article>
+      <ProjectMap
+        language={language}
+        projects={scopedProjects}
+        canManage={canManage}
+        onOpenProject={openProject}
+        onPlacePin={placePin}
+      />
+
+      {/* Directly under the map, and reading in the same three colours as its
+          pins: the state of the work is what the owner opens this page for.
+          The legend above already gives the bare counts, so each card here
+          carries the one schedule fact that would make somebody act on it. */}
+      <section
+        className="project-state-grid"
+        aria-label={id ? "Status proyek" : "Project states"}
+        data-testid="project-state-grid"
+      >
+        {STATUS_ORDER.map((status) => (
+          <article className="project-state-card" key={status} data-status={status}>
+            <span className="project-state-dot" style={{ background: STATUS_COLOUR[status] }} />
+            <span className="project-state-label">{STATUS_LABEL[status][id ? "id" : "en"]}</span>
+            <strong className="project-state-count">{stateCards[status].count}</strong>
+            <span
+              className={`project-state-fact${stateCards[status].fact?.urgent ? " warning-text" : ""}`}
+            >
+              {stateCards[status].fact?.text ?? ""}
+            </span>
+          </article>
+        ))}
       </section>
 
       <section className="dashboard-layout">
@@ -369,9 +464,12 @@ export function DashboardView({
                 <span className="eyebrow">{id ? "PERLU PERHATIAN" : "NEEDS ATTENTION"}</span>
                 <h2>{id ? "Tindak lanjut" : "Follow-up"}</h2>
               </div>
+              {/* The queue, not the rows. The badge used to be the length of a
+                  list that had already been cut to three, so a portfolio with
+                  seven follow-ups outstanding reported three of them. */}
               <span className="count-badge">{attentionProjects.length}</span>
             </div>
-            {attentionProjects.map((project) => (
+            {attentionProjects.slice(0, ATTENTION_ROWS).map((project) => (
               <button className="attention-item" type="button" key={project.id} onClick={() => { onSelectProject(project.id); navigate(project.payment === "Belum Dibayar" || project.payment === "Sebagian" ? "billing" : "project"); }}>
                 <span className={`attention-icon ${project.payment === "Belum Dibayar" ? "danger" : project.payment === "Sebagian" ? "warning" : "info"}`}><FileText size={17} /></span>
                 <span>
@@ -381,6 +479,13 @@ export function DashboardView({
                 <ArrowRight size={15} />
               </button>
             ))}
+            {attentionProjects.length > ATTENTION_ROWS && (
+              <p className="attention-more">
+                {id
+                  ? `${attentionProjects.length - ATTENTION_ROWS} lainnya menunggu tindak lanjut.`
+                  : `${attentionProjects.length - ATTENTION_ROWS} more are waiting for follow-up.`}
+              </p>
+            )}
             {!attentionProjects.length && <div className="empty-state compact"><CheckCircle2 size={24} /><p>{id ? "Tidak ada tindak lanjut mendesak." : "No urgent follow-up."}</p></div>}
           </section>
 
@@ -400,6 +505,54 @@ export function DashboardView({
             {!visibleTeam.length && <div className="empty-state compact"><UsersRound size={24} /><p>{id ? "Belum ada anggota proyek." : "No project members yet."}</p></div>}
           </section>
         </aside>
+      </section>
+
+      {/* The money, last on the page and below the fold on purpose.
+          The owner asked for the map and the three project states to lead and
+          for these two figures to be something you scroll to, so they sit under
+          the portfolio they summarise rather than above it — one labelled
+          section with a sentence saying what each figure counts, instead of two
+          bare cards stranded at the bottom. Both follow the project picker like
+          everything else on the page. */}
+      <section
+        className="panel finance-strip"
+        aria-label={id ? "Ringkasan keuangan proyek" : "Project financial summary"}
+        data-testid="dashboard-finance"
+      >
+        <div className="panel-head">
+          <div>
+            <span className="eyebrow">{id ? "RINGKASAN KEUANGAN" : "FINANCIAL SUMMARY"}</span>
+            <h2>{id ? "Nilai dan piutang" : "Value and receivables"}</h2>
+          </div>
+        </div>
+        <div className="finance-strip-body">
+          <article className="finance-figure">
+            <span className="metric-icon blue"><CircleDollarSign size={20} /></span>
+            <div className="finance-figure-main">
+              <span>{id ? "Nilai proyek berjalan" : "Active project value"}</span>
+              <strong>{formatCompactCurrency(money.value, language)}</strong>
+              <small>
+                {states.active.count}{" "}
+                {id ? "kontrak berjalan" : states.active.count === 1 ? "active contract" : "active contracts"}
+              </small>
+            </div>
+          </article>
+          <article className="finance-figure">
+            <span className="metric-icon orange"><Wallet size={20} /></span>
+            <div className="finance-figure-main">
+              <span>{id ? "Piutang diterima" : "Receivables collected"}</span>
+              <strong>{formatCompactCurrency(money.paid, language)}</strong>
+              <small className="warning-text">
+                {id ? "Sesuai pembayaran terkonfirmasi" : "Based on confirmed payments"}
+              </small>
+            </div>
+          </article>
+          <p className="finance-strip-note">
+            {id
+              ? "Nilai proyek berjalan menjumlahkan kontrak yang berstatus On progress. Piutang diterima mengikuti porsi setiap proyek yang sudah tertutup pembayaran terkonfirmasi."
+              : "Active project value adds up the contracts that are in progress. Receivables collected follows the share of each project that confirmed payments already cover."}
+          </p>
+        </div>
       </section>
 
       {showNewProject && (

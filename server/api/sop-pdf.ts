@@ -47,13 +47,25 @@ function formatAmount(value: number, language: Language) {
   return `${sign}Rp ${digits}`;
 }
 
+// Every other PerumNet document dates itself in Asia/Makassar (server/format.ts,
+// server/api/pdf.ts). Reading the host clock instead printed yesterday's date
+// for the whole 16:00-24:00 UTC window, and production runs on a UTC host.
+const makassarParts = new Intl.DateTimeFormat("en-US", {
+  day: "numeric",
+  month: "numeric",
+  year: "numeric",
+  timeZone: "Asia/Makassar",
+});
+
 function formatToday(language: Language) {
-  const now = new Date();
+  const parts = Object.fromEntries(
+    makassarParts.formatToParts(new Date()).map((part) => [part.type, part.value]),
+  );
   const months =
     language === "en"
       ? ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
       : ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-  return `${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()}`;
+  return `${Number(parts.day)} ${months[Number(parts.month) - 1]} ${parts.year}`;
 }
 
 async function logoData() {
@@ -65,30 +77,28 @@ async function logoData() {
   }
 }
 
-interface BuildResult {
-  doc: jsPDF;
-  starts: Map<string, number>;
-  pageCount: number;
-}
-
 /**
- * Lays the whole guide out once. The table of contents needs real page numbers,
- * which are only known after laying out, so the caller runs this twice: once
- * with an empty map to learn where every chapter lands, then again with that map
- * filled in. Only the digits inside an existing table-of-contents row change
- * between the two runs, so the layout is identical in both.
+ * Lays the whole guide out in a single pass.
+ *
+ * The table of contents is printed before any chapter exists, so its page
+ * numbers cannot be known while its rows are laid out. Each row therefore
+ * reserves the space its number will occupy — a fixed width measured from
+ * "000", which does not depend on the digits — and remembers where that space
+ * is; the real number is painted into it once every chapter has landed. The
+ * footers are written the same way, which is what makes "Page X of Y" possible:
+ * Y is only known at the end. The guide used to be built twice, the first copy
+ * discarded purely to learn the chapter pages, on an endpoint with no cache and
+ * no rate limit.
  */
-function buildGuide(
-  language: Language,
-  logo: string | undefined,
-  chapterPages: Map<string, number>,
-): BuildResult {
+function buildGuide(language: Language, logo: string | undefined): jsPDF {
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
   const width = doc.internal.pageSize.getWidth();
   const height = doc.internal.pageSize.getHeight();
   const content = width - MARGIN * 2;
   const bottom = height - 18;
   const starts = new Map<string, number>();
+  // Where each contents row left room for its page number, filled in below.
+  const tocSlots = new Map<string, { page: number; x: number; y: number }>();
   const en = language === "en";
   let page = 1;
   let y = 0;
@@ -148,24 +158,35 @@ function buildGuide(
     y = 42;
   }
 
-  function footer() {
-    if (page === 1) return;
-    stroke(RULE);
-    doc.setLineWidth(0.2);
-    doc.line(MARGIN, height - 12, width - MARGIN, height - 12);
-    font("normal", 7.2);
-    ink(MUTED);
-    doc.text("enterprise@perumnet.id", MARGIN, height - 7.6);
-    doc.text(
-      `${en ? "Page" : "Halaman"} ${page}`,
-      width - MARGIN,
-      height - 7.6,
-      { align: "right" },
-    );
+  /**
+   * Written after the whole guide is laid out, because the total is only known
+   * then. A reader holding a printed copy has to be able to tell that pages are
+   * missing, and this document is explicitly aimed at auditors. The cover
+   * (page 1) carries no footer.
+   */
+  function applyFooters(totalPages: number) {
+    for (let current = 2; current <= totalPages; current += 1) {
+      doc.setPage(current);
+      stroke(RULE);
+      doc.setLineWidth(0.2);
+      doc.line(MARGIN, height - 12, width - MARGIN, height - 12);
+      font("normal", 7.2);
+      ink(MUTED);
+      // Internal support, not the client-facing company address: this manual is
+      // read by staff, and a staff member who is stuck should reach IT.
+      doc.text("it@perumnet.id", MARGIN, height - 7.6);
+      doc.text(
+        en
+          ? `Page ${current} of ${totalPages}`
+          : `Halaman ${current} dari ${totalPages}`,
+        width - MARGIN,
+        height - 7.6,
+        { align: "right" },
+      );
+    }
   }
 
   function newPage() {
-    footer();
     doc.addPage("a4", "portrait");
     page += 1;
     header();
@@ -325,8 +346,6 @@ function buildGuide(
 
     guideChapters.forEach((chapter, index) => {
       const number = `${index + 1}.`;
-      const target = chapterPages.get(chapter.id);
-      const label = target ? String(target) : "--";
       font("normal", 9);
       const numberWidth = 8;
       const pageWidth = doc.getTextWidth("000") + 2;
@@ -353,11 +372,23 @@ function buildGuide(
         doc.line(titleEnd, lastLine - 1.1, dotsEnd, lastLine - 1.1);
         doc.setLineDashPattern([], 0);
       }
-      font("bold", 9);
-      ink(INK);
-      doc.text(label, width - MARGIN, lastLine, { align: "right" });
+      // The digits themselves land in `fillContents`, once the chapters have
+      // been laid out and their real page numbers are known.
+      tocSlots.set(chapter.id, { page, x: width - MARGIN, y: lastLine });
       y = lastLine + 4.6 + 2.4;
     });
+  }
+
+  function fillContents() {
+    for (const [chapterId, slot] of tocSlots) {
+      const target = starts.get(chapterId);
+      doc.setPage(slot.page);
+      font("bold", 9);
+      ink(INK);
+      doc.text(target ? String(target) : "--", slot.x, slot.y, {
+        align: "right",
+      });
+    }
   }
 
   // ---------------------------------------------------------------- blocks ---
@@ -800,9 +831,10 @@ function buildGuide(
     chapterHeading(index, chapter);
     for (const block of chapter.blocks) renderBlock(block);
   });
-  footer();
+  fillContents();
+  applyFooters(doc.getNumberOfPages());
 
-  return { doc, starts, pageCount: page };
+  return doc;
 }
 
 export async function renderSopPdf(request: Request, user: AuthUser) {
@@ -814,17 +846,13 @@ export async function renderSopPdf(request: Request, user: AuthUser) {
     requested === "id" || requested === "en" ? requested : user.preferredLanguage;
   const logo = await logoData();
 
-  // First pass discovers where each chapter starts, second pass prints those
-  // numbers into the table of contents. Only digits inside an already reserved
-  // row change, so both passes lay out identically.
-  const probe = buildGuide(language, logo, new Map());
-  const final = buildGuide(language, logo, probe.starts);
+  const doc = buildGuide(language, logo);
 
   const filename =
     language === "en"
       ? "PerumNet-Enterprise-Operations-Manual.pdf"
       : "Panduan-Operasional-PerumNet-Enterprise.pdf";
-  return new Response(Buffer.from(final.doc.output("arraybuffer")), {
+  return new Response(Buffer.from(doc.output("arraybuffer")), {
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename="${filename}"`,

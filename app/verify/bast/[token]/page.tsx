@@ -23,6 +23,29 @@ function longDate(value: unknown) {
   }).format(new Date(String(value)));
 }
 
+/**
+ * `basts.completion_date` is a date-only column: no clock time was ever
+ * recorded. Formatting it with `longDate` invented one — `new Date("2026-08-04")`
+ * is UTC midnight, which renders as "pukul 08.00" in Asia/Makassar — and the
+ * `.split(",")` that was meant to drop it never matched, because the `id-ID`
+ * long format has no comma. This page is a client-facing legal verification, so
+ * it must assert only the date the document actually carries.
+ */
+function longDateOnly(value: unknown) {
+  if (!value) return "-";
+  const day = String(value).slice(0, 10);
+  const date = new Date(
+    /^\d{4}-\d{2}-\d{2}$/.test(day) ? `${day}T00:00:00+08:00` : String(value),
+  );
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat("id-ID", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "Asia/Makassar",
+  }).format(date);
+}
+
 export default async function BastVerificationPage({
   params,
 }: {
@@ -81,7 +104,7 @@ export default async function BastVerificationPage({
             <div><dt>Nomor dokumen</dt><dd>{String(row.number)}</dd></div>
             <div><dt>Proyek</dt><dd>{String(row.project_code)} · {String(row.project_name)}</dd></div>
             <div><dt>Paket</dt><dd>{String(row.package_title ?? "Lingkup Utama")}</dd></div>
-            <div><dt>Tanggal serah terima</dt><dd>{longDate(row.completion_date).split(",")[0]}</dd></div>
+            <div><dt>Tanggal serah terima</dt><dd>{longDateOnly(row.completion_date)}</dd></div>
             <div><dt>Finalisasi</dt><dd>{longDate(row.finalized_at)}</dd></div>
             <div><dt>Status</dt><dd>{row.revoked_at ? "Dicabut" : String(row.status)}</dd></div>
             <div><dt>Hash SHA-256</dt><dd className="verification-hash">{String(row.pdf_hash ?? "-")}</dd></div>
