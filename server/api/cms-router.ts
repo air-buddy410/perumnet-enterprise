@@ -67,7 +67,7 @@ const serviceSchema = z.object({
   descriptionEn: z.string().trim().max(8_000).optional().default(""),
   features: z.array(z.string().trim().min(1).max(160)).max(12).default([]),
   featuresEn: z.array(z.string().trim().max(160)).max(12).default([]),
-  icon: z.enum(["wifi", "camera", "phone", "network", "shield", "home", "terminal"]).default("network"),
+  icon: z.enum(["wifi", "cctv", "camera", "phone", "network", "shield", "home", "terminal"]).default("network"),
   sortOrder: z.number().int().min(0).max(999).default(0),
   isPublished: z.boolean().default(true),
 });

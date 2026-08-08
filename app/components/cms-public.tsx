@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Building2,
   Camera,
+  Cctv,
   Check,
   ChevronRight,
   Clock3,
@@ -48,6 +49,10 @@ import styles from "../site.module.css";
 
 const serviceIcons = {
   wifi: Wifi,
+  // A surveillance camera on its mount, not a photo camera. `camera` stays
+  // available because removing an enum value would break any row already using
+  // it; this is an addition, not a rename.
+  cctv: Cctv,
   camera: Camera,
   phone: Phone,
   network: Network,
