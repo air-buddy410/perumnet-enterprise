@@ -79,6 +79,23 @@ interface QuotationRevision {
   supersedesId: string | null;
 }
 
+function discountInputFromQuotation(data: Quotation) {
+  const value = data.discountValue ?? 0;
+  if (!value) return "";
+  if ((data.discountType ?? "Nominal") === "Percent") {
+    const percent = value / 100;
+    return Number.isInteger(percent) ? String(percent) : String(percent).replace(".", ",");
+  }
+  return String(value);
+}
+
+function parseDiscountInput(type: "Nominal" | "Percent", raw: string) {
+  if (!raw.trim()) return 0;
+  const numeric = Number(raw.replace(",", "."));
+  if (!Number.isFinite(numeric) || numeric < 0) return 0;
+  return type === "Percent" ? Math.min(10_000, Math.round(numeric * 100)) : Math.round(numeric);
+}
+
 function parseRoundingAdjustment(value: string) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.round(parsed) : 0;
@@ -150,11 +167,15 @@ export function BillingView({
   const [issueDate, setIssueDate] = useState(new Date().toISOString().slice(0, 10));
   const [dueDate, setDueDate] = useState("");
   const [showQuotationForm, setShowQuotationForm] = useState(false);
+  const [showAcceptForm, setShowAcceptForm] = useState(false);
+  const [acceptDate, setAcceptDate] = useState("");
+  const [acceptFile, setAcceptFile] = useState<File | null>(null);
+  const [acceptSaving, setAcceptSaving] = useState(false);
   const [quotationIssuedAt, setQuotationIssuedAt] = useState("");
   const [quotationValidUntil, setQuotationValidUntil] = useState("");
   const [discountEnabled, setDiscountEnabled] = useState(false);
   const [discountType, setDiscountType] = useState<"Nominal" | "Percent">("Nominal");
-  const [discountValue, setDiscountValue] = useState(0);
+  const [discountValueInput, setDiscountValueInput] = useState("");
   const [roundingMode, setRoundingMode] = useState<"None" | "Up" | "Down" | "Custom">("None");
   const [roundingStep, setRoundingStep] = useState(0);
   const [roundingAdjustmentInput, setRoundingAdjustmentInput] = useState("");
@@ -202,7 +223,7 @@ export function BillingView({
         setQuotationValidUntil(quotationData.validUntil ?? "");
         setDiscountEnabled(Boolean(quotationData.discountEnabled));
         setDiscountType(quotationData.discountType ?? "Nominal");
-        setDiscountValue(quotationData.discountValue ?? 0);
+        setDiscountValueInput(discountInputFromQuotation(quotationData));
         setRoundingMode(quotationData.roundingMode ?? "None");
         setRoundingStep(quotationData.roundingStep ?? 0);
         setRoundingAdjustmentInput(roundingInputFromQuotation(quotationData));
@@ -294,7 +315,7 @@ export function BillingView({
     setQuotationValidUntil(updated.validUntil ?? "");
     setDiscountEnabled(Boolean(updated.discountEnabled));
     setDiscountType(updated.discountType ?? "Nominal");
-    setDiscountValue(updated.discountValue ?? 0);
+    setDiscountValueInput(discountInputFromQuotation(updated));
     setRoundingMode(updated.roundingMode ?? "None");
     setRoundingStep(updated.roundingStep ?? 0);
     setRoundingAdjustmentInput(roundingInputFromQuotation(updated));
@@ -307,6 +328,29 @@ export function BillingView({
     const updated = await api<Quotation>(`/api/quotations?projectId=${encodeURIComponent(projectId)}&packageId=${encodeURIComponent(packageId)}`);
     setQuotation(updated);
     await refreshQuotationHistory();
+  }
+
+  async function acceptQuotation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!quotation?.id || !acceptFile) return;
+    setAcceptSaving(true);
+    try {
+      const attachment = await attachmentFromFile(acceptFile);
+      await api(`/api/quotations/${encodeURIComponent(quotation.id)}/accept`, {
+        method: "POST",
+        body: JSON.stringify({ acceptedAt: acceptDate, attachment }),
+      });
+      setShowAcceptForm(false);
+      setAcceptFile(null);
+      setReloadKey((key) => key + 1);
+      notify(id
+        ? "Quotation diterima klien dan dikunci. Invoice termin siap dibuat."
+        : "Quotation accepted and locked. Installment invoices can now be issued.");
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setAcceptSaving(false);
+    }
   }
 
   async function deleteQuotation() {
@@ -351,7 +395,7 @@ export function BillingView({
         validUntil: quotationValidUntil,
         discountEnabled,
         discountType,
-        discountValue,
+        discountValue: parseDiscountInput(discountType, discountValueInput),
         roundingMode,
         roundingStep,
         roundingAdjustment: roundingMode === "Custom" ? parseRoundingAdjustment(roundingAdjustmentInput) : 0,
@@ -645,6 +689,11 @@ export function BillingView({
                     <Pencil size={15} /> {id ? "Edit" : "Edit"}
                   </button>
                 )}
+                {canManage && quotation?.id && quotation.status === "Sent" && (
+                  <button className="button primary small" type="button" onClick={() => { setAcceptDate(serverToday || new Date().toISOString().slice(0, 10)); setAcceptFile(null); setShowAcceptForm(true); }}>
+                    <CircleCheck size={15} /> {id ? "Terima klien" : "Client accept"}
+                  </button>
+                )}
                 {canManage && quotation?.id && ["Draft", "Sent", "Rejected"].includes(quotation.status) && (
                   <button className="button danger small" type="button" onClick={deleteQuotation}>
                     <Trash2 size={15} /> {id ? "Hapus" : "Delete"}
@@ -845,6 +894,26 @@ export function BillingView({
         </div>
       )}
 
+      {showAcceptForm && quotation?.id && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowAcceptForm(false)}>
+          <section className="modal-card" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div><span className="eyebrow">CLIENT ACCEPTANCE</span><h2>{quotation.number}</h2></div>
+              <button className="icon-button" type="button" onClick={() => setShowAcceptForm(false)} aria-label={id ? "Tutup" : "Close"}><X size={18} /></button>
+            </div>
+            <form className="form-grid" onSubmit={acceptQuotation}>
+              <label className="field full"><span>{id ? "Tanggal persetujuan" : "Acceptance date"}</span><input required type="date" max={serverToday || undefined} value={acceptDate} onChange={(event) => setAcceptDate(event.target.value)} /></label>
+              <label className="field full"><span>{id ? "Bukti persetujuan (PDF/gambar)" : "Acceptance proof (PDF/image)"}</span><input required type="file" accept=".pdf,image/png,image/jpeg,image/webp" onChange={(event) => setAcceptFile(event.target.files?.[0] ?? null)} /></label>
+              <p className="form-hint full">{id ? "Setelah diterima, diskon, pajak, dan pembulatan dikunci permanen. Perubahan berikutnya melalui Addendum." : "Once accepted, discount, tax, and rounding are locked. Later changes go through an Addendum."}</p>
+              <div className="modal-actions full">
+                <button className="button secondary" type="button" onClick={() => setShowAcceptForm(false)}>{id ? "Batal" : "Cancel"}</button>
+                <button className="button primary" type="submit" disabled={acceptSaving || !acceptFile}><CircleCheck size={16} /> {id ? "Terima & kunci" : "Accept & lock"}</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
       <DocumentPreviewModal
         open={Boolean(preview)}
         url={preview?.url ?? ""}
@@ -862,7 +931,7 @@ export function BillingView({
               <label className="field full"><span>{id ? "Berlaku sampai" : "Valid until"}</span><input required type="date" value={quotationValidUntil} onChange={(event) => setQuotationValidUntil(event.target.value)} /></label>
               <div className="field full"><span>{id ? "Pilihan cepat masa berlaku" : "Quick validity"}</span><div className="title-actions">{[7, 14, 30, 60].map((days) => <button className="button subtle small" type="button" key={days} onClick={() => setValidityDays(days)}>{days} {id ? "hari" : "days"}</button>)}</div></div>
               <label className="field full check-field"><input type="checkbox" checked={discountEnabled} onChange={(event) => setDiscountEnabled(event.target.checked)} /><span>{id ? "Gunakan diskon" : "Apply discount"}</span></label>
-              {discountEnabled && <><label className="field select-field"><span>{id ? "Jenis diskon" : "Discount type"}</span><select value={discountType} onChange={(event) => setDiscountType(event.target.value as "Nominal" | "Percent")}><option value="Nominal">Nominal</option><option value="Percent">%</option></select><ChevronDown size={15} /></label><label className="field"><span>{discountType === "Percent" ? (id ? "Persen diskon" : "Discount percent") : (id ? "Nilai diskon" : "Discount amount")}</span><input type="number" min="0" max={discountType === "Percent" ? 100 : undefined} step={discountType === "Percent" ? .01 : 1} value={discountType === "Percent" ? discountValue / 100 : discountValue} onChange={(event) => setDiscountValue(discountType === "Percent" ? Math.round(Number(event.target.value) * 100) : Number(event.target.value))} /></label></>}
+              {discountEnabled && <><label className="field select-field"><span>{id ? "Jenis diskon" : "Discount type"}</span><select value={discountType} onChange={(event) => { setDiscountType(event.target.value as "Nominal" | "Percent"); setDiscountValueInput(""); }}><option value="Nominal">Nominal</option><option value="Percent">%</option></select><ChevronDown size={15} /></label><label className="field"><span>{discountType === "Percent" ? (id ? "Persen diskon (mis. 10 atau 12,5)" : "Discount percent (e.g. 10 or 12.5)") : (id ? "Nilai diskon" : "Discount amount")}</span><input type="text" inputMode="decimal" placeholder={discountType === "Percent" ? "10" : "1000000"} value={discountValueInput} onChange={(event) => { const raw = event.target.value; if (discountType === "Percent" ? /^\d{0,3}([.,]\d{0,2})?$/.test(raw) : /^\d*$/.test(raw)) setDiscountValueInput(raw); }} /></label></>}
               <label className="field select-field"><span>{id ? "Pembulatan" : "Rounding"}</span><select value={roundingMode} onChange={(event) => { const nextMode = event.target.value as typeof roundingMode; setRoundingMode(nextMode); setRoundingAdjustmentInput(""); }}><option value="None">{id ? "Tanpa pembulatan" : "No rounding"}</option><option value="Up">{id ? "Ke atas" : "Round up"}</option><option value="Down">{id ? "Ke bawah" : "Round down"}</option><option value="Custom">Custom</option></select><ChevronDown size={15} /></label>
               {roundingMode !== "None" && roundingMode !== "Custom" && <label className="field select-field"><span>{id ? "Kelipatan" : "Increment"}</span><select value={roundingStep} onChange={(event) => setRoundingStep(Number(event.target.value))}><option value={1000}>Rp1.000</option><option value={10000}>Rp10.000</option><option value={100000}>Rp100.000</option></select><ChevronDown size={15} /></label>}
               {roundingMode === "Custom" && <><label className="field"><span>{id ? "Penyesuaian (+/-)" : "Adjustment (+/-)"}</span><input type="text" inputMode="numeric" autoComplete="off" placeholder="0" pattern="-?[0-9]*" value={roundingAdjustmentInput} onChange={(event) => { const raw = event.target.value; if (/^-?\d*$/.test(raw)) setRoundingAdjustmentInput(raw); }} /></label><label className="field full"><span>{id ? "Alasan wajib" : "Required reason"}</span><textarea required minLength={5} value={roundingReason} onChange={(event) => setRoundingReason(event.target.value)} /></label></>}
@@ -870,8 +939,8 @@ export function BillingView({
               <div className="invoice-form-summary full"><span>{id ? "Perkiraan total tagihan klien" : "Estimated total billed to client"}</span><strong>{formatCurrency((() => {
                 const previewDiscount = discountEnabled
                   ? discountType === "Percent"
-                    ? Math.round((boqTotal * Math.min(10_000, discountValue)) / 10_000)
-                    : Math.min(boqTotal, discountValue)
+                    ? Math.round((boqTotal * Math.min(10_000, parseDiscountInput("Percent", discountValueInput))) / 10_000)
+                    : Math.min(boqTotal, parseDiscountInput("Nominal", discountValueInput))
                   : 0;
                 const previewBase = Math.max(0, boqTotal - previewDiscount);
                 const beforeRounding = previewBase + (quotation?.taxAdditions ?? 0);

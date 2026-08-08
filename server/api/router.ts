@@ -67,7 +67,10 @@ import {
 import { handleBankAccounts } from "./bank-router";
 import { handleCatalog } from "./catalog-router";
 import { handleCatalogAi } from "./catalog-ai-router";
-import { handleCommercialPackages, ensureDefaultCommercialPackage } from "./commercial-package-router";
+import {
+  handleCommercialPackages,
+  resolveCommercialPackageId,
+} from "./commercial-package-router";
 import {
   handleBoqScopes,
   handleQuotationLifecycle,
@@ -563,6 +566,22 @@ function assertMutationAccess(user: AuthUser, resource: string) {
   }
 }
 
+// Field execution on a procurement document — confirming progress on an SPK and
+// receiving goods on a PO — belongs to the people who are actually on site. An
+// Engineer only carries `procurement: "view"` by default, so the blanket
+// "Kelola" gate below would reject exactly the role the workflow depends on.
+// The procurement router enforces the real rule for these two endpoints (role
+// in {Admin, Project Manager, Engineer} plus project membership); creating,
+// approving, sending, completing, voiding, and paying keep the Kelola gate.
+function isProcurementFieldExecution(resource: string, path: string[]) {
+  return (
+    resource === "procurement-orders" &&
+    Boolean(path[1]) &&
+    (path[2] === "verifications" || path[2] === "receipts") &&
+    !path[3]
+  );
+}
+
 function hasGlobalProjectScope(user: AuthUser) {
   return user.role === "Admin" || user.role === "Finance";
 }
@@ -772,7 +791,7 @@ async function assertBoqTotalCoversInvoices(
 
 async function detachOrDeleteSystemTransaction(
   client: Awaited<ReturnType<typeof getDatabase>>["client"],
-  source: "Invoice" | "SPK",
+  source: "Invoice" | "SPK" | "Invoice Payment" | "Invoice Payment Reversal",
   referenceId: string,
 ) {
   const result = await client.execute({
@@ -1594,24 +1613,6 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
   }
 
   throw new ApiError(404, "NOT_FOUND", "Endpoint proyek tidak ditemukan.");
-}
-
-async function resolveCommercialPackageId(
-  client: Awaited<ReturnType<typeof getDatabase>>["client"],
-  projectId: string,
-  requestedPackageId?: string | null,
-) {
-  if (!requestedPackageId) {
-    return ensureDefaultCommercialPackage(client, projectId);
-  }
-  const result = await client.execute({
-    sql: "SELECT id FROM project_commercial_packages WHERE id=? AND project_id=? LIMIT 1",
-    args: [requestedPackageId, projectId],
-  });
-  if (!result.rows.length) {
-    throw new ApiError(404, "PACKAGE_NOT_FOUND", "Paket komersial tidak ditemukan.");
-  }
-  return requestedPackageId;
 }
 
 async function getBoq(projectId: string, requestedPackageId?: string | null) {
@@ -3465,9 +3466,14 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
     // tax" used to make every freshly issued invoice uneditable. The real
     // business boundary is the same one deletion uses: payment history, or
     // tax obligations that are already settled/reported.
+    //
+    // Only ACTIVE (Posted) payments lock the invoice. Voiding a payment is the
+    // documented way to correct a mistake — matching every payment row
+    // regardless of status left the invoice permanently frozen after a void,
+    // with no way back.
     const locked = await client.execute({
       sql: `SELECT
-        EXISTS(SELECT 1 FROM invoice_payments WHERE invoice_id=?) AS has_payment,
+        EXISTS(SELECT 1 FROM invoice_payments WHERE invoice_id=? AND status='Posted') AS has_payment,
         EXISTS(
           SELECT 1 FROM tax_obligations o
           JOIN document_taxes dt ON dt.id=o.document_tax_id
@@ -3604,9 +3610,11 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
     if (!mutationRoles("invoices").includes(user.role)) throw new ApiError(403, "FORBIDDEN", "Anda tidak dapat menghapus invoice.");
     const invoice = await ensureExists("SELECT project_id,status FROM invoices WHERE id=?", [invoiceId], "Invoice tidak ditemukan.");
     await assertProjectAccess(user, String(invoice.project_id));
+    // Mirrors the edit guard: a voided payment is a cancelled one and must not
+    // keep the invoice undeletable forever.
     const history = await client.execute({
       sql: `SELECT
-        EXISTS(SELECT 1 FROM invoice_payments WHERE invoice_id=?) AS has_payment,
+        EXISTS(SELECT 1 FROM invoice_payments WHERE invoice_id=? AND status='Posted') AS has_payment,
         EXISTS(
           SELECT 1 FROM tax_obligations o
           JOIN document_taxes dt ON dt.id=o.document_tax_id
@@ -3641,7 +3649,21 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
       );
     }
     await detachOrDeleteSystemTransaction(client, "Invoice", invoiceId);
+    // Only voided payments can still be attached at this point (the guard above
+    // refuses while a Posted payment exists). They and their cash trail must go
+    // with the invoice — invoice_payments.invoice_id is ON DELETE RESTRICT, so
+    // leaving them behind would strand rows pointing at a deleted invoice.
+    const voidedPayments = await client.execute({
+      sql: "SELECT id FROM invoice_payments WHERE invoice_id=?",
+      args: [invoiceId],
+    });
+    for (const row of voidedPayments.rows) {
+      const paymentId = String(row.id);
+      await detachOrDeleteSystemTransaction(client, "Invoice Payment", paymentId);
+      await detachOrDeleteSystemTransaction(client, "Invoice Payment Reversal", paymentId);
+    }
     await client.batch([
+      { sql: "DELETE FROM invoice_payments WHERE invoice_id=?", args: [invoiceId] },
       {
         sql: `DELETE FROM tax_obligations WHERE document_tax_id IN (
           SELECT id FROM document_taxes
@@ -4359,6 +4381,39 @@ async function ensureValidation(
   return readValidation(projectId, packageId, deliveryCycle);
 }
 
+// A project is finished only when every commercial package that actually went
+// into delivery — i.e. every package with an Accepted quotation — carries an
+// active (finalized and not revoked) BAST. Closing the project on the first
+// package's handover used to strand multi-package projects: the remaining
+// packages were still running while the project reported 'Selesai'.
+async function projectHandoverComplete(
+  client: Awaited<ReturnType<typeof getDatabase>>["client"],
+  projectId: string,
+) {
+  const result = await client.execute({
+    sql: `SELECT
+      COUNT(*) AS delivering,
+      COALESCE(SUM(CASE WHEN EXISTS(
+        SELECT 1 FROM basts b
+        WHERE b.package_id=cp.id
+          AND b.finalized_at IS NOT NULL
+          AND b.revoked_at IS NULL
+      ) THEN 1 ELSE 0 END),0) AS handed_over
+      FROM project_commercial_packages cp
+      WHERE cp.project_id=?
+        AND EXISTS(
+          SELECT 1 FROM quotations q
+          WHERE q.package_id=cp.id AND q.status='Accepted'
+        )`,
+    args: [projectId],
+  });
+  const delivering = asNumber(result.rows[0]?.delivering);
+  const handedOver = asNumber(result.rows[0]?.handed_over);
+  // No package in delivery (legacy/degenerate data) keeps the historic
+  // behaviour: the handover closes the project.
+  return delivering === 0 || handedOver >= delivering;
+}
+
 async function assertCompletedValidation(
   projectId: string,
   packageId: string,
@@ -4742,6 +4797,7 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
       args: [verificationToken, seal.signer_name, seal.signer_role, timestamp, bastId],
     });
     let stored: Awaited<ReturnType<typeof storeProjectFile>> | null = null;
+    let projectClosed = false;
     try {
       const pdfResponse = await renderBusinessPdf("bast", bastId, user.preferredLanguage);
       const pdf = await pdfResponse.arrayBuffer();
@@ -4765,15 +4821,20 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
           bastId,
         ],
       });
-      await client.execute({
-        sql: "UPDATE projects SET status='Selesai',updated_at=? WHERE id=?",
-        args: [timestamp, bast.project_id],
-      });
+      // Only the last outstanding package handover closes the project.
+      if (await projectHandoverComplete(client, String(bast.project_id))) {
+        await client.execute({
+          sql: "UPDATE projects SET status='Selesai',updated_at=? WHERE id=?",
+          args: [timestamp, bast.project_id],
+        });
+        projectClosed = true;
+      }
       await writeAuditLog(client, request, user, "finalize", "bast", bastId, {
         pdfHash,
         verificationToken,
         packageId: bast.package_id,
         deliveryCycle: bast.delivery_cycle,
+        projectClosed,
       });
     } catch (error) {
       if (stored?.storageUrl) await cleanupProjectFile(stored.storageUrl, "BAST finalize rollback");
@@ -4784,10 +4845,16 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
           pdf_hash=NULL,finalized_at=NULL,finalized_by=NULL,updated_at=? WHERE id=?`,
         args: [bast.status, now(), bastId],
       });
-      await client.execute({
-        sql: "UPDATE projects SET status=?,updated_at=? WHERE id=?",
-        args: [projectBeforeFinalization.status, now(), bast.project_id],
-      });
+      // Mirror the forward path: restore the project status only if this
+      // finalize is the call that changed it. Rewriting it unconditionally
+      // would clobber a status another package's handover had legitimately
+      // set in the meantime.
+      if (projectClosed) {
+        await client.execute({
+          sql: "UPDATE projects SET status=?,updated_at=? WHERE id=?",
+          args: [projectBeforeFinalization.status, now(), bast.project_id],
+        });
+      }
       throw error;
     }
     await notifyProjectStakeholders(client, {
@@ -5121,7 +5188,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     }));
     const expenseReportResult = await client.execute({
       sql: `SELECT e.number,e.purchase_date,p.code,p.name,c.name AS category_name,
-        c.name_en AS category_name_en,u.name AS submitter,e.merchant,e.funding_source,
+        c.name_en AS category_name_en,u.name AS submitter,
+        COALESCE(payer.name,u.name) AS paid_by,e.payment_method,
+        e.merchant,e.funding_source,
         e.workflow_status,e.settlement_status,e.total_amount,
         CASE WHEN e.workflow_status='Approved'
           AND e.funding_source IN ('EmployeePaid','ProjectAdvance')
@@ -5132,6 +5201,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         JOIN projects p ON p.id=e.project_id
         JOIN project_expense_categories c ON c.id=e.category_id
         JOIN users u ON u.id=e.created_by
+        LEFT JOIN users payer ON payer.id=e.paid_by_user_id
         LEFT JOIN (
           SELECT expense_id,
             SUM(CASE WHEN settlement_type='AdvanceAllocation' AND status='Posted' THEN amount ELSE 0 END) AS allocated,
@@ -5150,6 +5220,9 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         ? String(row.category_name_en)
         : String(row.category_name),
       submitter: String(row.submitter),
+      // Old rows have no paid_by_user_id, so the creditor falls back to the submitter.
+      paidBy: String(row.paid_by),
+      paymentMethod: String(row.payment_method ?? "Tunai"),
       merchant: String(row.merchant),
       fundingSource: String(row.funding_source),
       workflowStatus: String(row.workflow_status),
@@ -5277,6 +5350,8 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
             en ? "Merchant" : "Toko",
             en ? "Category" : "Kategori",
             en ? "Funding source" : "Sumber dana",
+            en ? "Payment method" : "Metode pembayaran",
+            en ? "Reimbursement owed to" : "Utang reimbursement kepada",
             en ? "Workflow status" : "Status pengajuan",
             en ? "Settlement status" : "Status keuangan",
             "Amount (IDR)",
@@ -5290,6 +5365,8 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
             row.merchant,
             row.category,
             row.fundingSource,
+            row.paymentMethod,
+            row.reimbursementOutstanding > 0 ? row.paidBy : "",
             row.workflowStatus,
             row.settlementStatus,
             row.amount,
@@ -6149,7 +6226,11 @@ export async function dispatchApi(request: Request, path: string[]) {
   }
   const accessModule = resourceModules[resource];
   if (accessModule) {
-    if (request.method === "GET" || request.method === "HEAD") {
+    if (
+      request.method === "GET" ||
+      request.method === "HEAD" ||
+      isProcurementFieldExecution(resource, path)
+    ) {
       assertAccess(user, accessModule, "view");
     } else {
       assertMutationAccess(user, resource);

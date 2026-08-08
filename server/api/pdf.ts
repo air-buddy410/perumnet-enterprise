@@ -95,6 +95,8 @@ export type FinancialReportExpenseRow = {
   project: string;
   category: string;
   submitter: string;
+  paidBy: string;
+  paymentMethod: string;
   merchant: string;
   fundingSource: string;
   workflowStatus: string;
@@ -142,9 +144,23 @@ function tr(language: PdfLanguage, id: string, en: string) {
   return language === "en" ? en : id;
 }
 
+// Several statuses are stored in English. Client-facing Indonesian documents
+// must not print "ACCEPTED" or "COMPLETED" in their status pills, so the few
+// stored English words that reach a label are translated here as well.
+const indonesianValues: Record<string, string> = {
+  Accepted: "Diterima",
+  Approved: "Disetujui",
+  Completed: "Selesai",
+  Rejected: "Ditolak",
+  Sent: "Terkirim",
+  Superseded: "Digantikan",
+  Posted: "Tercatat",
+  Void: "Dibatalkan",
+};
+
 function localizeValue(value: unknown, language: PdfLanguage) {
   const source = cleanText(value);
-  if (language === "id") return source;
+  if (language === "id") return indonesianValues[source] ?? source;
   const values: Record<string, string> = {
     Aktif: "Active",
     Nonaktif: "Inactive",
@@ -546,6 +562,39 @@ function drawCallout(
   return y + height + 4;
 }
 
+type DocumentTaxLine = {
+  name: string;
+  nameEn: string;
+  effect: string;
+  amount: number;
+};
+
+// Client-facing documents must never suggest that a withheld tax lowers the
+// invoice. Add-effect lines are printed above the total; Withhold-effect lines
+// are printed below it, immediately before the amount actually transferred.
+function addedTaxRows(taxes: DocumentTaxLine[], language: PdfLanguage) {
+  return taxes
+    .filter((tax) => tax.effect !== "Withhold")
+    .map((tax) => ({
+      label: `${language === "en" ? tax.nameEn : tax.name} (${tr(language, "ditambahkan ke tagihan", "added to the bill")})`,
+      value: `+${rupiah(tax.amount, language)}`,
+    }));
+}
+
+function withheldTaxRows(
+  taxes: DocumentTaxLine[],
+  language: PdfLanguage,
+  withheldBy = "",
+) {
+  const by = withheldBy || tr(language, "dipotong klien", "withheld by client");
+  return taxes
+    .filter((tax) => tax.effect === "Withhold")
+    .map((tax) => ({
+      label: `${language === "en" ? tax.nameEn : tax.name} (${by})`,
+      value: `-${rupiah(tax.amount, language)}`,
+    }));
+}
+
 function drawTotals(
   context: PdfContext,
   y: number,
@@ -852,7 +901,7 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
     context,
     y,
     tr(language, "Rincian Penawaran", "Quotation Details"),
-    tr(language, "Nilai berdasarkan Bill of Quantity proyek", "Values are based on the project Bill of Quantity"),
+    tr(language, "Rincian pekerjaan, harga satuan, dan jumlah untuk ruang lingkup di atas", "Work items, unit prices, and amounts for the scope stated above"),
   );
   y = drawTable(
     context,
@@ -873,7 +922,7 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
     ]),
   );
   y = drawTotals(context, y, [
-    { label: "Subtotal", value: rupiah(total, language) },
+    { label: tr(language, "Subtotal pekerjaan", "Work subtotal"), value: rupiah(total, language) },
     ...(asNumber(quotation?.discount_amount) > 0
       ? [
           {
@@ -886,25 +935,26 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
           },
         ]
       : []),
-    ...quotationTax.taxes.map((tax) => ({
-      label: `${language === "en" ? tax.nameEn : tax.name} (${tax.effect === "Add" ? tr(language, "ditagihkan ke klien", "charged to client") : tr(language, "dipotong klien", "withheld by client")})`,
-      value: `${tax.effect === "Withhold" ? "-" : "+"}${rupiah(tax.amount, language)}`,
-    })),
+    // Add-effect tax raises the bill, so it belongs above the total. Withheld
+    // tax never reduces the bill: it is deducted by the client when they pay,
+    // so its line must sit BELOW the total, next to the amount transferred.
+    ...addedTaxRows(quotationTax.taxes, language),
     ...(asNumber(quotation?.rounding_adjustment) !== 0
       ? [{
-          label: tr(language, "Penyesuaian pembulatan", "Rounding adjustment"),
+          label: tr(language, "Pembulatan", "Rounding"),
           value: `${asNumber(quotation?.rounding_adjustment) > 0 ? "+" : ""}${rupiah(quotation?.rounding_adjustment, language)}`,
         }]
       : []),
     {
-      label: tr(language, "Total tagihan klien", "Total billed to client"),
+      label: tr(language, "Total tagihan klien", "Total billed to the client"),
       value: rupiah(
         asNumber(quotation?.grand_total) || quotationTax.grossTotal,
         language,
       ),
     },
+    ...withheldTaxRows(quotationTax.taxes, language),
     {
-      label: tr(language, "Kas bersih", "Net cash due"),
+      label: tr(language, "Dibayarkan ke PerumNet", "Payable to PerumNet"),
       value: rupiah(
         Math.max(
           0,
@@ -920,7 +970,7 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
     context,
     y,
     tr(language, "Ketentuan penawaran dan pajak", "Quotation and tax terms"),
-    tr(language, "Harga berlaku untuk ruang lingkup yang tercantum. Pajak tambah pada dokumen ini dibebankan kepada klien, bukan menjadi biaya proyek PerumNet. Perubahan spesifikasi, volume, lokasi, atau jadwal pekerjaan dikonfirmasi melalui revisi penawaran.", "Prices apply to the stated scope. Added tax in this document is charged to the client and is not a PerumNet project cost. Changes to specifications, quantities, location, or schedule are confirmed through a revised quotation."),
+    tr(language, "Harga di atas berlaku untuk ruang lingkup pekerjaan yang tercantum pada dokumen ini. Pajak yang ditambahkan, misalnya PPN, menambah nilai tagihan. Pajak yang dipotong, misalnya PPh, tidak mengurangi nilai tagihan: klien memotong dan menyetorkannya sendiri, sehingga jumlah yang ditransfer ke PerumNet menjadi lebih kecil dari total tagihan. Perubahan spesifikasi, volume, lokasi, atau jadwal pekerjaan dituangkan dalam penawaran revisi sebelum pekerjaan dimulai.", "The prices above apply to the scope of work stated in this document. Added tax such as VAT increases the amount billed. Withheld tax such as income tax does not reduce the amount billed: the client deducts and remits it directly, so the amount transferred to PerumNet is lower than the total billed. Changes to specifications, quantities, location, or schedule are confirmed in a revised quotation before work begins."),
     "teal",
   );
   y = drawSectionTitle(context, y, tr(language, "Persetujuan", "Approval"));
@@ -930,7 +980,7 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
     {
       heading: tr(language, "Disiapkan oleh", "Prepared by"),
       name: "PerumNet Enterprise",
-      role: "Project / Sales Representative",
+      role: tr(language, "Perwakilan proyek / penjualan", "Project / sales representative"),
     },
     {
       heading: tr(language, "Disetujui oleh", "Approved by"),
@@ -1061,51 +1111,49 @@ async function invoicePdf(invoiceId: string, language: PdfLanguage) {
       label: tr(language, "Nilai kontrak / paket", "Contract / package value"),
       value: rupiah(contractGrandTotal, language),
     },
-    { label: "Subtotal", value: rupiah(allocated ? invoice.subtotal_snapshot : invoice.amount, language) },
+    { label: tr(language, "Subtotal pekerjaan", "Work subtotal"), value: rupiah(allocated ? invoice.subtotal_snapshot : invoice.amount, language) },
     ...(allocated && asNumber(invoice.discount_snapshot) > 0
       ? [{ label: tr(language, "Dikurangi diskon", "Less discount"), value: `-${rupiah(invoice.discount_snapshot, language)}` }]
       : []),
     ...(allocated
       ? [{ label: tr(language, "Dasar pengenaan pajak", "Taxable subtotal"), value: rupiah(invoice.taxable_base_snapshot, language) }]
       : []),
-    ...invoiceTax.taxes.map((tax) => ({
-      label: `${language === "en" ? tax.nameEn : tax.name} (${tax.effect === "Add" ? tr(language, "ditagihkan ke klien", "charged to client") : tr(language, "dipotong klien", "withheld by client")})`,
-      value: `${tax.effect === "Withhold" ? "-" : "+"}${rupiah(tax.amount, language)}`,
-    })),
+    ...addedTaxRows(invoiceTax.taxes, language),
     ...(allocated && asNumber(invoice.rounding_snapshot) !== 0
-      ? [{ label: tr(language, "Penyesuaian pembulatan", "Rounding adjustment"), value: `${asNumber(invoice.rounding_snapshot) > 0 ? "+" : ""}${rupiah(invoice.rounding_snapshot, language)}` }]
+      ? [{ label: tr(language, "Pembulatan", "Rounding"), value: `${asNumber(invoice.rounding_snapshot) > 0 ? "+" : ""}${rupiah(invoice.rounding_snapshot, language)}` }]
       : []),
     {
-      label: tr(language, "Total tagihan klien", "Total billed to client"),
+      label: tr(language, "Total tagihan invoice ini", "Total for this invoice"),
       value: rupiah(invoiceGross, language),
     },
+    ...withheldTaxRows(invoiceTax.taxes, language),
     {
-      label: tr(language, "Kas bersih jatuh tempo", "Net cash due"),
+      label: tr(language, "Dibayarkan ke PerumNet", "Payable to PerumNet"),
       value: rupiah(Math.max(0, invoiceGross - invoiceTax.taxWithholdings), language),
     },
     {
-      label: tr(language, "Pembayaran diterima / prepayment", "Payments received / prepayment"),
+      label: tr(language, "Sudah dibayar", "Already paid"),
       value: rupiah(paidGross, language),
     },
     {
-      label: tr(language, "Balance due invoice", "Invoice balance due"),
+      label: tr(language, "Sisa tagihan invoice ini", "Balance due on this invoice"),
       value: rupiah(Math.max(0, invoiceGross - paidGross), language),
       highlight: true,
     },
     {
-      label: tr(language, "Kontrak belum diterbitkan sebagai invoice", "Contract not yet invoiced"),
+      label: tr(language, "Nilai kontrak belum ditagihkan", "Contract value not yet invoiced"),
       value: rupiah(Math.max(0, contractGrandTotal - packageInvoiced), language),
     },
     {
-      label: tr(language, "Outstanding seluruh invoice paket", "Total package invoice outstanding"),
+      label: tr(language, "Sisa tagihan seluruh paket", "Outstanding across the package"),
       value: rupiah(Math.max(0, packageInvoiced - packagePaid), language),
     },
   ]);
   y = drawCallout(
     context,
     y,
-    tr(language, "Instruksi pembayaran", "Payment instructions"),
-    tr(language, `Gunakan nomor invoice ${cleanText(invoice.number)} sebagai referensi pembayaran. Bukti pembayaran dan pertanyaan terkait tagihan dapat dikirim ke enterprise@perumnet.id. Pembayaran dinyatakan sah setelah dikonfirmasi oleh bagian Finance PerumNet Enterprise.`, `Use invoice number ${cleanText(invoice.number)} as the payment reference. Send payment evidence and billing questions to enterprise@perumnet.id. Payment is valid after confirmation by PerumNet Enterprise Finance.`),
+    tr(language, "Cara pembayaran", "How to pay"),
+    tr(language, `Mohon lakukan pembayaran paling lambat pada tanggal jatuh tempo dan cantumkan nomor invoice ${cleanText(invoice.number)} pada berita transfer. Bila klien memotong pajak, yang ditransfer adalah nilai "Dibayarkan ke PerumNet" dan bukti potong mohon dilampirkan. Kirim bukti transfer serta pertanyaan tentang tagihan ini ke enterprise@perumnet.id. Invoice dinyatakan lunas setelah pembayaran diverifikasi oleh bagian Keuangan PerumNet Enterprise.`, `Please pay on or before the due date and quote invoice number ${cleanText(invoice.number)} in the transfer description. If tax is withheld, transfer the "Payable to PerumNet" amount and attach the withholding slip. Send the transfer receipt and any billing questions to enterprise@perumnet.id. The invoice is marked paid once PerumNet Enterprise Finance has verified the payment.`),
     invoice.status === "Lunas" ? "teal" : "warning",
   );
   y = drawSectionTitle(context, y, tr(language, "Otorisasi", "Authorization"));
@@ -1115,12 +1163,12 @@ async function invoicePdf(invoiceId: string, language: PdfLanguage) {
     {
       heading: tr(language, "Penerima tagihan", "Bill recipient"),
       name: String(invoice.client),
-      role: "Finance / Authorized Representative",
+      role: tr(language, "Bagian keuangan / perwakilan berwenang", "Finance / authorized representative"),
     },
     {
       heading: tr(language, "Diterbitkan oleh", "Issued by"),
       name: "PerumNet Enterprise",
-      role: "Finance Department",
+      role: tr(language, "Bagian Keuangan", "Finance Department"),
     },
   );
   return response(
@@ -1227,10 +1275,10 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
     },
     { label: tr(language, "Nilai pekerjaan", "Work value"), value: rupiah(spk.cost, language) },
     {
-      label: tr(language, "Sumber komersial", "Commercial source"),
+      label: tr(language, "Dasar penerbitan", "Issued against"),
       value: spk.quotation_number
         ? `${String(spk.quotation_number)} · ${String(spk.scope_kind ?? "")} · ${String(spk.scope_title ?? "")}`
-        : tr(language, "Dokumen legacy tanpa relasi BoQ", "Legacy document without BoQ relation"),
+        : tr(language, "Dokumen lama tanpa keterkaitan BoQ", "Older document with no linked BoQ"),
     },
     {
       label: tr(language, "Status persetujuan", "Approval status"),
@@ -1241,11 +1289,11 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
     y = drawSectionTitle(
       context,
       y,
-      tr(language, "Rincian Komitmen", "Commitment Details"),
+      tr(language, "Rincian Pekerjaan yang Dikomitmenkan", "Committed Work Details"),
       tr(
         language,
-        "Budget BoQ dan harga negosiasi vendor dicatat terpisah",
-        "BoQ budget and negotiated vendor prices are recorded separately",
+        "Anggaran internal dan harga yang disepakati bersama vendor dicatat terpisah",
+        "The internal budget and the price agreed with the vendor are recorded separately",
       ),
     );
     y = drawTable(
@@ -1282,16 +1330,18 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
       label: tr(language, "Nilai pekerjaan disepakati", "Agreed work value"),
       value: rupiah(spk.cost, language),
     },
-    ...spkTax.taxes.map((tax) => ({
-      label: `${language === "en" ? tax.nameEn : tax.name} (${tax.effect === "Add" ? "+" : "-"})`,
-      value: rupiah(tax.amount, language),
-    })),
+    ...addedTaxRows(spkTax.taxes, language),
     {
-      label: tr(language, "Nilai bruto", "Gross total"),
+      label: tr(language, "Total tagihan vendor", "Total vendor billing"),
       value: rupiah(spkTax.grossTotal, language),
     },
+    ...withheldTaxRows(
+      spkTax.taxes,
+      language,
+      tr(language, "dipotong PerumNet", "withheld by PerumNet"),
+    ),
     {
-      label: tr(language, "Kas bersih jatuh tempo", "Net cash due"),
+      label: tr(language, "Dibayarkan ke vendor", "Payable to the vendor"),
       value: rupiah(spkTax.netCashDue, language),
       highlight: true,
     },
@@ -1300,7 +1350,12 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
     y = drawSectionTitle(
       context,
       y,
-      tr(language, "Jadwal Termin", "Payment Terms"),
+      tr(language, "Jadwal Pembayaran", "Payment Schedule"),
+      tr(
+        language,
+        "Termin yang bertanda wajib verifikasi baru dapat dibayar setelah progres atau barang diperiksa",
+        "Terms marked as requiring verification are payable only after progress or goods have been checked",
+      ),
     );
     y = drawTable(
       context,
@@ -1323,7 +1378,7 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
         }`,
         asNumber(term.requires_verification)
           ? tr(language, "Wajib", "Required")
-          : tr(language, "Tidak", "No"),
+          : tr(language, "Tidak wajib", "Not required"),
       ]),
     );
   }
@@ -1341,8 +1396,8 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
       [
         { title: tr(language, "Tanggal", "Date"), width: 30 },
         { title: tr(language, "Referensi", "Reference"), width: 56 },
-        { title: tr(language, "Petugas", "Officer"), width: 46 },
-        { title: tr(language, "Nilai / Qty", "Amount / Qty"), width: 50, align: "right" },
+        { title: tr(language, "Diperiksa oleh", "Checked by"), width: 46 },
+        { title: tr(language, "Nilai / Jumlah", "Amount / Quantity"), width: 50, align: "right" },
       ],
       documentType === "PO"
         ? receiptResult.rows.map((receipt) => [
@@ -1351,7 +1406,7 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
               ? String(receipt.receipt_number)
               : tr(language, "Tanpa nomor surat jalan", "No delivery note number"),
             String(receipt.receiver_name ?? "-"),
-            `${asNumber(receipt.received_quantity)} ${tr(language, "unit item", "item units")}`,
+            `${asNumber(receipt.received_quantity)} ${tr(language, "unit diterima", "units received")}`,
           ])
         : verificationResult.rows.map((verification) => [
             displayDate(verification.verified_at, language),
@@ -1412,7 +1467,7 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
     context,
     y,
     tr(language, "Ketentuan Pelaksanaan", "Execution Terms"),
-    tr(language, "Standar minimum pekerjaan vendor", "Minimum vendor work standards"),
+    tr(language, "Standar minimum yang disepakati kedua pihak", "The minimum standards agreed by both parties"),
   );
   y = drawTable(
     context,
@@ -1424,19 +1479,23 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
     [
       [
         1,
-        tr(language, "Pelaksana wajib mengikuti spesifikasi teknis, jadwal, dan arahan Project Manager PerumNet Enterprise.", "The contractor must follow the technical specifications, schedule, and directions from the PerumNet Enterprise Project Manager."),
+        tr(language, "Pelaksana mengerjakan pekerjaan sesuai spesifikasi teknis, jadwal, dan arahan Project Manager PerumNet Enterprise.", "The contractor carries out the work according to the technical specifications, schedule, and directions of the PerumNet Enterprise Project Manager."),
       ],
       [
         2,
-        tr(language, "Perubahan lingkup atau biaya harus memperoleh persetujuan tertulis sebelum dikerjakan.", "Scope or cost changes require written approval before work begins."),
+        tr(language, "Perubahan lingkup, volume, atau biaya harus disetujui tertulis oleh PerumNet Enterprise sebelum dikerjakan.", "Any change to the scope, quantities, or cost must be approved in writing by PerumNet Enterprise before it is carried out."),
       ],
       [
         3,
-        tr(language, "Pelaksana bertanggung jawab atas mutu pekerjaan, keselamatan kerja, kerapian area, dan dokumentasi hasil.", "The contractor is responsible for quality, safety, site cleanliness, and result documentation."),
+        tr(language, "Pelaksana bertanggung jawab atas mutu pekerjaan, keselamatan kerja, kerapian lokasi, serta dokumentasi hasil pekerjaan.", "The contractor is responsible for the quality of the work, occupational safety, site tidiness, and documentation of the results."),
       ],
       [
         4,
-        tr(language, "Penyelesaian pekerjaan diverifikasi melalui pemeriksaan lapangan dan dokumen serah terima.", "Work completion is verified through field inspection and handover documentation."),
+        tr(language, "Termin yang menuntut verifikasi dibayar setelah progres pekerjaan atau penerimaan barang diperiksa dan dicatat oleh PerumNet Enterprise.", "Terms that require verification are paid after PerumNet Enterprise has inspected and recorded the work progress or the goods received."),
+      ],
+      [
+        5,
+        tr(language, "Pekerjaan dinyatakan selesai setelah pemeriksaan di lokasi dan penandatanganan dokumen serah terima.", "The work is considered complete after the on-site inspection and the signing of the handover document."),
       ],
     ],
   );
@@ -1447,7 +1506,7 @@ async function spkPdf(spkId: string, language: PdfLanguage) {
     {
       heading: tr(language, "Pemberi kerja", "Employer"),
       name: "PerumNet Enterprise",
-      role: "Project Manager / Authorized Representative",
+      role: tr(language, "Project Manager / perwakilan berwenang", "Project Manager / authorized representative"),
     },
     {
       heading: tr(language, "Pelaksana", "Contractor"),
@@ -1492,7 +1551,7 @@ async function bastPdf(bastId: string, language: PdfLanguage) {
     { label: tr(language, "Pihak klien", "Client"), value: String(bast.client) },
     { label: tr(language, "Lokasi pekerjaan", "Work location"), value: String(bast.location) },
     {
-      label: tr(language, "Paket / siklus", "Package / cycle"),
+      label: tr(language, "Paket / serah terima ke-", "Package / handover no."),
       value: `${String(bast.package_title ?? "Lingkup Utama")} / ${String(bast.delivery_cycle ?? 1)}`,
     },
     { label: tr(language, "Tanggal serah terima", "Handover date"), value: displayDate(bast.completion_date, language) },
@@ -1508,7 +1567,7 @@ async function bastPdf(bastId: string, language: PdfLanguage) {
     context,
     y,
     tr(language, "Hasil Pekerjaan", "Work Results"),
-    tr(language, "Item terpasang dan telah diverifikasi", "Installed and verified items"),
+    tr(language, "Item yang terpasang dan sudah diperiksa bersama di lokasi", "Items installed and jointly inspected on site"),
   );
   y = drawTable(
     context,
@@ -1579,18 +1638,20 @@ async function bastPdf(bastId: string, language: PdfLanguage) {
     context.doc.setFont("helvetica", "bold");
     context.doc.setFontSize(8.5);
     context.doc.text(
-      tr(language, "VERIFIKASI DOKUMEN DAN CAP DIGITAL INTERNAL", "DOCUMENT AND INTERNAL DIGITAL SEAL VERIFICATION"),
+      tr(language, "CAP INTERNAL PERUMNET DAN TAUTAN PEMERIKSAAN KEASLIAN", "PERUMNET INTERNAL SEAL AND AUTHENTICITY CHECK LINK"),
       MARGIN + 30,
       y + 8,
     );
     context.doc.setTextColor(...colors.muted);
     context.doc.setFont("helvetica", "normal");
     context.doc.setFontSize(7);
+    // The seal must never be presented as a certified electronic signature.
+    // It is PerumNet's own tamper-evident mark plus a link the client can open.
     context.doc.text(
       tr(
         language,
-        `Pindai QR untuk memeriksa status dan hash dokumen. Cap: ${String(bast.seal_name_snapshot ?? "PerumNet Enterprise")} - ${String(bast.seal_role_snapshot ?? "Authorized Representative")}.`,
-        `Scan the QR code to verify document status and hash. Seal: ${String(bast.seal_name_snapshot ?? "PerumNet Enterprise")} - ${String(bast.seal_role_snapshot ?? "Authorized Representative")}.`,
+        `Cap ini adalah cap internal PerumNet Enterprise yang menandai dokumen asli dan belum diubah, bukan tanda tangan elektronik tersertifikasi. Pindai QR atau buka tautan di bawah untuk memastikan keaslian BAST ini. Cap atas nama ${String(bast.seal_name_snapshot ?? "PerumNet Enterprise")} - ${String(bast.seal_role_snapshot ?? "Authorized Representative")}.`,
+        `This is PerumNet Enterprise's own internal seal marking the document as genuine and unaltered; it is not a certified electronic signature. Scan the QR code or open the link below to confirm that this handover certificate is authentic. Seal issued for ${String(bast.seal_name_snapshot ?? "PerumNet Enterprise")} - ${String(bast.seal_role_snapshot ?? "Authorized Representative")}.`,
       ),
       MARGIN + 30,
       y + 14,
@@ -1652,19 +1713,19 @@ export async function renderValidationPdf(
   y = drawCallout(
     context,
     y,
-    tr(language, "Petunjuk validasi", "Validation instructions"),
+    tr(language, "Cara pengisian", "How to complete this form"),
     tr(
       language,
-      "Centang setiap Perangkat dan Material setelah jumlah, pemasangan, fungsi, serta kondisi fisiknya diperiksa di lokasi. Seluruh item wajib lolos sebelum BAST dapat diterbitkan.",
-      "Check each Device and Material after its quantity, installation, function, and physical condition have been inspected on site. Every item must pass before the handover certificate can be issued.",
+      "Centang setiap Perangkat dan Material setelah jumlah, pemasangan, fungsi, dan kondisi fisiknya diperiksa langsung di lokasi. Seluruh item harus tercentang sebelum Berita Acara Serah Terima dapat diterbitkan.",
+      "Tick each Device and Material once its quantity, installation, function, and physical condition have been inspected on site. Every item must be ticked before the handover certificate can be issued.",
     ),
     completed ? "teal" : "warning",
   );
   y = drawSectionTitle(
     context,
     y,
-    tr(language, "Checklist Pengujian", "Test Checklist"),
-    tr(language, "Daftar diambil dari kategori Perangkat dan Material pada BoQ", "Items are sourced from the Device and Material categories in the BoQ"),
+    tr(language, "Daftar Pemeriksaan", "Inspection Checklist"),
+    tr(language, "Daftar ini disusun otomatis dari item Perangkat dan Material pada BoQ", "This list is built automatically from the Device and Material items in the BoQ"),
   );
   y = drawTable(
     context,
@@ -1687,7 +1748,7 @@ export async function renderValidationPdf(
   const checkedCount = items.rows.filter((item) => Boolean(asNumber(item.checked))).length;
   y = drawTotals(context, y, [
     {
-      label: tr(language, "Item tervalidasi", "Validated items"),
+      label: tr(language, "Item sudah diperiksa", "Items checked"),
       value: `${checkedCount} / ${items.rows.length}`,
       highlight: completed,
     },
@@ -1700,7 +1761,7 @@ export async function renderValidationPdf(
       String(validation.notes),
     );
   }
-  y = drawSectionTitle(context, y, tr(language, "Otorisasi Validasi", "Validation Authorization"));
+  y = drawSectionTitle(context, y, tr(language, "Pengesahan Pemeriksaan", "Inspection Sign-off"));
   drawSignaturePair(
     context,
     y,
@@ -1887,8 +1948,8 @@ export async function renderFinancialReportPdf(
       tr(language, "Posisi Pajak", "Tax Position"),
       tr(
         language,
-        "Pajak tambah, potong, settlement, serta outstanding berdasarkan snapshot terkunci",
-        "Tax additions, withholdings, settlements, and outstanding amounts from locked snapshots",
+        "Pajak yang ditambahkan, dipotong, sudah disetor, dan yang masih tersisa, mengikuti nilai pajak yang terkunci pada tiap dokumen",
+        "Tax added, withheld, already settled, and still outstanding, based on the tax values locked on each document",
       ),
     );
     y = drawTable(
@@ -1940,8 +2001,8 @@ export async function renderFinancialReportPdf(
         `${row.number}\n${displayDate(row.date, language)}`,
         `${row.project}\n${row.merchant}`,
         `${row.category}\n${row.submitter}`,
-        `${localizeValue(row.fundingSource, language)}\n${localizeValue(row.workflowStatus, language)} / ${localizeValue(row.settlementStatus, language)}`,
-        `${rupiah(row.amount, language)}${row.reimbursementOutstanding > 0 ? `\n${tr(language, "Utang", "Payable")}: ${rupiah(row.reimbursementOutstanding, language)}` : ""}`,
+        `${localizeValue(row.fundingSource, language)} · ${row.paymentMethod}\n${localizeValue(row.workflowStatus, language)} / ${localizeValue(row.settlementStatus, language)}`,
+        `${rupiah(row.amount, language)}${row.reimbursementOutstanding > 0 ? `\n${tr(language, "Utang", "Payable")} ${row.paidBy}: ${rupiah(row.reimbursementOutstanding, language)}` : ""}`,
       ]),
     );
   }

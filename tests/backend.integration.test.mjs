@@ -127,6 +127,10 @@ after(async () => {
   if (uploadDirectory) rmSync(uploadDirectory, { recursive: true, force: true });
 });
 
+// The approver may never be the submitter. Admin is the only role allowed to
+// override that, and only with a reason that lands in the audit log.
+const SELF_APPROVAL_OVERRIDE = "Admin mencatat sekaligus memverifikasi belanja pengujian ini.";
+
 test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async () => {
   const health = await json("/api/health");
   assert.equal(health.status, "ok");
@@ -602,6 +606,61 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   );
   assert.equal(overriddenCatalogItem.sellingPrice, 1_700_000);
   assert.equal(overriddenCatalogItem.manualPriceOverride, true);
+  const disposableCategory = await json(
+    "/api/catalog/categories",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        boqRole: "Perangkat",
+        name: "Kategori Sekali Pakai",
+        nameEn: "Disposable Category",
+        defaultMargin1Percent: 20,
+        defaultMargin2Percent: 30,
+        status: "Aktif",
+        sortOrder: 950,
+      }),
+    },
+    201,
+  );
+  const disposableBrand = await json(
+    "/api/catalog/brands",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        categoryId: disposableCategory.id,
+        name: "Merek Sekali Pakai",
+        status: "Nonaktif",
+        sortOrder: 7,
+      }),
+    },
+    201,
+  );
+  await json(`/api/catalog/brands/${disposableBrand.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name: "Merek Sekali Pakai Baru" }),
+  });
+  const renamedBrand = (await json("/api/catalog?includeInactive=true")).brands.find(
+    (entry) => entry.id === disposableBrand.id,
+  );
+  assert.equal(renamedBrand.name, "Merek Sekali Pakai Baru");
+  assert.equal(renamedBrand.status, "Nonaktif");
+  assert.equal(renamedBrand.sortOrder, 7);
+  await json(`/api/catalog/categories/${disposableCategory.id}`, { method: "DELETE" }, 204);
+  assert.equal(
+    (await json("/api/catalog?includeInactive=true")).categories.some(
+      (entry) => entry.id === disposableCategory.id,
+    ),
+    false,
+  );
+  assert.equal(
+    (
+      await request(`/api/catalog/categories/${networkingCategory.id}`, {
+        method: "DELETE",
+      })
+    ).status,
+    409,
+  );
+
   const catalogExport = await request("/api/catalog/export.xlsx");
   assert.equal(catalogExport.status, 200);
   const catalogWorkbook = new ExcelJS.Workbook();
@@ -2537,6 +2596,25 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   const profitBeforeEmployeeExpense = await json(
     `/api/profit-shares?projectId=${project.id}`,
   );
+  // The approver may not be the submitter. Every expense in this flow was
+  // recorded by the Admin who is now approving it, so each approval must carry
+  // an audited override reason; Finance would be refused outright.
+  const missingOverrideReason = await request(
+    `/api/project-expenses/${employeeExpense.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        settlementDate: "2026-07-30",
+        duplicateAcknowledged: false,
+        paymentReference: "",
+      }),
+    },
+  );
+  assert.equal(missingOverrideReason.status, 422);
+  assert.equal(
+    (await missingOverrideReason.json()).error.code,
+    "OVERRIDE_REASON_REQUIRED",
+  );
   const approvedEmployeeExpense = await json(
     `/api/project-expenses/${employeeExpense.id}/approve`,
     {
@@ -2545,6 +2623,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
         settlementDate: "2026-07-30",
         duplicateAcknowledged: false,
         paymentReference: "",
+        selfApprovalReason: SELF_APPROVAL_OVERRIDE,
       }),
     },
   );
@@ -2696,6 +2775,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
         bankAccountId: bankAccount.id,
         paymentReference: "BCA-BLJ-001",
         duplicateAcknowledged: false,
+        selfApprovalReason: SELF_APPROVAL_OVERRIDE,
       }),
     },
   );
@@ -2769,6 +2849,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
         advanceId: projectAdvance.id,
         paymentReference: projectAdvance.number,
         duplicateAcknowledged: false,
+        selfApprovalReason: SELF_APPROVAL_OVERRIDE,
       }),
     },
   );
@@ -2841,6 +2922,7 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
         advanceId: projectAdvance.id,
         paymentReference: projectAdvance.number,
         duplicateAcknowledged: false,
+        selfApprovalReason: SELF_APPROVAL_OVERRIDE,
       }),
     },
   );
@@ -2856,11 +2938,319 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     `/api/profit-shares?projectId=${project.id}`,
   );
   assert.equal(protectedProfitWithReimbursements.outstandingReimbursement, 140_000);
+
+  // A company purchase paid by bank transfer must name the account it left.
+  const transferWithoutAccount = await request("/api/project-expenses", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId: project.id,
+      purchaseDate: "2026-08-03",
+      merchant: "Toko Transfer Tanpa Rekening",
+      categoryId: materialExpenseCategory.id,
+      totalAmount: 60_000,
+      fundingSource: "CompanyAccount",
+      paymentMethod: "Transfer Bank",
+      notes: "",
+      itemDetails: [],
+    }),
+  });
+  assert.equal(transferWithoutAccount.status, 422);
+  assert.equal(
+    (await transferWithoutAccount.json()).error.code,
+    "EXPENSE_BANK_ACCOUNT_REQUIRED",
+  );
+  const transferExpense = await json(
+    "/api/project-expenses",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        purchaseDate: "2026-08-03",
+        merchant: "Toko Transfer Bank",
+        categoryId: materialExpenseCategory.id,
+        totalAmount: 60_000,
+        fundingSource: "CompanyAccount",
+        paymentMethod: "Transfer Bank",
+        bankAccountId: bankAccount.id,
+        notes: "Pembelian ditransfer dari rekening perusahaan.",
+        itemDetails: [],
+      }),
+    },
+    201,
+  );
+  assert.equal(transferExpense.paymentMethod, "Transfer Bank");
+  assert.equal(transferExpense.bankAccountId, bankAccount.id);
+  // A partial PATCH must not reset the funding data captured with the receipt.
+  const patchedTransferExpense = await json(
+    `/api/project-expenses/${transferExpense.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ merchant: "Toko Transfer Bank Utama" }),
+    },
+  );
+  assert.equal(patchedTransferExpense.merchant, "Toko Transfer Bank Utama");
+  assert.equal(patchedTransferExpense.paymentMethod, "Transfer Bank");
+  assert.equal(patchedTransferExpense.bankAccountId, bankAccount.id);
+  assert.equal(patchedTransferExpense.fundingSource, "CompanyAccount");
+  assert.equal(patchedTransferExpense.totalAmount, 60_000);
+  const transferReceiptForm = new FormData();
+  transferReceiptForm.set(
+    "file",
+    new File(
+      [Buffer.from("%PDF-1.6\n7 0 obj<</Type/Catalog>>endobj\n%%EOF")],
+      "nota-transfer.pdf",
+      { type: "application/pdf" },
+    ),
+  );
+  await json(
+    `/api/project-expenses/${transferExpense.id}/attachments`,
+    { method: "POST", body: transferReceiptForm },
+    201,
+  );
+  await json(`/api/project-expenses/${transferExpense.id}/submit`, {
+    method: "POST",
+    body: JSON.stringify({ duplicateAcknowledged: false }),
+  });
+  // Approval deliberately omits bankAccountId: the capture-time account wins.
+  const approvedTransferExpense = await json(
+    `/api/project-expenses/${transferExpense.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        settlementDate: "2026-08-03",
+        paymentReference: "BCA-BLJ-TRF-001",
+        duplicateAcknowledged: false,
+        selfApprovalReason: SELF_APPROVAL_OVERRIDE,
+      }),
+    },
+  );
+  assert.equal(approvedTransferExpense.settlementStatus, "Posted");
+  assert.equal(approvedTransferExpense.bankAccountId, bankAccount.id);
+  const transferSettlement = approvedTransferExpense.settlements.find(
+    (settlement) => settlement.type === "CompanyPayment",
+  );
+  assert.equal(transferSettlement.bankAccountId, bankAccount.id);
+  assert.ok(transferSettlement.transactionId);
+  const transferTransaction = (
+    await json(`/api/transactions?projectId=${project.id}`)
+  ).find((entry) => entry.id === transferSettlement.transactionId);
+  assert.equal(transferTransaction.source, "Project Expense");
+  assert.equal(transferTransaction.amount, 60_000);
+
+  // Personal funds may belong to a teammate, and the payable follows them.
+  const teammatePaidExpense = await json(
+    "/api/project-expenses",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        purchaseDate: "2026-08-03",
+        merchant: "Toko Talangan Rekan",
+        categoryId: materialExpenseCategory.id,
+        totalAmount: 90_000,
+        fundingSource: "EmployeePaid",
+        paymentMethod: "Tunai",
+        paidByUserId: receivingEngineer.id,
+        notes: "Ditalangi rekan satu proyek.",
+        itemDetails: [],
+      }),
+    },
+    201,
+  );
+  assert.equal(teammatePaidExpense.paidByUserId, receivingEngineer.id);
+  assert.equal(teammatePaidExpense.paidByName, receivingEngineer.name);
+  assert.notEqual(
+    teammatePaidExpense.paidByUserId,
+    teammatePaidExpense.createdBy,
+  );
+  const teammateReceiptForm = new FormData();
+  teammateReceiptForm.set(
+    "file",
+    new File(
+      [Buffer.from("%PDF-1.7\n8 0 obj<</Type/Catalog>>endobj\n%%EOF")],
+      "nota-talangan-rekan.pdf",
+      { type: "application/pdf" },
+    ),
+  );
+  await json(
+    `/api/project-expenses/${teammatePaidExpense.id}/attachments`,
+    { method: "POST", body: teammateReceiptForm },
+    201,
+  );
+  await json(`/api/project-expenses/${teammatePaidExpense.id}/submit`, {
+    method: "POST",
+    body: JSON.stringify({ duplicateAcknowledged: false }),
+  });
+  const approvedTeammateExpense = await json(
+    `/api/project-expenses/${teammatePaidExpense.id}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        settlementDate: "2026-08-03",
+        duplicateAcknowledged: false,
+        paymentReference: "",
+        selfApprovalReason: SELF_APPROVAL_OVERRIDE,
+      }),
+    },
+  );
+  assert.equal(approvedTeammateExpense.settlementStatus, "AwaitingReimbursement");
+  assert.equal(approvedTeammateExpense.reimbursementOutstanding, 90_000);
+  assert.equal(approvedTeammateExpense.paidByName, receivingEngineer.name);
+  await json(`/api/project-expenses/${teammatePaidExpense.id}/reimburse`, {
+    method: "POST",
+    body: JSON.stringify({
+      amount: 40_000,
+      settlementDate: "2026-08-03",
+      bankAccountId: bankAccount.id,
+      paymentReference: "BCA-REIMB-REKAN-001",
+    }),
+  });
+  const teammateReimbursement = (
+    await json(`/api/transactions?projectId=${project.id}`)
+  ).find(
+    (entry) =>
+      entry.source === "Project Expense Reimbursement" &&
+      entry.amount === 40_000,
+  );
+  assert.match(
+    teammateReimbursement.description,
+    new RegExp(receivingEngineer.name),
+  );
+  assert.doesNotMatch(teammateReimbursement.description, /Dewa Mahardika/);
+
+  // Advance funding is gated on a real unsettled advance balance for the project.
+  const advanceExpensePayload = {
+    projectId: project.id,
+    purchaseDate: "2026-08-04",
+    merchant: "Toko Tanpa Uang Muka",
+    categoryId: materialExpenseCategory.id,
+    totalAmount: 45_000,
+    fundingSource: "ProjectAdvance",
+    paymentMethod: "Tunai",
+    notes: "Menunggu uang muka aktif.",
+    itemDetails: [],
+  };
+  const blockedAdvanceExpense = await request("/api/project-expenses", {
+    method: "POST",
+    body: JSON.stringify(advanceExpensePayload),
+  });
+  assert.equal(blockedAdvanceExpense.status, 422);
+  const blockedAdvanceError = (await blockedAdvanceExpense.json()).error;
+  assert.equal(blockedAdvanceError.code, "ADVANCE_UNAVAILABLE");
+  assert.match(blockedAdvanceError.message, /Cairkan uang muka melalui menu Uang Muka/);
+  const secondAdvance = await json(
+    "/api/project-advances",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        recipientUserId: receivingEngineer.id,
+        amount: 120_000,
+        disbursedDate: "2026-08-04",
+        bankAccountId: bankAccount.id,
+        paymentReference: "BCA-UM-002",
+        notes: "Uang muka lanjutan.",
+      }),
+    },
+    201,
+  );
+  assert.equal(secondAdvance.outstanding, 120_000);
+  const allowedAdvanceExpense = await json(
+    "/api/project-expenses",
+    { method: "POST", body: JSON.stringify(advanceExpensePayload) },
+    201,
+  );
+  const allowedAdvanceForm = new FormData();
+  allowedAdvanceForm.set(
+    "file",
+    new File(
+      [Buffer.from("%PDF-1.3\n9 0 obj<</Type/Catalog>>endobj\n%%EOF")],
+      "nota-uang-muka-lanjutan.pdf",
+      { type: "application/pdf" },
+    ),
+  );
+  await json(
+    `/api/project-expenses/${allowedAdvanceExpense.id}/attachments`,
+    { method: "POST", body: allowedAdvanceForm },
+    201,
+  );
+  assert.equal(
+    (
+      await json(`/api/project-expenses/${allowedAdvanceExpense.id}/submit`, {
+        method: "POST",
+        body: JSON.stringify({ duplicateAcknowledged: false }),
+      })
+    ).workflowStatus,
+    "Submitted",
+  );
+  // A draft captured while the advance was open is re-checked on submit.
+  const staleAdvanceExpense = await json(
+    "/api/project-expenses",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ...advanceExpensePayload,
+        merchant: "Toko Uang Muka Kedaluwarsa",
+        totalAmount: 35_000,
+      }),
+    },
+    201,
+  );
+  const staleAdvanceForm = new FormData();
+  staleAdvanceForm.set(
+    "file",
+    new File(
+      [Buffer.from("%PDF-1.2\n10 0 obj<</Type/Catalog>>endobj\n%%EOF")],
+      "nota-uang-muka-kedaluwarsa.pdf",
+      { type: "application/pdf" },
+    ),
+  );
+  await json(
+    `/api/project-expenses/${staleAdvanceExpense.id}/attachments`,
+    { method: "POST", body: staleAdvanceForm },
+    201,
+  );
+  await json(`/api/project-advances/${secondAdvance.id}/return`, {
+    method: "POST",
+    body: JSON.stringify({
+      amount: 120_000,
+      returnDate: "2026-08-04",
+      bankAccountId: bankAccount.id,
+      paymentReference: "BCA-RET-UM-002",
+    }),
+  });
+  const staleAdvanceSubmit = await request(
+    `/api/project-expenses/${staleAdvanceExpense.id}/submit`,
+    {
+      method: "POST",
+      body: JSON.stringify({ duplicateAcknowledged: false }),
+    },
+  );
+  assert.equal(staleAdvanceSubmit.status, 422);
+  assert.equal(
+    (await staleAdvanceSubmit.json()).error.code,
+    "ADVANCE_UNAVAILABLE",
+  );
+  // Invoice cash is decision context for disbursement, never a gate.
+  const advanceContext = await json(
+    `/api/project-advances/eligible-users?projectId=${project.id}`,
+  );
+  assert.ok(advanceContext.users.some((person) => person.id === receivingEngineer.id));
+  assert.equal(typeof advanceContext.invoiceCashReceived, "number");
+  assert.equal(advanceContext.outstandingAdvance, 0);
+  const expensePayers = await json(
+    `/api/project-expenses/payers?projectId=${project.id}`,
+  );
+  assert.ok(expensePayers.some((person) => person.id === receivingEngineer.id));
+
   const expenseCsv = await request(
     `/api/project-expenses/report.csv?projectId=${project.id}`,
   );
   assert.equal(expenseCsv.status, 200);
-  assert.match(await expenseCsv.text(), /Toko Material Integrasi/);
+  const expenseCsvText = await expenseCsv.text();
+  assert.match(expenseCsvText, /Toko Material Integrasi/);
+  assert.match(expenseCsvText, /Transfer Bank/);
+  assert.match(expenseCsvText, new RegExp(receivingEngineer.name));
   const expensePdf = await request(
     `/api/project-expenses/report.pdf?projectId=${project.id}`,
   );
@@ -2976,6 +3366,21 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
     ).status,
     409,
   );
+  // Finance stays payment-only: progress verification is rejected on role
+  // grounds (403), before any workflow-status validation.
+  assert.equal(
+    (
+      await request(`/api/procurement-orders/${financeSpk.id}/verifications`, {
+        method: "POST",
+        body: JSON.stringify({
+          termId: editedFinanceSpk.terms[0].id,
+          verifiedAmount: 240_000,
+          progressPercentage: 100,
+        }),
+      })
+    ).status,
+    403,
+  );
   await json("/api/auth/logout", { method: "POST" });
   cookie = "";
   await json("/api/auth/login", {
@@ -2994,6 +3399,63 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
       })
     ).approvalStatus,
     "Approved",
+  );
+
+  // Admin must be able to release the flow itself: verify progress (the demo
+  // account is Admin — without this the SPK dead-ends with availableToPay=0),
+  // then pay the released term and complete the document.
+  const sentFinanceSpk = await json(
+    `/api/procurement-orders/${financeSpk.id}/send`,
+    { method: "POST" },
+  );
+  assert.equal(sentFinanceSpk.workflowStatus, "Dikirim");
+  assert.equal(sentFinanceSpk.availableToPay, 0, "nothing payable before verification");
+  assert.equal(sentFinanceSpk.outstanding, 240_000);
+  const adminVerifiedSpk = await json(
+    `/api/procurement-orders/${financeSpk.id}/verifications`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        termId: sentFinanceSpk.terms[0].id,
+        verifiedAmount: 240_000,
+        progressPercentage: 100,
+        notes: "Progres diverifikasi langsung oleh Admin.",
+      }),
+    },
+    201,
+  );
+  assert.equal(adminVerifiedSpk.workflowStatus, "Dikerjakan");
+  assert.equal(
+    adminVerifiedSpk.availableToPay,
+    240_000,
+    "Admin verification releases the term for payment",
+  );
+  const adminSettledSpk = await json(
+    `/api/procurement-orders/${financeSpk.id}/payments`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        termId: sentFinanceSpk.terms[0].id,
+        amount: 240_000,
+        paidDate: "2026-07-31",
+        vendorInvoiceNumber: "TAG-SPK-ADMIN-001",
+        paymentReference: "BCA-SPK-ADMIN-001",
+        paymentMethod: "Transfer Bank",
+        bankAccountId: bankAccount.id,
+        attachment: paymentEvidence,
+      }),
+    },
+    201,
+  );
+  assert.equal(adminSettledSpk.paymentStatus, "Lunas");
+  assert.equal(adminSettledSpk.outstanding, 0);
+  assert.equal(
+    (
+      await json(`/api/procurement-orders/${financeSpk.id}/complete`, {
+        method: "POST",
+      })
+    ).workflowStatus,
+    "Selesai",
   );
 
   assert.equal(
@@ -3040,6 +3502,17 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
   assert.match(csvText, /PROJECT PROFIT DISTRIBUTION - LIFETIME/);
   assert.match(csvText, /COMPANY BANK POSITION/);
   assert.match(csvText, /VENDOR COMMITMENTS/);
+  // Reimbursement payables name the person who actually spent the money.
+  assert.match(csvText, /"Reimbursement owed to"/);
+  assert.match(csvText, new RegExp(`"${receivingEngineer.name}"`));
+  const financePdf = await request(
+    `/api/transactions/report.pdf?projectId=${project.id}`,
+  );
+  assert.equal(financePdf.status, 200);
+  assert.equal(
+    Buffer.from(await financePdf.arrayBuffer()).subarray(0, 4).toString(),
+    "%PDF",
+  );
   const sopPdf = await request("/api/help/sop.pdf?language=en");
   assert.equal(sopPdf.status, 200);
   assert.equal(sopPdf.headers.get("content-type"), "application/pdf");
@@ -3413,5 +3886,575 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
       (entry) => entry.projectId === project.id,
     ),
     false,
+  );
+}, { timeout: 45_000 });
+
+// ---------------------------------------------------------------------------
+// Regression: field staff must be able to evidence work with default rights.
+// ---------------------------------------------------------------------------
+const FIELD_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+const fieldToday = new Date().toISOString().slice(0, 10);
+
+function fieldAttachment(label) {
+  return { name: `${label}.png`, mimeType: "image/png", contentBase64: FIELD_PNG };
+}
+
+async function loginAsAdmin() {
+  await request("/api/auth/logout", { method: "POST" });
+  cookie = "";
+  await json("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "admin@perumnet.id",
+      password: "perumnet123",
+      remember: false,
+    }),
+  });
+}
+
+async function createRegressionProject(name) {
+  return await json(
+    "/api/projects",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        client: "Klien Regresi",
+        location: "Denpasar",
+        status: "Aktif",
+        value: 0,
+      }),
+    },
+    201,
+  );
+}
+
+async function addRegressionBoqItem(projectId, packageId, category, sellingPrice, description) {
+  const query = packageId
+    ? `projectId=${projectId}&packageId=${packageId}`
+    : `projectId=${projectId}`;
+  return await json(
+    `/api/boq/items?${query}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        category,
+        description,
+        quantity: 1,
+        unit: "paket",
+        costPrice: Math.round(sellingPrice / 2),
+        sellingPrice,
+      }),
+    },
+    201,
+  );
+}
+
+// Sends and accepts the package quotation; returns the accepted scope detail.
+async function acceptRegressionQuotation(projectId, packageId, label) {
+  const query = packageId
+    ? `projectId=${projectId}&packageId=${packageId}`
+    : `projectId=${projectId}`;
+  const sent = await json(`/api/quotations?${query}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Sent" }),
+  });
+  const scope = await json(`/api/quotations/${sent.id}/accept`, {
+    method: "POST",
+    body: JSON.stringify({ acceptedAt: fieldToday, attachment: fieldAttachment(label) }),
+  });
+  return { quotationId: sent.id, scope };
+}
+
+test("an Engineer on default permissions verifies progress and receives goods, but never approves or pays", async () => {
+  await loginAsAdmin();
+  const project = await createRegressionProject("Proyek Verifikasi Lapangan");
+  await addRegressionBoqItem(project.id, null, "Jasa", 1_000_000, "Instalasi lapangan");
+  await addRegressionBoqItem(project.id, null, "Perangkat", 600_000, "Access point lapangan");
+  const accepted = await acceptRegressionQuotation(project.id, null, "verifikasi-lapangan");
+  const serviceItem = accepted.scope.items.find((item) => item.category === "Jasa");
+  const goodsItem = accepted.scope.items.find((item) => item.category === "Perangkat");
+
+  const vendor = await json(
+    "/api/vendors",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Vendor Lapangan Regresi",
+        vendorType: "Hybrid",
+        category: "Teknisi Jaringan",
+        contact: "081200001111",
+        rate: 400_000,
+        status: "Aktif",
+      }),
+    },
+    201,
+  );
+
+  async function approvedAndSent(documentType, boqItemId, agreedUnitCost) {
+    const order = await json(
+      "/api/procurement-orders",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          documentType,
+          vendorId: vendor.id,
+          projectId: project.id,
+          quotationId: accepted.quotationId,
+          items: [{ boqItemId, quantity: 1, agreedUnitCost }],
+          terms: [{ label: "Pelunasan", type: "Final", percentage: 100 }],
+        }),
+      },
+      201,
+    );
+    await json(`/api/procurement-orders/${order.id}/submit`, { method: "POST" });
+    await json(`/api/procurement-orders/${order.id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ overrideReason: "Persetujuan Admin untuk pengujian regresi." }),
+    });
+    return await json(`/api/procurement-orders/${order.id}/send`, { method: "POST" });
+  }
+
+  const spk = await approvedAndSent("SPK", serviceItem.id, 400_000);
+  const purchaseOrder = await approvedAndSent("PO", goodsItem.id, 300_000);
+
+  // No `permissions` payload: the Engineer keeps the role defaults, which give
+  // procurement "view" only. Field verification must still work.
+  const fieldEngineer = await json(
+    "/api/users",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Engineer Lapangan Regresi",
+        email: "engineer.lapangan@perumnet.id",
+        password: "Engineer-Lapangan-2026",
+        role: "Engineer",
+        status: "Aktif",
+      }),
+    },
+    201,
+  );
+  assert.equal(fieldEngineer.permissions.procurement, "view");
+  await json(`/api/projects/${project.id}/access`, {
+    method: "PUT",
+    body: JSON.stringify({ userIds: [fieldEngineer.id] }),
+  });
+
+  await request("/api/auth/logout", { method: "POST" });
+  cookie = "";
+  await json("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "engineer.lapangan@perumnet.id",
+      password: "Engineer-Lapangan-2026",
+      remember: false,
+    }),
+  });
+
+  const verified = await json(
+    `/api/procurement-orders/${spk.id}/verifications`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        termId: spk.terms[0].id,
+        verifiedAmount: 400_000,
+        progressPercentage: 100,
+        notes: "Progres lapangan diverifikasi Engineer.",
+      }),
+    },
+    201,
+  );
+  assert.equal(verified.workflowStatus, "Dikerjakan");
+  assert.equal(verified.availableToPay, 400_000, "verification releases the term for payment");
+
+  const received = await json(
+    `/api/procurement-orders/${purchaseOrder.id}/receipts`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        receivedAt: fieldToday,
+        receiptNumber: "SJ-REGRESI-001",
+        items: [{ spkItemId: purchaseOrder.items[0].id, quantity: 1 }],
+      }),
+    },
+    201,
+  );
+  assert.equal(received.workflowStatus, "Diterima");
+  assert.equal(received.availableToPay, 300_000);
+
+  // Commercial authority stays exactly where it was: creating, approving,
+  // sending, completing, and paying still demand the Kelola permission.
+  assert.equal(
+    (
+      await request(`/api/procurement-orders/${spk.id}/approve`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      })
+    ).status,
+    403,
+    "the field Engineer still cannot approve",
+  );
+  assert.equal(
+    (
+      await request(`/api/procurement-orders/${spk.id}/payments`, {
+        method: "POST",
+        body: JSON.stringify({
+          termId: spk.terms[0].id,
+          amount: 400_000,
+          paidDate: fieldToday,
+          vendorInvoiceNumber: "TAG-REGRESI-001",
+          paymentReference: "BCA-REGRESI-001",
+          paymentMethod: "Tunai",
+          attachment: fieldAttachment("bukti-bayar"),
+        }),
+      })
+    ).status,
+    403,
+    "the field Engineer still cannot pay",
+  );
+  assert.equal(
+    (
+      await request("/api/procurement-orders", {
+        method: "POST",
+        body: JSON.stringify({
+          documentType: "SPK",
+          vendorId: vendor.id,
+          projectId: project.id,
+          quotationId: accepted.quotationId,
+          items: [{ boqItemId: serviceItem.id, quantity: 1, agreedUnitCost: 100_000 }],
+          terms: [{ label: "Pelunasan", type: "Final", percentage: 100 }],
+        }),
+      })
+    ).status,
+    403,
+    "the field Engineer still cannot create commitments",
+  );
+  assert.equal(
+    (await request(`/api/procurement-orders/${spk.id}/complete`, { method: "POST" })).status,
+    403,
+    "the field Engineer still cannot complete a document",
+  );
+
+  await loginAsAdmin();
+  await json(`/api/projects/${project.id}`, { method: "DELETE" }, 204);
+}, { timeout: 45_000 });
+
+// ---------------------------------------------------------------------------
+// Regression: one package's handover must not close a multi-package project.
+// ---------------------------------------------------------------------------
+test("a multi-package project only reaches Selesai when every delivering package is handed over", async () => {
+  await loginAsAdmin();
+  await json("/api/bast/settings/seal", {
+    method: "PUT",
+    body: JSON.stringify({
+      enabled: true,
+      signerName: "Direktur PerumNet",
+      signerRole: "Direktur",
+      sealMimeType: "image/png",
+      sealContentBase64: FIELD_PNG,
+    }),
+  });
+  const signature = `data:image/png;base64,${FIELD_PNG}`;
+  const project = await createRegressionProject("Proyek Dua Paket Serah Terima");
+  const packages = await json(`/api/projects/${project.id}/packages`);
+  const packageA = packages[0];
+  const packageB = await json(
+    `/api/projects/${project.id}/packages`,
+    {
+      method: "POST",
+      body: JSON.stringify({ title: "Paket B", status: "Active", sortOrder: 1 }),
+    },
+    201,
+  );
+  await addRegressionBoqItem(project.id, packageA.id, "Perangkat", 1_000_000, "Perangkat paket A");
+  await addRegressionBoqItem(project.id, packageB.id, "Perangkat", 2_000_000, "Perangkat paket B");
+  await acceptRegressionQuotation(project.id, packageA.id, "paket-a");
+  await acceptRegressionQuotation(project.id, packageB.id, "paket-b");
+
+  async function finalizePackageBast(commercialPackage, label) {
+    const validation = await json(
+      `/api/validations?projectId=${project.id}&packageId=${commercialPackage.id}`,
+      { method: "POST" },
+      201,
+    );
+    await json(`/api/validations/${validation.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: "Completed",
+        notes: `Seluruh perangkat ${label} lulus pengujian.`,
+        items: validation.items.map((item) => ({ ...item, checked: true })),
+      }),
+    });
+    const bast = await json(
+      "/api/bast",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          projectId: project.id,
+          packageId: commercialPackage.id,
+          completionDate: fieldToday,
+          notes: `Serah terima ${label} telah diuji bersama klien.`,
+          installedItems: [{ name: `Perangkat ${label}`, quantity: "1 unit", status: "Terpasang" }],
+          clientName: "Klien Regresi",
+          clientRole: "Manager",
+          clientSignature: signature,
+          engineerName: "Dewa Mahardika",
+          engineerRole: "Engineer",
+          engineerSignature: signature,
+          status: "Draft",
+        }),
+      },
+      201,
+    );
+    return await json(`/api/bast/${bast.id}/finalize`, { method: "POST" });
+  }
+
+  const finalA = await finalizePackageBast(packageA, "paket A");
+  assert.equal(finalA.status, "Final");
+  assert.equal(
+    (await json(`/api/projects/${project.id}`)).status,
+    "Aktif",
+    "package B is still in delivery, so the project must stay open",
+  );
+
+  const finalB = await finalizePackageBast(packageB, "paket B");
+  assert.equal(finalB.status, "Final");
+  assert.equal(
+    (await json(`/api/projects/${project.id}`)).status,
+    "Selesai",
+    "the last package handover closes the project",
+  );
+
+  // A single-package project keeps the historic behaviour.
+  const solo = await createRegressionProject("Proyek Satu Paket Serah Terima");
+  const soloPackages = await json(`/api/projects/${solo.id}/packages`);
+  await addRegressionBoqItem(solo.id, soloPackages[0].id, "Perangkat", 900_000, "Perangkat tunggal");
+  await acceptRegressionQuotation(solo.id, soloPackages[0].id, "paket-tunggal");
+  const soloValidation = await json(
+    `/api/validations?projectId=${solo.id}&packageId=${soloPackages[0].id}`,
+    { method: "POST" },
+    201,
+  );
+  await json(`/api/validations/${soloValidation.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status: "Completed",
+      notes: "Perangkat tunggal lulus pengujian.",
+      items: soloValidation.items.map((item) => ({ ...item, checked: true })),
+    }),
+  });
+  const soloBast = await json(
+    "/api/bast",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: solo.id,
+        packageId: soloPackages[0].id,
+        completionDate: fieldToday,
+        notes: "Serah terima paket tunggal telah diuji bersama klien.",
+        installedItems: [{ name: "Perangkat tunggal", quantity: "1 unit", status: "Terpasang" }],
+        clientName: "Klien Regresi",
+        clientRole: "Manager",
+        clientSignature: signature,
+        engineerName: "Dewa Mahardika",
+        engineerRole: "Engineer",
+        engineerSignature: signature,
+        status: "Draft",
+      }),
+    },
+    201,
+  );
+  await json(`/api/bast/${soloBast.id}/finalize`, { method: "POST" });
+  assert.equal((await json(`/api/projects/${solo.id}`)).status, "Selesai");
+}, { timeout: 45_000 });
+
+// ---------------------------------------------------------------------------
+// Regression: Finance approves other people's spending, never its own.
+// ---------------------------------------------------------------------------
+test("Finance cannot approve an expense it submitted, but an Admin can with a recorded reason", async () => {
+  await loginAsAdmin();
+  const project = await createRegressionProject("Proyek Belanja Regresi");
+  await json(
+    "/api/users",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Finance Regresi",
+        email: "finance.regresi@perumnet.id",
+        password: "Finance-Regresi-2026",
+        role: "Finance",
+        status: "Aktif",
+      }),
+    },
+    201,
+  );
+  const fieldUser = await json(
+    "/api/users",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Engineer Belanja Regresi",
+        email: "engineer.belanja@perumnet.id",
+        password: "Engineer-Belanja-2026",
+        role: "Engineer",
+        status: "Aktif",
+      }),
+    },
+    201,
+  );
+  await json(`/api/projects/${project.id}/access`, {
+    method: "PUT",
+    body: JSON.stringify({ userIds: [fieldUser.id] }),
+  });
+  const categories = await json("/api/project-expense-categories");
+  const category = categories.find((entry) => entry.name === "Material") ?? categories[0];
+
+  async function submitExpense(merchant, amount) {
+    const expense = await json(
+      "/api/project-expenses",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          projectId: project.id,
+          purchaseDate: fieldToday,
+          merchant,
+          categoryId: category.id,
+          totalAmount: amount,
+          fundingSource: "EmployeePaid",
+          notes: `Talangan ${merchant}.`,
+          itemDetails: [],
+        }),
+      },
+      201,
+    );
+    const form = new FormData();
+    form.set(
+      "file",
+      new File(
+        [Buffer.from(`%PDF-1.4\n1 0 obj<</Type/Catalog/Note(${merchant})>>endobj\n%%EOF`)],
+        `nota-${amount}.pdf`,
+        { type: "application/pdf" },
+      ),
+    );
+    await json(`/api/project-expenses/${expense.id}/attachments`, { method: "POST", body: form }, 201);
+    await json(`/api/project-expenses/${expense.id}/submit`, {
+      method: "POST",
+      body: JSON.stringify({ duplicateAcknowledged: false }),
+    });
+    return expense;
+  }
+
+  // 1. Finance records and submits its own expense, then tries to approve it.
+  await request("/api/auth/logout", { method: "POST" });
+  cookie = "";
+  await json("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "finance.regresi@perumnet.id",
+      password: "Finance-Regresi-2026",
+      remember: false,
+    }),
+  });
+  const ownExpense = await submitExpense("Toko Milik Finance", 140_000);
+  const selfApprove = await request(`/api/project-expenses/${ownExpense.id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({
+      settlementDate: fieldToday,
+      duplicateAcknowledged: false,
+      paymentReference: "",
+      selfApprovalReason: "Alasan yang panjang dan terlihat meyakinkan.",
+    }),
+  });
+  assert.equal(selfApprove.status, 409, "a reason does not buy Finance a self-approval");
+  const selfApprovePayload = await selfApprove.json();
+  assert.equal(selfApprovePayload.error.code, "SELF_APPROVAL_FORBIDDEN");
+  assert.ok(selfApprovePayload.error.message.length > 10);
+  assert.equal(
+    (await json(`/api/project-expenses/${ownExpense.id}`)).workflowStatus,
+    "Submitted",
+    "the expense stays in the queue",
+  );
+
+  // 2. Finance approving someone else's expense still works.
+  await request("/api/auth/logout", { method: "POST" });
+  cookie = "";
+  await json("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "engineer.belanja@perumnet.id",
+      password: "Engineer-Belanja-2026",
+      remember: false,
+    }),
+  });
+  const teamExpense = await submitExpense("Toko Milik Engineer", 90_000);
+  await request("/api/auth/logout", { method: "POST" });
+  cookie = "";
+  await json("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "finance.regresi@perumnet.id",
+      password: "Finance-Regresi-2026",
+      remember: false,
+    }),
+  });
+  const approvedForTeam = await json(`/api/project-expenses/${teamExpense.id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({
+      settlementDate: fieldToday,
+      duplicateAcknowledged: false,
+      paymentReference: "",
+    }),
+  });
+  assert.equal(approvedForTeam.workflowStatus, "Approved");
+  assert.equal(approvedForTeam.settlementStatus, "AwaitingReimbursement");
+
+  // 3. An Admin unblocks Finance's own submission, but must say why.
+  await loginAsAdmin();
+  const missingReason = await request(`/api/project-expenses/${ownExpense.id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({
+      settlementDate: fieldToday,
+      duplicateAcknowledged: false,
+      paymentReference: "",
+    }),
+  });
+  assert.equal(missingReason.status, 200, "the Admin did not author this expense");
+  assert.equal((await missingReason.json()).data.workflowStatus, "Approved");
+
+  // 4. An Admin approving an expense they authored themselves needs a reason.
+  const adminExpense = await submitExpense("Toko Milik Admin", 70_000);
+  const adminWithoutReason = await request(`/api/project-expenses/${adminExpense.id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({
+      settlementDate: fieldToday,
+      duplicateAcknowledged: false,
+      paymentReference: "",
+    }),
+  });
+  assert.equal(adminWithoutReason.status, 422);
+  assert.equal((await adminWithoutReason.json()).error.code, "OVERRIDE_REASON_REQUIRED");
+  const adminOverride = await json(`/api/project-expenses/${adminExpense.id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({
+      settlementDate: fieldToday,
+      duplicateAcknowledged: false,
+      paymentReference: "",
+      selfApprovalReason: "Tidak ada verifikator lain yang tersedia hari ini.",
+    }),
+  });
+  assert.equal(adminOverride.workflowStatus, "Approved");
+  assert.equal(
+    adminOverride.selfApprovalReason,
+    "Tidak ada verifikator lain yang tersedia hari ini.",
+  );
+  const overrideAudit = (await json("/api/audit-logs")).find(
+    (entry) => entry.entityId === adminExpense.id && entry.action === "approve",
+  );
+  assert.ok(overrideAudit, "the override is written to the audit log");
+  assert.equal(overrideAudit.metadata.selfApproval, true);
+  assert.equal(
+    overrideAudit.metadata.overrideReason,
+    "Tidak ada verifikator lain yang tersedia hari ini.",
   );
 }, { timeout: 45_000 });

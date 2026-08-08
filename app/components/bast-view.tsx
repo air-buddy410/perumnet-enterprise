@@ -118,6 +118,39 @@ export function BastView({
     setPackageId(nextPackageId);
   }, []);
 
+  // When the workspace project changes, drop the previous project's package
+  // selection during render so the bootstrap effect below re-resolves it.
+  const [packageProjectId, setPackageProjectId] = useState(projectId);
+  if (packageProjectId !== projectId) {
+    setPackageProjectId(projectId);
+    setPackageId("");
+    setLoading(true);
+  }
+
+  // Resolve the initial commercial package here instead of waiting for the
+  // CommercialPackageSwitcher: the switcher only mounts once loading is false,
+  // but loading could only become false after the switcher picked a package —
+  // a deadlock that left the view stuck on "Memuat BAST...".
+  useEffect(() => {
+    let active = true;
+    api<CommercialPackage[]>(`/api/projects/${encodeURIComponent(projectId)}/packages`)
+      .then((packages) => {
+        if (!active) return;
+        const remembered = window.localStorage.getItem(`commercial-package:${projectId}`);
+        const next = packages.find((item) => item.id === remembered)?.id ?? packages[0]?.id ?? "";
+        if (next) setPackageId((current) => current || next);
+        else setLoading(false);
+      })
+      .catch((error) => {
+        if (!active) return;
+        notify(messageOf(error, language));
+        setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [language, notify, projectId]);
+
   useEffect(() => {
     if (!packageId) return;
     let active = true;
@@ -351,6 +384,16 @@ export function BastView({
 
   if (loading) {
     return <section className="panel empty-state"><p>{id ? "Memuat BAST..." : "Loading handover..."}</p></section>;
+  }
+
+  if (!packageId) {
+    return (
+      <section className="panel empty-state">
+        <p>{id
+          ? "Paket komersial proyek tidak dapat dimuat. Muat ulang halaman atau periksa koneksi Anda."
+          : "The project's commercial packages could not be loaded. Reload the page or check your connection."}</p>
+      </section>
+    );
   }
 
   if (!validationCompleted && !bastId) {

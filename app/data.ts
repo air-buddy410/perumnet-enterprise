@@ -394,6 +394,7 @@ export interface ProjectExpense {
   totalAmount: number;
   currency: "IDR";
   fundingSource: "CompanyAccount" | "ProjectAdvance" | "EmployeePaid";
+  paymentMethod: "Tunai" | "QRIS" | "Transfer Bank";
   bankAccountId?: string;
   bankAccount?: string;
   advanceId?: string;
@@ -407,6 +408,9 @@ export interface ProjectExpense {
   selfApprovalReason: string;
   createdBy: string;
   creatorName: string;
+  submittedBy?: string;
+  paidByUserId: string;
+  paidByName: string;
   approvedBy?: string;
   approverName?: string;
   reimbursedAmount: number;

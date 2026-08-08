@@ -14,7 +14,14 @@ import {
   readStoredFile,
   storeUploadedFile,
 } from "../storage";
-import { ApiError, created, jsonBody, noContent, ok, partialPatchSchema } from "./errors";
+import {
+  ApiError,
+  created,
+  jsonBody,
+  noContent,
+  ok,
+  partialPatchSchema,
+} from "./errors";
 
 const idSchema = z.string().trim().min(1).max(100);
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -25,6 +32,7 @@ const itemSchema = z.object({
   unit: z.string().trim().min(1).max(40),
   unitPrice: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
 });
+const paymentMethodSchema = z.enum(["Tunai", "QRIS", "Transfer Bank"]);
 const expenseSchema = z.object({
   projectId: idSchema,
   purchaseDate: isoDateSchema,
@@ -32,11 +40,14 @@ const expenseSchema = z.object({
   categoryId: idSchema,
   totalAmount: moneySchema,
   fundingSource: z.enum(["CompanyAccount", "ProjectAdvance", "EmployeePaid"]),
+  paymentMethod: paymentMethodSchema.optional().default("Tunai"),
   bankAccountId: idSchema.optional(),
   advanceId: idSchema.optional(),
+  paidByUserId: idSchema.optional(),
   notes: z.string().trim().max(1_000).optional().default(""),
   itemDetails: z.array(itemSchema).max(100).optional().default([]),
 });
+const expensePatchSchema = partialPatchSchema(expenseSchema);
 const submitSchema = z.object({ duplicateAcknowledged: z.boolean().default(false) });
 const approvalSchema = z.object({
   settlementDate: isoDateSchema,
@@ -164,6 +175,7 @@ async function requireExpense(
     sql: `SELECT e.*,p.code AS project_code,p.name AS project_name,
       c.name AS category_name,c.name_en AS category_name_en,
       creator.name AS creator_name,approver.name AS approver_name,
+      payer.name AS paid_by_name,
       ba.bank_name,ba.account_name,ba.account_number_masked,
       a.number AS advance_number
       FROM project_expenses e
@@ -171,6 +183,7 @@ async function requireExpense(
       JOIN project_expense_categories c ON c.id=e.category_id
       JOIN users creator ON creator.id=e.created_by
       LEFT JOIN users approver ON approver.id=e.approved_by
+      LEFT JOIN users payer ON payer.id=e.paid_by_user_id
       LEFT JOIN bank_accounts ba ON ba.id=e.bank_account_id
       LEFT JOIN project_advances a ON a.id=e.advance_id
       WHERE e.id=? ${scope.sql ? `AND ${scope.sql}` : ""} LIMIT 1`,
@@ -271,6 +284,7 @@ async function mapExpense(
     totalAmount: asNumber(row.total_amount),
     currency: String(row.currency),
     fundingSource: String(row.funding_source),
+    paymentMethod: String(row.payment_method ?? "Tunai"),
     bankAccountId: row.bank_account_id ? String(row.bank_account_id) : undefined,
     bankAccount: row.bank_name
       ? `${String(row.bank_name)} · ${String(row.account_name)} ${String(row.account_number_masked ?? "")}`
@@ -288,6 +302,10 @@ async function mapExpense(
       : "",
     createdBy: String(row.created_by),
     creatorName: String(row.creator_name),
+    submittedBy: row.submitted_by ? String(row.submitted_by) : undefined,
+    // Old rows predate paid_by_user_id, so the submitter remains the creditor.
+    paidByUserId: String(row.paid_by_user_id ?? row.created_by),
+    paidByName: String(row.paid_by_name ?? row.creator_name),
     approvedBy: row.approved_by ? String(row.approved_by) : undefined,
     approverName: row.approver_name ? String(row.approver_name) : undefined,
     reimbursedAmount: reimbursed,
@@ -393,6 +411,104 @@ async function activeBankAccount(client: DatabaseClient, id?: string) {
     throw new ApiError(422, "BANK_ACCOUNT_REQUIRED", "Rekening perusahaan aktif tidak ditemukan.");
   }
   return id;
+}
+
+const advanceUnavailableMessage =
+  "Belum ada uang muka aktif untuk proyek ini. Cairkan uang muka melalui menu Uang Muka terlebih dahulu.";
+
+// Mirrors mapAdvance(): an advance is still usable while its disbursed amount
+// exceeds everything already allocated to receipts or returned to the company.
+async function outstandingAdvanceTotal(
+  client: DatabaseClient,
+  projectId: string,
+) {
+  const result = await client.execute({
+    sql: `SELECT COALESCE(SUM(CASE
+        WHEN a.amount - COALESCE(used.total,0) > 0
+        THEN a.amount - COALESCE(used.total,0) ELSE 0 END),0) AS outstanding
+      FROM project_advances a
+      LEFT JOIN (
+        SELECT advance_id,SUM(amount) AS total
+        FROM project_expense_settlements
+        WHERE status='Posted'
+          AND settlement_type IN ('AdvanceAllocation','AdvanceReturn')
+        GROUP BY advance_id
+      ) used ON used.advance_id=a.id
+      WHERE a.project_id=? AND a.status='Open'`,
+    args: [projectId],
+  });
+  return asNumber(result.rows[0]?.outstanding);
+}
+
+// Decision context for the disbursement modal only — never a gate.
+async function invoiceCashReceived(client: DatabaseClient, projectId: string) {
+  const result = await client.execute({
+    sql: `SELECT COALESCE(SUM(pay.cash_amount),0) AS total
+      FROM invoice_payments pay
+      JOIN invoices i ON i.id=pay.invoice_id
+      WHERE i.project_id=? AND pay.status='Posted'`,
+    args: [projectId],
+  });
+  return asNumber(result.rows[0]?.total);
+}
+
+async function assertFundingRules(
+  client: DatabaseClient,
+  input: {
+    projectId: string;
+    fundingSource: string;
+    paymentMethod: string;
+    bankAccountId?: string | null;
+    submitterId: string;
+    paidByUserId?: string | null;
+  },
+) {
+  if (
+    input.fundingSource === "CompanyAccount" &&
+    input.paymentMethod === "Transfer Bank"
+  ) {
+    if (!input.bankAccountId) {
+      throw new ApiError(
+        422,
+        "EXPENSE_BANK_ACCOUNT_REQUIRED",
+        "Pilih rekening perusahaan untuk belanja yang dibayar lewat transfer bank.",
+      );
+    }
+    const account = await client.execute({
+      sql: "SELECT id FROM bank_accounts WHERE id=? AND status='Aktif' LIMIT 1",
+      args: [input.bankAccountId],
+    });
+    if (!account.rows.length) {
+      throw new ApiError(
+        422,
+        "EXPENSE_BANK_ACCOUNT_REQUIRED",
+        "Rekening perusahaan aktif tidak ditemukan.",
+      );
+    }
+  }
+  if (input.fundingSource === "ProjectAdvance") {
+    if ((await outstandingAdvanceTotal(client, input.projectId)) <= 0) {
+      throw new ApiError(422, "ADVANCE_UNAVAILABLE", advanceUnavailableMessage);
+    }
+  }
+  if (
+    input.fundingSource === "EmployeePaid" &&
+    input.paidByUserId &&
+    input.paidByUserId !== input.submitterId
+  ) {
+    const member = await client.execute({
+      sql: `SELECT 1 FROM project_members pm JOIN users u ON u.id=pm.user_id
+        WHERE pm.project_id=? AND pm.user_id=? AND u.status='Aktif' LIMIT 1`,
+      args: [input.projectId, input.paidByUserId],
+    });
+    if (!member.rows.length) {
+      throw new ApiError(
+        422,
+        "INVALID_EXPENSE_PAYER",
+        "Pemilik dana pribadi harus pengaju sendiri atau anggota proyek yang aktif.",
+      );
+    }
+  }
 }
 
 async function createSettlement(
@@ -624,6 +740,7 @@ async function listRows(client: DatabaseClient, user: AuthUser, request: Request
     sql: `SELECT e.*,p.code AS project_code,p.name AS project_name,
       c.name AS category_name,c.name_en AS category_name_en,
       creator.name AS creator_name,approver.name AS approver_name,
+      payer.name AS paid_by_name,
       ba.bank_name,ba.account_name,ba.account_number_masked,
       a.number AS advance_number
       FROM project_expenses e
@@ -631,6 +748,7 @@ async function listRows(client: DatabaseClient, user: AuthUser, request: Request
       JOIN project_expense_categories c ON c.id=e.category_id
       JOIN users creator ON creator.id=e.created_by
       LEFT JOIN users approver ON approver.id=e.approved_by
+      LEFT JOIN users payer ON payer.id=e.paid_by_user_id
       LEFT JOIN bank_accounts ba ON ba.id=e.bank_account_id
       LEFT JOIN project_advances a ON a.id=e.advance_id
       ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
@@ -660,9 +778,13 @@ async function expenseReports(
         english ? "Merchant" : "Toko",
         english ? "Category" : "Kategori",
         english ? "Funding source" : "Sumber dana",
+        english ? "Payment method" : "Metode pembayaran",
+        english ? "Company account" : "Rekening perusahaan",
+        english ? "Personal funds owner" : "Dana pribadi milik",
         english ? "Workflow status" : "Status pengajuan",
         english ? "Settlement status" : "Status penyelesaian",
         "Amount (IDR)",
+        english ? "Reimbursement payable (IDR)" : "Utang reimbursement (IDR)",
       ].map(cell).join(","),
       ...rows.map((row) => [
         row.number,
@@ -672,9 +794,13 @@ async function expenseReports(
         row.merchant,
         english ? row.categoryEn : row.category,
         row.fundingSource,
+        row.paymentMethod,
+        row.bankAccount ?? "",
+        row.fundingSource === "EmployeePaid" ? row.paidByName : "",
         row.workflowStatus,
         row.settlementStatus,
         row.totalAmount,
+        row.reimbursementOutstanding,
       ].map(cell).join(",")),
     ];
     return new Response(`\uFEFF${lines.join("\r\n")}`, {
@@ -696,9 +822,9 @@ async function expenseReports(
   pdf.text(english ? "Audit history of field purchases" : "Riwayat audit pembelian lapangan", 14, 22);
   let y = 31;
   const headers = english
-    ? ["Date", "Number", "Project", "Merchant", "Category", "Source", "Status", "Amount"]
-    : ["Tanggal", "Nomor", "Proyek", "Toko", "Kategori", "Sumber", "Status", "Nominal"];
-  const widths = [22, 34, 48, 42, 30, 31, 34, 34];
+    ? ["Date", "Number", "Project", "Merchant", "Category", "Source / Method", "Funded by", "Status", "Amount"]
+    : ["Tanggal", "Nomor", "Proyek", "Toko", "Kategori", "Sumber / Metode", "Dana milik", "Status", "Nominal"];
+  const widths = [21, 30, 42, 36, 26, 36, 30, 30, 26];
   const drawRow = (values: string[], header = false) => {
     let x = 14;
     pdf.setFillColor(header ? 8 : 248, header ? 169 : 251, header ? 162 : 252);
@@ -727,7 +853,8 @@ async function expenseReports(
       `${row.projectCode} - ${row.projectName}`,
       row.merchant,
       english ? row.categoryEn : row.category,
-      row.fundingSource,
+      `${row.fundingSource} / ${row.paymentMethod}`,
+      row.fundingSource === "EmployeePaid" ? row.paidByName : "-",
       `${row.workflowStatus} / ${row.settlementStatus}`,
       new Intl.NumberFormat("id-ID").format(row.totalAmount),
     ]);
@@ -760,6 +887,32 @@ export async function handleProjectExpenses(
   if (request.method === "GET" && !expenseId) {
     return ok(await listRows(client, user, request));
   }
+  // Candidate owners of the personal funds behind an EmployeePaid receipt.
+  // Reachable by anyone who may record an expense, unlike /access (Admin only)
+  // and /project-advances/eligible-users (Finance only).
+  if (request.method === "GET" && expenseId === "payers") {
+    const payerProjectId = new URL(request.url).searchParams.get("projectId");
+    if (!payerProjectId) {
+      throw new ApiError(422, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
+    }
+    await assertProjectAccess(client, user, payerProjectId);
+    const members = await client.execute({
+      sql: `SELECT DISTINCT u.id,u.name,u.role FROM users u
+        WHERE u.status='Aktif' AND (
+          u.id=? OR EXISTS (
+            SELECT 1 FROM project_members pm
+            WHERE pm.project_id=? AND pm.user_id=u.id
+          )
+        )
+        ORDER BY u.name`,
+      args: [user.id, payerProjectId],
+    });
+    return ok(members.rows.map((row) => ({
+      id: String(row.id),
+      name: String(row.name),
+      role: String(row.role),
+    })));
+  }
   if (request.method === "GET" && expenseId) {
     return ok(await mapExpense(client, await requireExpense(client, user, expenseId), true));
   }
@@ -774,6 +927,18 @@ export async function handleProjectExpenses(
     if (!category.rows.length) {
       throw new ApiError(422, "CATEGORY_REQUIRED", "Kategori biaya aktif tidak ditemukan.");
     }
+    const paidByUserId =
+      input.fundingSource === "EmployeePaid"
+        ? input.paidByUserId ?? user.id
+        : null;
+    await assertFundingRules(client, {
+      projectId: input.projectId,
+      fundingSource: input.fundingSource,
+      paymentMethod: input.paymentMethod,
+      bankAccountId: input.bankAccountId,
+      submitterId: user.id,
+      paidByUserId,
+    });
     const sequence = await claimSequence(client, "project_expenses", "SELECT number AS value FROM project_expenses");
     const id = randomUUID();
     const number = `BLJ-${input.purchaseDate.slice(0, 7).replace("-", "")}-${String(sequence).padStart(4, "0")}`;
@@ -781,9 +946,9 @@ export async function handleProjectExpenses(
     await client.execute({
       sql: `INSERT INTO project_expenses
         (id,number,project_id,purchase_date,merchant,category_id,total_amount,currency,
-         funding_source,bank_account_id,advance_id,notes,item_details_json,workflow_status,
-         settlement_status,created_by,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,'IDR',?,?,?,?,?,'Draft','Unposted',?,?,?)`,
+         funding_source,payment_method,bank_account_id,advance_id,paid_by_user_id,notes,
+         item_details_json,workflow_status,settlement_status,created_by,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,'IDR',?,?,?,?,?,?,?,'Draft','Unposted',?,?,?)`,
       args: [
         id,
         number,
@@ -793,8 +958,10 @@ export async function handleProjectExpenses(
         input.categoryId,
         input.totalAmount,
         input.fundingSource,
+        input.paymentMethod,
         input.bankAccountId ?? null,
         input.advanceId ?? null,
+        paidByUserId,
         input.notes || null,
         JSON.stringify(input.itemDetails),
         user.id,
@@ -820,7 +987,7 @@ export async function handleProjectExpenses(
     if (String(expense.created_by) !== user.id && !["Admin", "Finance"].includes(user.role)) {
       throw new ApiError(403, "FORBIDDEN", "Hanya pengaju yang dapat mengubah data ini.");
     }
-    const input = partialPatchSchema(expenseSchema).parse(await jsonBody(request));
+    const input = expensePatchSchema.parse(await jsonBody(request));
     if (input.projectId) await assertProjectAccess(client, user, input.projectId);
     if (input.categoryId) {
       const category = await client.execute({
@@ -829,19 +996,47 @@ export async function handleProjectExpenses(
       });
       if (!category.rows.length) throw new ApiError(422, "CATEGORY_REQUIRED", "Kategori aktif tidak ditemukan.");
     }
+    const projectIdNext = String(input.projectId ?? expense.project_id);
+    const fundingSourceNext = String(input.fundingSource ?? expense.funding_source);
+    const paymentMethodNext = String(
+      input.paymentMethod ?? expense.payment_method ?? "Tunai",
+    );
+    const bankAccountIdNext =
+      input.bankAccountId === undefined
+        ? expense.bank_account_id
+          ? String(expense.bank_account_id)
+          : null
+        : input.bankAccountId ?? null;
+    const submitterId = String(expense.created_by);
+    const paidByUserIdNext =
+      fundingSourceNext === "EmployeePaid"
+        ? input.paidByUserId ??
+          (expense.paid_by_user_id ? String(expense.paid_by_user_id) : submitterId)
+        : null;
+    await assertFundingRules(client, {
+      projectId: projectIdNext,
+      fundingSource: fundingSourceNext,
+      paymentMethod: paymentMethodNext,
+      bankAccountId: bankAccountIdNext,
+      submitterId,
+      paidByUserId: paidByUserIdNext,
+    });
     await client.execute({
       sql: `UPDATE project_expenses SET project_id=?,purchase_date=?,merchant=?,category_id=?,
-        total_amount=?,funding_source=?,bank_account_id=?,advance_id=?,notes=?,item_details_json=?,
+        total_amount=?,funding_source=?,payment_method=?,bank_account_id=?,advance_id=?,
+        paid_by_user_id=?,notes=?,item_details_json=?,
         workflow_status='Draft',review_reason=NULL,duplicate_acknowledged=0,updated_at=? WHERE id=?`,
       args: [
-        input.projectId ?? expense.project_id,
+        projectIdNext,
         input.purchaseDate ?? expense.purchase_date,
         input.merchant ?? expense.merchant,
         input.categoryId ?? expense.category_id,
         input.totalAmount ?? expense.total_amount,
-        input.fundingSource ?? expense.funding_source,
-        input.bankAccountId === undefined ? expense.bank_account_id : input.bankAccountId ?? null,
+        fundingSourceNext,
+        paymentMethodNext,
+        bankAccountIdNext,
         input.advanceId === undefined ? expense.advance_id : input.advanceId ?? null,
+        paidByUserIdNext,
         input.notes === undefined ? expense.notes : input.notes || null,
         input.itemDetails === undefined ? expense.item_details_json : JSON.stringify(input.itemDetails),
         now(),
@@ -878,6 +1073,13 @@ export async function handleProjectExpenses(
       throw new ApiError(403, "FORBIDDEN", "Hanya pengaju yang dapat mengirim pengajuan.");
     }
     const input = submitSchema.parse(await jsonBody(request));
+    await assertFundingRules(client, {
+      projectId: String(expense.project_id),
+      fundingSource: String(expense.funding_source),
+      paymentMethod: String(expense.payment_method ?? "Tunai"),
+      bankAccountId: expense.bank_account_id ? String(expense.bank_account_id) : null,
+      submitterId: String(expense.created_by),
+    });
     const attachmentCount = await client.execute({
       sql: "SELECT COUNT(*) AS count FROM project_expense_attachments WHERE expense_id=?",
       args: [expenseId],
@@ -919,8 +1121,27 @@ export async function handleProjectExpenses(
       throw new ApiError(409, "INVALID_STATUS", "Hanya pengajuan Menunggu Verifikasi yang dapat disetujui.");
     }
     const input = approvalSchema.parse(await jsonBody(request));
-    if (String(expense.created_by) === user.id && user.role === "Finance" && input.selfApprovalReason.length < 10) {
-      throw new ApiError(422, "SELF_APPROVAL_REASON_REQUIRED", "Finance wajib mengisi alasan saat menyetujui pengajuan sendiri.");
+    // "Finance hanya approve, bukan berarti dia yang belanja": the approver may
+    // never be the person who recorded, submitted, or fronted the money for the
+    // expense. Same rule and same shape as procurement approvals — Finance is
+    // blocked outright, Admin may override but must say why, in the audit log.
+    const selfAuthored =
+      String(expense.created_by) === user.id ||
+      (expense.submitted_by ? String(expense.submitted_by) === user.id : false) ||
+      String(expense.paid_by_user_id ?? expense.created_by) === user.id;
+    if (selfAuthored && user.role === "Finance") {
+      throw new ApiError(
+        409,
+        "SELF_APPROVAL_FORBIDDEN",
+        "Finance tidak boleh menyetujui belanja yang dibuat, diajukan, atau ditalanginya sendiri.",
+      );
+    }
+    if (selfAuthored && user.role === "Admin" && input.selfApprovalReason.trim().length < 5) {
+      throw new ApiError(
+        422,
+        "OVERRIDE_REASON_REQUIRED",
+        "Admin wajib mengisi alasan saat menyetujui pengajuannya sendiri.",
+      );
     }
     const warnings = await duplicateWarnings(client, expense);
     if (warnings.length && !input.duplicateAcknowledged && !bool(expense.duplicate_acknowledged)) {
@@ -931,7 +1152,13 @@ export async function handleProjectExpenses(
     let advanceId: string | null = null;
     await client.transaction(async (tx) => {
       if (String(expense.funding_source) === "CompanyAccount") {
-        bankAccountId = await activeBankAccount(tx, input.bankAccountId);
+        // The account picked while capturing the receipt is the one the money
+        // actually left, so it wins unless Finance overrides it on approval.
+        bankAccountId = await activeBankAccount(
+          tx,
+          input.bankAccountId ??
+            (expense.bank_account_id ? String(expense.bank_account_id) : undefined),
+        );
         if (!input.paymentReference) throw new ApiError(422, "PAYMENT_REFERENCE_REQUIRED", "Isi referensi pembayaran perusahaan.");
         await createSettlement(tx, user, {
           expenseId,
@@ -1008,7 +1235,8 @@ export async function handleProjectExpenses(
     await writeAuditLog(client, request, user, "approve", "project_expense", expenseId, {
       settlementStatus,
       warningCount: warnings.length,
-      selfApproval: String(expense.created_by) === user.id,
+      selfApproval: selfAuthored,
+      overrideReason: selfAuthored ? input.selfApprovalReason.trim() : undefined,
     });
     return ok(await mapExpense(client, await requireExpense(client, user, expenseId), true));
   }
@@ -1044,7 +1272,9 @@ export async function handleProjectExpenses(
         bankAccountId: input.bankAccountId,
         reference: input.paymentReference,
         projectId: String(expense.project_id),
-        description: `Reimbursement ${String(expense.number)} · ${String(expense.creator_name)}`,
+        description: `Reimbursement ${String(expense.number)} · ${String(
+          expense.paid_by_name ?? expense.creator_name,
+        )}`,
         createTransaction: true,
       });
       const nextPaid = paid + input.amount;
@@ -1258,12 +1488,17 @@ export async function handleProjectAdvances(
         ORDER BY u.name`,
       args: [projectId],
     });
-    return ok(result.rows.map((row) => ({
-      id: String(row.id),
-      name: String(row.name),
-      email: String(row.email),
-      role: String(row.role),
-    })));
+    return ok({
+      users: result.rows.map((row) => ({
+        id: String(row.id),
+        name: String(row.name),
+        email: String(row.email),
+        role: String(row.role),
+      })),
+      // Decision context for the disbursement modal. Informational only.
+      invoiceCashReceived: await invoiceCashReceived(client, projectId),
+      outstandingAdvance: await outstandingAdvanceTotal(client, projectId),
+    });
   }
   if (request.method === "GET" && !advanceId) {
     const projectId = new URL(request.url).searchParams.get("projectId");

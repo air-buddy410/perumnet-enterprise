@@ -148,6 +148,25 @@ function assertManage(user: AuthUser, module: "procurement" | "boq" | "billing" 
   }
 }
 
+// Field execution (progress verification, goods receipt) is deliberately NOT
+// gated on the module-level "Kelola" permission: an Engineer only carries
+// `procurement: "view"` by default, yet the whole point of the role is to
+// confirm what actually happened on site. Those endpoints require the field
+// roles plus project membership instead; creating, approving, and paying
+// orders keep the Kelola gate.
+function assertFieldExecution(user: AuthUser, message: string) {
+  if (!["Admin", "Project Manager", "Engineer"].includes(user.role)) {
+    throw new ApiError(403, "FORBIDDEN", message);
+  }
+  if (!canAccess(user.permissions, "procurement", "view")) {
+    throw new ApiError(
+      403,
+      "FORBIDDEN",
+      "Akun Anda tidak memiliki akses ke modul Procurement.",
+    );
+  }
+}
+
 async function assertProjectAccess(
   client: DatabaseClient,
   user: AuthUser,
@@ -1346,14 +1365,13 @@ async function verifyOrder(
   user: AuthUser,
   orderId: string,
 ) {
-  if (!["Project Manager", "Engineer"].includes(user.role)) {
-    throw new ApiError(
-      403,
-      "FORBIDDEN",
-      "Verifikasi progres wajib dilakukan Project Manager atau Engineer.",
-    );
-  }
-  assertManage(user, "procurement");
+  // Admin may verify too: the demo/owner account is Admin, and without this the
+  // flow dead-ends after the DP payment (no one can release the next term).
+  // Finance stays payment-only by design.
+  assertFieldExecution(
+    user,
+    "Verifikasi progres wajib dilakukan Admin, Project Manager, atau Engineer.",
+  );
   const input = verificationSchema.parse(await jsonBody(request));
   const { client } = await getDatabase();
   const order = await getOrder(client, orderId);
@@ -1424,14 +1442,12 @@ async function receiveOrder(
   user: AuthUser,
   orderId: string,
 ) {
-  if (!["Project Manager", "Engineer"].includes(user.role)) {
-    throw new ApiError(
-      403,
-      "FORBIDDEN",
-      "Penerimaan barang wajib dilakukan Project Manager atau Engineer.",
-    );
-  }
-  assertManage(user, "procurement");
+  // Mirrors verifyOrder: Admin can record goods receipt so a PO never dead-ends
+  // after the DP payment. Finance stays payment-only by design.
+  assertFieldExecution(
+    user,
+    "Penerimaan barang wajib dilakukan Admin, Project Manager, atau Engineer.",
+  );
   const input = receiptSchema.parse(await jsonBody(request));
   const { client } = await getDatabase();
   const order = await getOrder(client, orderId);

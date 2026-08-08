@@ -162,8 +162,20 @@ async function accountUsage(client: DatabaseClient, accountId: string) {
       (SELECT COUNT(*) FROM bank_statement_imports WHERE bank_account_id=?) AS imports,
       (SELECT COUNT(*) FROM invoice_payments WHERE bank_account_id=?) AS invoice_payments,
       (SELECT COUNT(*) FROM spk_payments WHERE bank_account_id=?) AS vendor_payments,
-      (SELECT COUNT(*) FROM tax_settlements WHERE bank_account_id=?) AS tax_settlements`,
-    args: [accountId, accountId, accountId, accountId, accountId],
+      (SELECT COUNT(*) FROM tax_settlements WHERE bank_account_id=?) AS tax_settlements,
+      (SELECT COUNT(*) FROM project_expenses WHERE bank_account_id=?) AS project_expenses,
+      (SELECT COUNT(*) FROM project_expense_settlements WHERE bank_account_id=?) AS expense_settlements,
+      (SELECT COUNT(*) FROM project_advances WHERE bank_account_id=?) AS project_advances`,
+    args: [
+      accountId,
+      accountId,
+      accountId,
+      accountId,
+      accountId,
+      accountId,
+      accountId,
+      accountId,
+    ],
   });
   const row = result.rows[0] ?? {};
   return {
@@ -172,6 +184,9 @@ async function accountUsage(client: DatabaseClient, accountId: string) {
     invoicePayments: asNumber(row.invoice_payments),
     vendorPayments: asNumber(row.vendor_payments),
     taxSettlements: asNumber(row.tax_settlements),
+    projectExpenses: asNumber(row.project_expenses),
+    expenseSettlements: asNumber(row.expense_settlements),
+    projectAdvances: asNumber(row.project_advances),
   };
 }
 

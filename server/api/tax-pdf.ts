@@ -66,8 +66,8 @@ export function renderTaxReportPdf(
     doc.setFontSize(7.5);
     doc.text(
       en
-        ? "Operational record - final tax treatment is determined by Admin/Finance."
-        : "Catatan operasional - perlakuan pajak akhir ditentukan Admin/Finance.",
+        ? "Internal operational record. The final tax treatment is decided by Admin/Finance together with a tax adviser."
+        : "Catatan operasional internal. Perlakuan pajak akhir ditentukan Admin/Finance bersama penasihat pajak.",
       14,
       291,
     );
@@ -101,7 +101,7 @@ export function renderTaxReportPdf(
   const widths = [25, 27, 21, 21, 25, 25, 20, 18];
   const headers = en
     ? ["Project", "Document", "Tax", "Position", "Amount", "Outstanding", "Reporting", "Period"]
-    : ["Proyek", "Dokumen", "Pajak", "Posisi", "Nilai", "Outstanding", "Pelaporan", "Masa"];
+    : ["Proyek", "Dokumen", "Pajak", "Posisi", "Nilai", "Sisa", "Pelaporan", "Masa"];
 
   function tableHeader() {
     doc.setFillColor(31, 70, 84);

@@ -1053,11 +1053,15 @@ export const projectExpenses = sqliteTable(
     totalAmount: integer("total_amount").notNull(),
     currency: text("currency").notNull().default("IDR"),
     fundingSource: text("funding_source").notNull(),
+    paymentMethod: text("payment_method").notNull().default("Tunai"),
     bankAccountId: text("bank_account_id").references(() => bankAccounts.id, {
       onDelete: "restrict",
     }),
     advanceId: text("advance_id").references(() => projectAdvances.id, {
       onDelete: "restrict",
+    }),
+    paidByUserId: text("paid_by_user_id").references(() => users.id, {
+      onDelete: "set null",
     }),
     notes: text("notes"),
     itemDetailsJson: text("item_details_json").notNull().default("[]"),

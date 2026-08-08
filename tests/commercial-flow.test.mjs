@@ -858,3 +858,242 @@ test("scenario B6: quotation with invoices refuses deletion, and deletion never 
   assert.equal(missing.status, 404);
   assert.equal((await missing.json()).error.code, "NOT_FOUND");
 });
+
+// ---------------------------------------------------------------------------
+// Scenario C — corrections must stay possible after a payment is voided
+// ---------------------------------------------------------------------------
+
+test("scenario C1: voiding an invoice payment unlocks the invoice for edit and delete", async () => {
+  const project = await createProject("Proyek Void Pembayaran");
+  await addBoqItem(project.id, 2_000_000);
+  await patchQuotation(project.id, { status: "Draft" });
+  await patchQuotation(project.id, { status: "Sent" });
+  const quotation = await getQuotation(project.id);
+  await acceptQuotation(quotation.id, "void-pembayaran");
+  const invoice = await json(
+    "/api/invoices",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        quotationId: quotation.id,
+        type: "DP 50%",
+        issueDate: TODAY,
+        dueDate: isoInDays(14),
+        calculationMode: "Percent",
+        installmentPercent: 50,
+      }),
+    },
+    201,
+  );
+  assert.equal(invoice.grossTotal, 1_000_000);
+
+  const paid = await json(
+    `/api/invoices/${invoice.id}/payments`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        grossAmount: invoice.grossTotal,
+        cashAmount: invoice.grossTotal,
+        withholdingAmount: 0,
+        paidDate: TODAY,
+        paymentReference: "BCA-VOID-001",
+        paymentMethod: "Tunai",
+        attachment: acceptanceAttachment("bukti-bayar"),
+      }),
+    },
+    201,
+  );
+  const payment = paid.payments.find((entry) => entry.status === "Posted");
+  assert.ok(payment, "the payment is recorded as Posted");
+
+  // An ACTIVE payment still locks the invoice, in both directions.
+  const lockedPatch = await request(`/api/invoices/${invoice.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ type: "DP Tahap 1" }),
+  });
+  assert.equal(lockedPatch.status, 409, "a Posted payment keeps the invoice uneditable");
+  assert.equal((await lockedPatch.json()).error.code, "INVOICE_LOCKED");
+  const lockedDelete = await request(`/api/invoices/${invoice.id}`, { method: "DELETE" });
+  assert.equal(lockedDelete.status, 409, "a Posted payment keeps the invoice undeletable");
+  assert.equal((await lockedDelete.json()).error.code, "INVOICE_HISTORY_EXISTS");
+
+  // Voiding is the documented correction route, so it has to actually free the
+  // invoice again — otherwise a mistyped payment freezes the document forever.
+  const afterVoid = await json(`/api/invoices/${invoice.id}/payments/${payment.id}/void`, {
+    method: "POST",
+    body: JSON.stringify({ reason: "Referensi pembayaran keliru dan perlu dikoreksi." }),
+  });
+  assert.equal(afterVoid.status, "Belum Lunas");
+  assert.equal(afterVoid.paidGross, 0);
+  assert.equal(afterVoid.payments[0].status, "Void");
+
+  const edited = await json(`/api/invoices/${invoice.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ type: "DP Tahap 1", dueDate: isoInDays(30) }),
+  });
+  assert.equal(edited.type, "DP Tahap 1");
+  assert.equal(edited.dueDateIso, isoInDays(30));
+  assert.equal(edited.grossTotal, 1_000_000, "editing does not disturb the percent allocation");
+
+  await json(`/api/invoices/${invoice.id}`, { method: "DELETE" }, 204);
+  assert.equal((await request(`/api/invoices/${invoice.id}`)).status, 404);
+  // The whole percentage is free again, so the termin can simply be reissued.
+  const reissued = await json(
+    "/api/invoices",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        quotationId: quotation.id,
+        type: "DP 50% (ulang)",
+        issueDate: TODAY,
+        dueDate: isoInDays(14),
+        calculationMode: "Percent",
+        installmentPercent: 50,
+      }),
+    },
+    201,
+  );
+  assert.equal(reissued.grossTotal, 1_000_000);
+});
+
+// ---------------------------------------------------------------------------
+// Scenario D — an addendum belongs to a package, not to "the project"
+// ---------------------------------------------------------------------------
+
+test("scenario D1: an addendum created in a second package stays inside that package", async () => {
+  const project = await createProject("Proyek Addendum Paket");
+  const packages = await json(`/api/projects/${project.id}/packages`);
+  const defaultPackage = packages[0];
+  assert.ok(defaultPackage, "the project has a default commercial package");
+  const second = await json(
+    `/api/projects/${project.id}/packages`,
+    {
+      method: "POST",
+      body: JSON.stringify({ title: "Paket Kedua", status: "Active", sortOrder: 1 }),
+    },
+    201,
+  );
+
+  await addBoqItem(project.id, 1_000_000, 1, "Pekerjaan paket utama");
+  await json(`/api/boq/items?projectId=${project.id}&packageId=${second.id}`, {
+    method: "POST",
+    body: JSON.stringify({
+      category: "Jasa",
+      description: "Pekerjaan paket kedua",
+      quantity: 1,
+      unit: "paket",
+      costPrice: 1_500_000,
+      sellingPrice: 3_000_000,
+    }),
+  }, 201);
+  await json(`/api/quotations?projectId=${project.id}&packageId=${second.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "Sent" }),
+  });
+  const secondQuotation = await json(
+    `/api/quotations?projectId=${project.id}&packageId=${second.id}`,
+  );
+  await acceptQuotation(secondQuotation.id, "paket-kedua");
+
+  const addendum = await json(
+    `/api/boq/scopes?projectId=${project.id}&packageId=${second.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Addendum Paket Kedua",
+        items: [
+          {
+            category: "Jasa",
+            description: "Pekerjaan tambahan paket kedua",
+            quantity: 1,
+            unit: "paket",
+            costPrice: 100_000,
+            sellingPrice: 250_000,
+          },
+        ],
+      }),
+    },
+    201,
+  );
+  assert.equal(addendum.kind, "Addendum");
+  assert.equal(addendum.packageId, second.id, "the addendum carries its package");
+
+  // Package counters see it...
+  const refreshed = await json(`/api/projects/${project.id}/packages`);
+  const secondCounters = refreshed.find((entry) => entry.id === second.id);
+  const defaultCounters = refreshed.find((entry) => entry.id === defaultPackage.id);
+  assert.equal(secondCounters.scopeCount, 2, "original scope + addendum scope");
+  assert.equal(secondCounters.itemCount, 2);
+  assert.equal(defaultCounters.scopeCount, 1, "the default package is untouched");
+  assert.equal(defaultCounters.itemCount, 1);
+
+  // ...and so do the package-filtered quotation queries.
+  const secondHistory = await json(
+    `/api/quotations/history?projectId=${project.id}&packageId=${second.id}`,
+  );
+  assert.ok(
+    secondHistory.some((entry) => entry.id === addendum.quotation.id),
+    "the addendum quotation appears in its own package history",
+  );
+  const defaultHistory = await json(
+    `/api/quotations/history?projectId=${project.id}&packageId=${defaultPackage.id}`,
+  );
+  assert.equal(
+    defaultHistory.some((entry) => entry.id === addendum.quotation.id),
+    false,
+    "the addendum never leaks into another package's history",
+  );
+
+  // Scope listing filters on the package, and stays project-wide without one.
+  const secondScopes = await json(
+    `/api/boq/scopes?projectId=${project.id}&packageId=${second.id}`,
+  );
+  assert.deepEqual(
+    secondScopes.map((entry) => entry.packageId),
+    [second.id, second.id],
+  );
+  const defaultScopes = await json(
+    `/api/boq/scopes?projectId=${project.id}&packageId=${defaultPackage.id}`,
+  );
+  assert.deepEqual(defaultScopes.map((entry) => entry.kind), ["Original"]);
+  const allScopes = await json(`/api/boq/scopes?projectId=${project.id}`);
+  assert.equal(allScopes.length, 3);
+
+  // A package with no BoQ of its own cannot carry an addendum, and an unknown
+  // package is a friendly 404 rather than a silent project-level insert.
+  const empty = await json(
+    `/api/projects/${project.id}/packages`,
+    {
+      method: "POST",
+      body: JSON.stringify({ title: "Paket Kosong", status: "Draft", sortOrder: 2 }),
+    },
+    201,
+  );
+  const addendumBody = JSON.stringify({
+    title: "Addendum Tanpa BoQ",
+    items: [
+      {
+        category: "Jasa",
+        description: "Pekerjaan tanpa BoQ",
+        quantity: 1,
+        unit: "paket",
+        costPrice: 10_000,
+        sellingPrice: 20_000,
+      },
+    ],
+  });
+  const withoutBoq = await request(
+    `/api/boq/scopes?projectId=${project.id}&packageId=${empty.id}`,
+    { method: "POST", body: addendumBody },
+  );
+  assert.equal(withoutBoq.status, 409);
+  assert.equal((await withoutBoq.json()).error.code, "BOQ_REQUIRED");
+  const unknownPackage = await request(
+    `/api/boq/scopes?projectId=${project.id}&packageId=paket-tidak-ada`,
+    { method: "POST", body: addendumBody },
+  );
+  assert.equal(unknownPackage.status, 404);
+  assert.equal((await unknownPackage.json()).error.code, "PACKAGE_NOT_FOUND");
+});

@@ -291,20 +291,23 @@ test("project expenses: editing the merchant must not clear notes or item detail
     categoryId: category.id,
     totalAmount: 500_000,
     fundingSource: "CompanyAccount",
+    paymentMethod: "QRIS",
     notes: "Catatan penting belanja",
     itemDetails: [
       { description: "Kabel LAN Cat6", quantity: 2, unit: "roll", unitPrice: 250_000 },
     ],
   });
   assert.equal(expense.notes, "Catatan penting belanja");
+  assert.equal(expense.paymentMethod, "QRIS");
 
-  // Regression: expenseSchema defaults notes to "" and itemDetails to [] —
-  // an unrelated edit used to wipe both.
+  // Regression: expenseSchema defaults notes to "", itemDetails to [], and
+  // paymentMethod to "Tunai" — an unrelated edit used to wipe all three.
   const updatedExpense = await patch(`/api/project-expenses/${expense.id}`, {
     merchant: "Toko Kabel Uji Baru",
   });
   assert.equal(updatedExpense.merchant, "Toko Kabel Uji Baru");
   assert.equal(updatedExpense.notes, "Catatan penting belanja", "edit keeps the notes");
+  assert.equal(updatedExpense.paymentMethod, "QRIS", "edit keeps the payment method");
   assert.equal(updatedExpense.itemDetails.length, 1, "edit keeps the item details");
   assert.equal(updatedExpense.itemDetails[0].description, "Kabel LAN Cat6");
 });

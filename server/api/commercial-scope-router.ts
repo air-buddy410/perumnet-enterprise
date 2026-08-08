@@ -7,6 +7,7 @@ import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { claimSequence } from "../db/counters";
+import { resolveCommercialPackageId } from "./commercial-package-router";
 import { snapshotQuotationItems } from "../quotation-snapshot";
 import { lockDocumentTaxes } from "../tax";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
@@ -37,6 +38,7 @@ const itemSchema = z.object({
 });
 const scopeSchema = z.object({
   title: z.string().trim().min(3).max(160),
+  packageId: idSchema.optional(),
   issuedAt: isoDateSchema.optional(),
   validUntil: isoDateSchema.optional(),
   items: z.array(itemSchema).min(1).max(500),
@@ -236,6 +238,7 @@ async function scopeDetail(client: DatabaseClient, scopeId: string) {
     id: String(scope.id),
     boqId: String(scope.boq_id),
     projectId: String(scope.project_id),
+    packageId: scope.package_id ? String(scope.package_id) : null,
     kind: String(scope.kind),
     sequence: numberValue(scope.sequence),
     title: String(scope.title),
@@ -292,18 +295,26 @@ export async function handleBoqScopes(
 ) {
   const { client } = await getDatabase();
   const scopeId = path[2];
-  const projectId = new URL(request.url).searchParams.get("projectId");
+  const searchParams = new URL(request.url).searchParams;
+  const projectId = searchParams.get("projectId");
+  const requestedPackageId = searchParams.get("packageId");
 
   if (request.method === "GET" && !scopeId) {
     if (!projectId) {
       throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
     }
     await assertProjectAccess(client, user, projectId);
+    // Without an explicit packageId the list stays project-wide (the
+    // procurement workspace shows every commercial scope of the project).
+    const packageFilter = requestedPackageId
+      ? await resolveCommercialPackageId(client, projectId, requestedPackageId)
+      : null;
     const result = await client.execute({
       sql: `SELECT s.id FROM boq_scopes s
         JOIN boqs b ON b.id=s.boq_id
-        WHERE b.project_id=? ORDER BY s.sequence,s.created_at`,
-      args: [projectId],
+        WHERE b.project_id=?${packageFilter ? " AND s.package_id=?" : ""}
+        ORDER BY s.sequence,s.created_at`,
+      args: packageFilter ? [projectId, packageFilter] : [projectId],
     });
     return ok(
       await Promise.all(result.rows.map((row) => scopeDetail(client, String(row.id)))),
@@ -323,17 +334,30 @@ export async function handleBoqScopes(
     if (input.issuedAt && input.validUntil && input.validUntil < input.issuedAt) {
       throw new ApiError(422, "INVALID_DATE_RANGE", "Masa berlaku tidak boleh lebih awal dari tanggal terbit.");
     }
-    const boq = await client.execute({
-      sql: "SELECT id FROM boqs WHERE project_id=? LIMIT 1",
-      args: [projectId],
+    // An addendum extends one commercial package, never "the project": without
+    // a package_id it vanishes from the package counters and from every
+    // package-filtered quotation query.
+    const packageId = await resolveCommercialPackageId(
+      client,
+      projectId,
+      input.packageId ?? requestedPackageId,
+    );
+    const parentScope = await client.execute({
+      sql: `SELECT s.id,s.boq_id FROM boq_scopes s
+        JOIN boqs b ON b.id=s.boq_id
+        WHERE b.project_id=? AND s.package_id=? AND s.kind='Original'
+        ORDER BY s.sequence,s.created_at LIMIT 1`,
+      args: [projectId, packageId],
     });
-    if (!boq.rows[0]) {
+    if (!parentScope.rows[0]) {
       throw new ApiError(
         409,
         "BOQ_REQUIRED",
         "Buat BoQ Original terlebih dahulu sebelum menambahkan pekerjaan tambah.",
       );
     }
+    const boq = { rows: [{ id: parentScope.rows[0].boq_id }] };
+    const parentScopeId = String(parentScope.rows[0].id);
     const sequenceResult = await client.execute({
       sql: "SELECT COALESCE(MAX(sequence),0)+1 AS sequence FROM boq_scopes WHERE boq_id=?",
       args: [boq.rows[0].id],
@@ -355,11 +379,14 @@ export async function handleBoqScopes(
     await client.transaction(async (tx) => {
       await tx.execute({
         sql: `INSERT INTO boq_scopes
-          (id,boq_id,kind,sequence,title,status,created_by,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?)`,
+          (id,boq_id,package_id,parent_scope_id,kind,sequence,title,status,
+           created_by,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
         args: [
           scopeIdValue,
           boq.rows[0].id,
+          packageId,
+          parentScopeId,
           "Addendum",
           sequenceResult.rows[0]?.sequence ?? 1,
           input.title,
@@ -400,11 +427,12 @@ export async function handleBoqScopes(
       );
       await tx.execute({
         sql: `INSERT INTO quotations
-          (id,project_id,scope_id,number,status,issued_at,valid_until,total,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?)`,
+          (id,project_id,package_id,scope_id,number,status,issued_at,valid_until,total,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
         args: [
           quotationId,
           projectId,
+          packageId,
           scopeIdValue,
           quotationNumber(sequence),
           "Draft",
