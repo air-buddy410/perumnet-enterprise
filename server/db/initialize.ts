@@ -1259,9 +1259,9 @@ async function ensureCmsSeed(client: DatabaseClient) {
   }
 
   const portfolios = [
-    ["cms-portfolio-wifi", "Managed WiFi Hospitality", "Penataan ulang jaringan dan access point untuk koneksi tamu yang konsisten di seluruh area properti.", "/portfolio/network-rack.jpg", "Ubud, Gianyar", "2026-05-28", 1],
-    ["cms-portfolio-cctv", "CCTV Area Komersial", "Implementasi kamera IP, NVR, dan akses monitoring untuk area operasional dan parkir.", "/portfolio/cctv.jpg", "Denpasar, Bali", "2026-04-16", 2],
-    ["cms-portfolio-pabx", "IP PABX Kantor Cabang", "Sistem extension dan call routing yang menyatukan komunikasi antar divisi dan kantor cabang.", "/portfolio/ip-phone.jpg", "Karangasem, Bali", "2026-03-11", 3],
+    ["cms-portfolio-wifi", "Project Quenzo Beach Resort", "Pengelolaan WiFi dan CCTV untuk konektivitas tamu serta keamanan area resort yang stabil.", "/portfolio/quenzo-beach-resort-2026.png", "Padang Bai, Bali", "2026-05-28", 1],
+    ["cms-portfolio-cctv", "Project Sandy House Project", "Pengelolaan WiFi, CCTV, dan Smart House untuk konektivitas, keamanan, serta otomasi rumah yang terintegrasi.", "/portfolio/sandy-house-project-2026.png", "Pantai Indah Kapuk, Jakarta", "2026-04-16", 2],
+    ["cms-portfolio-pabx", "Project Internal PerumNet", "Implementasi IP PABX untuk komunikasi internal PerumNet yang stabil dan mudah dikelola.", "/portfolio/internal-perumnet-ip-pabx-2026.png", "Karangasem, Bali", "2026-03-11", 3],
   ];
   for (const row of portfolios) {
     statements.push(statement(
@@ -1877,14 +1877,67 @@ async function ensureCmsLandingFeatures(client: DatabaseClient) {
   }
 
   const portfolioTranslations: Array<[string, string, string, string]> = [
-    ["cms-portfolio-wifi", "Managed WiFi for Hospitality", "Network and access-point redesign for consistent guest connectivity throughout the property.", "Ubud, Gianyar"],
-    ["cms-portfolio-cctv", "CCTV for a Commercial Site", "IP cameras, NVR, and monitoring access for operational and parking areas.", "Denpasar, Bali"],
-    ["cms-portfolio-pabx", "IP PABX for a Branch Office", "Extensions and call routing that connect communications across departments and branch offices.", "Karangasem, Bali"],
+    ["cms-portfolio-wifi", "Project Quenzo Beach Resort", "Managed WiFi and CCTV for reliable guest connectivity and resort-wide security.", "Padang Bai, Bali"],
+    ["cms-portfolio-cctv", "Project Sandy House Project", "Managed WiFi, CCTV, and Smart House systems for connected, secure, and automated living.", "Pantai Indah Kapuk, Jakarta"],
+    ["cms-portfolio-pabx", "Project Internal PerumNet", "IP PABX implementation for reliable, manageable internal communications at PerumNet.", "Karangasem, Bali"],
   ];
   for (const [id, titleEn, descriptionEn, locationEn] of portfolioTranslations) {
     statements.push(statement(
       "UPDATE cms_portfolios SET title_en=?,description_en=?,location_en=?,updated_at=? WHERE id=? AND title_en=''",
       [titleEn, descriptionEn, locationEn, timestamp, id],
+    ));
+  }
+
+  // Replace only the three original placeholder records. The title guard makes
+  // this a one-time content migration: once the real portfolio copy is in
+  // place, later CMS edits are never overwritten at application startup.
+  const portfolioRefreshes = [
+    {
+      id: "cms-portfolio-wifi",
+      priorTitles: ["Managed WiFi Hospitality", "Managed WiFi & CCTV Hospitality"],
+      title: "Project Quenzo Beach Resort",
+      titleEn: "Project Quenzo Beach Resort",
+      description: "Pengelolaan WiFi dan CCTV untuk konektivitas tamu serta keamanan area resort yang stabil.",
+      descriptionEn: "Managed WiFi and CCTV for reliable guest connectivity and resort-wide security.",
+      imageUrl: "/portfolio/quenzo-beach-resort-2026.png",
+      location: "Padang Bai, Bali",
+      locationEn: "Padang Bai, Bali",
+      completedAt: "2026-05-28",
+      sortOrder: 1,
+    },
+    {
+      id: "cms-portfolio-cctv",
+      priorTitles: ["CCTV Area Komersial", "Manage WiFi, CCTV & Smart Home"],
+      title: "Project Sandy House Project",
+      titleEn: "Project Sandy House Project",
+      description: "Pengelolaan WiFi, CCTV, dan Smart House untuk konektivitas, keamanan, serta otomasi rumah yang terintegrasi.",
+      descriptionEn: "Managed WiFi, CCTV, and Smart House systems for connected, secure, and automated living.",
+      imageUrl: "/portfolio/sandy-house-project-2026.png",
+      location: "Pantai Indah Kapuk, Jakarta",
+      locationEn: "Pantai Indah Kapuk, Jakarta",
+      completedAt: "2026-04-16",
+      sortOrder: 2,
+    },
+    {
+      id: "cms-portfolio-pabx",
+      priorTitles: ["IP PABX Kantor Cabang"],
+      title: "Project Internal PerumNet",
+      titleEn: "Project Internal PerumNet",
+      description: "Implementasi IP PABX untuk komunikasi internal PerumNet yang stabil dan mudah dikelola.",
+      descriptionEn: "IP PABX implementation for reliable, manageable internal communications at PerumNet.",
+      imageUrl: "/portfolio/internal-perumnet-ip-pabx-2026.png",
+      location: "Karangasem, Bali",
+      locationEn: "Karangasem, Bali",
+      completedAt: "2026-03-11",
+      sortOrder: 3,
+    },
+  ];
+  for (const item of portfolioRefreshes) {
+    statements.push(statement(
+      `UPDATE cms_portfolios
+       SET title=?,title_en=?,description=?,description_en=?,image_url=?,image_storage_url=NULL,image_mime_type=NULL,location=?,location_en=?,completed_at=?,sort_order=?,is_published=1,updated_at=?
+       WHERE id=? AND title IN (${item.priorTitles.map(() => "?").join(",")})`,
+      [item.title, item.titleEn, item.description, item.descriptionEn, item.imageUrl, item.location, item.locationEn, item.completedAt, item.sortOrder, timestamp, item.id, ...item.priorTitles],
     ));
   }
 
