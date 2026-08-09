@@ -1020,6 +1020,17 @@ CREATE TABLE IF NOT EXISTS cms_portfolios (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS cms_portfolio_media (
+  id TEXT PRIMARY KEY,
+  portfolio_id TEXT NOT NULL REFERENCES cms_portfolios(id) ON DELETE CASCADE,
+  storage_url TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  sort_order INTEGER NOT NULL CHECK (sort_order BETWEEN 0 AND 9),
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cms_portfolio_media_portfolio_order
+  ON cms_portfolio_media(portfolio_id, sort_order, created_at);
+
 CREATE TABLE IF NOT EXISTS cms_testimonials (
   id TEXT PRIMARY KEY,
   client_name TEXT NOT NULL,

@@ -199,6 +199,32 @@
 .portfolioImage img { width: 100%; height: 100%; object-fit: cover; transition: transform .5s ease; }
 .portfolioCard:hover img { transform: scale(1.045); }
 .portfolioImage > span { position: absolute; left: 14px; bottom: 14px; padding: 7px 10px; display: inline-flex; align-items: center; gap: 5px; border-radius: 6px; color: #fff; background: rgba(25,50,56,.82); backdrop-filter: blur(8px); font-size: 12px; }
+.portfolioImageTrigger { width: 100%; height: 100%; display: block; padding: 0; border: 0; color: inherit; background: transparent; cursor: zoom-in; }
+.portfolioImageTrigger:disabled { cursor: default; }
+.portfolioImageTrigger:focus-visible { outline: 3px solid var(--gold); outline-offset: -3px; }
+.portfolioImageTrigger .imageFallback { min-height: 100%; }
+.portfolioGalleryCount { position: absolute; top: 14px; right: 14px; left: auto !important; bottom: auto !important; display: inline-flex; align-items: center; gap: 5px; padding: 7px 9px; border-radius: 6px; color: #fff; background: rgba(25,50,56,.82); backdrop-filter: blur(8px); font-size: 12px; line-height: 1; font-weight: 700; }
+.portfolioLightboxBackdrop { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(9,20,24,.86); backdrop-filter: blur(8px); animation: lightboxFade .18s ease-out; }
+.portfolioLightbox { width: min(1080px,100%); max-height: min(820px,calc(100vh - 48px)); display: grid; grid-template-rows: auto minmax(0,1fr) auto; overflow: hidden; border: 1px solid rgba(255,255,255,.18); border-radius: 16px; background: #102126; box-shadow: 0 24px 70px rgba(0,0,0,.42); }
+.portfolioLightboxTopline { min-height: 58px; padding: 0 14px 0 20px; display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 16px; align-items: center; color: #fff; font-size: 14px; }
+.portfolioLightboxTopline > span:first-child { overflow: hidden; font-family: "Plus Jakarta Sans",sans-serif; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.portfolioLightboxTopline > span:nth-child(2) { color: rgba(255,255,255,.68); font-variant-numeric: tabular-nums; }
+.portfolioLightboxClose, .portfolioLightboxArrow, .portfolioLightboxThumbs button { border: 0; color: #fff; background: transparent; cursor: pointer; }
+.portfolioLightboxClose { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; }
+.portfolioLightboxClose:hover, .portfolioLightboxClose:focus-visible { background: rgba(255,255,255,.14); }
+.portfolioLightboxStage { position: relative; min-height: 0; display: grid; place-items: center; background: #081115; touch-action: pan-y; }
+.portfolioLightboxStage > img { width: 100%; height: 100%; max-height: 660px; object-fit: contain; transition: opacity .18s ease; }
+.portfolioLightboxArrow { position: absolute; top: 50%; width: 46px; height: 46px; display: grid; place-items: center; border-radius: 50%; background: rgba(7,16,19,.72); transform: translateY(-50%); }
+.portfolioLightboxArrow:hover, .portfolioLightboxArrow:focus-visible { background: rgba(255,255,255,.2); }
+.portfolioLightboxArrowPrevious { left: 16px; }
+.portfolioLightboxArrowNext { right: 16px; }
+.portfolioLightboxThumbs { min-height: 82px; padding: 12px 16px; display: flex; gap: 9px; overflow-x: auto; background: #102126; }
+.portfolioLightboxThumbs button { width: 58px; height: 58px; flex: 0 0 58px; overflow: hidden; border: 2px solid transparent; border-radius: 7px; opacity: .58; }
+.portfolioLightboxThumbs button[aria-current="true"] { border-color: var(--gold); opacity: 1; }
+.portfolioLightboxThumbs button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.portfolioLightboxThumbs img { width: 100%; height: 100%; object-fit: cover; }
+@keyframes lightboxFade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .portfolioLightboxBackdrop { animation: none; } .portfolioLightboxStage > img { transition: none; } }
 .imageFallback { width: 100%; height: 100%; display: grid; place-items: center; color: var(--teal); background: linear-gradient(145deg,#e8f5f2,#c7e7e2); }
 .portfolioCopy { padding: 21px 22px 25px; }
 .portfolioCopy p { margin: 0; color: var(--teal-dark); font-size: 12px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
@@ -481,6 +507,13 @@
   .detailIcon { grid-column: 2; width: 52px; height: 52px; }
   .serviceDetail > div:nth-child(3), .serviceDetail ul { grid-column: 2; }
   .archiveSection { padding: 60px 0 80px; }
+  .portfolioLightboxBackdrop { padding: 0; }
+  .portfolioLightbox { width: 100%; height: 100dvh; max-height: none; border: 0; border-radius: 0; }
+  .portfolioLightboxTopline { padding-left: 16px; }
+  .portfolioLightboxStage > img { max-height: none; }
+  .portfolioLightboxArrow { width: 40px; height: 40px; }
+  .portfolioLightboxArrowPrevious { left: 10px; }
+  .portfolioLightboxArrowNext { right: 10px; }
   .contactSection { padding: 60px 0 80px; }
   .contactCards > a, .contactCards > div { padding: 18px; grid-template-columns: 30px 1fr auto; }
   .contactPanel { padding: 26px 18px; }

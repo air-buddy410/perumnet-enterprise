@@ -147,6 +147,17 @@
 .filePickerCopy small { overflow: hidden; color: var(--muted); font-size: 11px; font-weight: 500; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .filePickerAction { min-height: 34px; padding: 0 12px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #cde3df; border-radius: 7px; color: var(--teal-dark); background: #fff; font-size: 11px; font-weight: 800; white-space: nowrap; }
 .imagePreview { width: min(100%,420px); max-height: 220px; margin-top: 8px; object-fit: cover; border-radius: 8px; }
+.galleryEditor { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--line); }
+.galleryUploadRow { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; align-items: center; }
+.galleryUploadRow .filePicker { min-width: 0; }
+.galleryMediaList { margin-top: 14px; display: grid; gap: 8px; }
+.galleryMediaList > div { min-height: 72px; padding: 7px; display: grid; grid-template-columns: 84px minmax(0,1fr) auto; gap: 11px; align-items: center; border: 1px solid var(--line); border-radius: 8px; background: #fbfdfd; }
+.galleryMediaList img { width: 84px; height: 56px; object-fit: cover; border-radius: 5px; }
+.galleryMediaList > div > span { color: var(--ink); font-size: 12px; font-weight: 750; }
+.galleryMediaList > div > div { display: flex; gap: 5px; }
+.galleryMediaList button { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid #cde3df; border-radius: 6px; color: var(--teal-dark); background: #fff; }
+.galleryMediaList button:disabled { opacity: .4; cursor: not-allowed; }
+.galleryMediaList .deleteButton { border-color: #f0caca; color: #b63a3a; }
 .logoPreview { width: min(100%,240px); max-height: 100px; margin-top: 8px; padding: 10px; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .toggleField { position: relative; min-height: 66px; padding: 11px 13px; display: grid !important; grid-template-columns: 46px minmax(0,1fr) !important; align-items: center !important; gap: 12px !important; border: 1px solid #dce6e4; border-radius: 9px; background: #fbfdfd; cursor: pointer; }
 .toggleField > input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
@@ -310,6 +321,7 @@
   .topbar > a { width:44px; min-width:44px; height:44px; min-height:44px; padding:0; display:grid; place-items:center; gap:0; }
   .previewLink span { display:none; }
   .previewLink svg { display:block; margin:0; }
+  .galleryUploadRow { grid-template-columns: 1fr; }
   .welcome, .sectionTitle { align-items:flex-start; grid-template-columns:1fr; flex-direction:column; }
   .welcome { padding:28px; }
   .welcome > a { justify-self:start; }

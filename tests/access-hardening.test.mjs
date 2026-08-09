@@ -720,15 +720,27 @@ test("a genuine Cloudflare hop is still trusted for the throttle bucket", async 
 // 5. Portfolio upload: declared type versus actual bytes.
 // ---------------------------------------------------------------------------
 
-async function postPortfolio(title, filename, declaredType, bytes) {
+async function postPortfolio(title, filename, declaredType, bytes, isPublished = true) {
   const form = new FormData();
   form.set("title", title);
   form.set("description", "Dokumentasi pengujian unggahan portofolio.");
   form.set("location", "Denpasar");
   form.set("sortOrder", "0");
-  form.set("isPublished", "true");
+  form.set("isPublished", String(isPublished));
   form.set("image", new File([bytes], filename, { type: declaredType }));
   const response = await fetch(`${baseUrl}/api/cms/portfolios`, {
+    method: "POST",
+    headers: { Cookie: cookie },
+    body: form,
+  });
+  const payload = await response.json().catch(() => null);
+  return { status: response.status, payload };
+}
+
+async function postPortfolioGallery(portfolioId, filename, declaredType, bytes) {
+  const form = new FormData();
+  form.set("image", new File([bytes], filename, { type: declaredType }));
+  const response = await fetch(`${baseUrl}/api/cms/portfolios/${portfolioId}/gallery`, {
     method: "POST",
     headers: { Cookie: cookie },
     body: form,
@@ -777,6 +789,67 @@ test("a portfolio upload of something that is not an image at all is refused", a
     ["INVALID_IMAGE", "IMAGE_TYPE_MISMATCH"].includes(notAnImage.payload.error.code),
     notAnImage.payload.error.code,
   );
+});
+
+test("a published portfolio gallery keeps its cover first, orders media, enforces its limit, and removes media safely", async () => {
+  await loginAsAdmin();
+  const portfolio = await postPortfolio("Portofolio Galeri", "cover.png", "image/png", TINY_PNG);
+  assert.equal(portfolio.status, 201, JSON.stringify(portfolio.payload));
+  const portfolioId = portfolio.payload.data.id;
+
+  const first = await postPortfolioGallery(portfolioId, "gallery-1.png", "image/png", TINY_PNG);
+  const second = await postPortfolioGallery(portfolioId, "gallery-2.png", "image/png", TINY_PNG);
+  assert.equal(first.status, 201, JSON.stringify(first.payload));
+  assert.equal(second.status, 201, JSON.stringify(second.payload));
+
+  const bootstrap = await json("/api/cms/bootstrap");
+  const item = bootstrap.content.portfolios.find((candidate) => candidate.id === portfolioId);
+  assert.equal(item.gallery.length, 3);
+  assert.equal(item.gallery[0].isCover, true, "cover must remain the first gallery image");
+  assert.equal(item.gallery[1].id, first.payload.data.id);
+  assert.equal(item.gallery[2].id, second.payload.data.id);
+  const publicMedia = await fetch(`${baseUrl}/api/cms/portfolio-gallery-media/${first.payload.data.id}`);
+  assert.equal(publicMedia.status, 200);
+  assert.equal(publicMedia.headers.get("content-type"), "image/png");
+  assert.equal(publicMedia.headers.get("x-content-type-options"), "nosniff");
+
+  const move = await json(`/api/cms/portfolios/${portfolioId}/gallery/${second.payload.data.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ direction: "up" }),
+  });
+  assert.equal(move.moved, true);
+  const reordered = await json("/api/cms/bootstrap");
+  const reorderedItem = reordered.content.portfolios.find((candidate) => candidate.id === portfolioId);
+  assert.equal(reorderedItem.gallery[1].id, second.payload.data.id);
+
+  for (let index = 0; index < 8; index += 1) {
+    const extra = await postPortfolioGallery(portfolioId, `gallery-extra-${index}.png`, "image/png", TINY_PNG);
+    assert.equal(extra.status, 201, JSON.stringify(extra.payload));
+  }
+  const overLimit = await postPortfolioGallery(portfolioId, "gallery-too-many.png", "image/png", TINY_PNG);
+  assert.equal(overLimit.status, 422, JSON.stringify(overLimit.payload));
+  assert.equal(overLimit.payload.error.code, "GALLERY_LIMIT");
+
+  const deleteResponse = await request(`/api/cms/portfolios/${portfolioId}/gallery/${first.payload.data.id}`, { method: "DELETE" });
+  assert.equal(deleteResponse.status, 204);
+  const removed = await fetch(`${baseUrl}/api/cms/portfolio-gallery-media/${first.payload.data.id}`);
+  assert.equal(removed.status, 404);
+});
+
+test("portfolio gallery rejects misleading images and keeps draft media private", async () => {
+  await loginAsAdmin();
+  const portfolio = await postPortfolio("Portofolio Galeri Draft", "cover.png", "image/png", TINY_PNG, false);
+  assert.equal(portfolio.status, 201, JSON.stringify(portfolio.payload));
+  const portfolioId = portfolio.payload.data.id;
+  const lying = await postPortfolioGallery(portfolioId, "gallery.jpg", "image/jpeg", TINY_PNG);
+  assert.equal(lying.status, 415, JSON.stringify(lying.payload));
+  assert.equal(lying.payload.error.code, "IMAGE_TYPE_MISMATCH");
+  const privateMedia = await postPortfolioGallery(portfolioId, "gallery.png", "image/png", TINY_PNG);
+  assert.equal(privateMedia.status, 201, JSON.stringify(privateMedia.payload));
+  const anonymous = await fetch(`${baseUrl}/api/cms/portfolio-gallery-media/${privateMedia.payload.data.id}`);
+  assert.equal(anonymous.status, 401);
+  const adminMedia = await fetch(`${baseUrl}/api/cms/portfolio-gallery-media/${privateMedia.payload.data.id}`, { headers: { Cookie: cookie } });
+  assert.equal(adminMedia.status, 200);
 });
 
 // ---------------------------------------------------------------------------

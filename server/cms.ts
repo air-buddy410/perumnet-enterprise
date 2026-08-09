@@ -42,6 +42,14 @@ export type CmsPortfolio = {
   sortOrder: number;
   isPublished: boolean;
   updatedAt: string;
+  gallery: CmsPortfolioImage[];
+};
+
+export type CmsPortfolioImage = {
+  id: string;
+  url: string;
+  sortOrder: number;
+  isCover: boolean;
 };
 
 export type CmsTestimonial = {
@@ -180,7 +188,7 @@ function partnerLogo(row: Record<string, unknown>) {
 
 export async function getCmsContent(includeHidden = false): Promise<CmsContent> {
   const { client } = await getDatabase();
-  const [textResult, settingResult, serviceResult, portfolioResult, testimonialResult, pageResult, faqResult, partnerResult] =
+  const [textResult, settingResult, serviceResult, portfolioResult, portfolioMediaResult, testimonialResult, pageResult, faqResult, partnerResult] =
     await Promise.all([
       client.execute(
         "SELECT id,page_key,content_key,value_content,value_content_en,updated_at FROM cms_site_texts ORDER BY page_key,content_key",
@@ -193,6 +201,12 @@ export async function getCmsContent(includeHidden = false): Promise<CmsContent> 
       ),
       client.execute(
         `SELECT * FROM cms_portfolios${includeHidden ? "" : " WHERE is_published=1"} ORDER BY sort_order,completed_at DESC`,
+      ),
+      client.execute(
+        `SELECT media.* FROM cms_portfolio_media media
+         INNER JOIN cms_portfolios portfolio ON portfolio.id=media.portfolio_id
+         ${includeHidden ? "" : "WHERE portfolio.is_published=1"}
+         ORDER BY media.portfolio_id,media.sort_order,media.created_at`,
       ),
       client.execute(
         `SELECT * FROM cms_testimonials${includeHidden ? "" : " WHERE is_visible=1"} ORDER BY sort_order,created_at`,
@@ -225,6 +239,19 @@ export async function getCmsContent(includeHidden = false): Promise<CmsContent> 
     textMapEn[text.pageKey][text.contentKey] = text.valueEn;
   }
 
+  const galleryByPortfolio = new Map<string, CmsPortfolioImage[]>();
+  for (const row of portfolioMediaResult.rows) {
+    const portfolioId = String(row.portfolio_id);
+    const gallery = galleryByPortfolio.get(portfolioId) ?? [];
+    gallery.push({
+      id: String(row.id),
+      url: `/api/cms/portfolio-gallery-media/${String(row.id)}`,
+      sortOrder: numberValue(row.sort_order),
+      isCover: false,
+    });
+    galleryByPortfolio.set(portfolioId, gallery);
+  }
+
   return {
     texts,
     textMap,
@@ -239,20 +266,28 @@ export async function getCmsContent(includeHidden = false): Promise<CmsContent> 
       settingResult.rows.map((row) => [String(row.key_name), timestampValue(row.updated_at)]),
     ),
     services: serviceResult.rows.map(mapService),
-    portfolios: portfolioResult.rows.map((row) => ({
-      id: String(row.id),
-      title: String(row.title),
-      titleEn: String(row.title_en ?? ""),
-      description: String(row.description),
-      descriptionEn: String(row.description_en ?? ""),
-      imageUrl: portfolioImage(row),
-      location: String(row.location ?? ""),
-      locationEn: String(row.location_en ?? ""),
-      completedAt: String(row.completed_at ?? ""),
-      sortOrder: numberValue(row.sort_order),
-      isPublished: booleanValue(row.is_published),
-      updatedAt: timestampValue(row.updated_at),
-    })),
+    portfolios: portfolioResult.rows.map((row) => {
+      const id = String(row.id);
+      const imageUrl = portfolioImage(row);
+      return {
+        id,
+        title: String(row.title),
+        titleEn: String(row.title_en ?? ""),
+        description: String(row.description),
+        descriptionEn: String(row.description_en ?? ""),
+        imageUrl,
+        location: String(row.location ?? ""),
+        locationEn: String(row.location_en ?? ""),
+        completedAt: String(row.completed_at ?? ""),
+        sortOrder: numberValue(row.sort_order),
+        isPublished: booleanValue(row.is_published),
+        updatedAt: timestampValue(row.updated_at),
+        gallery: [
+          ...(imageUrl ? [{ id: `cover:${id}`, url: imageUrl, sortOrder: -1, isCover: true }] : []),
+          ...(galleryByPortfolio.get(id) ?? []),
+        ],
+      };
+    }),
     testimonials: testimonialResult.rows.map((row) => ({
       id: String(row.id),
       clientName: String(row.client_name),

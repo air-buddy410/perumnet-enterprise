@@ -7,7 +7,7 @@ import { writeAuditLog } from "../audit";
 import { requireUser, type AuthUser } from "../auth";
 import { getCmsContent } from "../cms";
 import { translateMany } from "../cms-translation";
-import { getDatabase } from "../db/client";
+import { getDatabase, rowLock } from "../db/client";
 import { deleteProjectFile, readProjectFile, storeProjectFile } from "../storage";
 import {
   ApiError,
@@ -150,6 +150,29 @@ async function mediaResponse(request: Request, id: string) {
   return new Response(file.content, {
     headers: {
       "Content-Type": String(row.image_mime_type ?? file.contentType ?? "application/octet-stream"),
+      "Cache-Control": "public, max-age=300, must-revalidate",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
+
+async function portfolioGalleryMediaResponse(request: Request, id: string) {
+  const { client } = await getDatabase();
+  const result = await client.execute({
+    sql: `SELECT media.storage_url,media.mime_type,portfolio.is_published
+          FROM cms_portfolio_media media
+          INNER JOIN cms_portfolios portfolio ON portfolio.id=media.portfolio_id
+          WHERE media.id=? LIMIT 1`,
+    args: [id],
+  });
+  const row = result.rows[0];
+  if (!row?.storage_url) throw new ApiError(404, "NOT_FOUND", "Gambar galeri tidak ditemukan.");
+  if (!row.is_published) await admin(request);
+  const file = await readProjectFile(String(row.storage_url));
+  if (!file) throw new ApiError(404, "NOT_FOUND", "Gambar galeri tidak ditemukan.");
+  return new Response(file.content, {
+    headers: {
+      "Content-Type": String(row.mime_type ?? file.contentType ?? "application/octet-stream"),
       "Cache-Control": "public, max-age=300, must-revalidate",
       "X-Content-Type-Options": "nosniff",
     },
@@ -483,14 +506,133 @@ async function handlePortfolios(request: Request, id: string | undefined, user: 
     return ok({ id });
   }
   if (id && request.method === "DELETE") {
-    const current = await client.execute({ sql: "SELECT image_storage_url FROM cms_portfolios WHERE id=? LIMIT 1", args: [id] });
+    const [current, gallery] = await Promise.all([
+      client.execute({ sql: "SELECT image_storage_url FROM cms_portfolios WHERE id=? LIMIT 1", args: [id] }),
+      client.execute({ sql: "SELECT storage_url FROM cms_portfolio_media WHERE portfolio_id=?", args: [id] }),
+    ]);
     const storageUrl = current.rows[0]?.image_storage_url;
     if (storageUrl) await deleteProjectFile(String(storageUrl));
+    await Promise.all(gallery.rows.map((item) => deleteProjectFile(String(item.storage_url))));
     await client.execute({ sql: "DELETE FROM cms_portfolios WHERE id=?", args: [id] });
     await writeAuditLog(client, request, user, "delete", "cms_portfolio", id);
     return noContent();
   }
   throw new ApiError(405, "METHOD_NOT_ALLOWED", "Aksi portofolio tidak didukung.");
+}
+
+const galleryMoveSchema = z.object({ direction: z.enum(["up", "down"]) });
+const MAX_PORTFOLIO_GALLERY_IMAGES = 10;
+
+async function handlePortfolioGallery(
+  request: Request,
+  portfolioId: string,
+  mediaId: string | undefined,
+  user: AuthUser,
+) {
+  const { client } = await getDatabase();
+
+  if (request.method === "POST" && !mediaId) {
+    const form = await request.formData();
+    const file = form.get("image");
+    if (!(file instanceof File) || file.size === 0) {
+      throw new ApiError(422, "IMAGE_REQUIRED", "Pilih satu gambar untuk galeri.");
+    }
+    const image = await preparePortfolioImage(file);
+    const galleryId = randomUUID();
+    let storageUrl: string | null = null;
+    try {
+      await client.transaction(async (transaction) => {
+        const portfolio = await transaction.execute({
+          sql: `SELECT id FROM cms_portfolios WHERE id=?${rowLock(transaction)}`,
+          args: [portfolioId],
+        });
+        if (!portfolio.rows[0]) throw new ApiError(404, "NOT_FOUND", "Portofolio tidak ditemukan.");
+        const media = await transaction.execute({
+          sql: "SELECT id FROM cms_portfolio_media WHERE portfolio_id=? ORDER BY sort_order,created_at",
+          args: [portfolioId],
+        });
+        if (media.rows.length >= MAX_PORTFOLIO_GALLERY_IMAGES) {
+          throw new ApiError(422, "GALLERY_LIMIT", `Maksimal ${MAX_PORTFOLIO_GALLERY_IMAGES} foto tambahan per portofolio.`);
+        }
+        const stored = await storeProjectFile(
+          `cms-portfolio-gallery-${galleryId}`,
+          image.mimeType,
+          image.content.buffer.slice(
+            image.content.byteOffset,
+            image.content.byteOffset + image.content.byteLength,
+          ) as ArrayBuffer,
+        );
+        storageUrl = stored.storageUrl;
+        const timestamp = new Date().toISOString();
+        await transaction.execute({
+          sql: "INSERT INTO cms_portfolio_media (id,portfolio_id,storage_url,mime_type,sort_order,created_at) VALUES (?,?,?,?,?,?)",
+          args: [galleryId, portfolioId, stored.storageUrl, image.mimeType, media.rows.length, timestamp],
+        });
+        await transaction.execute({
+          sql: "UPDATE cms_portfolios SET updated_at=? WHERE id=?",
+          args: [timestamp, portfolioId],
+        });
+      });
+    } catch (error) {
+      if (storageUrl) await deleteProjectFile(storageUrl).catch(() => undefined);
+      throw error;
+    }
+    await writeAuditLog(client, request, user, "create", "cms_portfolio_media", galleryId, { portfolioId });
+    return created({ id: galleryId });
+  }
+
+  if (request.method === "PATCH" && mediaId) {
+    const { direction } = galleryMoveSchema.parse(await jsonBody(request));
+    let moved = false;
+    await client.transaction(async (transaction) => {
+      const portfolio = await transaction.execute({
+        sql: `SELECT id FROM cms_portfolios WHERE id=?${rowLock(transaction)}`,
+        args: [portfolioId],
+      });
+      if (!portfolio.rows[0]) throw new ApiError(404, "NOT_FOUND", "Portofolio tidak ditemukan.");
+      const media = await transaction.execute({
+        sql: "SELECT id,sort_order FROM cms_portfolio_media WHERE portfolio_id=? ORDER BY sort_order,created_at",
+        args: [portfolioId],
+      });
+      const index = media.rows.findIndex((item) => String(item.id) === mediaId);
+      if (index < 0) throw new ApiError(404, "NOT_FOUND", "Gambar galeri tidak ditemukan.");
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= media.rows.length) return;
+      const current = media.rows[index];
+      const target = media.rows[targetIndex];
+      await transaction.batch([
+        { sql: "UPDATE cms_portfolio_media SET sort_order=? WHERE id=?", args: [target.sort_order, current.id] },
+        { sql: "UPDATE cms_portfolio_media SET sort_order=? WHERE id=?", args: [current.sort_order, target.id] },
+        { sql: "UPDATE cms_portfolios SET updated_at=? WHERE id=?", args: [new Date().toISOString(), portfolioId] },
+      ], "write");
+      moved = true;
+    });
+    if (moved) await writeAuditLog(client, request, user, "update", "cms_portfolio_media", mediaId, { portfolioId, direction });
+    return ok({ id: mediaId, moved });
+  }
+
+  if (request.method === "DELETE" && mediaId) {
+    await client.transaction(async (transaction) => {
+      const portfolio = await transaction.execute({
+        sql: `SELECT id FROM cms_portfolios WHERE id=?${rowLock(transaction)}`,
+        args: [portfolioId],
+      });
+      if (!portfolio.rows[0]) throw new ApiError(404, "NOT_FOUND", "Portofolio tidak ditemukan.");
+      const media = await transaction.execute({
+        sql: "SELECT storage_url FROM cms_portfolio_media WHERE id=? AND portfolio_id=? LIMIT 1",
+        args: [mediaId, portfolioId],
+      });
+      const storageUrl = media.rows[0]?.storage_url;
+      if (!storageUrl) throw new ApiError(404, "NOT_FOUND", "Gambar galeri tidak ditemukan.");
+      await deleteProjectFile(String(storageUrl));
+      await transaction.execute({ sql: "DELETE FROM cms_portfolio_media WHERE id=?", args: [mediaId] });
+      await transaction.execute({ sql: "UPDATE cms_portfolios SET updated_at=? WHERE id=?", args: [new Date().toISOString(), portfolioId] });
+    });
+    await writeAuditLog(client, request, user, "delete", "cms_portfolio_media", mediaId, { portfolioId });
+    return noContent();
+  }
+
+  throw new ApiError(405, "METHOD_NOT_ALLOWED", "Aksi galeri portofolio tidak didukung.");
 }
 
 async function handleTestimonials(request: Request, id: string | undefined, user: AuthUser) {
@@ -687,6 +829,7 @@ export async function dispatchCmsApi(request: Request, path: string[]) {
   const id = path[1];
 
   if (resource === "media" && id && request.method === "GET") return mediaResponse(request, id);
+  if (resource === "portfolio-gallery-media" && id && request.method === "GET") return portfolioGalleryMediaResponse(request, id);
   if (resource === "partner-media" && id && request.method === "GET") return partnerMediaResponse(request, id);
   if (resource === "leads") return dispatchLeadApi(request, path);
 
@@ -698,6 +841,7 @@ export async function dispatchCmsApi(request: Request, path: string[]) {
   if (resource === "texts" && request.method === "PUT") return updateTexts(request, user);
   if (resource === "settings" && request.method === "PUT") return updateSettings(request, user);
   if (resource === "services") return handleServices(request, id, user);
+  if (resource === "portfolios" && id && path[2] === "gallery") return handlePortfolioGallery(request, id, path[3], user);
   if (resource === "portfolios") return handlePortfolios(request, id, user);
   if (resource === "testimonials") return handleTestimonials(request, id, user);
   if (resource === "pages") return handlePages(request, id, user);

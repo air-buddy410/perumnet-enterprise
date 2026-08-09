@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
+  ArrowDown,
   ArrowLeft,
   ArrowRight,
+  ArrowUp,
   BriefcaseBusiness,
   Camera,
   Check,
@@ -47,7 +49,8 @@ import { MailLoginEditor } from "./mail-login-editor";
 
 type User = { id: string; name: string; email: string; role: string };
 type Service = { id: string; slug: string; title: string; titleEn: string; summary: string; summaryEn: string; description: string; descriptionEn: string; features: string[]; featuresEn: string[]; icon: string; sortOrder: number; isPublished: boolean };
-type Portfolio = { id: string; title: string; titleEn: string; description: string; descriptionEn: string; imageUrl: string; location: string; locationEn: string; completedAt: string; sortOrder: number; isPublished: boolean };
+type PortfolioGalleryImage = { id: string; url: string; sortOrder: number; isCover: boolean };
+type Portfolio = { id: string; title: string; titleEn: string; description: string; descriptionEn: string; imageUrl: string; location: string; locationEn: string; completedAt: string; sortOrder: number; isPublished: boolean; gallery: PortfolioGalleryImage[] };
 type Testimonial = { id: string; clientName: string; companyName: string; review: string; reviewEn: string; isVisible: boolean; sortOrder: number };
 type Page = { id: string; title: string; titleEn: string; slug: string; excerpt: string; excerptEn: string; content: string; contentEn: string; isPublished: boolean; showInNavigation: boolean; sortOrder: number };
 type Faq = { id: string; question: string; questionEn: string; answer: string; answerEn: string; sortOrder: number; isVisible: boolean };
@@ -161,10 +164,10 @@ async function translateTexts(texts: string[]) {
 function emptyService(): Omit<Service, "id"> {
   return { slug: "", title: "", titleEn: "", summary: "", summaryEn: "", description: "", descriptionEn: "", features: [], featuresEn: [], icon: "network", sortOrder: 0, isPublished: true };
 }
-function emptyPortfolio(): Omit<Portfolio, "id" | "imageUrl"> {
+function emptyPortfolio(): Omit<Portfolio, "id" | "imageUrl" | "gallery"> {
   return { title: "", titleEn: "", description: "", descriptionEn: "", location: "", locationEn: "", completedAt: "", sortOrder: 0, isPublished: true };
 }
-function portfolioForm(item?: Portfolio): Omit<Portfolio, "id" | "imageUrl"> {
+function portfolioForm(item?: Portfolio): Omit<Portfolio, "id" | "imageUrl" | "gallery"> {
   if (!item) return emptyPortfolio();
   return {
     title: item.title,
@@ -473,14 +476,36 @@ function PortfolioEditor({ items, busy, mutate }: { items: Portfolio[]; busy: bo
   const current = items.find((item) => item.id === selected);
   const [form, setForm] = useState(portfolioForm(current));
   const [file, setFile] = useState<File | null>(null);
+  const [galleryFiles, setGalleryFiles] = useState<File[]>([]);
   const submit = () => { const body = new FormData(); Object.entries(form).forEach(([key, value]) => body.set(key, String(value))); if (file) body.set("image", file); mutate(() => request(`/api/cms/portfolios${selected ? `/${selected}` : ""}`, { method: selected ? "PATCH" : "POST", body }), selected ? "Portofolio berhasil diperbarui." : "Proyek baru berhasil ditambahkan."); };
+  const gallery = current?.gallery.filter((image) => !image.isCover) ?? [];
+  const uploadGallery = () => {
+    if (!selected || galleryFiles.length === 0) return;
+    const uploads = galleryFiles;
+    setGalleryFiles([]);
+    mutate(async () => {
+      for (const image of uploads) {
+        const body = new FormData();
+        body.set("image", image);
+        await request(`/api/cms/portfolios/${selected}/gallery`, { method: "POST", body });
+      }
+    }, `${uploads.length} foto galeri berhasil ditambahkan.`);
+  };
   return <>
-    <SectionTitle eyebrow="PORTOFOLIO" title="Tampilkan bukti kerja terbaik Anda." description="Unggah foto proyek dan kelola deskripsi Indonesia serta Inggris." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyPortfolio()); setFile(null); }}><Plus size={17} /> Proyek baru</button>} />
-    <div className={styles.splitEditor}><ListPanel title="Daftar proyek">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm(portfolioForm(item)); setFile(null); }}>{item.imageUrl ? <img src={item.imageUrl} alt="" /> : <span className={styles.itemIcon}><Camera size={18} /></span>}<div><strong>{item.title}</strong><small>{item.location || "Tanpa lokasi"}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit portofolio" : "Proyek baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus proyek portofolio ini?")) mutate(() => request(`/api/cms/portfolios/${selected}`, { method: "DELETE" }), "Portofolio dihapus."); } : undefined}>
+    <SectionTitle eyebrow="PORTOFOLIO" title="Tampilkan bukti kerja terbaik Anda." description="Unggah cover dan hingga 10 foto galeri untuk setiap project." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyPortfolio()); setFile(null); setGalleryFiles([]); }}><Plus size={17} /> Proyek baru</button>} />
+    <div className={styles.splitEditor}><ListPanel title="Daftar proyek">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm(portfolioForm(item)); setFile(null); setGalleryFiles([]); }}>{item.imageUrl ? <img src={item.imageUrl} alt="" /> : <span className={styles.itemIcon}><Camera size={18} /></span>}<div><strong>{item.title}</strong><small>{item.location || "Tanpa lokasi"}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit portofolio" : "Proyek baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus proyek portofolio ini?")) mutate(() => request(`/api/cms/portfolios/${selected}`, { method: "DELETE" }), "Portofolio dihapus."); } : undefined}>
       <LanguageHeading label="Konten bilingual" helper="Terjemahkan lalu tinjau sebelum disimpan." action={<TranslateButton busy={busy} values={[form.title, form.location, form.description]} onTranslated={([titleEn, locationEn, descriptionEn]) => setForm({ ...form, titleEn, locationEn, descriptionEn })} />} />
       <div className={styles.fieldGrid}><Field label="Judul proyek · ID" value={form.title} onChange={(title) => setForm({ ...form, title })} /><Field label="Project title · EN" value={form.titleEn} onChange={(titleEn) => setForm({ ...form, titleEn })} /><Field label="Lokasi · ID" value={form.location} onChange={(location) => setForm({ ...form, location })} /><Field label="Location · EN" value={form.locationEn} onChange={(locationEn) => setForm({ ...form, locationEn })} /><TextArea label="Deskripsi · ID" value={form.description} rows={5} onChange={(description) => setForm({ ...form, description })} /><TextArea label="Description · EN" value={form.descriptionEn} rows={5} onChange={(descriptionEn) => setForm({ ...form, descriptionEn })} /><label><span>Tanggal selesai</span><input type="date" value={form.completedAt} onChange={(event) => setForm({ ...form, completedAt: event.target.value })} /></label><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><FileUploadField label="Foto proyek (JPG, PNG, WebP · maks. 5 MB)" accept="image/jpeg,image/png,image/webp" file={file} buttonLabel="Pilih foto proyek" helper="Klik untuk memilih foto dari perangkat Anda." currentUrl={current?.imageUrl} previewAlt={current?.title || "Foto proyek"} previewClassName={styles.imagePreview} onChange={setFile} /><ToggleField label="Tampilkan di website" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /></div>
+      {selected && <PortfolioGalleryEditor gallery={gallery} pendingFiles={galleryFiles} busy={busy} onSelectFiles={setGalleryFiles} onUpload={uploadGallery} onMove={(mediaId, direction) => mutate(() => request(`/api/cms/portfolios/${selected}/gallery/${mediaId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ direction }) }), "Urutan foto galeri diperbarui.")} onDelete={(mediaId) => { if (window.confirm("Hapus foto ini dari galeri?")) mutate(() => request(`/api/cms/portfolios/${selected}/gallery/${mediaId}`, { method: "DELETE" }), "Foto galeri dihapus."); }} />}
     </EditorPanel></div>
   </>;
+}
+
+function PortfolioGalleryEditor({ gallery, pendingFiles, busy, onSelectFiles, onUpload, onMove, onDelete }: { gallery: PortfolioGalleryImage[]; pendingFiles: File[]; busy: boolean; onSelectFiles: (files: File[]) => void; onUpload: () => void; onMove: (mediaId: string, direction: "up" | "down") => void; onDelete: (mediaId: string) => void }) {
+  const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const remaining = Math.max(0, 10 - gallery.length);
+  return <section className={styles.galleryEditor}><div className={styles.cardHeading}><span>Foto galeri</span><small>{gallery.length} / 10 foto tambahan · cover selalu tampil pertama</small></div><input ref={inputRef} id={inputId} className={styles.fileInput} type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => onSelectFiles(Array.from(event.target.files || []).slice(0, remaining))} /><div className={styles.galleryUploadRow}><button type="button" className={styles.filePicker} onClick={() => { if (inputRef.current) { inputRef.current.value = ""; inputRef.current.click(); } }} disabled={busy || remaining === 0}><span className={styles.filePickerIcon}><Upload size={19} /></span><span className={styles.filePickerCopy}><strong>{pendingFiles.length ? `${pendingFiles.length} foto siap diunggah` : "Pilih foto galeri"}</strong><small>{remaining ? "JPG, PNG, WebP · maks. 5 MB per foto" : "Batas 10 foto tambahan telah tercapai"}</small></span></button><button type="button" className={styles.secondaryAction} onClick={onUpload} disabled={busy || pendingFiles.length === 0}>Unggah foto</button></div>{gallery.length > 0 && <div className={styles.galleryMediaList}>{gallery.map((image, index) => <div key={image.id}><img src={image.url} alt="" /><span>Foto {index + 1}</span><div><button type="button" onClick={() => onMove(image.id, "up")} disabled={busy || index === 0} aria-label="Naikkan urutan foto"><ArrowUp size={16} /></button><button type="button" onClick={() => onMove(image.id, "down")} disabled={busy || index === gallery.length - 1} aria-label="Turunkan urutan foto"><ArrowDown size={16} /></button><button type="button" className={styles.deleteButton} onClick={() => onDelete(image.id)} disabled={busy} aria-label="Hapus foto galeri"><Trash2 size={16} /></button></div></div>)}</div>}</section>;
 }
 
 function PartnerEditor({ items, busy, mutate }: { items: Partner[]; busy: boolean; mutate: Mutate }) {

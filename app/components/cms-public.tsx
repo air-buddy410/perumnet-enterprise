@@ -42,7 +42,7 @@ import { PublicLanguageSwitcher } from "./public-language-switcher";
 import { PublicLeadForm } from "./public-lead-form";
 import { PublicMobileMenu } from "./public-mobile-menu";
 import { PublicMotionController } from "./public-motion-controller";
-import { PublicPortfolioImage } from "./public-portfolio-image";
+import { PortfolioGallery } from "./portfolio-gallery";
 import { SiteAnalytics } from "./site-analytics";
 import { measurementId } from "../analytics";
 import styles from "../site.module.css";
@@ -250,7 +250,7 @@ export function PortfolioCard({ item, language }: { item: CmsPortfolio; language
   return (
     <article className={styles.portfolioCard}>
       <div className={styles.portfolioImage}>
-        <PublicPortfolioImage src={item.imageUrl} alt={title} />
+        <PortfolioGallery images={item.gallery} title={title} language={language} />
         {item.location && <span><MapPin size={13} /> {localized(item.location, item.locationEn, language)}</span>}
       </div>
       <div className={styles.portfolioCopy}>
