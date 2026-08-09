@@ -96,7 +96,15 @@ type CmsContent = {
 };
 
 type Section = "overview" | "texts" | "services" | "portfolios" | "partners" | "testimonials" | "faqs" | "pages" | "leads" | "settings" | "mail-login";
-type Mutate = (job: () => Promise<unknown>, success: string) => void;
+type MutateResult = { ok: boolean; error?: string };
+type Mutate = (job: () => Promise<unknown>, success: string) => Promise<MutateResult>;
+type GalleryUploadProgress = {
+  state: "idle" | "uploading" | "success" | "error";
+  total: number;
+  completed: number;
+  currentFile?: string;
+  message?: string;
+};
 
 const navItems: Array<{ id: Section; label: string; icon: typeof Home }> = [
   { id: "overview", label: "Ringkasan", icon: LayoutDashboard },
@@ -238,8 +246,12 @@ export function PanelApp() {
   };
   const mutate: Mutate = async (job, success) => {
     setBusy(true);
-    try { await job(); await loadContent(); flash(success); }
-    catch (error) { flash(error instanceof Error ? error.message : "Terjadi kesalahan."); }
+    try { await job(); await loadContent(); flash(success); return { ok: true }; }
+    catch (error) {
+      const message = error instanceof Error ? error.message : "Terjadi kesalahan.";
+      flash(message);
+      return { ok: false, error: message };
+    }
     finally { setBusy(false); }
   };
   const logout = async () => {
@@ -273,7 +285,7 @@ export function PanelApp() {
           {section === "overview" && <Overview content={content} user={user} onNavigate={setSection} />}
           {section === "texts" && <TextEditor key={JSON.stringify(content.texts)} content={content} busy={busy} mutate={mutate} />}
           {section === "services" && <ServiceEditor key={JSON.stringify(content.services)} items={content.services} busy={busy} mutate={mutate} />}
-          {section === "portfolios" && <PortfolioEditor key={JSON.stringify(content.portfolios)} items={content.portfolios} busy={busy} mutate={mutate} />}
+          {section === "portfolios" && <PortfolioEditor items={content.portfolios} busy={busy} mutate={mutate} />}
           {section === "partners" && <PartnerEditor key={JSON.stringify(content.partners)} items={content.partners} busy={busy} mutate={mutate} />}
           {section === "testimonials" && <TestimonialEditor key={JSON.stringify(content.testimonials)} items={content.testimonials} busy={busy} mutate={mutate} />}
           {section === "faqs" && <FaqEditor key={JSON.stringify(content.faqs)} items={content.faqs} busy={busy} mutate={mutate} />}
@@ -477,35 +489,51 @@ function PortfolioEditor({ items, busy, mutate }: { items: Portfolio[]; busy: bo
   const [form, setForm] = useState(portfolioForm(current));
   const [file, setFile] = useState<File | null>(null);
   const [galleryFiles, setGalleryFiles] = useState<File[]>([]);
+  const [galleryUpload, setGalleryUpload] = useState<GalleryUploadProgress>({ state: "idle", total: 0, completed: 0 });
   const submit = () => { const body = new FormData(); Object.entries(form).forEach(([key, value]) => body.set(key, String(value))); if (file) body.set("image", file); mutate(() => request(`/api/cms/portfolios${selected ? `/${selected}` : ""}`, { method: selected ? "PATCH" : "POST", body }), selected ? "Portofolio berhasil diperbarui." : "Proyek baru berhasil ditambahkan."); };
   const gallery = current?.gallery.filter((image) => !image.isCover) ?? [];
-  const uploadGallery = () => {
+  const selectGalleryFiles = (files: File[]) => {
+    setGalleryFiles(files);
+    setGalleryUpload({ state: "idle", total: 0, completed: 0 });
+  };
+  const uploadGallery = async () => {
     if (!selected || galleryFiles.length === 0) return;
-    const uploads = galleryFiles;
-    setGalleryFiles([]);
-    mutate(async () => {
-      for (const image of uploads) {
+    const uploads = [...galleryFiles];
+    let completed = 0;
+    setGalleryUpload({ state: "uploading", total: uploads.length, completed, currentFile: uploads[0]?.name });
+    const result = await mutate(async () => {
+      for (const [index, image] of uploads.entries()) {
+        setGalleryUpload({ state: "uploading", total: uploads.length, completed, currentFile: image.name });
         const body = new FormData();
         body.set("image", image);
         await request(`/api/cms/portfolios/${selected}/gallery`, { method: "POST", body });
+        completed = index + 1;
+        setGalleryFiles((pending) => pending.filter((pendingFile) => pendingFile !== image));
+        setGalleryUpload({ state: "uploading", total: uploads.length, completed, currentFile: image.name });
       }
     }, `${uploads.length} foto galeri berhasil ditambahkan.`);
+    setGalleryUpload(result.ok
+      ? { state: "success", total: uploads.length, completed, message: `${completed} foto berhasil diunggah dan ditambahkan ke galeri.` }
+      : { state: "error", total: uploads.length, completed, message: result.error || "Upload belum selesai. Foto yang belum berhasil tetap tersedia untuk dicoba ulang." });
   };
   return <>
-    <SectionTitle eyebrow="PORTOFOLIO" title="Tampilkan bukti kerja terbaik Anda." description="Unggah cover dan hingga 10 foto galeri untuk setiap project." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyPortfolio()); setFile(null); setGalleryFiles([]); }}><Plus size={17} /> Proyek baru</button>} />
-    <div className={styles.splitEditor}><ListPanel title="Daftar proyek">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm(portfolioForm(item)); setFile(null); setGalleryFiles([]); }}>{item.imageUrl ? <img src={item.imageUrl} alt="" /> : <span className={styles.itemIcon}><Camera size={18} /></span>}<div><strong>{item.title}</strong><small>{item.location || "Tanpa lokasi"}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit portofolio" : "Proyek baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus proyek portofolio ini?")) mutate(() => request(`/api/cms/portfolios/${selected}`, { method: "DELETE" }), "Portofolio dihapus."); } : undefined}>
+    <SectionTitle eyebrow="PORTOFOLIO" title="Tampilkan bukti kerja terbaik Anda." description="Unggah cover dan hingga 10 foto galeri untuk setiap project." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyPortfolio()); setFile(null); setGalleryFiles([]); setGalleryUpload({ state: "idle", total: 0, completed: 0 }); }}><Plus size={17} /> Proyek baru</button>} />
+    <div className={styles.splitEditor}><ListPanel title="Daftar proyek">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm(portfolioForm(item)); setFile(null); setGalleryFiles([]); setGalleryUpload({ state: "idle", total: 0, completed: 0 }); }}>{item.imageUrl ? <img src={item.imageUrl} alt="" /> : <span className={styles.itemIcon}><Camera size={18} /></span>}<div><strong>{item.title}</strong><small>{item.location || "Tanpa lokasi"}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit portofolio" : "Proyek baru"} onSave={submit} busy={busy} onDelete={selected ? async () => { if (!window.confirm("Hapus proyek portofolio ini?")) return; const result = await mutate(() => request(`/api/cms/portfolios/${selected}`, { method: "DELETE" }), "Portofolio dihapus."); if (result.ok) { setSelected(null); setForm(emptyPortfolio()); setFile(null); setGalleryFiles([]); setGalleryUpload({ state: "idle", total: 0, completed: 0 }); } } : undefined}>
       <LanguageHeading label="Konten bilingual" helper="Terjemahkan lalu tinjau sebelum disimpan." action={<TranslateButton busy={busy} values={[form.title, form.location, form.description]} onTranslated={([titleEn, locationEn, descriptionEn]) => setForm({ ...form, titleEn, locationEn, descriptionEn })} />} />
       <div className={styles.fieldGrid}><Field label="Judul proyek · ID" value={form.title} onChange={(title) => setForm({ ...form, title })} /><Field label="Project title · EN" value={form.titleEn} onChange={(titleEn) => setForm({ ...form, titleEn })} /><Field label="Lokasi · ID" value={form.location} onChange={(location) => setForm({ ...form, location })} /><Field label="Location · EN" value={form.locationEn} onChange={(locationEn) => setForm({ ...form, locationEn })} /><TextArea label="Deskripsi · ID" value={form.description} rows={5} onChange={(description) => setForm({ ...form, description })} /><TextArea label="Description · EN" value={form.descriptionEn} rows={5} onChange={(descriptionEn) => setForm({ ...form, descriptionEn })} /><label><span>Tanggal selesai</span><input type="date" value={form.completedAt} onChange={(event) => setForm({ ...form, completedAt: event.target.value })} /></label><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><FileUploadField label="Foto proyek (JPG, PNG, WebP · maks. 5 MB)" accept="image/jpeg,image/png,image/webp" file={file} buttonLabel="Pilih foto proyek" helper="Klik untuk memilih foto dari perangkat Anda." currentUrl={current?.imageUrl} previewAlt={current?.title || "Foto proyek"} previewClassName={styles.imagePreview} onChange={setFile} /><ToggleField label="Tampilkan di website" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /></div>
-      {selected && <PortfolioGalleryEditor gallery={gallery} pendingFiles={galleryFiles} busy={busy} onSelectFiles={setGalleryFiles} onUpload={uploadGallery} onMove={(mediaId, direction) => mutate(() => request(`/api/cms/portfolios/${selected}/gallery/${mediaId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ direction }) }), "Urutan foto galeri diperbarui.")} onDelete={(mediaId) => { if (window.confirm("Hapus foto ini dari galeri?")) mutate(() => request(`/api/cms/portfolios/${selected}/gallery/${mediaId}`, { method: "DELETE" }), "Foto galeri dihapus."); }} />}
+      {selected && <PortfolioGalleryEditor gallery={gallery} pendingFiles={galleryFiles} uploadProgress={galleryUpload} busy={busy} onSelectFiles={selectGalleryFiles} onUpload={uploadGallery} onMove={(mediaId, direction) => mutate(() => request(`/api/cms/portfolios/${selected}/gallery/${mediaId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ direction }) }), "Urutan foto galeri diperbarui.")} onDelete={(mediaId) => { if (window.confirm("Hapus foto ini dari galeri?")) mutate(() => request(`/api/cms/portfolios/${selected}/gallery/${mediaId}`, { method: "DELETE" }), "Foto galeri dihapus."); }} />}
     </EditorPanel></div>
   </>;
 }
 
-function PortfolioGalleryEditor({ gallery, pendingFiles, busy, onSelectFiles, onUpload, onMove, onDelete }: { gallery: PortfolioGalleryImage[]; pendingFiles: File[]; busy: boolean; onSelectFiles: (files: File[]) => void; onUpload: () => void; onMove: (mediaId: string, direction: "up" | "down") => void; onDelete: (mediaId: string) => void }) {
+function PortfolioGalleryEditor({ gallery, pendingFiles, uploadProgress, busy, onSelectFiles, onUpload, onMove, onDelete }: { gallery: PortfolioGalleryImage[]; pendingFiles: File[]; uploadProgress: GalleryUploadProgress; busy: boolean; onSelectFiles: (files: File[]) => void; onUpload: () => void; onMove: (mediaId: string, direction: "up" | "down") => void; onDelete: (mediaId: string) => void }) {
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const remaining = Math.max(0, 10 - gallery.length);
-  return <section className={styles.galleryEditor}><div className={styles.cardHeading}><span>Foto galeri</span><small>{gallery.length} / 10 foto tambahan · cover selalu tampil pertama</small></div><input ref={inputRef} id={inputId} className={styles.fileInput} type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => onSelectFiles(Array.from(event.target.files || []).slice(0, remaining))} /><div className={styles.galleryUploadRow}><button type="button" className={styles.filePicker} onClick={() => { if (inputRef.current) { inputRef.current.value = ""; inputRef.current.click(); } }} disabled={busy || remaining === 0}><span className={styles.filePickerIcon}><Upload size={19} /></span><span className={styles.filePickerCopy}><strong>{pendingFiles.length ? `${pendingFiles.length} foto siap diunggah` : "Pilih foto galeri"}</strong><small>{remaining ? "JPG, PNG, WebP · maks. 5 MB per foto" : "Batas 10 foto tambahan telah tercapai"}</small></span></button><button type="button" className={styles.secondaryAction} onClick={onUpload} disabled={busy || pendingFiles.length === 0}>Unggah foto</button></div>{gallery.length > 0 && <div className={styles.galleryMediaList}>{gallery.map((image, index) => <div key={image.id}><img src={image.url} alt="" /><span>Foto {index + 1}</span><div><button type="button" onClick={() => onMove(image.id, "up")} disabled={busy || index === 0} aria-label="Naikkan urutan foto"><ArrowUp size={16} /></button><button type="button" onClick={() => onMove(image.id, "down")} disabled={busy || index === gallery.length - 1} aria-label="Turunkan urutan foto"><ArrowDown size={16} /></button><button type="button" className={styles.deleteButton} onClick={() => onDelete(image.id)} disabled={busy} aria-label="Hapus foto galeri"><Trash2 size={16} /></button></div></div>)}</div>}</section>;
+  const statusLabel = uploadProgress.state === "uploading"
+    ? `Mengunggah foto ${Math.min(uploadProgress.completed + 1, uploadProgress.total)} dari ${uploadProgress.total}`
+    : uploadProgress.message;
+  return <section className={styles.galleryEditor}><div className={styles.cardHeading}><span>Foto galeri</span><small>{gallery.length} / 10 foto tambahan · cover selalu tampil pertama</small></div><input ref={inputRef} id={inputId} className={styles.fileInput} type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => onSelectFiles(Array.from(event.target.files || []).slice(0, remaining))} /><div className={styles.galleryUploadRow}><button type="button" className={styles.filePicker} onClick={() => { if (inputRef.current) { inputRef.current.value = ""; inputRef.current.click(); } }} disabled={busy || remaining === 0}><span className={styles.filePickerIcon}><Upload size={19} /></span><span className={styles.filePickerCopy}><strong>{pendingFiles.length ? `${pendingFiles.length} foto siap diunggah` : "Pilih foto galeri"}</strong><small>{remaining ? "JPG, PNG, WebP · maks. 5 MB per foto" : "Batas 10 foto tambahan telah tercapai"}</small></span></button><button type="button" className={styles.secondaryAction} onClick={onUpload} disabled={busy || pendingFiles.length === 0}>{uploadProgress.state === "uploading" ? <><LoaderCircle className={styles.spin} size={16} /> Mengunggah</> : "Unggah foto"}</button></div>{uploadProgress.state !== "idle" && <div className={`${styles.galleryUploadStatus} ${uploadProgress.state === "error" ? styles.galleryUploadStatusError : ""}`} role="status" aria-live="polite"><span>{uploadProgress.state === "uploading" ? <LoaderCircle className={styles.spin} size={18} /> : uploadProgress.state === "success" ? <Check size={18} /> : <X size={18} />}</span><div><strong>{statusLabel}</strong>{uploadProgress.state === "uploading" && <small>{uploadProgress.currentFile}</small>}{uploadProgress.total > 0 && <progress value={uploadProgress.completed} max={uploadProgress.total} aria-label={`Upload ${uploadProgress.completed} dari ${uploadProgress.total} foto`} />}</div></div>}{pendingFiles.length > 0 && uploadProgress.state !== "uploading" && <div className={styles.galleryPendingFiles} aria-live="polite">{pendingFiles.map((pendingFile) => <span key={`${pendingFile.name}-${pendingFile.lastModified}`}>{pendingFile.name}</span>)}</div>}{gallery.length > 0 && <div className={styles.galleryMediaList}>{gallery.map((image, index) => <div key={image.id}><img src={image.url} alt="" /><span>Foto {index + 1}</span><div><button type="button" onClick={() => onMove(image.id, "up")} disabled={busy || index === 0} aria-label="Naikkan urutan foto"><ArrowUp size={16} /></button><button type="button" onClick={() => onMove(image.id, "down")} disabled={busy || index === gallery.length - 1} aria-label="Turunkan urutan foto"><ArrowDown size={16} /></button><button type="button" className={styles.deleteButton} onClick={() => onDelete(image.id)} disabled={busy} aria-label="Hapus foto galeri"><Trash2 size={16} /></button></div></div>)}</div>}</section>;
 }
 
 function PartnerEditor({ items, busy, mutate }: { items: Partner[]; busy: boolean; mutate: Mutate }) {

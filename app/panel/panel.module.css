@@ -150,6 +150,19 @@
 .galleryEditor { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--line); }
 .galleryUploadRow { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; align-items: center; }
 .galleryUploadRow .filePicker { min-width: 0; }
+.galleryUploadRow .secondaryAction { min-width: 132px; justify-content: center; }
+.galleryUploadStatus { margin-top: 10px; padding: 11px 12px; display: grid; grid-template-columns: 26px minmax(0,1fr); gap: 9px; align-items: start; border: 1px solid #b9e5de; border-radius: 8px; color: var(--teal-dark); background: #f1fbf9; }
+.galleryUploadStatus > span { padding-top: 1px; color: var(--teal); }
+.galleryUploadStatus > div { min-width: 0; display: grid; gap: 4px; }
+.galleryUploadStatus strong { color: var(--teal-dark); font-size: 12px; line-height: 1.4; }
+.galleryUploadStatus small { overflow: hidden; color: #5d7376; font-size: 11px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.galleryUploadStatus progress { width: 100%; height: 5px; margin-top: 2px; overflow: hidden; border: 0; border-radius: 999px; accent-color: var(--teal); }
+.galleryUploadStatus progress::-webkit-progress-bar { background: #d9eeea; }
+.galleryUploadStatus progress::-webkit-progress-value { background: var(--teal); }
+.galleryUploadStatusError { border-color: #f1c8c8; color: #a83e3e; background: #fff5f5; }
+.galleryUploadStatusError > span, .galleryUploadStatusError strong { color: #b23d3d; }
+.galleryPendingFiles { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 6px; }
+.galleryPendingFiles span { max-width: 100%; overflow: hidden; padding: 4px 7px; border: 1px solid #d5e5e2; border-radius: 5px; color: #587074; background: #fbfdfd; font-size: 10px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .galleryMediaList { margin-top: 14px; display: grid; gap: 8px; }
 .galleryMediaList > div { min-height: 72px; padding: 7px; display: grid; grid-template-columns: 84px minmax(0,1fr) auto; gap: 11px; align-items: center; border: 1px solid var(--line); border-radius: 8px; background: #fbfdfd; }
 .galleryMediaList img { width: 84px; height: 56px; object-fit: cover; border-radius: 5px; }
