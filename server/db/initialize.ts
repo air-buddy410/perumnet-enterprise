@@ -1025,7 +1025,7 @@ CREATE TABLE IF NOT EXISTS cms_portfolio_media (
   portfolio_id TEXT NOT NULL REFERENCES cms_portfolios(id) ON DELETE CASCADE,
   storage_url TEXT NOT NULL,
   mime_type TEXT NOT NULL,
-  sort_order INTEGER NOT NULL CHECK (sort_order BETWEEN 0 AND 9),
+  sort_order INTEGER NOT NULL CHECK (sort_order BETWEEN 0 AND 19),
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cms_portfolio_media_portfolio_order
@@ -2935,6 +2935,37 @@ async function ensureProjectCoordinateSchema(client: DatabaseClient) {
   }
 }
 
+async function ensurePortfolioGalleryLimit(client: DatabaseClient) {
+  if (client.dialect === "postgres") {
+    const constraints = await client.execute(`SELECT pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conrelid = 'cms_portfolio_media'::regclass AND contype = 'c'`);
+    if (constraints.rows.some((row) => /sort_order\s*(?:BETWEEN\s+0\s+AND\s+19|>=\s+0[\s\S]*sort_order\s*<=\s+19)/i.test(String(row.definition)))) return;
+    await client.execute(`ALTER TABLE cms_portfolio_media
+      DROP CONSTRAINT IF EXISTS cms_portfolio_media_sort_order_check,
+      ADD CONSTRAINT cms_portfolio_media_sort_order_check CHECK (sort_order BETWEEN 0 AND 19)`);
+    return;
+  }
+
+  const table = await client.execute(
+    "SELECT sql FROM sqlite_master WHERE type='table' AND name='cms_portfolio_media' LIMIT 1",
+  );
+  const tableSql = table.rows[0]?.sql ? String(table.rows[0].sql) : null;
+  if (!tableSql || /sort_order\s+BETWEEN\s+0\s+AND\s+19/i.test(tableSql)) return;
+  const checkPattern = /CHECK\s*\(\s*sort_order\s+BETWEEN\s+0\s+AND\s+9\s*\)/i;
+  if (!checkPattern.test(tableSql)) return;
+  const indexes = await client.execute(
+    "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='cms_portfolio_media' AND sql IS NOT NULL",
+  );
+  const rebuiltSql = tableSql.replace(checkPattern, "CHECK (sort_order BETWEEN 0 AND 19)");
+  await client.execute("DROP TABLE IF EXISTS cms_portfolio_media_limit_migration");
+  await client.execute("ALTER TABLE cms_portfolio_media RENAME TO cms_portfolio_media_limit_migration");
+  await client.execute(rebuiltSql);
+  await client.execute("INSERT INTO cms_portfolio_media SELECT * FROM cms_portfolio_media_limit_migration");
+  await client.execute("DROP TABLE cms_portfolio_media_limit_migration");
+  for (const row of indexes.rows) await client.execute(String(row.sql));
+}
+
 export async function initializeDatabase(client: DatabaseClient) {
   await client.executeMultiple(schemaSql);
   await ensureCmsBilingualSchema(client);
@@ -2948,6 +2979,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureBankReconciliationSchema(client);
   await ensureTransactionOriginColumn(client);
   await ensureProjectCoordinateSchema(client);
+  await ensurePortfolioGalleryLimit(client);
   await ensureDocumentCounters(client);
   await ensureAuthHardeningSchema(client);
   await ensureTaxAndEmailSchema(client);

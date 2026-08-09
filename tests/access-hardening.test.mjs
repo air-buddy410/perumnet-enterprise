@@ -822,7 +822,7 @@ test("a published portfolio gallery keeps its cover first, orders media, enforce
   const reorderedItem = reordered.content.portfolios.find((candidate) => candidate.id === portfolioId);
   assert.equal(reorderedItem.gallery[1].id, second.payload.data.id);
 
-  for (let index = 0; index < 8; index += 1) {
+  for (let index = 0; index < 18; index += 1) {
     const extra = await postPortfolioGallery(portfolioId, `gallery-extra-${index}.png`, "image/png", TINY_PNG);
     assert.equal(extra.status, 201, JSON.stringify(extra.payload));
   }

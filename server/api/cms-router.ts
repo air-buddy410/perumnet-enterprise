@@ -521,7 +521,7 @@ async function handlePortfolios(request: Request, id: string | undefined, user: 
 }
 
 const galleryMoveSchema = z.object({ direction: z.enum(["up", "down"]) });
-const MAX_PORTFOLIO_GALLERY_IMAGES = 10;
+const MAX_PORTFOLIO_GALLERY_IMAGES = 20;
 
 async function handlePortfolioGallery(
   request: Request,
