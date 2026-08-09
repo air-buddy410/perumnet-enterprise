@@ -1260,7 +1260,7 @@ async function ensureCmsSeed(client: DatabaseClient) {
 
   const portfolios = [
     ["cms-portfolio-wifi", "Project Quenzo Beach Resort", "Pengelolaan WiFi dan CCTV untuk konektivitas tamu serta keamanan area resort yang stabil.", "/portfolio/quenzo-beach-resort-2026.png", "Padang Bai, Bali", "2026-05-28", 1],
-    ["cms-portfolio-cctv", "Project Sandy House Project", "Pengelolaan WiFi, CCTV, dan Smart House untuk konektivitas, keamanan, serta otomasi rumah yang terintegrasi.", "/portfolio/sandy-house-project-2026.png", "Pantai Indah Kapuk, Jakarta", "2026-04-16", 2],
+    ["cms-portfolio-cctv", "Project Sandy House Project", "Pengelolaan WiFi, CCTV, dan Smart House untuk konektivitas, keamanan, serta otomasi rumah yang terintegrasi.", "/portfolio/sandy-house-project-network-rack-2026.png", "Pantai Indah Kapuk, Jakarta", "2026-04-16", 2],
     ["cms-portfolio-pabx", "Project Internal PerumNet", "Implementasi IP PABX untuk komunikasi internal PerumNet yang stabil dan mudah dikelola.", "/portfolio/internal-perumnet-ip-pabx-2026.png", "Karangasem, Bali", "2026-03-11", 3],
   ];
   for (const row of portfolios) {
@@ -1912,7 +1912,7 @@ async function ensureCmsLandingFeatures(client: DatabaseClient) {
       titleEn: "Project Sandy House Project",
       description: "Pengelolaan WiFi, CCTV, dan Smart House untuk konektivitas, keamanan, serta otomasi rumah yang terintegrasi.",
       descriptionEn: "Managed WiFi, CCTV, and Smart House systems for connected, secure, and automated living.",
-      imageUrl: "/portfolio/sandy-house-project-2026.png",
+      imageUrl: "/portfolio/sandy-house-project-network-rack-2026.png",
       location: "Pantai Indah Kapuk, Jakarta",
       locationEn: "Pantai Indah Kapuk, Jakarta",
       completedAt: "2026-04-16",
@@ -1940,6 +1940,13 @@ async function ensureCmsLandingFeatures(client: DatabaseClient) {
       [item.title, item.titleEn, item.description, item.descriptionEn, item.imageUrl, item.location, item.locationEn, item.completedAt, item.sortOrder, timestamp, item.id, ...item.priorTitles],
     ));
   }
+
+  // Give the revised Sandy House cover a new URL so public browser and image
+  // optimizer caches cannot continue serving the prior placeholder asset.
+  statements.push(statement(
+    "UPDATE cms_portfolios SET image_url=?,image_storage_url=NULL,image_mime_type=NULL,updated_at=? WHERE id=? AND image_url=?",
+    ["/portfolio/sandy-house-project-network-rack-2026.png", timestamp, "cms-portfolio-cctv", "/portfolio/sandy-house-project-2026.png"],
+  ));
 
   const testimonialTranslations: Array<[string, string]> = [
     ["cms-testimonial-1", "The PerumNet team understood our operational requirements, delivered a well-organized installation, and remained responsive after handover."],
