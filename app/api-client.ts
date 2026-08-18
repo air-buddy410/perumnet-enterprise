@@ -25,6 +25,13 @@ export class ApiClientError extends Error {
   }
 }
 
+const mailcowPasswordErrorCodes = new Set([
+  "INVALID_PASSWORD",
+  "MAILCOW_REJECTED",
+  "MAILCOW_NOT_CONFIGURED",
+  "MAILSERVER_UNREACHABLE",
+]);
+
 export async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (init?.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
@@ -52,6 +59,13 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export function messageOf(error: unknown, language: "id" | "en" = "id") {
+  if (
+    error instanceof ApiClientError &&
+    error.code &&
+    mailcowPasswordErrorCodes.has(error.code)
+  ) {
+    return error.message;
+  }
   if (language === "id") {
     return error instanceof Error ? error.message : "Terjadi kesalahan. Silakan coba kembali.";
   }

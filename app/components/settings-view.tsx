@@ -146,14 +146,22 @@ export function SettingsView({
       return;
     }
     try {
-      await api("/api/profile/password", {
+      const result = await api<{ target?: "mailcow" | "local" }>("/api/profile/password", {
         method: "PATCH",
         body: JSON.stringify({ currentPassword, newPassword }),
       });
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      notify(id ? "Kata sandi berhasil diperbarui." : "Password updated successfully.");
+      notify(
+        result.target === "mailcow"
+          ? id
+            ? "Password email berhasil diperbarui untuk webmail dan aplikasi PerumNet lain."
+            : "Email password updated for webmail and other PerumNet apps."
+          : id
+            ? "Kata sandi berhasil diperbarui."
+            : "Password updated successfully.",
+      );
     } catch (error) {
       notify(messageOf(error, language));
     }
@@ -245,14 +253,14 @@ export function SettingsView({
           <div className="settings-form-actions"><button className="button primary" type="submit"><Save size={16} /> {id ? "Simpan preferensi" : "Save preferences"}</button></div>
         </form>
         <form className="panel settings-card" onSubmit={changePassword}>
-          <div className="settings-section-head"><span className="metric-icon orange"><LockKeyhole size={20} /></span><div><h2>{id ? "Keamanan akun" : "Account security"}</h2><p>{id ? "Gunakan minimal 10 karakter dan jangan pakai ulang kata sandi lama." : "Use at least 10 characters and do not reuse an old password."}</p></div></div>
+          <div className="settings-section-head"><span className="metric-icon orange"><LockKeyhole size={20} /></span><div><h2>{id ? "Keamanan password email" : "Email password security"}</h2><p>{id ? "Gunakan minimal 10 karakter. Password ini dipakai untuk webmail dan aplikasi PerumNet lain." : "Use at least 10 characters. This password is used for webmail and other PerumNet apps."}</p></div></div>
           <div className="form-grid single-column">
-            <label className="field full"><span>{id ? "Kata sandi saat ini" : "Current password"}</span><input type="password" required minLength={8} value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" /></label>
-            <label className="field full"><span>{id ? "Kata sandi baru" : "New password"}</span><input type="password" required minLength={10} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" /></label>
-            <label className="field full"><span>{id ? "Ulangi kata sandi baru" : "Confirm new password"}</span><input type="password" required minLength={10} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" /></label>
+            <label className="field full"><span>{id ? "Password email saat ini" : "Current email password"}</span><input type="password" required minLength={8} value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" /></label>
+            <label className="field full"><span>{id ? "Password email baru" : "New email password"}</span><input type="password" required minLength={10} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" /></label>
+            <label className="field full"><span>{id ? "Ulangi password email baru" : "Repeat new email password"}</span><input type="password" required minLength={10} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" /></label>
           </div>
-          <div className="security-note"><ShieldCheck size={18} /><span>{id ? "Perubahan kata sandi dicatat di audit log keamanan." : "Password changes are recorded in the security audit log."}</span></div>
-          <div className="settings-form-actions"><button className="button secondary" type="submit"><LockKeyhole size={16} /> {id ? "Perbarui kata sandi" : "Update password"}</button></div>
+          <div className="security-note"><ShieldCheck size={18} /><span>{id ? "Perubahan berlaku untuk webmail dan aplikasi PerumNet lain, serta dicatat di audit log keamanan." : "Changes apply to webmail and other PerumNet apps and are recorded in the security audit log."}</span></div>
+          <div className="settings-form-actions"><button className="button secondary" type="submit"><LockKeyhole size={16} /> {id ? "Perbarui password email" : "Update email password"}</button></div>
         </form>
       </div>
     </div>

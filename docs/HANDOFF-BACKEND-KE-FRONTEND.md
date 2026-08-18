@@ -68,23 +68,13 @@ kalau sudah dikerjakan.
   pesannya sudah ditulis untuk dibaca pengguna; yang menentukan apa yang
   terlihat tinggal layar ini.
 
-### T-2. Teks form ganti kata sandi menyebut kata sandi EMAIL
-
-- **Layar:** halaman profil, form ganti kata sandi.
-- **Butuh:** **jangan disembunyikan** — form itu berfungsi, tapi yang diganti
-  sekarang adalah **kata sandi email di mailcow**, bukan kata sandi aplikasi.
-  Backend sudah mengarahkannya ke sana. Yang perlu berubah teksnya: judul,
-  label "kata sandi saat ini" → "kata sandi email Anda saat ini", dan satu
-  kalimat bahwa perubahannya berlaku juga untuk webmail dan aplikasi PerumNet
-  lain.
-- **Kode galat yang perlu ditampilkan apa adanya:** `INVALID_PASSWORD` (400),
-  `MAILCOW_REJECTED` (502), `MAILCOW_NOT_CONFIGURED` (503),
-  `MAILSERVER_UNREACHABLE` (503). Jawaban sukses membawa
-  `{ target: "mailcow" }`.
-- **Kenapa tidak bisa diakali di sisi backend:** perilakunya sudah benar; yang
-  menyesatkan tinggal kalimatnya.
-
 ### Selesai
 
 - **T-1** — `auth-screen.tsx` dan `panel-app.tsx` membedakan 503
   `MAILSERVER_UNREACHABLE` dari 401. Diverifikasi dari kode.
+- **T-2** — `settings-view.tsx` mempertahankan form dan endpoint yang sama,
+  menjelaskan password email MailCow untuk webmail/aplikasi PerumNet lain,
+  memakai `{ target: "mailcow" }` untuk copy sukses, dan meneruskan pesan
+  backend untuk empat kode error MailCow. Form/copy dan error kredensial
+  diverifikasi melalui browser; submit sukses MailCow tidak dijalankan karena
+  memerlukan perubahan password nyata.
