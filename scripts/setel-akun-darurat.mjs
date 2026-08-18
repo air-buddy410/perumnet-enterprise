@@ -14,11 +14,17 @@
 //   node scripts/setel-akun-darurat.mjs admin@perumnet.id
 
 import { createInterface } from "node:readline";
+import { readFileSync, unlinkSync } from "node:fs";
 import { hash } from "bcryptjs";
 
-const [, , email] = process.argv;
+const [, , email, ...bendera] = process.argv;
+const hanyaPeriksa = bendera.includes("--periksa");
+const berkasSandi = (() => {
+  const i = bendera.indexOf("--dari-berkas");
+  return i >= 0 ? bendera[i + 1] : null;
+})();
 if (!email) {
-  console.error("Pemakaian: node scripts/setel-akun-darurat.mjs <email>");
+  console.error("Pemakaian: node scripts/setel-akun-darurat.mjs <email> [--periksa]");
   process.exit(1);
 }
 
@@ -53,6 +59,28 @@ function tanya(pertanyaan, { sembunyikan = false } = {}) {
   });
 }
 
+/**
+ * Jalur tanpa TTY: kata sandi dibaca dari berkas, lalu berkasnya DIHAPUS.
+ *
+ * Ada karena tidak semua terminal menyediakan TTY — panel web, tempelan
+ * perintah, dan sebagian klien SSH tidak. Tanpa jalur ini skrip berhenti di
+ * pemeriksaan TTY dengan pesan yang mudah terlewat, dan orang mengira kata
+ * sandinya sudah tersetel padahal belum.
+ *
+ * Tetap tidak lewat argumen perintah (yang terlihat di `ps`) dan tidak masuk
+ * riwayat shell, asalkan berkasnya dibuat dengan editor, bukan dengan `echo`.
+ */
+function dariBerkas(path) {
+  const isi = readFileSync(path, "utf8").split("\n")[0].trim();
+  try {
+    unlinkSync(path);
+  } catch {
+    /* berkas sudah hilang */
+  }
+  if (!isi) throw new Error(`Berkas ${path} kosong.`);
+  return isi;
+}
+
 const modeDemo = process.env.APP_MODE === "demo";
 const urlPostgres = modeDemo ? process.env.DEMO_DATABASE_URL : process.env.DATABASE_URL;
 const urlLibsql = modeDemo
@@ -71,7 +99,9 @@ console.log(`Akun: ${email}\n`);
 
 let sandi;
 let ulang;
-try {
+if (berkasSandi) {
+  sandi = ulang = dariBerkas(berkasSandi);
+} else if (!hanyaPeriksa) try {
   sandi = await tanya("Kata sandi baru (tidak akan tampil): ", { sembunyikan: true });
   ulang = await tanya("Ketik ulang untuk memastikan: ", { sembunyikan: true });
 } catch (error) {
@@ -81,15 +111,15 @@ try {
   process.exit(1);
 }
 
-if (sandi !== ulang) {
+if (!hanyaPeriksa && sandi !== ulang) {
   console.error("Tidak sama. Tidak ada yang diubah.");
   process.exit(1);
 }
-if (sandi.length < MIN_PANJANG) {
+if (!hanyaPeriksa && sandi.length < MIN_PANJANG) {
   console.error(`Minimal ${MIN_PANJANG} karakter — ini kunci cadangan ke seluruh aplikasi.`);
   process.exit(1);
 }
-if (/[\r\n\0]/.test(sandi)) {
+if (!hanyaPeriksa && /[\r\n\0]/.test(sandi)) {
   console.error("Kata sandi memuat karakter yang tidak diizinkan.");
   process.exit(1);
 }
@@ -118,7 +148,7 @@ if (urlPostgres) {
 }
 
 const ada = await client.execute({
-  sql: "SELECT id,allow_local_login FROM users WHERE lower(email)=lower(?) LIMIT 1",
+  sql: "SELECT id,allow_local_login,password_hash,updated_at FROM users WHERE lower(email)=lower(?) LIMIT 1",
   args: [email],
 });
 if (!ada.rows[0]) {
@@ -127,13 +157,42 @@ if (!ada.rows[0]) {
   process.exit(1);
 }
 
+if (hanyaPeriksa) {
+  const { compare } = await import("bcryptjs");
+  // Hash bawaan yang disalin dari CRM saat penyiapan. Kalau masih ini yang
+  // tersimpan, berarti kata sandinya belum pernah disetel di sini.
+  console.log(`allow_local_login : ${ada.rows[0].allow_local_login}`);
+  console.log(`terakhir ditulis  : ${ada.rows[0].updated_at ?? "-"}`);
+  await tutup();
+  process.exit(0);
+}
+
+const sebelum = String(ada.rows[0].password_hash);
 await client.execute({
   sql: "UPDATE users SET password_hash=?,allow_local_login=1,updated_at=? WHERE id=?",
   args: [await hash(sandi, 12), new Date().toISOString(), ada.rows[0].id],
 });
+
+// Membuktikan sendiri, bukan menganggap berhasil: baca ulang barisnya dan
+// cocokkan dengan kata sandi yang barusan diketik. Empat percobaan sebelumnya
+// gagal tanpa disadari karena skrip ini berhenti di penjaga tanpa menulis.
+const sesudah = await client.execute({
+  sql: "SELECT password_hash,updated_at FROM users WHERE id=?",
+  args: [ada.rows[0].id],
+});
+const { compare } = await import("bcryptjs");
+const cocok = await compare(sandi, String(sesudah.rows[0].password_hash));
+const berubah = String(sesudah.rows[0].password_hash) !== sebelum;
 await tutup();
 
-console.log(`\nSelesai. ${email} kini akun darurat dengan kata sandi yang baru kamu ketik.`);
+if (!cocok || !berubah) {
+  console.error("\nGAGAL: kata sandi tidak tersimpan. Tidak ada yang berubah.");
+  process.exit(1);
+}
+
+console.log(`\n✓ TERBUKTI TERSIMPAN — dibaca ulang dari database dan cocok.`);
+console.log(`  akun    : ${email}`);
+console.log(`  ditulis : ${sesudah.rows[0].updated_at}`);
 console.log(
-  "Simpan di pengelola kata sandi — ini satu-satunya jalan masuk kalau mailcow mati.",
+  "\nSimpan di pengelola kata sandi — ini satu-satunya jalan masuk kalau mailcow mati.",
 );
