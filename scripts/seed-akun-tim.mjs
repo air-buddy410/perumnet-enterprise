@@ -88,8 +88,57 @@ if (!terapkan) {
   process.exit(0);
 }
 
-const { getDatabase } = await import("../server/db/client.ts");
-const { client } = await getDatabase();
+// Bicara langsung ke database, TIDAK lewat server/db/client.ts: berkas itu
+// mengimpor `server-only`, yang memang tugasnya menolak dijalankan di luar
+// Next — jadi skrip baris perintah tidak akan pernah bisa memakainya.
+//
+// Pemilihan URL-nya mengikuti aturan yang sama dengan aplikasi (APP_MODE=demo
+// memakai DEMO_*), supaya menjalankan skrip ini dari folder rilis demo tidak
+// pernah bisa menulis ke database produksi.
+const modeDemo = process.env.APP_MODE === "demo";
+const urlPostgres = modeDemo
+  ? process.env.DEMO_DATABASE_URL
+  : process.env.DATABASE_URL;
+const urlLibsql = modeDemo
+  ? process.env.DEMO_TURSO_DATABASE_URL
+  : process.env.TURSO_DATABASE_URL;
+
+if (!urlPostgres && !urlLibsql) {
+  console.error(
+    `Database belum ditunjuk. Sumber env yang dipakai: ${
+      modeDemo ? "DEMO_DATABASE_URL / DEMO_TURSO_DATABASE_URL" : "DATABASE_URL / TURSO_DATABASE_URL"
+    }.\nJalankan dari folder rilis dengan .env.production di-source lebih dulu.`,
+  );
+  process.exit(1);
+}
+
+console.log(
+  `\nMenulis ke ${modeDemo ? "DEMO" : "PRODUKSI"} lewat ${urlPostgres ? "PostgreSQL" : "libSQL"}.`,
+);
+
+/** `?` → `$1`, sama seperti postgresQuery() di server/db/client.ts. */
+function kueriPostgres(sql) {
+  let n = 0;
+  return sql.replace(/\?/g, () => `$${++n}`);
+}
+
+let client;
+let tutup = async () => {};
+if (urlPostgres) {
+  const { default: pg } = await import("pg");
+  const pool = new pg.Pool({ connectionString: urlPostgres });
+  client = {
+    execute: async ({ sql, args = [] }) => ({
+      rows: (await pool.query(kueriPostgres(sql), args)).rows,
+    }),
+  };
+  tutup = () => pool.end();
+} else {
+  const { createClient } = await import("@libsql/client");
+  const libsql = createClient({ url: urlLibsql });
+  client = { execute: (stmt) => libsql.execute(stmt) };
+  tutup = async () => libsql.close();
+}
 const sekarang = new Date().toISOString();
 let dibuat = 0;
 let diperbarui = 0;
@@ -128,6 +177,8 @@ for (const a of akun) {
   });
   dibuat += 1;
 }
+
+await tutup();
 
 console.log(`\nSelesai: ${dibuat} dibuat, ${diperbarui} diperbarui.`);
 if (akun.some((a) => a.email === AKUN_DARURAT)) {
