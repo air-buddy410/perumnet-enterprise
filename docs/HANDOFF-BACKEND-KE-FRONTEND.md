@@ -46,3 +46,44 @@ bukan dari ingatan.
   yang sebenarnya tidak bermasalah. Tampilkan `message` apa adanya.
 
   Selengkapnya: `docs/LOGIN-MAILCOW.md`.
+
+---
+
+## Tugas untuk Luna
+
+Papan permintaan Opus → Luna (`WORKFLOW-TIM.md` §5). Backend-nya sudah jalan
+di demo; yang tersisa murni tampilan. Tandai ✅ dan pindahkan ke §Selesai
+kalau sudah dikerjakan.
+
+### T-1. Layar login menangani 503
+
+- **Layar:** form login (admin & panel).
+- **Butuh:** jawaban **503 `MAILSERVER_UNREACHABLE`** kini mungkin muncul —
+  artinya mailserver tidak terjawab, **bukan** kata sandi salah. Tampilkan
+  `message` dari backend apa adanya, **tanpa** tautan "lupa kata sandi" dan
+  tanpa kalimat yang menyiratkan kata sandinya keliru. Kalau ditampilkan
+  seperti 401, orang akan mereset kata sandi email yang sebenarnya tidak
+  bermasalah. 401 tetap seperti sekarang.
+- **Kenapa tidak bisa diakali di sisi backend:** kodenya sudah dibedakan dan
+  pesannya sudah ditulis untuk dibaca pengguna; yang menentukan apa yang
+  terlihat tinggal layar ini.
+
+### T-2. Teks form ganti kata sandi menyebut kata sandi EMAIL
+
+- **Layar:** halaman profil, form ganti kata sandi.
+- **Butuh:** **jangan disembunyikan** — form itu berfungsi, tapi yang diganti
+  sekarang adalah **kata sandi email di mailcow**, bukan kata sandi aplikasi.
+  Backend sudah mengarahkannya ke sana. Yang perlu berubah teksnya: judul,
+  label "kata sandi saat ini" → "kata sandi email Anda saat ini", dan satu
+  kalimat bahwa perubahannya berlaku juga untuk webmail dan aplikasi PerumNet
+  lain.
+- **Kode galat yang perlu ditampilkan apa adanya:** `INVALID_PASSWORD` (400),
+  `MAILCOW_REJECTED` (502), `MAILCOW_NOT_CONFIGURED` (503),
+  `MAILSERVER_UNREACHABLE` (503). Jawaban sukses membawa
+  `{ target: "mailcow" }`.
+- **Kenapa tidak bisa diakali di sisi backend:** perilakunya sudah benar; yang
+  menyesatkan tinggal kalimatnya.
+
+### Selesai
+
+_(kosong)_
