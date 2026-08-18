@@ -848,8 +848,9 @@ async function handleAuth(request: Request, path: string[]) {
     // keep the server busy running bcrypt on their behalf.
     await assertAuthRateLimit(client, request, "login", input.email);
     let user: AuthUser;
+    let jalur: "mailserver" | "lokal";
     try {
-      user = await verifyCredentials(input.email, input.password);
+      ({ user, jalur } = await verifyCredentials(input.email, input.password));
     } catch (error) {
       if (
         error instanceof ApiError &&
@@ -860,6 +861,12 @@ async function handleAuth(request: Request, path: string[]) {
       throw error;
     }
     await clearAuthRateLimit(client, request, "login", input.email);
+    // Masuk lewat kata sandi lokal saat mode mailserver menyala berarti akun
+    // darurat dipakai. Itu pintu kebakaran yang sah, tapi pemakaiannya harus
+    // terlihat — bukan tersembunyi di antara login biasa.
+    await writeAuditLog(client, request, user, "login", "session", user.id, {
+      jalur,
+    });
     const session = await createSession(user.id, input.remember);
     return withSessionCookie(ok({ user }), session.token, session.maxAge);
   }

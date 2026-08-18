@@ -2966,6 +2966,25 @@ async function ensurePortfolioGalleryLimit(client: DatabaseClient) {
   for (const row of indexes.rows) await client.execute(String(row.sql));
 }
 
+/**
+ * Akun darurat untuk mode login mailcow.
+ *
+ * Saat `AUTH_PROVIDER=MAILSERVER`, kata sandi yang sah adalah kata sandi email
+ * di mailcow. Baris dengan `allow_local_login = 1` dikecualikan dan tetap
+ * memakai hash lokal — tanpa satu pun akun seperti itu, mailserver yang mati
+ * berarti tidak ada seorang pun bisa masuk untuk memperbaikinya.
+ *
+ * INTEGER, bukan BOOLEAN: skema ini berjalan di SQLite/libSQL maupun Postgres.
+ */
+async function ensureMailserverAuthSchema(client: DatabaseClient) {
+  await ensureColumn(
+    client,
+    "users",
+    "allow_local_login",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
+}
+
 export async function initializeDatabase(client: DatabaseClient) {
   await client.executeMultiple(schemaSql);
   await ensureCmsBilingualSchema(client);
@@ -2982,6 +3001,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensurePortfolioGalleryLimit(client);
   await ensureDocumentCounters(client);
   await ensureAuthHardeningSchema(client);
+  await ensureMailserverAuthSchema(client);
   await ensureTaxAndEmailSchema(client);
   await ensureProjectExpenseSchema(client);
   await ensureItemCatalogSchema(client);

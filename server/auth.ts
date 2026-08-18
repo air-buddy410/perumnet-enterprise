@@ -9,6 +9,7 @@ import {
   type EnterpriseRole,
 } from "@/shared/access";
 import { getDatabase } from "./db/client";
+import { authProviderMode, verifyMailserverPassword } from "./mail-auth";
 import { isProductionRuntime } from "./runtime-env";
 import type { DatabaseClient } from "./db/client";
 import { ApiError } from "./api/errors";
@@ -113,7 +114,7 @@ export async function verifyCredentials(email: string, password: string) {
   const { client } = await getDatabase();
   const result = await client.execute({
     sql: `
-      SELECT u.id,u.name,u.email,u.password_hash,u.role,u.status,
+      SELECT u.id,u.name,u.email,u.password_hash,u.role,u.status,u.allow_local_login,
         p.preferred_language,p.avatar_mime_type,p.updated_at AS profile_updated_at,
         up.permissions_json
       FROM users u
@@ -125,20 +126,58 @@ export async function verifyCredentials(email: string, password: string) {
   });
   const row = result.rows[0];
 
-  // Always hash, even when there is no account, so the two paths are
-  // indistinguishable by timing.
-  const passwordMatches = await compare(
-    password,
-    row ? String(row.password_hash) : ABSENT_ACCOUNT_PASSWORD_HASH,
-  );
-  if (!row || !passwordMatches) {
-    throw new ApiError(401, "INVALID_CREDENTIALS", "Email atau kata sandi tidak sesuai.");
+  // ── Di mana kata sandi diperiksa ────────────────────────────────
+  //
+  // Mode MAILSERVER memindahkan pemeriksaan dari hash lokal ke mailcow: yang
+  // sah adalah kata sandi EMAIL orang itu. Hash lokal tetap dipakai untuk akun
+  // darurat (`allow_local_login`) — tanpa itu, mailserver yang mati berarti
+  // tidak ada seorang pun bisa masuk untuk membetulkannya.
+  //
+  // Alamat yang TIDAK punya akun di sini tidak pernah dikirim ke mailcow, walau
+  // mode mailserver menyala. Kalau dikirim, aplikasi ini berubah jadi alat
+  // menebak mailbox: siapa pun bisa menanyakan "apakah alamat ini ada" dan
+  // "apakah kata sandi ini benar" untuk alamat yang bukan penggunanya.
+  const allowLocalLogin = row ? Number(row.allow_local_login ?? 0) === 1 : false;
+  const lewatMailserver =
+    Boolean(row) && authProviderMode() === "MAILSERVER" && !allowLocalLogin;
+
+  if (lewatMailserver) {
+    const hasil = await verifyMailserverPassword(String(row.email), password);
+    if (!hasil.ok) {
+      if (hasil.reason === "REJECTED") {
+        throw new ApiError(401, "INVALID_CREDENTIALS", "Email atau kata sandi tidak sesuai.");
+      }
+      // Dibedakan DENGAN SENGAJA dari "kata sandi salah": memberitahu yang
+      // keliru membuat orang mereset kata sandi email yang sebenarnya tidak
+      // bermasalah. `hasil.detail` sengaja TIDAK ikut ke pemanggil — ia
+      // menyebut nama host dan kondisi jaringan.
+      console.warn(`[auth] mailserver tidak terjawab: ${hasil.detail}`);
+      throw new ApiError(
+        503,
+        "MAILSERVER_UNREACHABLE",
+        "Mailserver sedang tidak bisa dihubungi, jadi login belum bisa diproses. Coba lagi sebentar lagi atau hubungi IT.",
+      );
+    }
+  } else {
+    // Always hash, even when there is no account, so the two paths are
+    // indistinguishable by timing.
+    const passwordMatches = await compare(
+      password,
+      row ? String(row.password_hash) : ABSENT_ACCOUNT_PASSWORD_HASH,
+    );
+    if (!row || !passwordMatches) {
+      throw new ApiError(401, "INVALID_CREDENTIALS", "Email atau kata sandi tidak sesuai.");
+    }
   }
   if (row.status !== "Aktif") {
     throw new ApiError(403, "ACCOUNT_INACTIVE", "Akun ini sedang dinonaktifkan.");
   }
 
-  return authUserFromRow(row);
+  return {
+    user: authUserFromRow(row),
+    /** Dipakai audit log: pemakaian pintu darurat harus terlihat. */
+    jalur: lewatMailserver ? ("mailserver" as const) : ("lokal" as const),
+  };
 }
 
 export async function createSession(userId: string, remember: boolean) {
