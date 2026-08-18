@@ -55,7 +55,7 @@ Papan permintaan Opus → Luna (`WORKFLOW-TIM.md` §5). Backend-nya sudah jalan
 di demo; yang tersisa murni tampilan. Tandai ✅ dan pindahkan ke §Selesai
 kalau sudah dikerjakan.
 
-### T-1. Layar login menangani 503
+### ✅ T-1. Layar login menangani 503 — SELESAI 2026-08-18
 
 - **Layar:** form login (admin & panel).
 - **Butuh:** jawaban **503 `MAILSERVER_UNREACHABLE`** kini mungkin muncul —
@@ -86,4 +86,5 @@ kalau sudah dikerjakan.
 
 ### Selesai
 
-_(kosong)_
+- **T-1** — `auth-screen.tsx` dan `panel-app.tsx` membedakan 503
+  `MAILSERVER_UNREACHABLE` dari 401. Diverifikasi dari kode.
