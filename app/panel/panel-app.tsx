@@ -45,6 +45,7 @@ import {
   X,
 } from "lucide-react";
 import styles from "./panel.module.css";
+import { ApiClientError } from "../api-client";
 import { MailLoginEditor } from "./mail-login-editor";
 
 type User = { id: string; name: string; email: string; role: string };
@@ -156,7 +157,14 @@ const textLabels: Record<string, Record<string, string>> = {
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, credentials: "same-origin", cache: "no-store" });
   const payload = response.status === 204 ? null : await response.json().catch(() => null);
-  if (!response.ok) throw new Error(payload?.error?.message || "Permintaan tidak dapat diproses.");
+  if (!response.ok) {
+    throw new ApiClientError(
+      payload?.error?.message || "Permintaan tidak dapat diproses.",
+      response.status,
+      payload?.error?.code,
+      payload?.error?.details,
+    );
+  }
   return payload?.data as T;
 }
 
@@ -312,6 +320,7 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
   const [resetToken, setResetToken] = useState("");
   const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
+  const [mailserverUnavailable, setMailserverUnavailable] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     const token = new URLSearchParams(window.location.search).get("resetToken");
@@ -324,12 +333,18 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
     }
   }, []);
   const submit = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setError("");
+    event.preventDefault(); setBusy(true); setError(""); setMailserverUnavailable(false);
     try {
       const { user } = await request<{ user: User }>("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password, remember: false }) });
       if (user.role !== "Admin") throw new Error("Akun ini tidak memiliki akses Administrator.");
       await onSuccess();
-    } catch (error) { setError(error instanceof Error ? error.message : "Email atau kata sandi salah."); }
+    } catch (error) {
+      const isMailserverError =
+        error instanceof ApiClientError &&
+        (error.status === 503 || error.code === "MAILSERVER_UNREACHABLE");
+      setMailserverUnavailable(isMailserverError);
+      setError(error instanceof Error ? error.message : "Email atau kata sandi salah.");
+    }
     finally { setBusy(false); }
   };
   const submitForgot = async (event: FormEvent) => {
@@ -378,8 +393,8 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
         <span className={styles.formEyebrow}>AKSES ADMIN</span><h2>Selamat datang kembali.</h2><p>Masuk dengan akun Administrator PerumNet Enterprise.</p>
         <label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@perumnet.id" required autoComplete="email" /></label>
         <label>Kata sandi<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Masukkan kata sandi" required minLength={8} autoComplete="current-password" /></label>
-        <button className={styles.loginFormSwitch} type="button" onClick={() => { setMode("forgot"); setError(""); }}>Lupa kata sandi?</button>
-        {error && <div className={styles.formError}>{error}</div>}
+        {!mailserverUnavailable && <button className={styles.loginFormSwitch} type="button" onClick={() => { setMode("forgot"); setError(""); }}>Lupa kata sandi?</button>}
+        {error && <div className={styles.formError} role="alert">{mailserverUnavailable && <strong>Mailserver tidak tersedia. </strong>}{error}</div>}
         <button type="submit" disabled={busy}>{busy ? <LoaderCircle className={styles.spin} size={19} /> : <>Masuk ke Panel <ArrowRight size={18} /></>}</button>
         <div className={styles.loginLegal}><Link href="/syarat-ketentuan">Syarat dan Ketentuan</Link><Link href="/kebijakan-privasi">Kebijakan Privasi</Link><Link href="/#faq">FAQ</Link></div>
         <small>© {new Date().getFullYear()} PerumNet Enterprise</small>

@@ -2,7 +2,7 @@
 
 import { ArrowLeft, ArrowRight, Eye, EyeOff, KeyRound, Mail, ShieldCheck, Wifi } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
-import { api, messageOf, SessionUser } from "../api-client";
+import { api, ApiClientError, messageOf, SessionUser } from "../api-client";
 import { appPath } from "../paths";
 
 interface AuthScreenProps {
@@ -31,6 +31,7 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [mailserverUnavailable, setMailserverUnavailable] = useState(false);
   const [sent, setSent] = useState(false);
   const [resetToken, setResetToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -49,6 +50,7 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
   async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+    setMailserverUnavailable(false);
     setBusy(true);
     try {
       const result = await api<{ user: SessionUser }>("/api/auth/login", {
@@ -57,6 +59,10 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
       });
       onLogin(result.user);
     } catch (requestError) {
+      const isMailserverError =
+        requestError instanceof ApiClientError &&
+        (requestError.status === 503 || requestError.code === "MAILSERVER_UNREACHABLE");
+      setMailserverUnavailable(isMailserverError);
       setError(messageOf(requestError, language));
     } finally {
       setBusy(false);
@@ -241,11 +247,20 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
                         : "Remember me for 30 days"}
                     </span>
                   </label>
-                  <button className="text-button" type="button" onClick={() => setMode("forgot")}>
-                    {id ? "Lupa kata sandi?" : "Forgot password?"}
-                  </button>
+                  {!mailserverUnavailable && (
+                    <button className="text-button" type="button" onClick={() => setMode("forgot")}>
+                      {id ? "Lupa kata sandi?" : "Forgot password?"}
+                    </button>
+                  )}
                 </div>
-                {error && <p className="form-error" role="alert">{error}</p>}
+                {error && (
+                  <p className="form-error" role="alert">
+                    {mailserverUnavailable && (
+                      <strong>{id ? "Mailserver tidak tersedia. " : "Mail server unavailable. "}</strong>
+                    )}
+                    {error}
+                  </p>
+                )}
                 <button className="button primary auth-submit" type="submit" disabled={busy}>
                   {busy ? (id ? "Memeriksa akses..." : "Checking access...") : (id ? "Masuk ke Dashboard" : "Sign in to Dashboard")} <ArrowRight size={17} />
                 </button>
