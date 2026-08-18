@@ -82,10 +82,63 @@ ditinggal — tidak berpengaruh di mode LOCAL. Akun yang dibuat skrip seed
 **tidak punya kata sandi lokal**, jadi setelah rollback mereka perlu memakai
 alur reset kata sandi sebelum bisa masuk.
 
+## Ganti kata sandi ikut pindah ke mailcow
+
+`PATCH /api/profile/password` di mode `MAILSERVER` **tidak lagi menyentuh
+`users.password_hash`** — ia mengganti kata sandi mailbox di mailcow. Kalau
+tidak begitu, form itu berpura-pura bekerja: orangnya merasa sudah mengganti
+kata sandi, padahal yang menentukan aksesnya sama sekali tidak berubah.
+
+Butuh satu variabel tambahan, dipasang **olehmu sendiri** di `.env.production`
+tiap rilis:
+
+```
+MAILCOW_API_KEY=<API key read-write dari mailcow>
+```
+
+Tanpa itu, jalurnya menjawab **503 `MAILCOW_NOT_CONFIGURED`** — menolak dengan
+jelas, bukan diam-diam mengganti kata sandi yang salah.
+
+Tiga penjagaannya, sama seperti CRM:
+
+1. Alamat mailbox diambil dari baris pengguna yang sedang login, **tidak
+   pernah dari input**. Dengan API key read-write, satu alamat yang bisa
+   dikendalikan pemanggil berarti siapa pun bisa mengganti kata sandi mailbox
+   siapa pun.
+2. **Kata sandi lama diverifikasi ke mailserver lebih dulu.** Tanpa itu, sesi
+   aplikasi yang dibajak cukup untuk mengambil alih kotak surat seseorang.
+3. Nilai kata sandinya tidak pernah masuk log maupun pesan galat.
+
+**Akun darurat dikecualikan** — justru kata sandi lokalnya yang berarti,
+karena ia jalan masuk saat mailserver mati.
+
+| Status | Kode | Kapan |
+|---|---|---|
+| 200 | — | kata sandi mailbox diganti; sesi lain dicabut |
+| 400 | `INVALID_PASSWORD` | kata sandi email saat ini salah |
+| 502 | `MAILCOW_REJECTED` | mailcow menolak — paling sering API key read-only |
+| 503 | `MAILCOW_NOT_CONFIGURED` | `MAILCOW_API_KEY` belum dipasang |
+| 503 | `MAILSERVER_UNREACHABLE` | mailserver tidak terjawab |
+
+## Akun darurat — kata sandinya harus DIKETAHUI
+
+Ditandai `allow_local_login = 1` saja tidak cukup. Setel kata sandinya
+sendiri; nilainya tidak pernah lewat siapa pun:
+
+```
+cd <folder rilis>
+set -a && . ./.env.production && set +a
+node scripts/setel-akun-darurat.mjs admin@perumnet.id
+```
+
+Skrip itu meminta kata sandi diketik langsung di terminal — tidak lewat
+argumen perintah (yang terlihat di `ps`), tidak masuk riwayat shell, tidak
+dicetak. Minimal 12 karakter, dan simpan di pengelola kata sandi.
+
 ## Yang belum dikerjakan
 
-- Form ganti kata sandi masih tampil di mode mailserver, padahal yang diganti
-  seharusnya kata sandi email di webmail. Tugasnya ada di
+- Teks form ganti kata sandi masih berbunyi seperti kata sandi aplikasi,
+  padahal yang diganti kata sandi email. Tugasnya ada di
   `HANDOFF-BACKEND-KE-FRONTEND.md`.
 - Demo dan produksi memakai commit yang sama (lihat memory
   `demo-mirrors-production`): nyalakan di demo lebih dulu, pakai beberapa

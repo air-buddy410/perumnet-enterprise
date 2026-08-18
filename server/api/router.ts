@@ -13,6 +13,8 @@ import {
   type AccessPermissions,
 } from "@/shared/access";
 import { writeAuditLog } from "../audit";
+import { authProviderMode, verifyMailserverPassword } from "../mail-auth";
+import { mailcowConfig, setMailboxPassword } from "../mailcow";
 import {
   calculateInvoiceAllocation,
   calculateQuotationCommercialTotals,
@@ -6194,7 +6196,74 @@ async function handleProfile(request: Request, path: string[], user: AuthUser) {
       currentPassword: z.string().min(8).max(128),
       newPassword: z.string().min(10).max(128),
     }).parse(await jsonBody(request));
-    const row = await ensureExists("SELECT password_hash FROM users WHERE id=?", [user.id], "Pengguna tidak ditemukan.");
+    const row = await ensureExists(
+      "SELECT password_hash,email,allow_local_login FROM users WHERE id=?",
+      [user.id],
+      "Pengguna tidak ditemukan.",
+    );
+
+    // ── Kata sandi mana yang sebenarnya diganti ─────────────────────
+    //
+    // Di mode MAILSERVER, kata sandi lokal tidak dipakai untuk masuk. Mengganti
+    // kolom `password_hash` di sini berarti form ini berpura-pura bekerja:
+    // orangnya merasa sudah mengganti kata sandi, padahal yang menentukan
+    // aksesnya sama sekali tidak berubah. Jadi yang diganti kata sandi
+    // mailbox-nya di mailcow.
+    //
+    // Akun darurat dikecualikan — justru kata sandi lokalnya yang berarti,
+    // karena ia jalan masuk saat mailserver mati.
+    const akunDarurat = Number(row.allow_local_login ?? 0) === 1;
+    if (authProviderMode() === "MAILSERVER" && !akunDarurat) {
+      const cfg = mailcowConfig();
+      if (!cfg) {
+        throw new ApiError(
+          503,
+          "MAILCOW_NOT_CONFIGURED",
+          "Penggantian kata sandi email belum disiapkan di server ini. Hubungi IT.",
+        );
+      }
+
+      // Kata sandi LAMA diverifikasi ke mailserver lebih dulu. Tanpa itu, sesi
+      // aplikasi yang dibajak cukup untuk mengambil alih kotak surat seseorang
+      // — dan lewat kotak surat itu, seluruh akun lain miliknya.
+      const sekarang = await verifyMailserverPassword(
+        String(row.email),
+        input.currentPassword,
+      );
+      if (!sekarang.ok) {
+        if (sekarang.reason === "REJECTED") {
+          throw new ApiError(400, "INVALID_PASSWORD", "Kata sandi email Anda saat ini tidak sesuai.");
+        }
+        throw new ApiError(
+          503,
+          "MAILSERVER_UNREACHABLE",
+          "Mailserver sedang tidak bisa dihubungi, jadi kata sandi belum diganti. Coba lagi sebentar lagi.",
+        );
+      }
+
+      try {
+        // Alamatnya diambil dari baris pengguna yang sedang login, TIDAK PERNAH
+        // dari input: dengan API key read-write, satu alamat yang bisa
+        // dikendalikan pemanggil berarti siapa pun bisa mengganti kata sandi
+        // mailbox siapa pun.
+        await setMailboxPassword(cfg, String(row.email), input.newPassword);
+      } catch (error) {
+        // Paling sering berarti API key-nya read-only. Nilai kata sandinya —
+        // lama maupun baru — tidak pernah ikut ke pesan galat.
+        const pesan = error instanceof Error ? error.message : String(error);
+        console.warn(`[auth] mailcow menolak ganti kata sandi: ${pesan}`);
+        throw new ApiError(
+          502,
+          "MAILCOW_REJECTED",
+          "Mailserver menolak penggantian kata sandi. Hubungi IT.",
+        );
+      }
+
+      await revokeOtherSessions(client, request, user.id);
+      await writeAuditLog(client, request, user, "change_mail_password", "user", user.id);
+      return ok({ success: true, otherSessionsRevoked: true, target: "mailcow" });
+    }
+
     if (!(await compare(input.currentPassword, String(row.password_hash)))) {
       throw new ApiError(400, "INVALID_PASSWORD", "Kata sandi saat ini tidak sesuai.");
     }

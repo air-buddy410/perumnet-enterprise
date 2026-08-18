@@ -164,6 +164,59 @@ test("akun darurat dengan kata sandi lokal salah tetap ditolak", async () => {
   assert.equal(hasil.code, "INVALID_CREDENTIALS");
 });
 
+test("ganti kata sandi diarahkan ke mailcow, bukan ke hash lokal", async () => {
+  // Untuk bisa punya sesi tanpa mailcow hidup, akunnya dijadikan akun darurat
+  // sebentar, lalu dikembalikan jadi akun biasa sambil sesinya dipegang. Yang
+  // diuji adalah keputusan rutenya, bukan cara masuknya.
+  await setelAkunDarurat(ADMIN, 1);
+  const masukDulu = await masuk(ADMIN, ADMIN_PASSWORD, "10.1.0.6");
+  assert.equal(masukDulu.status, 200);
+  const cookie = masukDulu.setCookie.split(";")[0];
+
+  await setelAkunDarurat(ADMIN, 0);
+  const response = await fetch(`${baseUrl}/api/profile/password`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({
+      currentPassword: ADMIN_PASSWORD,
+      newPassword: "kata-sandi-baru-yang-panjang",
+    }),
+  });
+  const payload = await response.json().catch(() => null);
+
+  // MAILCOW_API_KEY sengaja tidak diisi di lingkungan tes: yang dibuktikan
+  // adalah permintaannya BERBELOK ke mailcow. Kalau ia masih menulis ke hash
+  // lokal, jawabannya 200 dan tes ini gagal — dan form ganti kata sandi akan
+  // berpura-pura bekerja padahal akses orangnya tidak berubah sama sekali.
+  assert.equal(response.status, 503);
+  assert.equal(payload?.error?.code, "MAILCOW_NOT_CONFIGURED");
+
+  await setelAkunDarurat(ADMIN, 1);
+});
+
+test("akun darurat tetap mengganti kata sandi LOKAL-nya, bukan mailbox", async () => {
+  await setelAkunDarurat(ADMIN, 1);
+  const masukDulu = await masuk(ADMIN, ADMIN_PASSWORD, "10.1.0.7");
+  const cookie = masukDulu.setCookie.split(";")[0];
+
+  const response = await fetch(`${baseUrl}/api/profile/password`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({
+      currentPassword: ADMIN_PASSWORD,
+      newPassword: "kata-sandi-darurat-baru",
+    }),
+  });
+
+  // Justru kata sandi lokal akun darurat yang berarti — ia jalan masuk saat
+  // mailserver mati. Jadi jalur ini TIDAK boleh ikut berbelok ke mailcow.
+  assert.equal(response.status, 200);
+
+  // Kembalikan supaya tes lain yang memakai kata sandi lama tetap jalan.
+  const balik = await masuk(ADMIN, "kata-sandi-darurat-baru", "10.1.0.8");
+  assert.equal(balik.status, 200);
+});
+
 test("alamat tanpa akun ditolak 401, tidak pernah dikirim ke mailcow", async () => {
   const hasil = await masuk("orangasing@perumnet.id", "apa-saja", "10.1.0.5");
 
