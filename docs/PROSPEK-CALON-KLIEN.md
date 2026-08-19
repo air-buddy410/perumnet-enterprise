@@ -144,6 +144,83 @@ Skrip ini tidak bicara ke database; ia mengunggah ke endpoint yang sama dengan
 tombol impor di layar, supaya aturan "kontak seperti apa yang sah" tidak ada
 duanya.
 
+## Tugas layar untuk Luna (T-6 … T-10)
+
+Backend semuanya sudah jalan dan bertes; yang tersisa murni tampilan di
+`/admin`. Nomor dilanjutkan dari T-5 di `HANDOFF-BACKEND-KE-FRONTEND.md`.
+
+> Ditulis di berkas ini, bukan di HANDOFF, karena HANDOFF sedang disunting di
+> direktori kerja bersama saat ini. Penunjuk satu baris menyusul ke sana.
+
+### T-6. Layar daftar prospek
+
+- **Butuh:** `GET /api/cms/prospects` — sudah punya paginasi, `q`, `status`,
+  `segment`, `emailable=1`, `optOut=1`.
+- Tab per segmen memakai `prospectSegmentLabels` dari `shared/prospects.ts`;
+  **jangan menulis nama segmen sebagai teks di layar** — daftarnya berasal dari
+  nama lembar workbook dan akan bertambah.
+- Checkbox pemilih penerima **dimatikan saat `emailable === false`**. Jangan
+  menghitung ulang syaratnya di layar: server menolak dengan aturan yang sama,
+  dan dua perhitungan yang bisa berbeda adalah cara membuat tombol yang
+  menjanjikan sesuatu lalu gagal.
+- Tampilkan `source` di baris atau detail. Itu jawaban atas "dari mana Anda
+  dapat alamat email saya" dan harus mudah dilihat, bukan tersembunyi.
+
+### T-7. Form tambah calon klien
+
+- **Butuh:** `POST /api/cms/prospects`.
+- **`source` wajib.** Beri label seperti *"Dari mana kontak ini didapat?"*
+  dengan contoh: kartu nama pameran properti, telepon masuk, berkas Data
+  Clients Enterprise.xlsx. Server menolak yang kosong (422).
+- **409 `EMAIL_ALREADY_LISTED`** → `details.prospectId` untuk tombol "buka
+  prospek yang sudah ada". Jangan tampilkan sebagai kegagalan buntu.
+
+### T-8. Layar hasil impor
+
+- **Butuh:** `POST /api/cms/prospects/import` (multipart: `file`, `source`,
+  `dryRun`).
+- **Tawarkan `dryRun` sebagai langkah pertama, bukan opsi tersembunyi.** Ia
+  melaporkan tanpa menyimpan; itu satu-satunya kesempatan memeriksa sebelum
+  ratusan baris masuk.
+- Jawabannya memuat `sheets[]`, `terbaca`, `disimpan`, `dilewati`, dan
+  `issues[]`. **Tampilkan `issues` sebagai daftar yang bisa dibaca**, jangan
+  diringkas jadi satu angka — tiap baris menyebut lembar dan nomor baris supaya
+  bisa dibetulkan di berkas sumber.
+- `EMAIL_GANDA` berarti kontaknya masuk **tanpa email**; arahkan pengguna
+  memilih salah satu alamat lalu mengisinya lewat T-7/detail.
+
+### T-9. Komposer email
+
+- **Butuh:** `POST /api/cms/prospects/outreach` dengan
+  `{ prospectIds[], templateId | (subject + bodyHtml), spacingSeconds? }`.
+  Kirim ke satu orang adalah batch berisi satu — tidak ada endpoint terpisah.
+- **Tampilkan jedanya, jangan sembunyikan.** Bawaan 60 detik, maksimal 200
+  penerima. Beri tahu perkiraan selesai: 40 penerima × 60 detik = 40 menit.
+  Orang yang tidak tahu ini akan mengira pengiriman macet.
+- Pratinjau lewat `POST /api/cms/prospect-templates/:id/preview` dengan satu
+  `prospectId` — **wajibkan melihat pratinjau sebelum tombol kirim aktif.**
+  Placeholder salah ketik dibiarkan utuh oleh server justru supaya terlihat di
+  sini; kalau pratinjau dilewati, ia terkirim ke semua orang.
+- **422 `NO_ELIGIBLE_RECIPIENTS`** → `details.skipped[]` menyebut alasan per
+  prospek (`OPTED_OUT`, `NO_EMAIL`, `NOT_FOUND`). Tampilkan per orang, bukan
+  satu pesan umum.
+
+### T-10. Pengelola template
+
+- **Butuh:** CRUD `/api/cms/prospect-templates` + `:id/preview`.
+- Sisipkan placeholder lewat tombol, jangan mengandalkan orang mengetik
+  `{{nama}}` dengan benar. Daftarnya dan penjelasannya ada di
+  `prospectPlaceholders` dan `prospectPlaceholderHints`.
+- Editor isi surat menghasilkan HTML. Nilai yang disisipkan sudah di-escape di
+  server; yang **tidak** di-escape adalah template itu sendiri — itu memang
+  disengaja supaya bisa diformat, jadi jangan tempelkan HTML dari sumber luar
+  ke dalamnya.
+
+### Belum ada, dan memang belum diminta
+
+Lampiran PDF. Surat berisi teks dan tautan. Jangan membuat tombol lampiran
+yang tidak punya endpoint.
+
 ## Yang belum ada
 
 - **Lampiran PDF.** Surat berisi teks dan tautan. Diputuskan 19 Agustus untuk

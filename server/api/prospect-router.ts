@@ -628,7 +628,7 @@ async function importProspects(request: Request, user: AuthUser) {
     .parse(form.get("source") ?? `berkas ${file.name}`);
   const dryRun = String(form.get("dryRun") ?? "") === "1";
 
-  const { kontak, masalah, sheetName } = await bacaWorkbookProspek(
+  const { kontak, masalah, sheets } = await bacaWorkbookProspek(
     await file.arrayBuffer(),
   );
   if (!kontak.length) {
@@ -636,7 +636,7 @@ async function importProspects(request: Request, user: AuthUser) {
       422,
       "EMPTY_WORKBOOK",
       "Tidak ada kontak yang terbaca. Pastikan baris pertama berisi judul kolom seperti Nama, Email, Perusahaan.",
-      { sheetName, issues: masalah },
+      { sheets, issues: masalah },
     );
   }
 
@@ -656,9 +656,10 @@ async function importProspects(request: Request, user: AuthUser) {
         // sumber, bukan duplikat yang boleh digabung. Barisnya dilewati dan
         // dilaporkan dengan nomor barisnya, supaya bisa diperiksa manusia.
         issues.push({
+          sheet: baris.sheet,
           row: baris.row,
           code: "EMAIL_TIDAK_SAH",
-          detail: `Baris ${baris.row}: ${baris.email} sudah dipakai prospek lain. Baris dilewati.`,
+          detail: `${baris.sheet} baris ${baris.row}: ${baris.email} sudah dipakai prospek lain. Baris dilewati.`,
         });
         dilewati += 1;
         continue;
@@ -672,8 +673,8 @@ async function importProspects(request: Request, user: AuthUser) {
     await client.execute({
       sql: `INSERT INTO cms_prospects
         (id,full_name,email,company_name,job_title,whatsapp,location,industry,
-         source,status,created_by,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,'New',?,?,?)`,
+         segment,source,status,created_by,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,'New',?,?,?)`,
       args: [
         randomUUID(),
         baris.fullName,
@@ -683,6 +684,7 @@ async function importProspects(request: Request, user: AuthUser) {
         baris.whatsapp || null,
         baris.location || null,
         baris.industry || null,
+        baris.segment,
         source,
         user.id,
         timestamp,
@@ -703,7 +705,7 @@ async function importProspects(request: Request, user: AuthUser) {
 
   return ok({
     dryRun,
-    sheetName,
+    sheets,
     terbaca: kontak.length,
     disimpan,
     dilewati,

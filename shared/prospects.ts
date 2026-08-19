@@ -28,16 +28,13 @@ export const prospectStatusLabels: Record<
   Lost: { id: "Tidak jadi", en: "Lost" },
 };
 
+// Segmen diambil dari nama lembar di workbook kontak milik pemilik, bukan
+// dikarang: itu pembagian pasar yang benar-benar dipakai tim.
 export const prospectSegments = [
-  "perumahan",
-  "apartemen",
-  "perkantoran",
-  "ruko",
-  "hotel",
-  "pendidikan",
-  "kesehatan",
-  "pemerintahan",
-  "industri",
+  "konstruksi-arsitektur",
+  "developer",
+  "smart-home",
+  "hotel-villa",
   "lainnya",
 ] as const;
 export type ProspectSegment = (typeof prospectSegments)[number];
@@ -46,17 +43,31 @@ export const prospectSegmentLabels: Record<
   ProspectSegment,
   { id: string; en: string }
 > = {
-  perumahan: { id: "Perumahan", en: "Residential" },
-  apartemen: { id: "Apartemen", en: "Apartment" },
-  perkantoran: { id: "Perkantoran", en: "Office" },
-  ruko: { id: "Ruko", en: "Shophouse" },
-  hotel: { id: "Hotel", en: "Hotel" },
-  pendidikan: { id: "Pendidikan", en: "Education" },
-  kesehatan: { id: "Kesehatan", en: "Healthcare" },
-  pemerintahan: { id: "Pemerintahan", en: "Government" },
-  industri: { id: "Industri", en: "Industrial" },
+  "konstruksi-arsitektur": {
+    id: "Konstruksi & Arsitektur",
+    en: "Construction & Architecture",
+  },
+  developer: { id: "Developer", en: "Developer" },
+  "smart-home": { id: "Smart Home", en: "Smart Home" },
+  "hotel-villa": { id: "Hotel & Villa", en: "Hotel & Villa" },
   lainnya: { id: "Lainnya", en: "Other" },
 };
+
+/**
+ * Nama lembar workbook -> segmen. Dicocokkan setelah huruf dikecilkan dan
+ * yang bukan huruf/angka dibuang, supaya "Kontruksi & Arsitektur" (salah ketik
+ * di berkas sumber) dan "Konstruksi dan Arsitektur" sama-sama kena.
+ */
+export function segmenDariNamaLembar(nama: string): ProspectSegment {
+  const kunci = nama.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (kunci.includes("arsitek") || kunci.includes("kontruksi") || kunci.includes("konstruksi")) {
+    return "konstruksi-arsitektur";
+  }
+  if (kunci.includes("develop")) return "developer";
+  if (kunci.includes("smarthome") || kunci.includes("smart")) return "smart-home";
+  if (kunci.includes("hotel") || kunci.includes("villa")) return "hotel-villa";
+  return "lainnya";
+}
 
 // ── Template surat ───────────────────────────────────────────────────
 //

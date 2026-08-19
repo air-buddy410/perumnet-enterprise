@@ -1,6 +1,10 @@
 import "server-only";
 
 import ExcelJS from "exceljs";
+import {
+  segmenDariNamaLembar,
+  type ProspectSegment,
+} from "../shared/prospects";
 
 /**
  * Membaca workbook kontak jadi baris yang siap disimpan.
@@ -20,12 +24,15 @@ export type ImportIssueCode =
   | "EMAIL_TIDAK_SAH";
 
 export interface ImportIssue {
+  sheet: string;
   row: number;
   code: ImportIssueCode;
   detail: string;
 }
 
 export interface ImportedContact {
+  sheet: string;
+  segment: ProspectSegment;
   row: number;
   fullName: string;
   email: string | null;
@@ -37,21 +44,29 @@ export interface ImportedContact {
 }
 
 /** Nama kolom yang diterima, dalam dua bahasa dan beberapa ejaan lazim. */
-const alias: Record<keyof Omit<ImportedContact, "row">, string[]> = {
+type KolomKontak = keyof Omit<ImportedContact, "row" | "sheet" | "segment">;
+
+const alias: Record<KolomKontak, string[]> = {
   fullName: ["nama", "nama lengkap", "nama kontak", "kontak", "pic", "name", "full name", "contact"],
   email: ["email", "e-mail", "alamat email", "email address", "surel"],
   companyName: ["perusahaan", "nama perusahaan", "instansi", "company", "company name", "organisasi"],
   jobTitle: ["jabatan", "posisi", "job title", "title", "position"],
-  whatsapp: ["telepon", "telpon", "no telepon", "no. telepon", "hp", "no hp", "whatsapp", "wa", "phone", "mobile"],
+  whatsapp: ["telepon", "telpon", "no telepon", "hp", "no hp", "whatsapp", "wa", "phone", "mobile"],
   location: ["kota", "lokasi", "alamat", "city", "location", "address"],
   industry: ["industri", "bidang", "sektor", "industry", "sector"],
 };
 
+/**
+ * Judul dinormalkan sampai ke huruf dan angka saja: berkas sumber menulis
+ * "No.Telepon" tanpa spasi dan "Nama " dengan spasi di belakang. Mencocokkan
+ * apa adanya berarti kolomnya diam-diam tidak terbaca — dan nomor telepon yang
+ * hilang tanpa pesan galat baru ketahuan saat ada yang perlu ditelepon.
+ */
 function normalkanJudul(value: unknown) {
   return String(value ?? "")
-    .trim()
     .toLowerCase()
-    .replace(/\s+/g, " ");
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function teks(value: unknown) {
@@ -70,16 +85,23 @@ function teks(value: unknown) {
 }
 
 /**
- * Excel menyimpan "08123456789" sebagai angka dan nol di depannya hilang.
- * Nomor Indonesia yang tersisa dimulai dari 8 dan panjangnya 9–13 digit;
- * itulah yang dikembalikan nolnya. Nomor yang sudah berbentuk teks, atau yang
- * memakai +62, tidak disentuh.
+ * Excel menyimpan "08123456789" sebagai ANGKA dan nol di depannya hilang.
+ * Yang hilang itu dikembalikan.
+ *
+ * Berlaku untuk nomor tetap juga, bukan cuma HP: berkas kontak ini memuat
+ * "3619346511" yang seharusnya "03619346511" (kode area Bali 0361). Aturan
+ * sebelumnya hanya mengenali awalan 8 dan diam-diam melewatkan seluruh nomor
+ * kantor.
+ *
+ * Yang sudah berbentuk teks dengan nol di depan, atau memakai +62, tidak
+ * disentuh — di sana tidak ada yang hilang.
  */
 export function perbaikiNomor(mentah: unknown) {
-  const nilai = teks(mentah);
+  const nilai = teks(mentah).replace(/\s+/g, "");
   if (!nilai) return "";
-  if (typeof mentah === "number" || /^\d+$/.test(nilai)) {
-    if (/^8\d{8,12}$/.test(nilai)) return `0${nilai}`;
+  const angkaMurni = typeof mentah === "number" || /^\d+$/.test(nilai);
+  if (angkaMurni && !nilai.startsWith("0") && /^\d{9,13}$/.test(nilai)) {
+    return `0${nilai}`;
   }
   return nilai;
 }
@@ -92,90 +114,102 @@ export function bacaWorkbookProspek(buffer: ArrayBuffer) {
   return (async () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer);
-    const sheet = workbook.worksheets[0];
-    if (!sheet) return { kontak, masalah, sheetName: "" };
 
-    const judul = sheet.getRow(1).values as unknown[];
-    const kolom = new Map<keyof Omit<ImportedContact, "row">, number>();
-    judul.forEach((nilai, index) => {
-      const nama = normalkanJudul(nilai);
-      if (!nama) return;
-      for (const [field, daftar] of Object.entries(alias)) {
-        if (kolom.has(field as keyof Omit<ImportedContact, "row">)) continue;
-        if (daftar.includes(nama)) {
-          kolom.set(field as keyof Omit<ImportedContact, "row">, index);
+    // SEMUA lembar, bukan hanya yang pertama. Workbook kontak yang sebenarnya
+    // memisahkan segmen pasar per lembar; membaca satu saja berarti 18 dari 37
+    // kontak hilang tanpa satu pun pesan galat.
+    const lembar = workbook.worksheets.filter((ws) => ws.rowCount > 1);
+    if (!lembar.length) return { kontak, masalah, sheets: [] as string[] };
+
+    for (const sheet of lembar) {
+      const segment = segmenDariNamaLembar(sheet.name);
+      const judul = sheet.getRow(1).values as unknown[];
+      const kolom = new Map<KolomKontak, number>();
+      judul.forEach((nilai, index) => {
+        const nama = normalkanJudul(nilai);
+        if (!nama) return;
+        for (const [field, daftar] of Object.entries(alias)) {
+          const kunci = field as KolomKontak;
+          if (kolom.has(kunci)) continue;
+          if (daftar.some((a) => normalkanJudul(a) === nama)) kolom.set(kunci, index);
         }
-      }
-    });
-
-    const ambil = (
-      nilai: unknown[],
-      field: keyof Omit<ImportedContact, "row">,
-    ) => {
-      const index = kolom.get(field);
-      return index === undefined ? "" : teks(nilai[index]);
-    };
-
-    sheet.eachRow((row, index) => {
-      if (index === 1) return;
-      const nilai = row.values as unknown[];
-      const fullName = ambil(nilai, "fullName");
-      const companyName = ambil(nilai, "companyName");
-      if (!fullName && !companyName) return; // baris kosong, bukan masalah
-
-      if (!fullName) {
-        masalah.push({
-          row: index,
-          code: "TANPA_NAMA",
-          detail: `Baris ${index} tidak punya nama kontak; hanya "${companyName}".`,
-        });
-        return;
-      }
-
-      const selEmail = ambil(nilai, "email");
-      const cocok = selEmail.match(polaEmail) ?? [];
-      let email: string | null = null;
-      if (cocok.length > 1) {
-        // Dua alamat dalam satu sel hampir selalu salah tempel di berkas
-        // sumber. Memilih salah satunya berarti menebak; kontaknya tetap masuk
-        // supaya tidak hilang, tanpa email supaya tidak salah kirim.
-        masalah.push({
-          row: index,
-          code: "EMAIL_GANDA",
-          detail: `Baris ${index} memuat ${cocok.length} alamat: ${cocok.join(", ")}. Kontak disimpan tanpa email.`,
-        });
-      } else if (cocok.length === 1) {
-        email = cocok[0].toLowerCase();
-      } else if (selEmail) {
-        masalah.push({
-          row: index,
-          code: "EMAIL_TIDAK_SAH",
-          detail: `Baris ${index}: "${selEmail}" bukan alamat email. Kontak disimpan tanpa email.`,
-        });
-      } else {
-        masalah.push({
-          row: index,
-          code: "TANPA_EMAIL",
-          detail: `Baris ${index} tidak punya email; kontak tidak bisa dikirimi penawaran.`,
-        });
-      }
-
-      kontak.push({
-        row: index,
-        fullName,
-        email,
-        companyName,
-        jobTitle: ambil(nilai, "jobTitle"),
-        whatsapp: perbaikiNomor(
-          kolom.get("whatsapp") === undefined
-            ? ""
-            : (row.values as unknown[])[kolom.get("whatsapp")!],
-        ),
-        location: ambil(nilai, "location"),
-        industry: ambil(nilai, "industry"),
       });
-    });
 
-    return { kontak, masalah, sheetName: sheet.name };
+      const ambil = (
+        nilai: unknown[],
+        field: KolomKontak,
+      ) => {
+        const index = kolom.get(field);
+        return index === undefined ? "" : teks(nilai[index]);
+      };
+
+      sheet.eachRow((row, index) => {
+        if (index === 1) return;
+        const nilai = row.values as unknown[];
+        const namaKolom = ambil(nilai, "fullName");
+        const perusahaanKolom = ambil(nilai, "companyName");
+        if (!namaKolom && !perusahaanKolom) return;
+
+        if (!namaKolom && perusahaanKolom) {
+          masalah.push({
+            sheet: sheet.name,
+            row: index,
+            code: "TANPA_NAMA",
+            detail: `${sheet.name} baris ${index}: tidak ada nama kontak, hanya "${perusahaanKolom}".`,
+          });
+          return;
+        }
+
+        const selEmail = ambil(nilai, "email");
+        const cocok = selEmail.match(polaEmail) ?? [];
+        let email: string | null = null;
+        if (cocok.length > 1) {
+          masalah.push({
+            sheet: sheet.name,
+            row: index,
+            code: "EMAIL_GANDA",
+            detail: `${sheet.name} baris ${index}: memuat ${cocok.length} alamat (${cocok.join(", ")}). Kontak disimpan TANPA email — pilih salah satu lalu isi manual.`,
+          });
+        } else if (cocok.length === 1) {
+          email = cocok[0].toLowerCase();
+        } else if (selEmail) {
+          masalah.push({
+            sheet: sheet.name,
+            row: index,
+            code: "EMAIL_TIDAK_SAH",
+            detail: `${sheet.name} baris ${index}: "${selEmail}" bukan alamat email. Kontak disimpan tanpa email.`,
+          });
+        } else {
+          masalah.push({
+            sheet: sheet.name,
+            row: index,
+            code: "TANPA_EMAIL",
+            detail: `${sheet.name} baris ${index}: tidak ada email, kontak tidak bisa dikirimi penawaran.`,
+          });
+        }
+
+        const indexTelepon = kolom.get("whatsapp");
+
+        kontak.push({
+          sheet: sheet.name,
+          segment,
+          row: index,
+          fullName: namaKolom,
+          email,
+          // Berkas kontak B2B menaruh NAMA PERUSAHAAN di kolom "Nama" dan tidak
+          // punya kolom perusahaan tersendiri. Tanpa penyalinan ini,
+          // {{perusahaan}} di surat penawaran akan kosong pada seluruh 37
+          // kontak — dan itu baru terlihat setelah suratnya terkirim.
+          companyName: perusahaanKolom || namaKolom,
+          jobTitle: ambil(nilai, "jobTitle"),
+          whatsapp:
+            indexTelepon === undefined ? "" : perbaikiNomor(nilai[indexTelepon]),
+          location: ambil(nilai, "location"),
+          industry: ambil(nilai, "industry"),
+        });
+      });
+    }
+
+    return { kontak, masalah, sheets: lembar.map((ws) => ws.name) };
   })();
 }

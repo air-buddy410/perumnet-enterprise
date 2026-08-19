@@ -92,20 +92,20 @@ const jawaban = await unggah.json().catch(() => null);
 if (unggah.status !== 200) {
   console.error(`Impor ditolak (${unggah.status}): ${jawaban?.error?.message ?? "tanpa keterangan"}`);
   for (const m of jawaban?.error?.details?.issues ?? []) {
-    console.error(`  baris ${m.row}: ${m.detail}`);
+    console.error(`  ${m.detail}`);
   }
   process.exit(1);
 }
 
 const d = jawaban.data;
-console.log(`\nLembar    : ${d.sheetName}`);
+console.log(`\nLembar    : ${d.sheets.join(", ")}`);
 console.log(`Terbaca   : ${d.terbaca} kontak`);
 console.log(`${d.dryRun ? "Akan disimpan" : "Disimpan"} : ${d.disimpan}`);
 console.log(`Dilewati  : ${d.dilewati}`);
 
 if (d.issues.length) {
   console.log(`\n${d.issues.length} baris perlu diperiksa:`);
-  for (const m of d.issues) console.log(`  baris ${m.row}  [${m.code}]  ${m.detail}`);
+  for (const m of d.issues) console.log(`  [${m.code}]  ${m.detail}`);
 } else {
   console.log("\nTidak ada baris bermasalah.");
 }

@@ -458,3 +458,85 @@ test("berkas tanpa judul kolom yang dikenali ditolak dengan penjelasan", async (
   assert.equal(hasil.status, 422);
   assert.equal(hasil.code, "EMPTY_WORKBOOK");
 });
+
+// ── Bentuk berkas yang sebenarnya ────────────────────────────────────
+//
+// Workbook kontak milik pemilik memisahkan segmen per LEMBAR, menulis judul
+// "No.Telepon" tanpa spasi dan "Nama " dengan spasi di belakang, menaruh nama
+// PERUSAHAAN di kolom "Nama", dan menyimpan sebagian nomor sebagai angka
+// sehingga nol di depannya hilang. Keempatnya pernah membuat impor kehilangan
+// data tanpa satu pun pesan galat.
+
+async function workbookAsli() {
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+  const buat = (nama, baris) => {
+    const ws = wb.addWorksheet(nama);
+    ws.addRow(["No", "Nama ", "Bidang", "Alamat Email", "No.Telepon"]);
+    for (const r of baris) ws.addRow(r);
+  };
+  buat("Kontruksi & Arsitektur", [
+    [1, "IBUKU Studio (Badung) ", "Arsitektur dan desain", "info@ibuku.test", "0361980999"],
+  ]);
+  buat("Developer", [
+    [1, "Mirah Investment", "Properti premium", "info@mirah.test\t", "03619347733"],
+  ]);
+  buat("Smart Home", [
+    [1, "Domotics Bali", "Smart home", "info@domotics.test", 3619346511],
+  ]);
+  buat("Hotel & Villa", [
+    [1, "Coz Bali Management", "Hospitality", " cozbali@hotel.test", " 085190053526"],
+  ]);
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+test("keempat lembar terbaca, bukan hanya yang pertama", async () => {
+  const hasil = await unggah(await workbookAsli());
+
+  assert.equal(hasil.status, 200);
+  // Membaca satu lembar saja akan memulangkan 1, bukan 4 — dan tiga lembar
+  // lainnya hilang tanpa jejak.
+  assert.equal(hasil.data.terbaca, 4);
+  assert.equal(hasil.data.disimpan, 4);
+  assert.equal(hasil.data.sheets.length, 4);
+});
+
+test("segmen diambil dari nama lembar", async () => {
+  const cari = await api("/api/cms/prospects?q=info@domotics.test");
+  assert.equal(cari.data.items[0].segment, "smart-home");
+
+  const hotel = await api("/api/cms/prospects?q=cozbali@hotel.test");
+  assert.equal(hotel.data.items[0].segment, "hotel-villa");
+
+  const arsitek = await api("/api/cms/prospects?q=info@ibuku.test");
+  // Lembar sumbernya salah ketik "Kontruksi"; pencocokan harus tetap kena.
+  assert.equal(arsitek.data.items[0].segment, "konstruksi-arsitektur");
+});
+
+test("judul No.Telepon tanpa spasi tetap terbaca, dan nol nomor tetap kembali", async () => {
+  const domotics = await api("/api/cms/prospects?q=info@domotics.test");
+  // Disimpan Excel sebagai angka 3619346511; kode area Bali 0361.
+  assert.equal(domotics.data.items[0].whatsapp, "03619346511");
+
+  const ibuku = await api("/api/cms/prospects?q=info@ibuku.test");
+  // Sudah berbentuk teks dengan nol — tidak boleh disentuh.
+  assert.equal(ibuku.data.items[0].whatsapp, "0361980999");
+
+  const hotel = await api("/api/cms/prospects?q=cozbali@hotel.test");
+  // Spasi di depan dibuang, nolnya sudah ada.
+  assert.equal(hotel.data.items[0].whatsapp, "085190053526");
+});
+
+test("kolom Nama jadi perusahaan juga saat tidak ada kolom perusahaan", async () => {
+  const cari = await api("/api/cms/prospects?q=info@ibuku.test");
+  const p = cari.data.items[0];
+  assert.equal(p.fullName, "IBUKU Studio (Badung)");
+  // Tanpa penyalinan ini, {{perusahaan}} di surat penawaran kosong pada
+  // SELURUH kontak — dan itu baru terlihat setelah suratnya terkirim.
+  assert.equal(p.companyName, "IBUKU Studio (Badung)");
+});
+
+test("tab dan spasi liar di sel email tidak ikut tersimpan", async () => {
+  const cari = await api("/api/cms/prospects?q=info@mirah.test");
+  assert.equal(cari.data.items[0].email, "info@mirah.test");
+});
