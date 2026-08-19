@@ -644,9 +644,28 @@ async function importProspects(request: Request, user: AuthUser) {
   const issues = [...masalah];
   let disimpan = 0;
   let dilewati = 0;
+  // Alamat yang sudah dipakai baris SEBELUMNYA di berkas yang sama. Tanpa ini,
+  // uji kering melewatkan kembar di dalam satu berkas: ia hanya bertanya ke
+  // database, dan saat kering tidak ada yang tersimpan sehingga dua baris
+  // kembar tidak pernah bertemu. Laporan kering lalu menjanjikan 37 tersimpan
+  // padahal yang sungguhan hanya 36 — persis jenis kejutan yang uji kering ada
+  // untuk mencegahnya.
+  const sudahDipakai = new Map<string, number>();
 
   for (const baris of kontak) {
     if (baris.email) {
+      const kunci = baris.email.toLowerCase();
+      const barisSebelumnya = sudahDipakai.get(kunci);
+      if (barisSebelumnya !== undefined) {
+        issues.push({
+          sheet: baris.sheet,
+          row: baris.row,
+          code: "EMAIL_TIDAK_SAH",
+          detail: `${baris.sheet} baris ${baris.row}: ${baris.email} sudah dipakai baris ${barisSebelumnya} di berkas yang sama. Baris dilewati — dua perusahaan berbagi satu alamat hampir selalu salah tempel.`,
+        });
+        dilewati += 1;
+        continue;
+      }
       const ada = await client.execute({
         sql: "SELECT id FROM cms_prospects WHERE lower(email)=lower(?) AND deleted_at IS NULL LIMIT 1",
         args: [baris.email],
@@ -664,6 +683,7 @@ async function importProspects(request: Request, user: AuthUser) {
         dilewati += 1;
         continue;
       }
+      sudahDipakai.set(kunci, baris.row);
     }
     if (dryRun) {
       disimpan += 1;

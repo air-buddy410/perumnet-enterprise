@@ -540,3 +540,24 @@ test("tab dan spasi liar di sel email tidak ikut tersimpan", async () => {
   const cari = await api("/api/cms/prospects?q=info@mirah.test");
   assert.equal(cari.data.items[0].email, "info@mirah.test");
 });
+
+test("dua baris beralamat sama dalam SATU berkas: kering dan sungguhan sepakat", async () => {
+  const baris = [
+    ["GFAB Architects", "kembar@satuberkas.test", "PT GFAB", "", "", ""],
+    ["Bali Home Immo", "kembar@satuberkas.test", "PT Immo", "", "", ""],
+  ];
+
+  const kering = await unggah(await workbook(baris), { dryRun: "1" });
+  assert.equal(kering.status, 200);
+  // Uji kering pernah memulangkan 2 di sini: ia hanya bertanya ke database,
+  // dan saat kering tidak ada yang tersimpan sehingga dua baris kembar tidak
+  // pernah bertemu. Laporannya lalu menjanjikan lebih banyak daripada yang
+  // sungguhan tersimpan.
+  assert.equal(kering.data.disimpan, 1);
+  assert.equal(kering.data.dilewati, 1);
+  assert.ok(kering.data.issues.some((i) => /berkas yang sama/.test(i.detail)));
+
+  const sungguhan = await unggah(await workbook(baris));
+  assert.equal(sungguhan.data.disimpan, 1);
+  assert.equal(sungguhan.data.dilewati, 1);
+});
