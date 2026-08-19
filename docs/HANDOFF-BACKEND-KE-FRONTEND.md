@@ -47,6 +47,34 @@ bukan dari ingatan.
 
   Selengkapnya: `docs/LOGIN-MAILCOW.md`.
 
+
+### Ganti kata sandi — `PATCH /api/profile/password`
+
+- **Dipakai untuk:** blok "Keamanan password email" di layar Pengaturan.
+- **Cara pakai:** body `{ currentPassword, newPassword }`. Panjangnya
+  ditegakkan di server (zod): `currentPassword` 8–128, `newPassword` 10–128 —
+  sama dengan `minLength` yang sudah dipasang di form.
+- **Field jawaban sukses:** `{ success: true, otherSessionsRevoked: true }`,
+  **plus `target: "mailcow"`** kalau yang diganti kotak surat mailcow.
+  Tidak ada `target` berarti kata sandi **lokal** yang diganti — itu terjadi
+  pada akun darurat (`allow_local_login`) dan saat `AUTH_PROVIDER` bukan
+  `MAILSERVER`. Cabang inilah yang menentukan kalimat suksesnya.
+- **Efek samping yang perlu diberitahukan:** kedua jalur memanggil
+  `revokeOtherSessions` — semua sesi lain milik orang itu dicabut. Perangkat
+  lain yang sedang masuk akan terlempar. Itulah arti
+  `otherSessionsRevoked: true`.
+- **Batas perilaku:**
+  | Status | Kode | Artinya di layar |
+  |---|---|---|
+  | 400 | `INVALID_PASSWORD` | kata sandi saat ini salah. Di mode mailcow ini hasil pengecekan ke mailserver, bukan ke database |
+  | 502 | `MAILCOW_REJECTED` | mailserver menolak — paling sering API key read-only. **Bukan** salah pengguna; arahkan ke IT |
+  | 503 | `MAILCOW_NOT_CONFIGURED` | server ini belum disiapkan untuk ganti kata sandi email |
+  | 503 | `MAILSERVER_UNREACHABLE` | mailserver tak terjawab |
+
+  Pada 502 dan kedua 503, **kata sandi belum berubah sama sekali** — pesannya
+  sudah ditulis untuk dibaca pengguna, tampilkan apa adanya. Sama seperti di
+  login: jangan tawarkan "lupa kata sandi" untuk tiga kode ini.
+
 ---
 
 ## Tugas untuk Luna

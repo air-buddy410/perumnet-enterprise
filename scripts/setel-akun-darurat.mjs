@@ -12,6 +12,12 @@
 //   cd <folder rilis>
 //   set -a && . ./.env.production && set +a
 //   node scripts/setel-akun-darurat.mjs admin@perumnet.id
+//
+// Di host tanpa TTY (pipa, skrip deploy) prompt tersembunyi tidak bisa
+// dipakai. Untuk itu ada `--dari-berkas <path>`: baris pertama berkas dibaca
+// sebagai kata sandi, lalu BERKASNYA LANGSUNG DIHAPUS. Ia tetap tidak lewat
+// argumen perintah. Batas panjang dan penolakan CR/LF tetap berlaku; yang
+// dilewati hanya konfirmasi ketik-ulang.
 
 import { createInterface } from "node:readline";
 import { readFileSync, unlinkSync } from "node:fs";
@@ -24,7 +30,9 @@ const berkasSandi = (() => {
   return i >= 0 ? bendera[i + 1] : null;
 })();
 if (!email) {
-  console.error("Pemakaian: node scripts/setel-akun-darurat.mjs <email> [--periksa]");
+  console.error(
+    "Pemakaian: node scripts/setel-akun-darurat.mjs <email> [--periksa] [--dari-berkas <path>]",
+  );
   process.exit(1);
 }
 
@@ -158,9 +166,10 @@ if (!ada.rows[0]) {
 }
 
 if (hanyaPeriksa) {
-  const { compare } = await import("bcryptjs");
-  // Hash bawaan yang disalin dari CRM saat penyiapan. Kalau masih ini yang
-  // tersimpan, berarti kata sandinya belum pernah disetel di sini.
+  // Tanpa tahu kata sandinya, yang bisa dijawab cuma dua: apakah barisnya
+  // ditandai darurat, dan kapan terakhir ditulis. `terakhir ditulis` yang
+  // masih sama dengan waktu seed berarti kata sandinya belum pernah disetel
+  // di sini — dan itu artinya pintu daruratnya belum benar-benar ada.
   console.log(`allow_local_login : ${ada.rows[0].allow_local_login}`);
   console.log(`terakhir ditulis  : ${ada.rows[0].updated_at ?? "-"}`);
   await tutup();

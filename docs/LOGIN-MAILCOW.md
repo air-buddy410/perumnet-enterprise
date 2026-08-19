@@ -135,11 +135,26 @@ Skrip itu meminta kata sandi diketik langsung di terminal — tidak lewat
 argumen perintah (yang terlihat di `ps`), tidak masuk riwayat shell, tidak
 dicetak. Minimal 12 karakter, dan simpan di pengelola kata sandi.
 
+**Kalau host-nya tidak punya TTY** (lewat pipa, atau dipanggil skrip deploy),
+prompt tersembunyi tidak bisa dipakai dan skrip berhenti dengan pesan yang
+menjelaskan itu. Jalur penggantinya:
+
+```
+node scripts/setel-akun-darurat.mjs admin@perumnet.id --dari-berkas /jalan/ke/berkas
+```
+
+Baris pertama berkas dipakai sebagai kata sandi, lalu **berkasnya langsung
+dihapus**. Nilainya tetap tidak pernah lewat argumen perintah. Batas 12
+karakter dan penolakan CR/LF tetap berlaku; yang dilewati hanya konfirmasi
+ketik-ulang — jadi salah ketik tidak akan ketahuan, periksa isinya dulu.
+
+`--periksa` menampilkan keadaan akun tanpa mengubah apa pun.
+
 ## Yang belum dikerjakan
 
-- Teks form ganti kata sandi masih berbunyi seperti kata sandi aplikasi,
-  padahal yang diganti kata sandi email. Tugasnya ada di
-  `HANDOFF-BACKEND-KE-FRONTEND.md`.
+- ~~Teks form ganti kata sandi~~ — **selesai 2026-08-18**. `settings-view.tsx`
+  sudah berbunyi "password email", menyebut webmail dan aplikasi PerumNet
+  lain, dan memakai `target: "mailcow"` untuk memilih kalimat suksesnya.
 - Demo dan produksi memakai commit yang sama (lihat memory
   `demo-mirrors-production`): nyalakan di demo lebih dulu, pakai beberapa
   hari, baru produksi.
