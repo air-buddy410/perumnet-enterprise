@@ -120,6 +120,47 @@ karena ia jalan masuk saat mailserver mati.
 | 503 | `MAILCOW_NOT_CONFIGURED` | `MAILCOW_API_KEY` belum dipasang |
 | 503 | `MAILSERVER_UNREACHABLE` | mailserver tidak terjawab |
 
+## Reset kata sandi mati di mode mailserver
+
+`POST /api/auth/forgot-password` dan `POST /api/auth/reset-password` menjawab
+**409 `PASSWORD_RESET_UNAVAILABLE`** selama `AUTH_PROVIDER=MAILSERVER`.
+
+Sebabnya sama dengan alasan ganti kata sandi dipindah ke mailcow:
+`reset-password` menulis `users.password_hash`, kolom yang di mode ini tidak
+dibaca untuk akun biasa. Tanpa penjaga itu, orang yang terkunci menempuh
+seluruh alur, melihat "berhasil", **tetap tidak bisa masuk** — dan sesinya ikut
+terhapus, jadi ia justru lebih terkunci daripada sebelum mencoba.
+
+Penjaganya berjalan **sebelum** akun dicari, supaya jawabannya sama untuk
+alamat terdaftar maupun tidak; kalau dipasang sesudah, bedanya jawaban akan
+membocorkan siapa saja yang punya akun.
+
+Akun darurat ikut ditolak, dengan sengaja: kata sandinya disetel lewat
+`scripts/setel-akun-darurat.mjs`, dan tautan reset ke kotak suratnya sendiri
+tetap butuh kata sandi email — berputar tanpa jalan keluar.
+
+Yang harus dilakukan orang yang lupa: **reset kata sandi emailnya lewat
+webmail atau hubungi IT.** Setelah itu ia langsung bisa masuk, karena yang
+diperiksa memang kata sandi email.
+
+## Login menerima username tanpa @
+
+`budi` dan `budi@perumnet.id` menuju akun yang sama. Field-nya tetap bernama
+`email`; yang berubah hanya apa yang boleh diisi.
+
+Pemetaannya lewat baris yang **ada di tabel `users`**, bukan dengan
+menempelkan domain bawaan. Menempelkan domain berarti mengarang alamat, dan
+alamat karangan itulah yang akan dikirim ke mailcow — persis yang dilarang
+aturan kedua di atas.
+
+Kalau dua akun punya bagian-lokal yang sama, tidak ada yang dipilih: jawabannya
+401. Menebak di situ berarti seseorang bisa masuk ke akun orang lain hanya
+karena username-nya kebetulan sama.
+
+Throttle memakai ember yang sama untuk kedua ejaan — kalau dipisah, satu akun
+bisa dicoba dua kali lipat hanya dengan berganti ejaan.
+
+
 ## Akun darurat — kata sandinya harus DIKETAHUI
 
 Ditandai `allow_local_login = 1` saja tidak cukup. Setel kata sandinya
@@ -155,6 +196,15 @@ ketik-ulang — jadi salah ketik tidak akan ketahuan, periksa isinya dulu.
 - ~~Teks form ganti kata sandi~~ — **selesai 2026-08-18**. `settings-view.tsx`
   sudah berbunyi "password email", menyebut webmail dan aplikasi PerumNet
   lain, dan memakai `target: "mailcow"` untuk memilih kalimat suksesnya.
-- Demo dan produksi memakai commit yang sama (lihat memory
-  `demo-mirrors-production`): nyalakan di demo lebih dulu, pakai beberapa
-  hari, baru produksi.
+- ~~Nyalakan di demo lebih dulu, lalu produksi~~ — **sudah dijalankan
+  2026-08-19.** Demo dan produksi keduanya `AUTH_PROVIDER=MAILSERVER` pada
+  release `aebc599`. Login lewat mailcow terbukti di produksi (sesi non-darurat
+  13:19:54Z); di demo baru akun darurat yang dipakai. Kata sandi akun darurat
+  disetel di kedua lingkungan hari itu juga, dan `MAILCOW_API_KEY` terpasang di
+  keduanya. Cadangan `.env` untuk rollback ada di tiap folder rilis, bertanda
+  `sebelum-mailserver-` dan `sebelum-apikey-`.
+- **Layar belum menyesuaikan.** Tautan "Lupa kata sandi?" masih tampil padahal
+  alurnya kini dijawab 409, kolom login masih berlabel "Email" padahal username
+  sudah diterima, dan judul form ganti kata sandi menyebut kata sandi email
+  untuk akun darurat juga. Ketiganya ada di
+  `HANDOFF-BACKEND-KE-FRONTEND.md` sebagai T-3, T-4, T-5.

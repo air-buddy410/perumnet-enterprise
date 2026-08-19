@@ -75,6 +75,62 @@ bukan dari ingatan.
   sudah ditulis untuk dibaca pengguna, tampilkan apa adanya. Sama seperti di
   login: jangan tawarkan "lupa kata sandi" untuk tiga kode ini.
 
+
+
+### Mode autentikasi — `GET /api/auth/mode`
+
+- **Dipakai untuk:** layar yang harus berhenti menawarkan sesuatu yang tidak
+  bisa dipakai — tautan "Lupa kata sandi?" dan judul form ganti kata sandi.
+- **Cara pakai:** GET biasa, tanpa parameter. Boleh dipanggil **sebelum masuk**
+  — layar login memang perlu tahu saat belum ada sesi.
+- **Field jawaban:**
+  | Field | Kapan ada | Nilai |
+  |---|---|---|
+  | `mode` | selalu | `"LOCAL"` atau `"MAILSERVER"` |
+  | `allowLocalLogin` | **hanya kalau ada sesi sah** | `true` untuk akun darurat |
+- **Batas perilaku:** `mode` adalah sifat server, jadi terbuka. `allowLocalLogin`
+  menempel pada **orang**, jadi ia sengaja tidak ikut saat belum masuk — kalau
+  ikut, siapa pun bisa menanyakan akun mana yang jadi pintu darurat, dan itu
+  justru akun paling berharga untuk diserang ketika mailserver dimatikan.
+  Jangan menyimpulkan `allowLocalLogin: false` dari ketiadaan field; periksa
+  keberadaannya.
+
+---
+
+### Login menerima username, bukan cuma email
+
+- **Dipakai untuk:** form masuk (admin & panel).
+- **Cara pakai:** **tidak ada perubahan bentuk permintaan.** Field-nya tetap
+  bernama `email` di body `{ email, password, remember }` — yang berubah cuma
+  apa yang boleh diisi: alamat lengkap **atau** username, yaitu bagian sebelum
+  `@`. `budi` dan `budi@perumnet.id` menuju akun yang sama.
+- **Batas perilaku:**
+  - Username dipetakan lewat akun yang **benar-benar ada**, bukan dengan
+    menempelkan domain bawaan. Yang tidak cocok ke akun mana pun dijawab 401
+    seperti biasa, dan tidak pernah dikirim ke mailcow.
+  - Kalau dua akun punya bagian-lokal yang sama (`budi@perumnet.id` dan
+    `budi@lain.id`), **tidak ada yang dipilih** — jawabannya 401. Tidak ada
+    cara masuk lewat username untuk salah satunya; pakai alamat lengkap.
+  - Throttle memakai ember yang sama untuk kedua ejaan, jadi berganti ejaan
+    tidak menambah jatah percobaan.
+  - Yang ditolak schema: string kosong, lebih dari 254 karakter, dan karakter
+    di luar `A-Z a-z 0-9 . _ % + -` (plus `@` dan domain kalau alamat penuh).
+
+### Reset kata sandi — mati saat mode mailserver
+
+- **Dipakai untuk:** tautan "Lupa kata sandi?" di kedua layar login.
+- **Batas perilaku:** saat `AUTH_PROVIDER=MAILSERVER`, **`POST
+  /api/auth/forgot-password` dan `POST /api/auth/reset-password` keduanya
+  menjawab 409 `PASSWORD_RESET_UNAVAILABLE`** dengan pesan yang mengarahkan
+  ke reset kata sandi email lewat webmail atau IT.
+- **Kenapa:** `reset-password` menulis `users.password_hash`, kolom yang di
+  mode mailserver tidak dibaca untuk akun biasa. Sebelum penjaga ini ada,
+  orang yang terkunci menempuh seluruh alur, melihat "berhasil", tetap tidak
+  bisa masuk — dan sesinya ikut terhapus, jadi ia justru lebih terkunci.
+- Penjaganya berjalan **sebelum** akun dicari, jadi jawabannya sama untuk
+  alamat terdaftar maupun tidak. Jangan menyimpulkan apa pun tentang
+  keberadaan akun dari kode ini.
+
 ---
 
 ## Tugas untuk Luna
@@ -95,6 +151,41 @@ kalau sudah dikerjakan.
 - **Kenapa tidak bisa diakali di sisi backend:** kodenya sudah dibedakan dan
   pesannya sudah ditulis untuk dibaca pengguna; yang menentukan apa yang
   terlihat tinggal layar ini.
+
+### T-3. Layar login: sembunyikan "Lupa kata sandi?" saat mode mailserver
+
+- **Layar:** `app/components/auth-screen.tsx:251` dan
+  `app/panel/panel-app.tsx:396`.
+- **Butuh:** saat mode mailserver menyala, tautan itu menuju alur yang kini
+  dijawab **409 `PASSWORD_RESET_UNAVAILABLE`**. Sembunyikan tautannya, dan
+  ganti dengan satu kalimat yang menyebut kata sandi email direset lewat
+  webmail atau IT. Kalau tautannya tetap ditampilkan, tampilkan `message` dari
+  409 apa adanya — jangan sebagai kegagalan yang bisa dicoba lagi.
+- **Datanya dari mana:** `GET /api/auth/mode` — lihat kontrak di §Siap dipakai.
+- **Kenapa tidak bisa diakali di sisi backend:** servernya sudah menolak; yang
+  tersisa tautan yang menjanjikan sesuatu yang tidak akan terjadi.
+
+### T-4. Kolom login menerima username
+
+- **Layar:** form masuk (admin & panel).
+- **Butuh:** label kolomnya masih berbunyi "Email". Backend kini menerima
+  username tanpa `@` pada field yang sama. Ubah labelnya jadi menyebut
+  keduanya, dan lepas `type="email"` kalau masih dipasang — atribut itu
+  membuat peramban menolak `budi` sebelum permintaan terkirim.
+- **Kenapa tidak bisa diakali di sisi backend:** penolakannya terjadi di
+  peramban, sebelum ada permintaan yang sampai ke server.
+
+### T-5. Judul form ganti kata sandi untuk akun darurat
+
+- **Layar:** `app/components/settings-view.tsx:256`.
+- **Butuh:** judulnya berbunyi "Keamanan password email — dipakai untuk webmail
+  dan aplikasi PerumNet lain" untuk **semua orang**. Untuk akun darurat
+  (`allowLocalLogin: true` dari `GET /api/auth/mode`), yang berganti justru
+  kata sandi **lokal** aplikasi ini, bukan mailbox — jadi kalimat itu tidak
+  benar untuknya. Satu akun saja, tapi itu akun yang kata sandinya paling
+  penting dipahami dengan benar.
+- **Kenapa tidak bisa diakali di sisi backend:** backend sudah membedakan
+  jalurnya dan sudah membocorkan statusnya lewat endpoint di atas.
 
 ### Selesai
 
