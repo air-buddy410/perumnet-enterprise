@@ -1191,7 +1191,8 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
       body: JSON.stringify({
         status: "Draft",
         issuedAt: "2026-08-01",
-        validUntil: "2026-08-31",
+        // Diterima di baris ~1225 — tanggalnya tidak boleh bisa lewat.
+        validUntil: "2099-12-31",
       }),
     },
   );
@@ -3189,7 +3190,9 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
       body: JSON.stringify({
         title: "Pekerjaan Tambah Konfigurasi",
         issuedAt: "2026-07-30",
-        validUntil: "2026-08-13",
+        // Harus masih berlaku saat dijalankan: /accept menolak dengan
+        // QUOTATION_EXPIRED kalau valid_until sudah lewat HARI INI.
+        validUntil: "2099-12-31",
         items: [
           {
             category: "Jasa",
