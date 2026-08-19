@@ -18,6 +18,7 @@
 // Jalankan --dry-run lebih dulu. Ia melaporkan apa yang akan tersimpan dan
 // baris mana yang bermasalah, tanpa menulis apa pun.
 
+import { createInterface } from "node:readline";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 
@@ -48,13 +49,45 @@ function parseArguments(argv) {
 }
 
 const options = parseArguments(process.argv);
-if (!options.file || !options.email || !options.password) {
+if (!options.file || !options.email) {
   console.error(
     "Pemakaian: node scripts/import-prospects.mjs --file <berkas.xlsx> [--dry-run]\n" +
-      "           [--base-url <url>] [--source <asal kontak>]\n\n" +
-      "Kredensial: PROSPECT_ADMIN_EMAIL dan PROSPECT_ADMIN_PASSWORD, atau --email/--password.",
+      "           [--base-url <url>] [--source <asal kontak>] [--email <alamat>]\n\n" +
+      "Alamat admin dari PROSPECT_ADMIN_EMAIL atau --email.\n" +
+      "Kata sandi ditanyakan kalau tidak diisi lewat PROSPECT_ADMIN_PASSWORD.",
   );
   process.exit(1);
+}
+
+/**
+ * Kata sandi ditanyakan di sini kalau belum ada, bukan diminta lewat argumen:
+ * argumen perintah terlihat di `ps` dan tersimpan di riwayat shell. Yang
+ * diketik di prompt ini tidak lewat keduanya.
+ */
+if (!options.password) {
+  if (!process.stdin.isTTY) {
+    console.error(
+      "Butuh terminal sungguhan untuk mengetik kata sandi tanpa menampilkannya.\n" +
+        "Jalankan langsung di terminal, atau isi PROSPECT_ADMIN_PASSWORD.",
+    );
+    process.exit(1);
+  }
+  options.password = await new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const tanya = `Kata sandi ${options.email} (tidak akan tampil): `;
+    rl._writeToOutput = (chunk) => {
+      if (chunk.includes(tanya)) rl.output.write(tanya);
+    };
+    rl.question(tanya, (jawaban) => {
+      rl.close();
+      process.stdout.write("\n");
+      resolve(jawaban);
+    });
+  });
+  if (!options.password) {
+    console.error("Kata sandi kosong. Tidak ada yang dikerjakan.");
+    process.exit(1);
+  }
 }
 
 const isi = await readFile(options.file);
