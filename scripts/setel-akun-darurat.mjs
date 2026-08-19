@@ -102,7 +102,12 @@ if (!urlPostgres && !urlLibsql) {
   process.exit(1);
 }
 
-console.log(`\nMenyetel kata sandi akun darurat di ${modeDemo ? "DEMO" : "PRODUKSI"}.`);
+// Banner ini sempat selalu berbunyi "Menyetel" — termasuk saat --periksa,
+// yang tidak mengubah apa pun. Orang membacanya sebagai bukti kata sandinya
+// sudah tersimpan, padahal belum.
+console.log(
+  `\n${hanyaPeriksa ? "Memeriksa" : "Menyetel"} kata sandi akun darurat di ${modeDemo ? "DEMO" : "PRODUKSI"}.`,
+);
 console.log(`Akun: ${email}\n`);
 
 let sandi;
