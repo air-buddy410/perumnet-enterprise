@@ -30,6 +30,14 @@ Pola yang sama berlaku untuk indeks dan untuk perubahan `CHECK` — lihat
 `ensureBastVoidStatus` sebagai contoh cara melonggarkan constraint pada tabel
 yang sudah berisi data tanpa kehilangan baris atau indeks.
 
+**Tabel yang benar-benar baru cukup di `schemaSql`.** `CREATE TABLE IF NOT
+EXISTS` berjalan tiap boot, jadi instalasi lama pun mendapatkannya, dan
+indeksnya boleh ikut di sana karena tabelnya sudah ada saat baris indeks
+dijalankan. Yang menuntut langkah kedua adalah kolom baru pada tabel LAMA —
+dan indeks di atas kolom seperti itu, karena `schemaSql` berjalan lebih dulu,
+sebelum `ensureColumn` sempat membuat kolomnya. Contohnya `cms_prospects`
+beserta ketiga indeksnya: semuanya di `schemaSql`, tanpa fungsi `ensure`.
+
 ## Kenapa tidak ada Drizzle
 
 Repo ini pernah membawa `server/db/schema.ts` (definisi Drizzle) plus
