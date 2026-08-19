@@ -2,6 +2,16 @@ import "server-only";
 
 import { getDatabase } from "./db/client";
 
+/**
+ * Every CMS row carries the `updated_at` its panel form last wrote, and every
+ * mapped shape below carries it through as `updatedAt`. The sitemap is what
+ * needs it: `<lastmod>` is only worth emitting if it is the moment the content
+ * changed, and the only place that moment is recorded is this column.
+ *
+ * The column is TEXT and ISO-8601 only by convention, so the value is passed
+ * through exactly as stored. Deciding what an empty or unparseable value means
+ * belongs to the consumer, not here — see app/sitemap.ts.
+ */
 export type CmsService = {
   id: string;
   slug: string;
@@ -16,6 +26,7 @@ export type CmsService = {
   icon: string;
   sortOrder: number;
   isPublished: boolean;
+  updatedAt: string;
 };
 
 export type CmsPortfolio = {
@@ -30,6 +41,15 @@ export type CmsPortfolio = {
   completedAt: string;
   sortOrder: number;
   isPublished: boolean;
+  updatedAt: string;
+  gallery: CmsPortfolioImage[];
+};
+
+export type CmsPortfolioImage = {
+  id: string;
+  url: string;
+  sortOrder: number;
+  isCover: boolean;
 };
 
 export type CmsTestimonial = {
@@ -40,6 +60,7 @@ export type CmsTestimonial = {
   reviewEn: string;
   isVisible: boolean;
   sortOrder: number;
+  updatedAt: string;
 };
 
 export type CmsPage = {
@@ -54,6 +75,7 @@ export type CmsPage = {
   isPublished: boolean;
   showInNavigation: boolean;
   sortOrder: number;
+  updatedAt: string;
 };
 
 export type CmsText = {
@@ -62,6 +84,7 @@ export type CmsText = {
   contentKey: string;
   value: string;
   valueEn: string;
+  updatedAt: string;
 };
 
 export type CmsFaq = {
@@ -72,6 +95,7 @@ export type CmsFaq = {
   answerEn: string;
   sortOrder: number;
   isVisible: boolean;
+  updatedAt: string;
 };
 
 export type CmsPartner = {
@@ -83,6 +107,7 @@ export type CmsPartner = {
   logoUrl: string;
   sortOrder: number;
   isVisible: boolean;
+  updatedAt: string;
 };
 
 export type CmsContent = {
@@ -91,6 +116,10 @@ export type CmsContent = {
   textMapEn: Record<string, Record<string, string>>;
   settings: Record<string, string>;
   settingsEn: Record<string, string>;
+  /** key_name -> that setting row's `updated_at`, the timestamp counterpart of
+   *  `settings`. A flat record has nowhere to hang a per-row field, so it gets
+   *  a record of its own rather than losing the granularity. */
+  settingsUpdatedAt: Record<string, string>;
   services: CmsService[];
   portfolios: CmsPortfolio[];
   testimonials: CmsTestimonial[];
@@ -108,6 +137,12 @@ function booleanValue(value: unknown) {
   return value === true || value === 1 || value === "1";
 }
 
+/** `updated_at` verbatim. Anything that is not text — a NULL left by an old
+ *  migration, say — becomes "" so no consumer has to guess at "null". */
+function timestampValue(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
 function stringArray(value: unknown) {
   try {
     const parsed = JSON.parse(String(value ?? "[]"));
@@ -115,6 +150,30 @@ function stringArray(value: unknown) {
   } catch {
     return [];
   }
+}
+
+/**
+ * One row of cms_services in the shape the public site consumes. Shared by the
+ * list query in getCmsContent and the single-slug lookup behind
+ * /services/[slug] so a detail page can never disagree with the list.
+ */
+function mapService(row: Record<string, unknown>): CmsService {
+  return {
+    id: String(row.id),
+    slug: String(row.slug),
+    title: String(row.title),
+    titleEn: String(row.title_en ?? ""),
+    summary: String(row.summary),
+    summaryEn: String(row.summary_en ?? ""),
+    description: String(row.description),
+    descriptionEn: String(row.description_en ?? ""),
+    features: stringArray(row.features_json),
+    featuresEn: stringArray(row.features_json_en),
+    icon: String(row.icon),
+    sortOrder: numberValue(row.sort_order),
+    isPublished: booleanValue(row.is_published),
+    updatedAt: timestampValue(row.updated_at),
+  };
 }
 
 function portfolioImage(row: Record<string, unknown>) {
@@ -129,19 +188,25 @@ function partnerLogo(row: Record<string, unknown>) {
 
 export async function getCmsContent(includeHidden = false): Promise<CmsContent> {
   const { client } = await getDatabase();
-  const [textResult, settingResult, serviceResult, portfolioResult, testimonialResult, pageResult, faqResult, partnerResult] =
+  const [textResult, settingResult, serviceResult, portfolioResult, portfolioMediaResult, testimonialResult, pageResult, faqResult, partnerResult] =
     await Promise.all([
       client.execute(
-        "SELECT id,page_key,content_key,value_content,value_content_en FROM cms_site_texts ORDER BY page_key,content_key",
+        "SELECT id,page_key,content_key,value_content,value_content_en,updated_at FROM cms_site_texts ORDER BY page_key,content_key",
       ),
       client.execute(
-        "SELECT key_name,value_content,value_content_en FROM cms_site_settings ORDER BY key_name",
+        "SELECT key_name,value_content,value_content_en,updated_at FROM cms_site_settings ORDER BY key_name",
       ),
       client.execute(
         `SELECT * FROM cms_services${includeHidden ? "" : " WHERE is_published=1"} ORDER BY sort_order,title`,
       ),
       client.execute(
         `SELECT * FROM cms_portfolios${includeHidden ? "" : " WHERE is_published=1"} ORDER BY sort_order,completed_at DESC`,
+      ),
+      client.execute(
+        `SELECT media.* FROM cms_portfolio_media media
+         INNER JOIN cms_portfolios portfolio ON portfolio.id=media.portfolio_id
+         ${includeHidden ? "" : "WHERE portfolio.is_published=1"}
+         ORDER BY media.portfolio_id,media.sort_order,media.created_at`,
       ),
       client.execute(
         `SELECT * FROM cms_testimonials${includeHidden ? "" : " WHERE is_visible=1"} ORDER BY sort_order,created_at`,
@@ -163,6 +228,7 @@ export async function getCmsContent(includeHidden = false): Promise<CmsContent> 
     contentKey: String(row.content_key),
     value: String(row.value_content),
     valueEn: String(row.value_content_en ?? ""),
+    updatedAt: timestampValue(row.updated_at),
   }));
   const textMap: Record<string, Record<string, string>> = {};
   const textMapEn: Record<string, Record<string, string>> = {};
@@ -171,6 +237,19 @@ export async function getCmsContent(includeHidden = false): Promise<CmsContent> 
     textMap[text.pageKey][text.contentKey] = text.value;
     textMapEn[text.pageKey] ??= {};
     textMapEn[text.pageKey][text.contentKey] = text.valueEn;
+  }
+
+  const galleryByPortfolio = new Map<string, CmsPortfolioImage[]>();
+  for (const row of portfolioMediaResult.rows) {
+    const portfolioId = String(row.portfolio_id);
+    const gallery = galleryByPortfolio.get(portfolioId) ?? [];
+    gallery.push({
+      id: String(row.id),
+      url: `/api/cms/portfolio-gallery-media/${String(row.id)}`,
+      sortOrder: numberValue(row.sort_order),
+      isCover: false,
+    });
+    galleryByPortfolio.set(portfolioId, gallery);
   }
 
   return {
@@ -183,34 +262,32 @@ export async function getCmsContent(includeHidden = false): Promise<CmsContent> 
     settingsEn: Object.fromEntries(
       settingResult.rows.map((row) => [String(row.key_name), String(row.value_content_en ?? "")]),
     ),
-    services: serviceResult.rows.map((row) => ({
-      id: String(row.id),
-      slug: String(row.slug),
-      title: String(row.title),
-      titleEn: String(row.title_en ?? ""),
-      summary: String(row.summary),
-      summaryEn: String(row.summary_en ?? ""),
-      description: String(row.description),
-      descriptionEn: String(row.description_en ?? ""),
-      features: stringArray(row.features_json),
-      featuresEn: stringArray(row.features_json_en),
-      icon: String(row.icon),
-      sortOrder: numberValue(row.sort_order),
-      isPublished: booleanValue(row.is_published),
-    })),
-    portfolios: portfolioResult.rows.map((row) => ({
-      id: String(row.id),
-      title: String(row.title),
-      titleEn: String(row.title_en ?? ""),
-      description: String(row.description),
-      descriptionEn: String(row.description_en ?? ""),
-      imageUrl: portfolioImage(row),
-      location: String(row.location ?? ""),
-      locationEn: String(row.location_en ?? ""),
-      completedAt: String(row.completed_at ?? ""),
-      sortOrder: numberValue(row.sort_order),
-      isPublished: booleanValue(row.is_published),
-    })),
+    settingsUpdatedAt: Object.fromEntries(
+      settingResult.rows.map((row) => [String(row.key_name), timestampValue(row.updated_at)]),
+    ),
+    services: serviceResult.rows.map(mapService),
+    portfolios: portfolioResult.rows.map((row) => {
+      const id = String(row.id);
+      const imageUrl = portfolioImage(row);
+      return {
+        id,
+        title: String(row.title),
+        titleEn: String(row.title_en ?? ""),
+        description: String(row.description),
+        descriptionEn: String(row.description_en ?? ""),
+        imageUrl,
+        location: String(row.location ?? ""),
+        locationEn: String(row.location_en ?? ""),
+        completedAt: String(row.completed_at ?? ""),
+        sortOrder: numberValue(row.sort_order),
+        isPublished: booleanValue(row.is_published),
+        updatedAt: timestampValue(row.updated_at),
+        gallery: [
+          ...(imageUrl ? [{ id: `cover:${id}`, url: imageUrl, sortOrder: -1, isCover: true }] : []),
+          ...(galleryByPortfolio.get(id) ?? []),
+        ],
+      };
+    }),
     testimonials: testimonialResult.rows.map((row) => ({
       id: String(row.id),
       clientName: String(row.client_name),
@@ -219,6 +296,7 @@ export async function getCmsContent(includeHidden = false): Promise<CmsContent> 
       reviewEn: String(row.review_en ?? ""),
       isVisible: booleanValue(row.is_visible),
       sortOrder: numberValue(row.sort_order),
+      updatedAt: timestampValue(row.updated_at),
     })),
     pages: pageResult.rows.map((row) => ({
       id: String(row.id),
@@ -232,6 +310,7 @@ export async function getCmsContent(includeHidden = false): Promise<CmsContent> 
       isPublished: booleanValue(row.is_published),
       showInNavigation: booleanValue(row.show_in_navigation),
       sortOrder: numberValue(row.sort_order),
+      updatedAt: timestampValue(row.updated_at),
     })),
     faqs: faqResult.rows.map((row) => ({
       id: String(row.id),
@@ -241,6 +320,7 @@ export async function getCmsContent(includeHidden = false): Promise<CmsContent> 
       answerEn: String(row.answer_en ?? ""),
       sortOrder: numberValue(row.sort_order),
       isVisible: booleanValue(row.is_visible),
+      updatedAt: timestampValue(row.updated_at),
     })),
     partners: partnerResult.rows.map((row) => ({
       id: String(row.id),
@@ -251,8 +331,25 @@ export async function getCmsContent(includeHidden = false): Promise<CmsContent> 
       logoUrl: partnerLogo(row),
       sortOrder: numberValue(row.sort_order),
       isVisible: booleanValue(row.is_visible),
+      updatedAt: timestampValue(row.updated_at),
     })),
   };
+}
+
+/**
+ * The single service behind /services/[slug]. Unpublished rows are filtered in
+ * SQL exactly like getCmsPageBySlug, so unpublishing a service in the panel
+ * turns its detail page into a 404 rather than leaving it quietly reachable.
+ */
+export async function getCmsServiceBySlug(slug: string) {
+  const { client } = await getDatabase();
+  const result = await client.execute({
+    sql: "SELECT * FROM cms_services WHERE slug=? AND is_published=1 LIMIT 1",
+    args: [slug],
+  });
+  const row = result.rows[0];
+  if (!row) return null;
+  return mapService(row);
 }
 
 export async function getCmsPageBySlug(slug: string) {
@@ -275,5 +372,6 @@ export async function getCmsPageBySlug(slug: string) {
     isPublished: true,
     showInNavigation: booleanValue(row.show_in_navigation),
     sortOrder: numberValue(row.sort_order),
+    updatedAt: timestampValue(row.updated_at),
   } satisfies CmsPage;
 }

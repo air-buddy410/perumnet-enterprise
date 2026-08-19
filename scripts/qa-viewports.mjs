@@ -42,6 +42,11 @@ const PUBLIC_PAGES = [
   { key: "public-testimonials", path: "/testimonials" },
   { key: "public-contact", path: "/contact" },
   { key: "public-home-en", path: "/en" },
+  // The longest service title and the longest feature strings, in both
+  // languages — the widest thing a /services/[slug] page has to lay out.
+  { key: "public-service-smart-home", path: "/services/smart-home-device" },
+  { key: "public-service-smart-home-en", path: "/en/services/smart-home-device" },
+  { key: "public-service-cctv", path: "/services/cctv" },
 ];
 
 const chrome = spawn(chromePath, [

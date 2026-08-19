@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
+  ArrowDown,
   ArrowLeft,
   ArrowRight,
+  ArrowUp,
   BriefcaseBusiness,
   Camera,
   Check,
@@ -43,11 +45,13 @@ import {
   X,
 } from "lucide-react";
 import styles from "./panel.module.css";
+import { ApiClientError } from "../api-client";
 import { MailLoginEditor } from "./mail-login-editor";
 
 type User = { id: string; name: string; email: string; role: string };
 type Service = { id: string; slug: string; title: string; titleEn: string; summary: string; summaryEn: string; description: string; descriptionEn: string; features: string[]; featuresEn: string[]; icon: string; sortOrder: number; isPublished: boolean };
-type Portfolio = { id: string; title: string; titleEn: string; description: string; descriptionEn: string; imageUrl: string; location: string; locationEn: string; completedAt: string; sortOrder: number; isPublished: boolean };
+type PortfolioGalleryImage = { id: string; url: string; sortOrder: number; isCover: boolean };
+type Portfolio = { id: string; title: string; titleEn: string; description: string; descriptionEn: string; imageUrl: string; location: string; locationEn: string; completedAt: string; sortOrder: number; isPublished: boolean; gallery: PortfolioGalleryImage[] };
 type Testimonial = { id: string; clientName: string; companyName: string; review: string; reviewEn: string; isVisible: boolean; sortOrder: number };
 type Page = { id: string; title: string; titleEn: string; slug: string; excerpt: string; excerptEn: string; content: string; contentEn: string; isPublished: boolean; showInNavigation: boolean; sortOrder: number };
 type Faq = { id: string; question: string; questionEn: string; answer: string; answerEn: string; sortOrder: number; isVisible: boolean };
@@ -93,7 +97,15 @@ type CmsContent = {
 };
 
 type Section = "overview" | "texts" | "services" | "portfolios" | "partners" | "testimonials" | "faqs" | "pages" | "leads" | "settings" | "mail-login";
-type Mutate = (job: () => Promise<unknown>, success: string) => void;
+type MutateResult = { ok: boolean; error?: string };
+type Mutate = (job: () => Promise<unknown>, success: string) => Promise<MutateResult>;
+type GalleryUploadProgress = {
+  state: "idle" | "uploading" | "success" | "error";
+  total: number;
+  completed: number;
+  currentFile?: string;
+  message?: string;
+};
 
 const navItems: Array<{ id: Section; label: string; icon: typeof Home }> = [
   { id: "overview", label: "Ringkasan", icon: LayoutDashboard },
@@ -145,7 +157,14 @@ const textLabels: Record<string, Record<string, string>> = {
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, credentials: "same-origin", cache: "no-store" });
   const payload = response.status === 204 ? null : await response.json().catch(() => null);
-  if (!response.ok) throw new Error(payload?.error?.message || "Permintaan tidak dapat diproses.");
+  if (!response.ok) {
+    throw new ApiClientError(
+      payload?.error?.message || "Permintaan tidak dapat diproses.",
+      response.status,
+      payload?.error?.code,
+      payload?.error?.details,
+    );
+  }
   return payload?.data as T;
 }
 
@@ -161,10 +180,10 @@ async function translateTexts(texts: string[]) {
 function emptyService(): Omit<Service, "id"> {
   return { slug: "", title: "", titleEn: "", summary: "", summaryEn: "", description: "", descriptionEn: "", features: [], featuresEn: [], icon: "network", sortOrder: 0, isPublished: true };
 }
-function emptyPortfolio(): Omit<Portfolio, "id" | "imageUrl"> {
+function emptyPortfolio(): Omit<Portfolio, "id" | "imageUrl" | "gallery"> {
   return { title: "", titleEn: "", description: "", descriptionEn: "", location: "", locationEn: "", completedAt: "", sortOrder: 0, isPublished: true };
 }
-function portfolioForm(item?: Portfolio): Omit<Portfolio, "id" | "imageUrl"> {
+function portfolioForm(item?: Portfolio): Omit<Portfolio, "id" | "imageUrl" | "gallery"> {
   if (!item) return emptyPortfolio();
   return {
     title: item.title,
@@ -235,8 +254,12 @@ export function PanelApp() {
   };
   const mutate: Mutate = async (job, success) => {
     setBusy(true);
-    try { await job(); await loadContent(); flash(success); }
-    catch (error) { flash(error instanceof Error ? error.message : "Terjadi kesalahan."); }
+    try { await job(); await loadContent(); flash(success); return { ok: true }; }
+    catch (error) {
+      const message = error instanceof Error ? error.message : "Terjadi kesalahan.";
+      flash(message);
+      return { ok: false, error: message };
+    }
     finally { setBusy(false); }
   };
   const logout = async () => {
@@ -270,7 +293,7 @@ export function PanelApp() {
           {section === "overview" && <Overview content={content} user={user} onNavigate={setSection} />}
           {section === "texts" && <TextEditor key={JSON.stringify(content.texts)} content={content} busy={busy} mutate={mutate} />}
           {section === "services" && <ServiceEditor key={JSON.stringify(content.services)} items={content.services} busy={busy} mutate={mutate} />}
-          {section === "portfolios" && <PortfolioEditor key={JSON.stringify(content.portfolios)} items={content.portfolios} busy={busy} mutate={mutate} />}
+          {section === "portfolios" && <PortfolioEditor items={content.portfolios} busy={busy} mutate={mutate} />}
           {section === "partners" && <PartnerEditor key={JSON.stringify(content.partners)} items={content.partners} busy={busy} mutate={mutate} />}
           {section === "testimonials" && <TestimonialEditor key={JSON.stringify(content.testimonials)} items={content.testimonials} busy={busy} mutate={mutate} />}
           {section === "faqs" && <FaqEditor key={JSON.stringify(content.faqs)} items={content.faqs} busy={busy} mutate={mutate} />}
@@ -297,6 +320,7 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
   const [resetToken, setResetToken] = useState("");
   const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
+  const [mailserverUnavailable, setMailserverUnavailable] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     const token = new URLSearchParams(window.location.search).get("resetToken");
@@ -309,12 +333,18 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
     }
   }, []);
   const submit = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setError("");
+    event.preventDefault(); setBusy(true); setError(""); setMailserverUnavailable(false);
     try {
       const { user } = await request<{ user: User }>("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password, remember: false }) });
       if (user.role !== "Admin") throw new Error("Akun ini tidak memiliki akses Administrator.");
       await onSuccess();
-    } catch (error) { setError(error instanceof Error ? error.message : "Email atau kata sandi salah."); }
+    } catch (error) {
+      const isMailserverError =
+        error instanceof ApiClientError &&
+        (error.status === 503 || error.code === "MAILSERVER_UNREACHABLE");
+      setMailserverUnavailable(isMailserverError);
+      setError(error instanceof Error ? error.message : "Email atau kata sandi salah.");
+    }
     finally { setBusy(false); }
   };
   const submitForgot = async (event: FormEvent) => {
@@ -363,8 +393,8 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
         <span className={styles.formEyebrow}>AKSES ADMIN</span><h2>Selamat datang kembali.</h2><p>Masuk dengan akun Administrator PerumNet Enterprise.</p>
         <label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@perumnet.id" required autoComplete="email" /></label>
         <label>Kata sandi<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Masukkan kata sandi" required minLength={8} autoComplete="current-password" /></label>
-        <button className={styles.loginFormSwitch} type="button" onClick={() => { setMode("forgot"); setError(""); }}>Lupa kata sandi?</button>
-        {error && <div className={styles.formError}>{error}</div>}
+        {!mailserverUnavailable && <button className={styles.loginFormSwitch} type="button" onClick={() => { setMode("forgot"); setError(""); }}>Lupa kata sandi?</button>}
+        {error && <div className={styles.formError} role="alert">{mailserverUnavailable && <strong>Mailserver tidak tersedia. </strong>}{error}</div>}
         <button type="submit" disabled={busy}>{busy ? <LoaderCircle className={styles.spin} size={19} /> : <>Masuk ke Panel <ArrowRight size={18} /></>}</button>
         <div className={styles.loginLegal}><Link href="/syarat-ketentuan">Syarat dan Ketentuan</Link><Link href="/kebijakan-privasi">Kebijakan Privasi</Link><Link href="/#faq">FAQ</Link></div>
         <small>© {new Date().getFullYear()} PerumNet Enterprise</small>
@@ -463,7 +493,7 @@ function ServiceEditor({ items, busy, mutate }: { items: Service[]; busy: boolea
       <div className={styles.fieldGrid}><Field label="Nama layanan" value={form.title} onChange={(title) => setForm({ ...form, title })} /><Field label="Slug URL" value={form.slug} onChange={(slug) => setForm({ ...form, slug })} placeholder="otomatis-dari-judul" /><TextArea label="Ringkasan" value={form.summary} rows={3} onChange={(summary) => setForm({ ...form, summary })} /><TextArea label="Deskripsi lengkap" value={form.description} rows={5} onChange={(description) => setForm({ ...form, description })} /><TextArea label="Fitur (satu per baris)" value={form.features.join("\n")} rows={5} onChange={(value) => setForm({ ...form, features: value.split("\n").map((item) => item.trim()).filter(Boolean) })} /></div>
       <LanguageHeading label="English" helper="Tinjau istilah teknis setelah terjemahan otomatis." />
       <div className={styles.fieldGrid}><Field label="Service name" value={form.titleEn} onChange={(titleEn) => setForm({ ...form, titleEn })} /><TextArea label="Summary" value={form.summaryEn} rows={3} onChange={(summaryEn) => setForm({ ...form, summaryEn })} /><TextArea label="Full description" value={form.descriptionEn} rows={5} onChange={(descriptionEn) => setForm({ ...form, descriptionEn })} /><TextArea label="Features (one per line)" value={form.featuresEn.join("\n")} rows={5} onChange={(value) => setForm({ ...form, featuresEn: value.split("\n").map((item) => item.trim()).filter(Boolean) })} /></div>
-      <div className={styles.fieldGrid}><SelectField label="Ikon" value={form.icon} options={["wifi","camera","phone","network","shield","home","terminal"]} onChange={(icon) => setForm({ ...form, icon })} /><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><ToggleField label="Tampilkan di website" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /></div>
+      <div className={styles.fieldGrid}><SelectField label="Ikon" value={form.icon} options={["wifi","cctv","camera","phone","network","shield","home","terminal"]} onChange={(icon) => setForm({ ...form, icon })} /><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><ToggleField label="Tampilkan di website" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /></div>
     </EditorPanel></div>
   </>;
 }
@@ -473,14 +503,52 @@ function PortfolioEditor({ items, busy, mutate }: { items: Portfolio[]; busy: bo
   const current = items.find((item) => item.id === selected);
   const [form, setForm] = useState(portfolioForm(current));
   const [file, setFile] = useState<File | null>(null);
+  const [galleryFiles, setGalleryFiles] = useState<File[]>([]);
+  const [galleryUpload, setGalleryUpload] = useState<GalleryUploadProgress>({ state: "idle", total: 0, completed: 0 });
   const submit = () => { const body = new FormData(); Object.entries(form).forEach(([key, value]) => body.set(key, String(value))); if (file) body.set("image", file); mutate(() => request(`/api/cms/portfolios${selected ? `/${selected}` : ""}`, { method: selected ? "PATCH" : "POST", body }), selected ? "Portofolio berhasil diperbarui." : "Proyek baru berhasil ditambahkan."); };
+  const gallery = current?.gallery.filter((image) => !image.isCover) ?? [];
+  const selectGalleryFiles = (files: File[]) => {
+    setGalleryFiles(files);
+    setGalleryUpload({ state: "idle", total: 0, completed: 0 });
+  };
+  const uploadGallery = async () => {
+    if (!selected || galleryFiles.length === 0) return;
+    const uploads = [...galleryFiles];
+    let completed = 0;
+    setGalleryUpload({ state: "uploading", total: uploads.length, completed, currentFile: uploads[0]?.name });
+    const result = await mutate(async () => {
+      for (const [index, image] of uploads.entries()) {
+        setGalleryUpload({ state: "uploading", total: uploads.length, completed, currentFile: image.name });
+        const body = new FormData();
+        body.set("image", image);
+        await request(`/api/cms/portfolios/${selected}/gallery`, { method: "POST", body });
+        completed = index + 1;
+        setGalleryFiles((pending) => pending.filter((pendingFile) => pendingFile !== image));
+        setGalleryUpload({ state: "uploading", total: uploads.length, completed, currentFile: image.name });
+      }
+    }, `${uploads.length} foto galeri berhasil ditambahkan.`);
+    setGalleryUpload(result.ok
+      ? { state: "success", total: uploads.length, completed, message: `${completed} foto berhasil diunggah dan ditambahkan ke galeri.` }
+      : { state: "error", total: uploads.length, completed, message: result.error || "Upload belum selesai. Foto yang belum berhasil tetap tersedia untuk dicoba ulang." });
+  };
   return <>
-    <SectionTitle eyebrow="PORTOFOLIO" title="Tampilkan bukti kerja terbaik Anda." description="Unggah foto proyek dan kelola deskripsi Indonesia serta Inggris." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyPortfolio()); setFile(null); }}><Plus size={17} /> Proyek baru</button>} />
-    <div className={styles.splitEditor}><ListPanel title="Daftar proyek">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm(portfolioForm(item)); setFile(null); }}>{item.imageUrl ? <img src={item.imageUrl} alt="" /> : <span className={styles.itemIcon}><Camera size={18} /></span>}<div><strong>{item.title}</strong><small>{item.location || "Tanpa lokasi"}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit portofolio" : "Proyek baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus proyek portofolio ini?")) mutate(() => request(`/api/cms/portfolios/${selected}`, { method: "DELETE" }), "Portofolio dihapus."); } : undefined}>
+    <SectionTitle eyebrow="PORTOFOLIO" title="Tampilkan bukti kerja terbaik Anda." description="Unggah cover dan hingga 20 foto galeri untuk setiap project." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyPortfolio()); setFile(null); setGalleryFiles([]); setGalleryUpload({ state: "idle", total: 0, completed: 0 }); }}><Plus size={17} /> Proyek baru</button>} />
+    <div className={styles.splitEditor}><ListPanel title="Daftar proyek">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm(portfolioForm(item)); setFile(null); setGalleryFiles([]); setGalleryUpload({ state: "idle", total: 0, completed: 0 }); }}>{item.imageUrl ? <img src={item.imageUrl} alt="" /> : <span className={styles.itemIcon}><Camera size={18} /></span>}<div><strong>{item.title}</strong><small>{item.location || "Tanpa lokasi"}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit portofolio" : "Proyek baru"} onSave={submit} busy={busy} onDelete={selected ? async () => { if (!window.confirm("Hapus proyek portofolio ini?")) return; const result = await mutate(() => request(`/api/cms/portfolios/${selected}`, { method: "DELETE" }), "Portofolio dihapus."); if (result.ok) { setSelected(null); setForm(emptyPortfolio()); setFile(null); setGalleryFiles([]); setGalleryUpload({ state: "idle", total: 0, completed: 0 }); } } : undefined}>
       <LanguageHeading label="Konten bilingual" helper="Terjemahkan lalu tinjau sebelum disimpan." action={<TranslateButton busy={busy} values={[form.title, form.location, form.description]} onTranslated={([titleEn, locationEn, descriptionEn]) => setForm({ ...form, titleEn, locationEn, descriptionEn })} />} />
       <div className={styles.fieldGrid}><Field label="Judul proyek · ID" value={form.title} onChange={(title) => setForm({ ...form, title })} /><Field label="Project title · EN" value={form.titleEn} onChange={(titleEn) => setForm({ ...form, titleEn })} /><Field label="Lokasi · ID" value={form.location} onChange={(location) => setForm({ ...form, location })} /><Field label="Location · EN" value={form.locationEn} onChange={(locationEn) => setForm({ ...form, locationEn })} /><TextArea label="Deskripsi · ID" value={form.description} rows={5} onChange={(description) => setForm({ ...form, description })} /><TextArea label="Description · EN" value={form.descriptionEn} rows={5} onChange={(descriptionEn) => setForm({ ...form, descriptionEn })} /><label><span>Tanggal selesai</span><input type="date" value={form.completedAt} onChange={(event) => setForm({ ...form, completedAt: event.target.value })} /></label><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><FileUploadField label="Foto proyek (JPG, PNG, WebP · maks. 5 MB)" accept="image/jpeg,image/png,image/webp" file={file} buttonLabel="Pilih foto proyek" helper="Klik untuk memilih foto dari perangkat Anda." currentUrl={current?.imageUrl} previewAlt={current?.title || "Foto proyek"} previewClassName={styles.imagePreview} onChange={setFile} /><ToggleField label="Tampilkan di website" checked={form.isPublished} onChange={(isPublished) => setForm({ ...form, isPublished })} /></div>
+      {selected && <PortfolioGalleryEditor gallery={gallery} pendingFiles={galleryFiles} uploadProgress={galleryUpload} busy={busy} onSelectFiles={selectGalleryFiles} onUpload={uploadGallery} onMove={(mediaId, direction) => mutate(() => request(`/api/cms/portfolios/${selected}/gallery/${mediaId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ direction }) }), "Urutan foto galeri diperbarui.")} onDelete={(mediaId) => { if (window.confirm("Hapus foto ini dari galeri?")) mutate(() => request(`/api/cms/portfolios/${selected}/gallery/${mediaId}`, { method: "DELETE" }), "Foto galeri dihapus."); }} />}
     </EditorPanel></div>
   </>;
+}
+
+function PortfolioGalleryEditor({ gallery, pendingFiles, uploadProgress, busy, onSelectFiles, onUpload, onMove, onDelete }: { gallery: PortfolioGalleryImage[]; pendingFiles: File[]; uploadProgress: GalleryUploadProgress; busy: boolean; onSelectFiles: (files: File[]) => void; onUpload: () => void; onMove: (mediaId: string, direction: "up" | "down") => void; onDelete: (mediaId: string) => void }) {
+  const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const remaining = Math.max(0, 20 - gallery.length);
+  const statusLabel = uploadProgress.state === "uploading"
+    ? `Mengunggah foto ${Math.min(uploadProgress.completed + 1, uploadProgress.total)} dari ${uploadProgress.total}`
+    : uploadProgress.message;
+  return <section className={styles.galleryEditor}><div className={styles.cardHeading}><span>Foto galeri</span><small>{gallery.length} / 20 foto tambahan · cover selalu tampil pertama</small></div><input ref={inputRef} id={inputId} className={styles.fileInput} type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => onSelectFiles(Array.from(event.target.files || []).slice(0, remaining))} /><div className={styles.galleryUploadRow}><button type="button" className={styles.filePicker} onClick={() => { if (inputRef.current) { inputRef.current.value = ""; inputRef.current.click(); } }} disabled={busy || remaining === 0}><span className={styles.filePickerIcon}><Upload size={19} /></span><span className={styles.filePickerCopy}><strong>{pendingFiles.length ? `${pendingFiles.length} foto siap diunggah` : "Pilih foto galeri"}</strong><small>{remaining ? "JPG, PNG, WebP · maks. 5 MB per foto" : "Batas 20 foto tambahan telah tercapai"}</small></span></button><button type="button" className={styles.secondaryAction} onClick={onUpload} disabled={busy || pendingFiles.length === 0}>{uploadProgress.state === "uploading" ? <><LoaderCircle className={styles.spin} size={16} /> Mengunggah</> : "Unggah foto"}</button></div>{uploadProgress.state !== "idle" && <div className={`${styles.galleryUploadStatus} ${uploadProgress.state === "error" ? styles.galleryUploadStatusError : ""}`} role="status" aria-live="polite"><span>{uploadProgress.state === "uploading" ? <LoaderCircle className={styles.spin} size={18} /> : uploadProgress.state === "success" ? <Check size={18} /> : <X size={18} />}</span><div><strong>{statusLabel}</strong>{uploadProgress.state === "uploading" && <small>{uploadProgress.currentFile}</small>}{uploadProgress.total > 0 && <progress value={uploadProgress.completed} max={uploadProgress.total} aria-label={`Upload ${uploadProgress.completed} dari ${uploadProgress.total} foto`} />}</div></div>}{pendingFiles.length > 0 && uploadProgress.state !== "uploading" && <div className={styles.galleryPendingFiles} aria-live="polite">{pendingFiles.map((pendingFile) => <span key={`${pendingFile.name}-${pendingFile.lastModified}`}>{pendingFile.name}</span>)}</div>}{gallery.length > 0 && <div className={styles.galleryMediaList}>{gallery.map((image, index) => <div key={image.id}><img src={image.url} alt="" /><span>Foto {index + 1}</span><div><button type="button" onClick={() => onMove(image.id, "up")} disabled={busy || index === 0} aria-label="Naikkan urutan foto"><ArrowUp size={16} /></button><button type="button" onClick={() => onMove(image.id, "down")} disabled={busy || index === gallery.length - 1} aria-label="Turunkan urutan foto"><ArrowDown size={16} /></button><button type="button" className={styles.deleteButton} onClick={() => onDelete(image.id)} disabled={busy} aria-label="Hapus foto galeri"><Trash2 size={16} /></button></div></div>)}</div>}</section>;
 }
 
 function PartnerEditor({ items, busy, mutate }: { items: Partner[]; busy: boolean; mutate: Mutate }) {
@@ -492,7 +560,7 @@ function PartnerEditor({ items, busy, mutate }: { items: Partner[]; busy: boolea
   return <>
     <SectionTitle eyebrow="PARTNER & KLIEN" title="Kelola organisasi yang tampil di landing page." description="Nama, kategori, tautan, dan logo dapat disusun ulang atau disembunyikan." action={<button className={styles.secondaryAction} onClick={() => { setSelected(null); setForm(emptyPartner()); setFile(null); }}><Plus size={17} /> Tambah organisasi</button>} />
     <div className={styles.splitEditor}><ListPanel title="Daftar organisasi">{items.map((item) => <button key={item.id} className={selected === item.id ? styles.selectedItem : ""} onClick={() => { setSelected(item.id); setForm(partnerForm(item)); setFile(null); }}>{item.logoUrl ? <span className={`${styles.partnerListLogo} ${item.logoUrl.toLowerCase().includes("quenzo") ? styles.partnerListLogoDark : ""}`}><img src={item.logoUrl} alt="" /></span> : <span className={styles.itemIcon}><Handshake size={18} /></span>}<div><strong>{item.name}</strong><small>{item.organizationType === "partner" ? "Partner teknologi" : "Klien"} · {item.isVisible ? "Tampil" : "Tersembunyi"}</small></div><ChevronRight size={16} /></button>)}</ListPanel><EditorPanel title={selected ? "Edit organisasi" : "Organisasi baru"} onSave={submit} busy={busy} onDelete={selected ? () => { if (window.confirm("Hapus organisasi ini?")) mutate(() => request(`/api/cms/partners/${selected}`, { method: "DELETE" }), "Organisasi dihapus."); } : undefined}>
-      <div className={styles.fieldGrid}><Field label="Nama organisasi" value={form.name} onChange={(name) => setForm({ ...form, name })} /><SelectField label="Jenis" value={form.organizationType} options={["partner","client"]} onChange={(organizationType) => setForm({ ...form, organizationType: organizationType as "partner" | "client" })} /><Field label="Kategori / sektor" value={form.category} onChange={(category) => setForm({ ...form, category })} placeholder="Partner Teknologi, Hospitality, Retail..." /><Field label="Website URL (opsional)" value={form.websiteUrl} onChange={(websiteUrl) => setForm({ ...form, websiteUrl })} type="url" /><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><FileUploadField label="Logo (SVG, PNG, JPG, WebP · maks. 2 MB)" accept="image/svg+xml,image/png,image/jpeg,image/webp" file={file} buttonLabel="Pilih logo organisasi" helper="Klik untuk memilih logo dari perangkat Anda." currentUrl={current?.logoUrl} previewAlt={current?.name || "Logo organisasi"} previewClassName={styles.logoPreview} onChange={setFile} /><ToggleField label="Tampilkan di website" checked={form.isVisible} onChange={(isVisible) => setForm({ ...form, isVisible })} /></div>
+      <div className={styles.fieldGrid}><Field label="Nama organisasi" value={form.name} onChange={(name) => setForm({ ...form, name })} /><SelectField label="Jenis" value={form.organizationType} options={["partner","client"]} onChange={(organizationType) => setForm({ ...form, organizationType: organizationType as "partner" | "client" })} /><Field label="Kategori / sektor" value={form.category} onChange={(category) => setForm({ ...form, category })} placeholder="Partner Teknologi, Hospitality, Retail..." /><Field label="Website URL (opsional)" value={form.websiteUrl} onChange={(websiteUrl) => setForm({ ...form, websiteUrl })} type="url" /><NumberField label="Urutan" value={form.sortOrder} onChange={(sortOrder) => setForm({ ...form, sortOrder })} /><FileUploadField label="Logo (SVG, PNG, JPG, WebP · maks. 2 MB)" accept="image/svg+xml,image/png,image/jpeg,image/webp" file={file} buttonLabel="Pilih logo organisasi" helper="Klik untuk memilih logo dari perangkat Anda. Logo SVG otomatis diubah menjadi PNG saat disimpan." currentUrl={current?.logoUrl} previewAlt={current?.name || "Logo organisasi"} previewClassName={styles.logoPreview} onChange={setFile} /><ToggleField label="Tampilkan di website" checked={form.isVisible} onChange={(isVisible) => setForm({ ...form, isVisible })} /></div>
     </EditorPanel></div>
   </>;
 }

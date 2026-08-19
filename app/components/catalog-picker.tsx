@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, messageOf } from "../api-client";
 import type { CatalogItem, CatalogPayload } from "../data";
 import { formatCurrency } from "../data";
-import type { AppLanguage } from "../i18n";
+import { type AppLanguage, BOQ_ROLES, localizedLabel } from "../i18n";
 
 export function CatalogPicker({
   language,
@@ -47,7 +47,7 @@ export function CatalogPicker({
       <div className="catalog-picker-head"><div><span className="eyebrow">{id ? "DATABASE ITEM" : "ITEM DATABASE"}</span><h2 id="catalog-picker-title">{id ? "Pilih item untuk BoQ" : "Select an item for the BoQ"}</h2><p>{id ? "Filter berdasarkan kelompok, kategori produk, lalu merek." : "Filter by group, product category, then brand."}</p></div><button className="icon-button" type="button" onClick={onClose} aria-label={id ? "Tutup" : "Close"}><X size={18} /></button></div>
       <div className="catalog-picker-filters">
         <label className="search-field"><Search size={16} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={id ? "Cari nama, SKU, model..." : "Search name, SKU, model..."} /></label>
-        <select value={role} onChange={(event) => { setRole(event.target.value); setCategoryId(""); setBrandId(""); }}><option value="">{id ? "Semua kelompok" : "All groups"}</option><option>Perangkat</option><option>Material</option><option>Jasa</option><option>Mobilitas</option></select>
+        <select value={role} onChange={(event) => { setRole(event.target.value); setCategoryId(""); setBrandId(""); }}><option value="">{id ? "Semua kelompok" : "All groups"}</option>{BOQ_ROLES.map((entry) => <option key={entry} value={entry}>{localizedLabel(language, entry)}</option>)}</select>
         <select value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setBrandId(""); }}><option value="">{id ? "Semua kategori" : "All categories"}</option>{categories.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
         <select value={brandId} onChange={(event) => setBrandId(event.target.value)}><option value="">{id ? "Semua merek" : "All brands"}</option>{brands.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
       </div>

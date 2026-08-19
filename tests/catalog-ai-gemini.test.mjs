@@ -126,6 +126,9 @@ async function startApp(extraEnv) {
       env: {
         ...process.env,
         NEXT_TELEMETRY_DISABLED: "1",
+        // The suite must never reach Nominatim: it is a third-party service with a
+        // one-request-per-second policy, and a test run creates dozens of projects.
+        GEOCODING_ENABLED: "false",
         TURSO_DATABASE_URL: `file:${databasePath}`,
         APP_URL: baseUrl,
         UPLOAD_DIR: uploadDirectory,

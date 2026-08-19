@@ -2,6 +2,7 @@ import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
 import { hash } from "bcryptjs";
+import { isProductionRuntime } from "../runtime-env";
 import type { DatabaseClient, DatabaseStatement } from "./client";
 
 const schemaSql = `
@@ -35,6 +36,32 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS password_reset_user_idx ON password_reset_tokens(user_id);
+
+CREATE TABLE IF NOT EXISTS email_change_requests (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  current_email TEXT NOT NULL,
+  new_email TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  requested_by TEXT,
+  expires_at TEXT NOT NULL,
+  confirmed_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS email_change_requests_user_idx
+  ON email_change_requests(user_id);
+
+CREATE TABLE IF NOT EXISTS auth_rate_limits (
+  scope_key TEXT NOT NULL,
+  route_key TEXT NOT NULL,
+  window_started_at TEXT NOT NULL,
+  failure_count INTEGER NOT NULL DEFAULT 0,
+  blocked_until TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (scope_key, route_key)
+);
+CREATE INDEX IF NOT EXISTS auth_rate_limits_blocked_idx
+  ON auth_rate_limits(route_key, blocked_until);
 
 CREATE TABLE IF NOT EXISTS user_profiles (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -109,6 +136,11 @@ CREATE TABLE IF NOT EXISTS projects (
   value INTEGER NOT NULL DEFAULT 0 CHECK (value >= 0),
   manager_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  latitude DOUBLE PRECISION CHECK (latitude BETWEEN -90 AND 90),
+  longitude DOUBLE PRECISION CHECK (longitude BETWEEN -180 AND 180),
+  coordinate_source TEXT,
+  geocoded_query TEXT,
+  geocoded_label TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -502,7 +534,7 @@ CREATE TABLE IF NOT EXISTS basts (
   engineer_name TEXT NOT NULL,
   engineer_role TEXT NOT NULL DEFAULT 'Project Manager',
   engineer_signature TEXT,
-  status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Final')),
+  status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Final', 'Void')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -583,6 +615,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   source TEXT NOT NULL,
   reference_id TEXT,
   category TEXT NOT NULL DEFAULT 'Lainnya',
+  origin TEXT NOT NULL DEFAULT 'system',
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -905,6 +938,7 @@ CREATE TABLE IF NOT EXISTS bank_statement_entries (
   bank_account_id TEXT NOT NULL REFERENCES bank_accounts(id) ON DELETE CASCADE,
   import_id TEXT REFERENCES bank_statement_imports(id) ON DELETE SET NULL,
   transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+  excluded_transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
   date TEXT NOT NULL,
   description TEXT NOT NULL,
   type TEXT NOT NULL CHECK (type IN ('Pemasukan', 'Pengeluaran')),
@@ -985,6 +1019,17 @@ CREATE TABLE IF NOT EXISTS cms_portfolios (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS cms_portfolio_media (
+  id TEXT PRIMARY KEY,
+  portfolio_id TEXT NOT NULL REFERENCES cms_portfolios(id) ON DELETE CASCADE,
+  storage_url TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  sort_order INTEGER NOT NULL CHECK (sort_order BETWEEN 0 AND 19),
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cms_portfolio_media_portfolio_order
+  ON cms_portfolio_media(portfolio_id, sort_order, created_at);
 
 CREATE TABLE IF NOT EXISTS cms_testimonials (
   id TEXT PRIMARY KEY,
@@ -1213,7 +1258,7 @@ async function ensureCmsSeed(client: DatabaseClient) {
 
   const services = [
     ["cms-service-wifi", "managed-wifi", "Managed WiFi", "WiFi stabil, aman, dan mudah dikelola untuk kantor, hotel, sekolah, dan area publik.", "Kami merancang cakupan, kapasitas, segmentasi jaringan, dan monitoring agar setiap pengguna mendapat pengalaman koneksi yang konsisten.", "[\"Site survey & heatmap\",\"Managed access point\",\"Guest WiFi & captive portal\",\"Monitoring dan dukungan\"]", "wifi", 1],
-    ["cms-service-cctv", "cctv", "CCTV & Surveillance", "Sistem pengawasan yang memberi visibilitas jelas dari lokasi maupun jarak jauh.", "Mulai dari penempatan kamera hingga retensi rekaman dan akses mobile, sistem CCTV disusun sesuai risiko dan alur aktivitas lokasi.", "[\"IP camera & NVR\",\"Remote monitoring\",\"Smart detection\",\"Preventive maintenance\"]", "camera", 2],
+    ["cms-service-cctv", "cctv", "CCTV & Surveillance", "Sistem pengawasan yang memberi visibilitas jelas dari lokasi maupun jarak jauh.", "Mulai dari penempatan kamera hingga retensi rekaman dan akses mobile, sistem CCTV disusun sesuai risiko dan alur aktivitas lokasi.", "[\"IP camera & NVR\",\"Remote monitoring\",\"Smart detection\",\"Preventive maintenance\"]", "cctv", 2],
     ["cms-service-pabx", "ip-pabx", "IP PABX", "Komunikasi internal yang profesional, fleksibel, dan siap berkembang bersama tim.", "Kami mengintegrasikan extension, IVR, call routing, dan perangkat IP phone agar komunikasi pelanggan dan tim berjalan lebih efisien.", "[\"Extension planning\",\"IVR & call routing\",\"IP phone provisioning\",\"Call recording option\"]", "phone", 3],
     ["cms-service-smart-home", "smart-home-device", "Smart Home Device", "Kontrol perangkat, keamanan, dan otomasi ruang yang praktis dari satu sistem.", "Kami mengintegrasikan perangkat smart home sesuai kebutuhan rumah, villa, maupun area komersial agar pencahayaan, akses, sensor, dan perangkat terpilih dapat dipantau serta dikendalikan dengan mudah.", "[\"Smart lighting & switch\",\"Sensor pintu dan gerak\",\"Kontrol perangkat terpusat\",\"Konfigurasi dan dukungan\"]", "home", 4],
   ];
@@ -1225,9 +1270,9 @@ async function ensureCmsSeed(client: DatabaseClient) {
   }
 
   const portfolios = [
-    ["cms-portfolio-wifi", "Managed WiFi Hospitality", "Penataan ulang jaringan dan access point untuk koneksi tamu yang konsisten di seluruh area properti.", "/portfolio/network-rack.jpg", "Ubud, Gianyar", "2026-05-28", 1],
-    ["cms-portfolio-cctv", "CCTV Area Komersial", "Implementasi kamera IP, NVR, dan akses monitoring untuk area operasional dan parkir.", "/portfolio/cctv.jpg", "Denpasar, Bali", "2026-04-16", 2],
-    ["cms-portfolio-pabx", "IP PABX Kantor Cabang", "Sistem extension dan call routing yang menyatukan komunikasi antar divisi dan kantor cabang.", "/portfolio/ip-phone.jpg", "Karangasem, Bali", "2026-03-11", 3],
+    ["cms-portfolio-wifi", "Project Quenzo Beach Resort", "Pengelolaan WiFi dan CCTV untuk konektivitas tamu serta keamanan area resort yang stabil.", "/portfolio/quenzo-beach-resort-2026.png", "Padang Bai, Bali", "2026-05-28", 1],
+    ["cms-portfolio-cctv", "Project Sandy House Project", "Pengelolaan WiFi, CCTV, dan Smart House untuk konektivitas, keamanan, serta otomasi rumah yang terintegrasi.", "/portfolio/sandy-house-project-network-rack-2026.png", "Pantai Indah Kapuk, Jakarta", "2026-04-16", 2],
+    ["cms-portfolio-pabx", "Project Internal PerumNet", "Implementasi IP PABX untuk komunikasi internal PerumNet yang stabil dan mudah dikelola.", "/portfolio/internal-perumnet-ip-pabx-2026.png", "Karangasem, Bali", "2026-03-11", 3],
   ];
   for (const row of portfolios) {
     statements.push(statement(
@@ -1354,6 +1399,50 @@ async function ensureDocumentCounters(client: DatabaseClient) {
     key TEXT PRIMARY KEY,
     last_value INTEGER NOT NULL DEFAULT 0
   )`);
+}
+
+// Step two of the pattern in server/db/README.md. `schemaSql` covers fresh
+// installations; this covers the databases that already exist in demo and
+// production, which never re-run a CREATE TABLE they have already skipped in a
+// dialect-specific way. Both statements are idempotent.
+async function ensureAuthHardeningSchema(client: DatabaseClient) {
+  await client.execute(`CREATE TABLE IF NOT EXISTS email_change_requests (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    current_email TEXT NOT NULL,
+    new_email TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    requested_by TEXT,
+    expires_at TEXT NOT NULL,
+    confirmed_at TEXT,
+    created_at TEXT NOT NULL
+  )`);
+  await client.execute(
+    "CREATE INDEX IF NOT EXISTS email_change_requests_user_idx ON email_change_requests(user_id)",
+  );
+  await client.execute(`CREATE TABLE IF NOT EXISTS auth_rate_limits (
+    scope_key TEXT NOT NULL,
+    route_key TEXT NOT NULL,
+    window_started_at TEXT NOT NULL,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    blocked_until TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (scope_key, route_key)
+  )`);
+  await client.execute(
+    "CREATE INDEX IF NOT EXISTS auth_rate_limits_blocked_idx ON auth_rate_limits(route_key, blocked_until)",
+  );
+  // The tables are pure scratch state; drop anything that can no longer matter
+  // so neither grows without bound on a long-lived installation.
+  const timestamp = new Date().toISOString();
+  await client.execute({
+    sql: "DELETE FROM email_change_requests WHERE expires_at <= ? OR confirmed_at IS NOT NULL",
+    args: [timestamp],
+  });
+  await client.execute({
+    sql: "DELETE FROM auth_rate_limits WHERE updated_at <= ?",
+    args: [new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString()],
+  });
 }
 
 async function ensureCommercialPackageSchema(client: DatabaseClient) {
@@ -1799,9 +1888,9 @@ async function ensureCmsLandingFeatures(client: DatabaseClient) {
   }
 
   const portfolioTranslations: Array<[string, string, string, string]> = [
-    ["cms-portfolio-wifi", "Managed WiFi for Hospitality", "Network and access-point redesign for consistent guest connectivity throughout the property.", "Ubud, Gianyar"],
-    ["cms-portfolio-cctv", "CCTV for a Commercial Site", "IP cameras, NVR, and monitoring access for operational and parking areas.", "Denpasar, Bali"],
-    ["cms-portfolio-pabx", "IP PABX for a Branch Office", "Extensions and call routing that connect communications across departments and branch offices.", "Karangasem, Bali"],
+    ["cms-portfolio-wifi", "Project Quenzo Beach Resort", "Managed WiFi and CCTV for reliable guest connectivity and resort-wide security.", "Padang Bai, Bali"],
+    ["cms-portfolio-cctv", "Project Sandy House Project", "Managed WiFi, CCTV, and Smart House systems for connected, secure, and automated living.", "Pantai Indah Kapuk, Jakarta"],
+    ["cms-portfolio-pabx", "Project Internal PerumNet", "IP PABX implementation for reliable, manageable internal communications at PerumNet.", "Karangasem, Bali"],
   ];
   for (const [id, titleEn, descriptionEn, locationEn] of portfolioTranslations) {
     statements.push(statement(
@@ -1809,6 +1898,66 @@ async function ensureCmsLandingFeatures(client: DatabaseClient) {
       [titleEn, descriptionEn, locationEn, timestamp, id],
     ));
   }
+
+  // Replace only the three original placeholder records. The title guard makes
+  // this a one-time content migration: once the real portfolio copy is in
+  // place, later CMS edits are never overwritten at application startup.
+  const portfolioRefreshes = [
+    {
+      id: "cms-portfolio-wifi",
+      priorTitles: ["Managed WiFi Hospitality", "Managed WiFi & CCTV Hospitality"],
+      title: "Project Quenzo Beach Resort",
+      titleEn: "Project Quenzo Beach Resort",
+      description: "Pengelolaan WiFi dan CCTV untuk konektivitas tamu serta keamanan area resort yang stabil.",
+      descriptionEn: "Managed WiFi and CCTV for reliable guest connectivity and resort-wide security.",
+      imageUrl: "/portfolio/quenzo-beach-resort-2026.png",
+      location: "Padang Bai, Bali",
+      locationEn: "Padang Bai, Bali",
+      completedAt: "2026-05-28",
+      sortOrder: 1,
+    },
+    {
+      id: "cms-portfolio-cctv",
+      priorTitles: ["CCTV Area Komersial", "Manage WiFi, CCTV & Smart Home"],
+      title: "Project Sandy House Project",
+      titleEn: "Project Sandy House Project",
+      description: "Pengelolaan WiFi, CCTV, dan Smart House untuk konektivitas, keamanan, serta otomasi rumah yang terintegrasi.",
+      descriptionEn: "Managed WiFi, CCTV, and Smart House systems for connected, secure, and automated living.",
+      imageUrl: "/portfolio/sandy-house-project-network-rack-2026.png",
+      location: "Pantai Indah Kapuk, Jakarta",
+      locationEn: "Pantai Indah Kapuk, Jakarta",
+      completedAt: "2026-04-16",
+      sortOrder: 2,
+    },
+    {
+      id: "cms-portfolio-pabx",
+      priorTitles: ["IP PABX Kantor Cabang"],
+      title: "Project Internal PerumNet",
+      titleEn: "Project Internal PerumNet",
+      description: "Implementasi IP PABX untuk komunikasi internal PerumNet yang stabil dan mudah dikelola.",
+      descriptionEn: "IP PABX implementation for reliable, manageable internal communications at PerumNet.",
+      imageUrl: "/portfolio/internal-perumnet-ip-pabx-2026.png",
+      location: "Karangasem, Bali",
+      locationEn: "Karangasem, Bali",
+      completedAt: "2026-03-11",
+      sortOrder: 3,
+    },
+  ];
+  for (const item of portfolioRefreshes) {
+    statements.push(statement(
+      `UPDATE cms_portfolios
+       SET title=?,title_en=?,description=?,description_en=?,image_url=?,image_storage_url=NULL,image_mime_type=NULL,location=?,location_en=?,completed_at=?,sort_order=?,is_published=1,updated_at=?
+       WHERE id=? AND title IN (${item.priorTitles.map(() => "?").join(",")})`,
+      [item.title, item.titleEn, item.description, item.descriptionEn, item.imageUrl, item.location, item.locationEn, item.completedAt, item.sortOrder, timestamp, item.id, ...item.priorTitles],
+    ));
+  }
+
+  // Give the revised Sandy House cover a new URL so public browser and image
+  // optimizer caches cannot continue serving the prior placeholder asset.
+  statements.push(statement(
+    "UPDATE cms_portfolios SET image_url=?,image_storage_url=NULL,image_mime_type=NULL,updated_at=? WHERE id=? AND image_url=?",
+    ["/portfolio/sandy-house-project-network-rack-2026.png", timestamp, "cms-portfolio-cctv", "/portfolio/sandy-house-project-2026.png"],
+  ));
 
   const testimonialTranslations: Array<[string, string]> = [
     ["cms-testimonial-1", "The PerumNet team understood our operational requirements, delivered a well-organized installation, and remained responsive after handover."],
@@ -2026,6 +2175,89 @@ async function ensureBastEngineerRoleColumn(client: DatabaseClient) {
       // A concurrent initializer may have completed the same migration first.
       await client.execute("SELECT engineer_role FROM basts LIMIT 1");
     }
+  }
+}
+
+// Creating a quotation, invoice, validation or BAST now requires an Active
+// commercial package. Packages created before that rule were stamped 'Draft' by
+// the old column default — a state nothing can leave, because the status
+// control did not exist yet and the transition table has no route back into
+// Draft. Left alone they would silently refuse every new document. Promote them
+// once; on every later boot the WHERE clause matches nothing, since no writer
+// can produce a Draft package again (every INSERT names its status, and the
+// request schema defaults to Active).
+async function ensureCommercialPackageActiveDefault(client: DatabaseClient) {
+  await client.execute(
+    "UPDATE project_commercial_packages SET status='Active' WHERE status='Draft'",
+  );
+  // PostgreSQL still carries the stale 'Draft' default on the live column.
+  // Nothing reads it — every insert is explicit — but a wrong default is a trap
+  // for the next writer, and correcting it is one cheap statement. SQLite keeps
+  // defaults inside the CREATE TABLE text and would need a full table rebuild
+  // to change one, which is not worth it for a value no code path reaches.
+  try {
+    await client.execute(
+      "ALTER TABLE project_commercial_packages ALTER COLUMN status SET DEFAULT 'Active'",
+    );
+  } catch {
+    // SQLite, which cannot alter a column default in place.
+  }
+}
+
+// The BAST void endpoint writes status='Void', but the original table declared
+// CHECK (status IN ('Draft','Final')) — every revocation failed with a raw
+// constraint error surfaced as a 500. Fresh databases now declare 'Void' in the
+// schema; databases created before this fix are relaxed here. Idempotent: it
+// inspects the live constraint first and does nothing once 'Void' is allowed.
+async function ensureBastVoidStatus(client: DatabaseClient) {
+  let tableSql: string | null = null;
+  let sqlite = true;
+  try {
+    const result = await client.execute(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='basts' LIMIT 1",
+    );
+    tableSql = result.rows[0]?.sql ? String(result.rows[0].sql) : null;
+  } catch {
+    sqlite = false;
+  }
+  if (!sqlite) {
+    // PostgreSQL names the inline CHECK `basts_status_check`, so it can be
+    // replaced in place. Dropping and re-adding in ONE statement keeps the
+    // migration both re-runnable and atomic: a failure can never leave the
+    // column with no constraint at all.
+    try {
+      await client.execute(
+        `ALTER TABLE basts
+          DROP CONSTRAINT IF EXISTS basts_status_check,
+          ADD CONSTRAINT basts_status_check CHECK (status IN ('Draft', 'Final', 'Void'))`,
+      );
+    } catch {
+      // Another dialect, or the constraint was never declared — nothing to relax.
+    }
+    return;
+  }
+  if (!tableSql) return;
+  const checkPattern = /CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i;
+  const declaredCheck = tableSql.match(checkPattern);
+  if (!declaredCheck || /'Void'/i.test(declaredCheck[0])) return;
+  // SQLite cannot alter a CHECK constraint, so rebuild the table from its own
+  // stored DDL. Deriving the new DDL from sqlite_master (instead of restating
+  // it here) preserves every column and default added by later migrations.
+  const indexes = await client.execute(
+    "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='basts' AND sql IS NOT NULL",
+  );
+  const rebuiltSql = tableSql.replace(
+    checkPattern,
+    "CHECK (status IN ('Draft', 'Final', 'Void'))",
+  );
+  await client.execute("DROP TABLE IF EXISTS basts_status_migration");
+  await client.execute("ALTER TABLE basts RENAME TO basts_status_migration");
+  await client.execute(rebuiltSql);
+  await client.execute("INSERT INTO basts SELECT * FROM basts_status_migration");
+  // Dropping the old table also drops the indexes that travelled with it.
+  await client.execute("DROP TABLE basts_status_migration");
+  for (const row of indexes.rows) {
+    await client.execute(String(row.sql));
   }
 }
 
@@ -2354,6 +2586,56 @@ async function ensureProcurementSchema(client: DatabaseClient) {
   }
 }
 
+// Step two of the pattern in server/db/README.md for the reconciliation memory
+// added with the exclude/restore fix: excluding a mutasi has to remember which
+// transaction it was booked against, otherwise restoring it invents a second
+// `Bank:` transaction next to the one that already recorded the same cash.
+async function ensureBankReconciliationSchema(client: DatabaseClient) {
+  await ensureColumn(
+    client,
+    "bank_statement_entries",
+    "excluded_transaction_id",
+    "TEXT",
+  );
+}
+
+// Manual transaction CRUD used to be gated by a denylist of source prefixes, so
+// every new system source was tamperable until somebody remembered to add it.
+// `origin` inverts that into an allowlist: only rows a human typed in are
+// editable. The classification of pre-existing rows runs exactly once, right
+// after the column is created — never again, so a row can not be silently
+// re-classified later by a source string that happens not to match.
+async function ensureTransactionOriginColumn(client: DatabaseClient) {
+  try {
+    await client.execute("SELECT origin FROM transactions LIMIT 1");
+    return;
+  } catch {
+    // The column does not exist yet.
+  }
+  try {
+    await client.execute(
+      "ALTER TABLE transactions ADD COLUMN origin TEXT NOT NULL DEFAULT 'system'",
+    );
+  } catch {
+    await client.execute("SELECT origin FROM transactions LIMIT 1");
+    return;
+  }
+  await client.execute(`
+    UPDATE transactions SET origin='manual'
+    WHERE NOT (
+      source IN ('Invoice','SPK')
+      OR source LIKE 'Bank:%'
+      OR source LIKE 'Profit Share%'
+      OR source LIKE 'Procurement %'
+      OR source LIKE 'Invoice Payment%'
+      OR source LIKE 'Tax Settlement%'
+      OR source LIKE 'Project Expense%'
+      OR source LIKE 'Project Advance%'
+      OR category='Bagi Hasil'
+    )
+  `);
+}
+
 async function ensureTaxAndEmailSchema(client: DatabaseClient) {
   const timestamp = new Date().toISOString();
 
@@ -2627,6 +2909,82 @@ async function ensureItemCatalogSchema(client: DatabaseClient) {
   }
 }
 
+// Step two of the pattern in server/db/README.md for the project map.
+//
+// `coordinate_source` is what keeps a hand-placed pin alive: 'manual' means a
+// person dropped it and no geocoder may touch it again, 'geocoded' means the
+// guess is disposable, NULL means the project has never had coordinates. The
+// two `geocoded_*` columns record what was asked and what came back, so a pin
+// that landed in the wrong village can be diagnosed without re-running
+// anything — and `geocoded_query` doubles as the "we already tried this exact
+// text" marker that stops a repeated save from re-querying Nominatim.
+//
+// The range CHECKs are the same ones declared in `schemaSql`; both dialects
+// accept a column CHECK in ADD COLUMN, and every existing row is NULL, which
+// no CHECK rejects.
+async function ensureProjectCoordinateSchema(client: DatabaseClient) {
+  const columns: Array<[string, string, string]> = [
+    ["projects", "latitude", "DOUBLE PRECISION CHECK (latitude BETWEEN -90 AND 90)"],
+    ["projects", "longitude", "DOUBLE PRECISION CHECK (longitude BETWEEN -180 AND 180)"],
+    ["projects", "coordinate_source", "TEXT"],
+    ["projects", "geocoded_query", "TEXT"],
+    ["projects", "geocoded_label", "TEXT"],
+  ];
+  for (const [table, column, definition] of columns) {
+    await ensureColumn(client, table, column, definition);
+  }
+}
+
+async function ensurePortfolioGalleryLimit(client: DatabaseClient) {
+  if (client.dialect === "postgres") {
+    const constraints = await client.execute(`SELECT pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conrelid = 'cms_portfolio_media'::regclass AND contype = 'c'`);
+    if (constraints.rows.some((row) => /sort_order\s*(?:BETWEEN\s+0\s+AND\s+19|>=\s+0[\s\S]*sort_order\s*<=\s+19)/i.test(String(row.definition)))) return;
+    await client.execute(`ALTER TABLE cms_portfolio_media
+      DROP CONSTRAINT IF EXISTS cms_portfolio_media_sort_order_check,
+      ADD CONSTRAINT cms_portfolio_media_sort_order_check CHECK (sort_order BETWEEN 0 AND 19)`);
+    return;
+  }
+
+  const table = await client.execute(
+    "SELECT sql FROM sqlite_master WHERE type='table' AND name='cms_portfolio_media' LIMIT 1",
+  );
+  const tableSql = table.rows[0]?.sql ? String(table.rows[0].sql) : null;
+  if (!tableSql || /sort_order\s+BETWEEN\s+0\s+AND\s+19/i.test(tableSql)) return;
+  const checkPattern = /CHECK\s*\(\s*sort_order\s+BETWEEN\s+0\s+AND\s+9\s*\)/i;
+  if (!checkPattern.test(tableSql)) return;
+  const indexes = await client.execute(
+    "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='cms_portfolio_media' AND sql IS NOT NULL",
+  );
+  const rebuiltSql = tableSql.replace(checkPattern, "CHECK (sort_order BETWEEN 0 AND 19)");
+  await client.execute("DROP TABLE IF EXISTS cms_portfolio_media_limit_migration");
+  await client.execute("ALTER TABLE cms_portfolio_media RENAME TO cms_portfolio_media_limit_migration");
+  await client.execute(rebuiltSql);
+  await client.execute("INSERT INTO cms_portfolio_media SELECT * FROM cms_portfolio_media_limit_migration");
+  await client.execute("DROP TABLE cms_portfolio_media_limit_migration");
+  for (const row of indexes.rows) await client.execute(String(row.sql));
+}
+
+/**
+ * Akun darurat untuk mode login mailcow.
+ *
+ * Saat `AUTH_PROVIDER=MAILSERVER`, kata sandi yang sah adalah kata sandi email
+ * di mailcow. Baris dengan `allow_local_login = 1` dikecualikan dan tetap
+ * memakai hash lokal — tanpa satu pun akun seperti itu, mailserver yang mati
+ * berarti tidak ada seorang pun bisa masuk untuk memperbaikinya.
+ *
+ * INTEGER, bukan BOOLEAN: skema ini berjalan di SQLite/libSQL maupun Postgres.
+ */
+async function ensureMailserverAuthSchema(client: DatabaseClient) {
+  await ensureColumn(
+    client,
+    "users",
+    "allow_local_login",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
+}
+
 export async function initializeDatabase(client: DatabaseClient) {
   await client.executeMultiple(schemaSql);
   await ensureCmsBilingualSchema(client);
@@ -2635,7 +2993,15 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureSpkPaymentColumns(client);
   await ensureProcurementSchema(client);
   await ensureCommercialPackageSchema(client);
+  await ensureCommercialPackageActiveDefault(client);
+  await ensureBastVoidStatus(client);
+  await ensureBankReconciliationSchema(client);
+  await ensureTransactionOriginColumn(client);
+  await ensureProjectCoordinateSchema(client);
+  await ensurePortfolioGalleryLimit(client);
   await ensureDocumentCounters(client);
+  await ensureAuthHardeningSchema(client);
+  await ensureMailserverAuthSchema(client);
   await ensureTaxAndEmailSchema(client);
   await ensureProjectExpenseSchema(client);
   await ensureItemCatalogSchema(client);
@@ -2647,7 +3013,12 @@ export async function initializeDatabase(client: DatabaseClient) {
   const existing = await client.execute("SELECT id FROM users LIMIT 1");
   if (existing.rows.length) return;
 
-  const production = process.env.NODE_ENV === "production";
+  // The runtime reading, not the compile-time literal. This flag decides
+  // whether a first boot may fall back to the well-known "perumnet123" seed
+  // password and whether SEED_ADMIN_PASSWORD has to be twelve characters — both
+  // of which quietly relaxed inside a `NODE_ENV=production next dev` process.
+  // See server/runtime-env.ts.
+  const production = isProductionRuntime();
   const demoMode = process.env.APP_MODE === "demo";
   const bootstrapPassword = demoMode
     ? process.env.DEMO_ACCOUNT_PASSWORD ?? (production ? "" : "perumnet123")
@@ -2788,16 +3159,22 @@ export async function initializeDatabase(client: DatabaseClient) {
     ));
   }
 
-  const transactionRows = [
-    ["trx-1", "project-1", "2026-07-18", "Pengeluaran", "Pembelian access point tahap 2", 29400000, "Material"],
-    ["trx-2", "project-2", "2026-07-15", "Pemasukan", "Pembayaran invoice DP 30%", 29040000, "Invoice"],
-    ["trx-3", "project-1", "2026-07-10", "Pemasukan", "Pembayaran invoice DP 50%", 93725000, "Invoice"],
-    ["trx-4", "project-1", "2026-07-09", "Pengeluaran", "Termin awal teknisi jaringan", 6250000, "SPK"],
-    ["trx-5", "project-2", "2026-07-04", "Pengeluaran", "Pembelian kamera dan NVR", 41750000, "Material"],
-  ];
+  // Demo cash movements. They exist so a development or demo install has a
+  // populated Keuangan page; a production install must never open its books
+  // with roughly Rp 200 juta of fictitious movements, so they are gated on the
+  // same condition that deactivates the demo user accounts.
+  const transactionRows = production
+    ? []
+    : [
+        ["trx-1", "project-1", "2026-07-18", "Pengeluaran", "Pembelian access point tahap 2", 29400000, "Material", "manual"],
+        ["trx-2", "project-2", "2026-07-15", "Pemasukan", "Pembayaran invoice DP 30%", 29040000, "Invoice", "system"],
+        ["trx-3", "project-1", "2026-07-10", "Pemasukan", "Pembayaran invoice DP 50%", 93725000, "Invoice", "system"],
+        ["trx-4", "project-1", "2026-07-09", "Pengeluaran", "Termin awal teknisi jaringan", 6250000, "SPK", "system"],
+        ["trx-5", "project-2", "2026-07-04", "Pengeluaran", "Pembelian kamera dan NVR", 41750000, "Material", "manual"],
+      ];
   for (const row of transactionRows) {
     statements.push(statement(
-      "INSERT INTO transactions (id,project_id,date,type,description,amount,source,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO transactions (id,project_id,date,type,description,amount,source,origin,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
       [...row, "user-1", now, now],
     ));
   }

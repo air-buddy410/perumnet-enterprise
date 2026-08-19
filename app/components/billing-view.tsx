@@ -271,6 +271,26 @@ export function BillingView({
       ),
     [quotationItems],
   );
+  // Everything the rounding field is measured against: subtotal − discount +
+  // add-effect tax, exactly as the server computes `beforeRounding`.
+  const previewBeforeRounding = useMemo(() => {
+    const previewDiscount = discountEnabled
+      ? discountType === "Percent"
+        ? Math.round((boqTotal * Math.min(10_000, parseDiscountInput("Percent", discountValueInput))) / 10_000)
+        : Math.min(boqTotal, parseDiscountInput("Nominal", discountValueInput))
+      : 0;
+    return Math.max(0, boqTotal - previewDiscount) + (quotation?.taxAdditions ?? 0);
+  }, [boqTotal, discountEnabled, discountType, discountValueInput, quotation?.taxAdditions]);
+  // A custom adjustment is capped at the larger of Rp 100.000 — the coarsest
+  // step the automatic modes can produce — and 1% of the pre-rounding total.
+  // The server refuses anything beyond with ROUNDING_ADJUSTMENT_TOO_LARGE, so
+  // the same arithmetic runs here and the boundary is stated on the field
+  // rather than arriving as a rejection after Save. It is shown, never typed
+  // over: clamping mid-keystroke would fight the keyboard.
+  const customRoundingLimit = Math.max(100_000, Math.ceil(previewBeforeRounding / 100));
+  const customRoundingOverLimit =
+    roundingMode === "Custom" &&
+    Math.abs(parseRoundingAdjustment(roundingAdjustmentInput)) > customRoundingLimit;
   const quotationTotal = quotation?.total ?? boqTotal;
   const quotationGrossTotal = quotation?.grandTotal ?? quotation?.grossTotal ?? quotationTotal;
   const paidTotal = invoices.reduce(
@@ -288,6 +308,29 @@ export function BillingView({
     quotation.validUntil < serverToday &&
     quotation.status !== "Accepted",
   );
+  // Everything past Draft has already left the office, so the delivery step is
+  // complete and "Tandai sudah dikirim" is no longer an available transition —
+  // on an Accepted quotation it could only return ACCEPTED_QUOTATION_LOCKED.
+  const quotationSettled = ["Accepted", "Rejected", "Void", "Superseded"].includes(quotation?.status ?? "");
+  const quotationDispatched = quotation?.status === "Sent" || quotationSettled;
+  const quotationDeliveryTitle = quotation?.status === "Accepted"
+    ? (id ? "Diterima klien" : "Accepted by the client")
+    : quotation?.status === "Rejected"
+      ? (id ? "Ditolak klien" : "Rejected by the client")
+      : quotation?.status === "Void"
+        ? (id ? "Dibatalkan" : "Voided")
+        : quotation?.status === "Superseded"
+          ? (id ? "Digantikan revisi baru" : "Superseded by a newer revision")
+          : quotation?.status === "Sent"
+            ? (id ? "Sudah dikirim" : "Sent")
+            : (id ? "Menunggu dikirim" : "Awaiting delivery");
+  const quotationDeliveryDetail = quotation?.status === "Accepted"
+    ? (id ? "Nilai, pajak, dan pembulatan terkunci permanen" : "Value, tax, and rounding are permanently locked")
+    : quotationSettled
+      ? (id ? "Dokumen tidak dapat diubah lagi" : "This document can no longer be changed")
+      : quotation?.status === "Sent"
+        ? (id ? "Nilai terkunci sampai BoQ berubah" : "Value is locked until the BoQ changes")
+        : (id ? "Periksa tanggal dan isi dokumen" : "Review dates and document content");
 
   function setValidityDays(days: number) {
     if (!quotationIssuedAt) return;
@@ -774,11 +817,11 @@ export function BillingView({
               <div className="document-status-list">
                 <div className={quotationItems.length ? "done" : "active"}><span><Check size={14} /></span><div><strong>BoQ</strong><small>{quotationItems.length} item · {formatCurrency(boqTotal, language)}</small></div></div>
                 <div className={quotation?.id ? "done" : "active"}><span><FileCheck2 size={14} /></span><div><strong>Quotation</strong><small>{quotation?.number ?? (id ? "Belum disimpan" : "Not saved")}</small></div></div>
-                <div className={quotation?.status === "Sent" ? "done" : "active"}><span><Mail size={14} /></span><div><strong>{quotation?.status === "Sent" ? (id ? "Sudah dikirim" : "Sent") : (id ? "Menunggu dikirim" : "Awaiting delivery")}</strong><small>{quotation?.status === "Sent" ? (id ? "Nilai terkunci sampai BoQ berubah" : "Value is locked until the BoQ changes") : (id ? "Periksa tanggal dan isi dokumen" : "Review dates and document content")}</small></div></div>
+                <div className={quotationDispatched ? "done" : "active"}><span><Mail size={14} /></span><div><strong>{quotationDeliveryTitle}</strong><small>{quotationDeliveryDetail}</small></div></div>
               </div>
-              {canManage && (
-                <button className="button primary full-width" type="button" disabled={!quotationItems.length || quotation?.status === "Sent" || quotationExpired} onClick={markQuotationSent}>
-                  <Send size={16} /> {quotation?.status === "Sent" ? (id ? "Sudah dikirim" : "Sent") : (id ? "Tandai sudah dikirim" : "Mark as sent")}
+              {canManage && !quotationSettled && (
+                <button className="button primary full-width" type="button" disabled={!quotationItems.length || quotationDispatched || quotationExpired} onClick={markQuotationSent}>
+                  <Send size={16} /> {quotationDispatched ? (id ? "Sudah dikirim" : "Sent") : (id ? "Tandai sudah dikirim" : "Mark as sent")}
                 </button>
               )}
             </section>
@@ -934,19 +977,21 @@ export function BillingView({
               {discountEnabled && <><label className="field select-field"><span>{id ? "Jenis diskon" : "Discount type"}</span><select value={discountType} onChange={(event) => { setDiscountType(event.target.value as "Nominal" | "Percent"); setDiscountValueInput(""); }}><option value="Nominal">Nominal</option><option value="Percent">%</option></select><ChevronDown size={15} /></label><label className="field"><span>{discountType === "Percent" ? (id ? "Persen diskon (mis. 10 atau 12,5)" : "Discount percent (e.g. 10 or 12.5)") : (id ? "Nilai diskon" : "Discount amount")}</span><input type="text" inputMode="decimal" placeholder={discountType === "Percent" ? "10" : "1000000"} value={discountValueInput} onChange={(event) => { const raw = event.target.value; if (discountType === "Percent" ? /^\d{0,3}([.,]\d{0,2})?$/.test(raw) : /^\d*$/.test(raw)) setDiscountValueInput(raw); }} /></label></>}
               <label className="field select-field"><span>{id ? "Pembulatan" : "Rounding"}</span><select value={roundingMode} onChange={(event) => { const nextMode = event.target.value as typeof roundingMode; setRoundingMode(nextMode); setRoundingAdjustmentInput(""); }}><option value="None">{id ? "Tanpa pembulatan" : "No rounding"}</option><option value="Up">{id ? "Ke atas" : "Round up"}</option><option value="Down">{id ? "Ke bawah" : "Round down"}</option><option value="Custom">Custom</option></select><ChevronDown size={15} /></label>
               {roundingMode !== "None" && roundingMode !== "Custom" && <label className="field select-field"><span>{id ? "Kelipatan" : "Increment"}</span><select value={roundingStep} onChange={(event) => setRoundingStep(Number(event.target.value))}><option value={1000}>Rp1.000</option><option value={10000}>Rp10.000</option><option value={100000}>Rp100.000</option></select><ChevronDown size={15} /></label>}
-              {roundingMode === "Custom" && <><label className="field"><span>{id ? "Penyesuaian (+/-)" : "Adjustment (+/-)"}</span><input type="text" inputMode="numeric" autoComplete="off" placeholder="0" pattern="-?[0-9]*" value={roundingAdjustmentInput} onChange={(event) => { const raw = event.target.value; if (/^-?\d*$/.test(raw)) setRoundingAdjustmentInput(raw); }} /></label><label className="field full"><span>{id ? "Alasan wajib" : "Required reason"}</span><textarea required minLength={5} value={roundingReason} onChange={(event) => setRoundingReason(event.target.value)} /></label></>}
+              {roundingMode === "Custom" && <><label className="field"><span>{id ? "Penyesuaian (+/-)" : "Adjustment (+/-)"}</span><input type="text" inputMode="numeric" autoComplete="off" placeholder="0" pattern="-?[0-9]*" aria-describedby="quotation-rounding-limit" value={roundingAdjustmentInput} onChange={(event) => { const raw = event.target.value; if (/^-?\d*$/.test(raw)) setRoundingAdjustmentInput(raw); }} /></label><p className={`form-hint full${customRoundingOverLimit ? " attention" : ""}`} id="quotation-rounding-limit">{customRoundingOverLimit
+                ? (id
+                  ? `Melebihi batas. Pembulatan khusus maksimal ±${formatCurrency(customRoundingLimit, language)} untuk nilai ini; simpan akan ditolak. Perubahan harga yang lebih besar adalah diskon atau pajak.`
+                  : `Over the limit. A custom rounding may move this value by at most ±${formatCurrency(customRoundingLimit, language)}; saving will be refused. A larger change to the price is a discount or a tax.`)
+                : (id
+                  ? `Pembulatan khusus maksimal ±${formatCurrency(customRoundingLimit, language)} untuk nilai ini — mana yang lebih besar antara Rp 100.000 dan 1% dari nilai sebelum pembulatan. Gunakan kolom diskon atau pajak untuk perubahan harga yang lebih besar.`
+                  : `A custom rounding may move this value by at most ±${formatCurrency(customRoundingLimit, language)} — the larger of Rp 100,000 and 1% of the value before rounding. Use the discount or tax fields for a larger change to the price.`)}</p><label className="field full"><span>{id ? "Alasan wajib" : "Required reason"}</span><textarea required minLength={5} value={roundingReason} onChange={(event) => setRoundingReason(event.target.value)} /></label></>}
               <div className="invoice-form-summary full"><span>{id ? "Subtotal BoQ" : "BoQ subtotal"}</span><strong>{formatCurrency(boqTotal, language)}</strong><small>{id ? "Urutan: subtotal − diskon + pajak ± pembulatan." : "Order: subtotal − discount + tax ± rounding."}</small></div>
               <div className="invoice-form-summary full"><span>{id ? "Perkiraan total tagihan klien" : "Estimated total billed to client"}</span><strong>{formatCurrency((() => {
-                const previewDiscount = discountEnabled
-                  ? discountType === "Percent"
-                    ? Math.round((boqTotal * Math.min(10_000, parseDiscountInput("Percent", discountValueInput))) / 10_000)
-                    : Math.min(boqTotal, parseDiscountInput("Nominal", discountValueInput))
-                  : 0;
-                const previewBase = Math.max(0, boqTotal - previewDiscount);
-                const beforeRounding = previewBase + (quotation?.taxAdditions ?? 0);
+                const beforeRounding = previewBeforeRounding;
                 const step = [1_000, 10_000, 100_000].includes(roundingStep) ? roundingStep : 0;
+                // Mirrors the server clamp so the preview shows what would
+                // actually be stored, not what was typed past the cap.
                 const adjustment = roundingMode === "Custom"
-                  ? parseRoundingAdjustment(roundingAdjustmentInput)
+                  ? Math.max(-customRoundingLimit, Math.min(customRoundingLimit, parseRoundingAdjustment(roundingAdjustmentInput)))
                   : roundingMode === "Up" && step > 0
                     ? Math.ceil(beforeRounding / step) * step - beforeRounding
                     : roundingMode === "Down" && step > 0

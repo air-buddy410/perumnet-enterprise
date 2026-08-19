@@ -9,6 +9,8 @@ import {
   type EnterpriseRole,
 } from "@/shared/access";
 import { getDatabase } from "./db/client";
+import { authProviderMode, verifyMailserverPassword } from "./mail-auth";
+import { isProductionRuntime } from "./runtime-env";
 import type { DatabaseClient } from "./db/client";
 import { ApiError } from "./api/errors";
 
@@ -86,7 +88,11 @@ function parseCookies(header: string | null) {
 }
 
 function serializeCookie(name: string, value: string, maxAge: number) {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  // Read through the runtime helper, not the bare literal: Next inlines
+  // `process.env.NODE_ENV` at compile time, so a server started with
+  // `NODE_ENV=production next dev` would hand out a session cookie without the
+  // Secure flag. See server/runtime-env.ts.
+  const secure = isProductionRuntime() ? "; Secure" : "";
   const configuredBasePath = process.env.NEXT_PUBLIC_BASE_PATH?.trim() ?? "";
   const cookiePath =
     configuredBasePath && configuredBasePath !== "/"
@@ -95,11 +101,20 @@ function serializeCookie(name: string, value: string, maxAge: number) {
   return `${name}=${encodeURIComponent(value)}; Path=${cookiePath}; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
 }
 
+// A bcrypt digest at the same cost factor the application uses for real
+// passwords (12). When no account matches, we still run a full comparison
+// against this value so both paths cost the same. Without it the request that
+// finds no row returned in a few milliseconds while a real account spent the
+// ~200ms bcrypt needs, and that gap alone told an attacker which addresses are
+// registered. Nothing hashes to it; it is not a usable password.
+const ABSENT_ACCOUNT_PASSWORD_HASH =
+  "$2b$12$hrZ1mh6YKsTSNlHAQsAzy.gvJYs4rUXP2sAoADK/jNt00Im9gQXWq";
+
 export async function verifyCredentials(email: string, password: string) {
   const { client } = await getDatabase();
   const result = await client.execute({
     sql: `
-      SELECT u.id,u.name,u.email,u.password_hash,u.role,u.status,
+      SELECT u.id,u.name,u.email,u.password_hash,u.role,u.status,u.allow_local_login,
         p.preferred_language,p.avatar_mime_type,p.updated_at AS profile_updated_at,
         up.permissions_json
       FROM users u
@@ -111,14 +126,58 @@ export async function verifyCredentials(email: string, password: string) {
   });
   const row = result.rows[0];
 
-  if (!row || !(await compare(password, String(row.password_hash)))) {
-    throw new ApiError(401, "INVALID_CREDENTIALS", "Email atau kata sandi tidak sesuai.");
+  // ── Di mana kata sandi diperiksa ────────────────────────────────
+  //
+  // Mode MAILSERVER memindahkan pemeriksaan dari hash lokal ke mailcow: yang
+  // sah adalah kata sandi EMAIL orang itu. Hash lokal tetap dipakai untuk akun
+  // darurat (`allow_local_login`) — tanpa itu, mailserver yang mati berarti
+  // tidak ada seorang pun bisa masuk untuk membetulkannya.
+  //
+  // Alamat yang TIDAK punya akun di sini tidak pernah dikirim ke mailcow, walau
+  // mode mailserver menyala. Kalau dikirim, aplikasi ini berubah jadi alat
+  // menebak mailbox: siapa pun bisa menanyakan "apakah alamat ini ada" dan
+  // "apakah kata sandi ini benar" untuk alamat yang bukan penggunanya.
+  const allowLocalLogin = row ? Number(row.allow_local_login ?? 0) === 1 : false;
+  const lewatMailserver =
+    Boolean(row) && authProviderMode() === "MAILSERVER" && !allowLocalLogin;
+
+  if (lewatMailserver) {
+    const hasil = await verifyMailserverPassword(String(row.email), password);
+    if (!hasil.ok) {
+      if (hasil.reason === "REJECTED") {
+        throw new ApiError(401, "INVALID_CREDENTIALS", "Email atau kata sandi tidak sesuai.");
+      }
+      // Dibedakan DENGAN SENGAJA dari "kata sandi salah": memberitahu yang
+      // keliru membuat orang mereset kata sandi email yang sebenarnya tidak
+      // bermasalah. `hasil.detail` sengaja TIDAK ikut ke pemanggil — ia
+      // menyebut nama host dan kondisi jaringan.
+      console.warn(`[auth] mailserver tidak terjawab: ${hasil.detail}`);
+      throw new ApiError(
+        503,
+        "MAILSERVER_UNREACHABLE",
+        "Mailserver sedang tidak bisa dihubungi, jadi login belum bisa diproses. Coba lagi sebentar lagi atau hubungi IT.",
+      );
+    }
+  } else {
+    // Always hash, even when there is no account, so the two paths are
+    // indistinguishable by timing.
+    const passwordMatches = await compare(
+      password,
+      row ? String(row.password_hash) : ABSENT_ACCOUNT_PASSWORD_HASH,
+    );
+    if (!row || !passwordMatches) {
+      throw new ApiError(401, "INVALID_CREDENTIALS", "Email atau kata sandi tidak sesuai.");
+    }
   }
   if (row.status !== "Aktif") {
     throw new ApiError(403, "ACCOUNT_INACTIVE", "Akun ini sedang dinonaktifkan.");
   }
 
-  return authUserFromRow(row);
+  return {
+    user: authUserFromRow(row),
+    /** Dipakai audit log: pemakaian pintu darurat harus terlihat. */
+    jalur: lewatMailserver ? ("mailserver" as const) : ("lokal" as const),
+  };
 }
 
 export async function createSession(userId: string, remember: boolean) {
@@ -158,6 +217,36 @@ export async function revokeSession(request: Request) {
   await client.execute({
     sql: "DELETE FROM sessions WHERE token_hash = ?",
     args: [sha256(token)],
+  });
+}
+
+/**
+ * Ends every session belonging to `userId` except the one that made this
+ * request. Changing your own password has to evict whoever else is holding a
+ * stolen cookie; logging yourself out at the same moment would only teach
+ * people to avoid rotating their password.
+ */
+export async function revokeOtherSessions(
+  client: DatabaseClient,
+  request: Request,
+  userId: string,
+) {
+  const token = parseCookies(request.headers.get("cookie")).get(SESSION_COOKIE);
+  if (!token) {
+    await revokeAllSessions(client, userId);
+    return;
+  }
+  await client.execute({
+    sql: "DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?",
+    args: [userId, sha256(token)],
+  });
+}
+
+/** Ends every session belonging to `userId`, including the caller's own. */
+export async function revokeAllSessions(client: DatabaseClient, userId: string) {
+  await client.execute({
+    sql: "DELETE FROM sessions WHERE user_id = ?",
+    args: [userId],
   });
 }
 
@@ -236,4 +325,57 @@ export async function createPasswordResetToken(client: DatabaseClient, userId: s
 
 export function hashResetToken(token: string) {
   return sha256(token);
+}
+
+export function emailChangeTokenMinutes() {
+  const configured = Number(process.env.EMAIL_CHANGE_TOKEN_MINUTES);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : 60;
+}
+
+/**
+ * Stores a pending email change and returns the raw confirmation token. The
+ * account keeps its current address until the token comes back, so a stolen
+ * session cannot move the recovery address out from under the real owner.
+ * Requesting a new change supersedes any earlier pending one.
+ */
+export async function createEmailChangeToken(
+  client: DatabaseClient,
+  input: {
+    userId: string;
+    currentEmail: string;
+    newEmail: string;
+    requestedBy: string;
+  },
+) {
+  const rawToken = randomBytes(32).toString("base64url");
+  const now = new Date();
+  await client.batch(
+    [
+      {
+        sql: "DELETE FROM email_change_requests WHERE user_id = ? OR expires_at <= ?",
+        args: [input.userId, now.toISOString()],
+      },
+      {
+        sql: `INSERT INTO email_change_requests
+          (id,user_id,current_email,new_email,token_hash,requested_by,expires_at,created_at)
+          VALUES (?,?,?,?,?,?,?,?)`,
+        args: [
+          randomUUID(),
+          input.userId,
+          input.currentEmail,
+          input.newEmail,
+          sha256(rawToken),
+          input.requestedBy,
+          new Date(
+            now.getTime() + emailChangeTokenMinutes() * 60 * 1000,
+          ).toISOString(),
+          now.toISOString(),
+        ],
+      },
+    ],
+    "write",
+  );
+  return rawToken;
 }

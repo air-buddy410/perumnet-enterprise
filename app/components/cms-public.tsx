@@ -4,7 +4,9 @@ import {
   ArrowRight,
   Building2,
   Camera,
+  Cctv,
   Check,
+  ChevronRight,
   Clock3,
   Code2,
   Globe2,
@@ -30,16 +32,27 @@ import type {
   CmsTestimonial,
 } from "@/server/cms";
 import type { PublicLanguage } from "@/server/public-language";
-import { businessStructuredData } from "@/server/public-seo";
+import {
+  breadcrumbStructuredData,
+  businessStructuredData,
+  serviceCopy,
+  serviceStructuredData,
+} from "@/server/public-seo";
 import { PublicLanguageSwitcher } from "./public-language-switcher";
 import { PublicLeadForm } from "./public-lead-form";
 import { PublicMobileMenu } from "./public-mobile-menu";
 import { PublicMotionController } from "./public-motion-controller";
-import { PublicPortfolioImage } from "./public-portfolio-image";
+import { PortfolioGallery } from "./portfolio-gallery";
+import { SiteAnalytics } from "./site-analytics";
+import { measurementId } from "../analytics";
 import styles from "../site.module.css";
 
 const serviceIcons = {
   wifi: Wifi,
+  // A surveillance camera on its mount, not a photo camera. `camera` stays
+  // available because removing an enum value would break any row already using
+  // it; this is an addition, not a rename.
+  cctv: Cctv,
   camera: Camera,
   phone: Phone,
   network: Network,
@@ -81,6 +94,21 @@ function publicHref(language: PublicLanguage, path: string) {
   return `/en${path}`;
 }
 
+/**
+ * The one way structured data reaches the document. PublicShell emits the
+ * Organization node through it on every page; the service detail pages add
+ * their Service and BreadcrumbList nodes through the same component so there is
+ * a single place where JSON-LD is serialised and escaped.
+ */
+function StructuredData({ data }: { data: unknown }) {
+  return (
+    <script
+      type="application/ld+json"
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(data).replaceAll("<", "\\u003c") }}
+    />
+  );
+}
+
 function Brand({ language }: { language: PublicLanguage }) {
   return (
     <Link href={publicHref(language, "/")} className={styles.brand} aria-label={`PerumNet Enterprise — ${language === "id" ? "Beranda" : "Home"}`}>
@@ -114,6 +142,7 @@ export function PublicShell({
   const configuredSurfaceColor = content.settings.dark_font_color || "#FFFFFF";
   const surfaceColor = /^#[0-9a-f]{6}$/i.test(configuredSurfaceColor) ? configuredSurfaceColor : "#FFFFFF";
   const motionEnabled = content.settings.motion_enabled !== "false";
+  const gaMeasurementId = measurementId();
 
   return (
     <div
@@ -123,11 +152,22 @@ export function PublicShell({
       lang={language}
       style={{ "--surface-text": surfaceColor } as CSSProperties}
     >
+      {/*
+        Analytics hangs off the public shell rather than the root layout, which
+        is shared with /admin, /panel and the BAST verification page. Placing it
+        here means the console routes never render the component at all — the
+        tag cannot reach staff traffic by accident, only by someone deliberately
+        wrapping the ERP in PublicShell.
+
+        The ternary rather than letting <SiteAnalytics> return null for itself:
+        a rendered client component is a client boundary whether or not it draws
+        anything, so its chunk is fetched and hydrated on every page. Not
+        rendering it keeps it out of the flight payload entirely, which is what
+        the demo build — and production until the owner pastes an ID — needs.
+      */}
+      {gaMeasurementId ? <SiteAnalytics measurementId={gaMeasurementId} /> : null}
       <PublicMotionController enabled={motionEnabled} />
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(businessStructuredData(content, language)).replaceAll("<", "\\u003c") }}
-      />
+      <StructuredData data={businessStructuredData(content, language)} />
       <header className={styles.header}>
         <div className={styles.navWrap}>
           <Brand language={language} />
@@ -165,7 +205,7 @@ export function PublicShell({
           </div>
           <div>
             <h3>{language === "id" ? "Layanan" : "Services"}</h3>
-            <ul>{content.services.map((service) => <li key={service.id}><Link href={publicHref(language, `/services#${service.slug}`)}>{localized(service.title, service.titleEn, language)}</Link></li>)}</ul>
+            <ul>{content.services.map((service) => <li key={service.id}><Link href={publicHref(language, `/services/${service.slug}`)}>{localized(service.title, service.titleEn, language)}</Link></li>)}</ul>
           </div>
           <div>
             <h3>{language === "id" ? "Kontak" : "Contact"}</h3>
@@ -196,7 +236,7 @@ export function ServiceCard({ service, index = 0, language }: { service: CmsServ
   const Icon = serviceIcons[service.icon as keyof typeof serviceIcons] || Network;
   const title = localized(service.title, service.titleEn, language);
   return (
-    <Link className={styles.serviceCard} href={publicHref(language, `/services#${service.slug}`)} aria-label={`${language === "id" ? "Pelajari layanan" : "Explore service"} ${title}`}>
+    <Link className={styles.serviceCard} href={publicHref(language, `/services/${service.slug}`)} aria-label={`${language === "id" ? "Pelajari layanan" : "Explore service"} ${title}`}>
       <div className={styles.cardTopline}><span>{String(index + 1).padStart(2, "0")}</span><Icon size={26} /></div>
       <h3>{title}</h3>
       <p>{localized(service.summary, service.summaryEn, language)}</p>
@@ -210,7 +250,7 @@ export function PortfolioCard({ item, language }: { item: CmsPortfolio; language
   return (
     <article className={styles.portfolioCard}>
       <div className={styles.portfolioImage}>
-        <PublicPortfolioImage src={item.imageUrl} alt={title} />
+        <PortfolioGallery images={item.gallery} title={title} language={language} />
         {item.location && <span><MapPin size={13} /> {localized(item.location, item.locationEn, language)}</span>}
       </div>
       <div className={styles.portfolioCopy}>
@@ -241,7 +281,7 @@ function LabsSection({ service, language }: { service: CmsService; language: Pub
         <span className={styles.eyebrowDark}><TerminalSquare size={15} /> PERUMNET LABS</span>
         <h2>{language === "id" ? "Software yang dibangun mengikuti alur bisnis Anda." : "Software built around the way your business works."}</h2>
         <p>{localized(service.description, service.descriptionEn, language)}</p>
-        <Link className={styles.inlineButton} href={publicHref(language, `/services#${service.slug}`)}>{language === "id" ? "Jelajahi PerumNet Labs" : "Explore PerumNet Labs"} <ArrowRight size={17} /></Link>
+        <Link className={styles.inlineButton} href={publicHref(language, `/services/${service.slug}`)}>{language === "id" ? "Jelajahi PerumNet Labs" : "Explore PerumNet Labs"} <ArrowRight size={17} /></Link>
       </div>
       <div className={styles.codeWindow} aria-label={language === "id" ? "Ilustrasi pengembangan perangkat lunak" : "Software development illustration"}>
         <div><span /><span /><span /><small>perumnet-labs.ts</small></div>
@@ -346,7 +386,7 @@ export function HomePage({ content, language }: { content: CmsContent; language:
             <div className={styles.visualCenter}><img src="/perumnet-mark.png" alt="PerumNet Enterprise" /></div>
             <div className={`${styles.visualNode} ${styles.nodeWifi}`}><Wifi size={24} /><span>{wifi ? localized(wifi.title, wifi.titleEn, language) : "Managed WiFi"}</span><small>{language === "id" ? "Terpantau" : "Monitored"}</small></div>
             <div className={`${styles.visualNode} ${styles.nodeSmartHome}`}><Home size={24} /><span>{smartHome ? localized(smartHome.title, smartHome.titleEn, language) : "Smart Home"}</span><small>{language === "id" ? "Terintegrasi" : "Integrated"}</small></div>
-            <div className={`${styles.visualNode} ${styles.nodeCamera}`}><Camera size={24} /><span>{cctv ? localized(cctv.title, cctv.titleEn, language) : "CCTV"}</span><small>{language === "id" ? "Terlindungi" : "Protected"}</small></div>
+            <div className={`${styles.visualNode} ${styles.nodeCamera}`}><Cctv size={24} /><span>{cctv ? localized(cctv.title, cctv.titleEn, language) : "CCTV"}</span><small>{language === "id" ? "Terlindungi" : "Protected"}</small></div>
             <div className={`${styles.visualNode} ${styles.nodePhone}`}><Phone size={24} /><span>{pabx ? localized(pabx.title, pabx.titleEn, language) : "IP PABX"}</span><small>{language === "id" ? "Terhubung" : "Connected"}</small></div>
             <div className={`${styles.visualNode} ${styles.nodeLabs}`}><Code2 size={24} /><span>{labs ? localized(labs.title, labs.titleEn, language) : "PerumNet Labs"}</span><small>{language === "id" ? "Dikembangkan" : "Building"}</small></div>
             <div className={styles.signalCard}><span className={styles.liveDot} /> {language === "id" ? "Sistem terpantau" : "Monitored systems"} <strong>24/7</strong></div>
@@ -404,8 +444,8 @@ export function HomePage({ content, language }: { content: CmsContent; language:
   );
 }
 
-export function PageHero({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
-  return <section className={styles.pageHero} data-reveal><span className={styles.eyebrow}>{eyebrow}</span><h1>{title}</h1><p>{description}</p><div className={styles.pageHeroMark}><img src="/perumnet-mark.png" alt="" /></div></section>;
+export function PageHero({ eyebrow, title, description, breadcrumb }: { eyebrow: string; title: string; description: string; breadcrumb?: React.ReactNode }) {
+  return <section className={styles.pageHero} data-reveal>{breadcrumb}<span className={styles.eyebrow}>{eyebrow}</span><h1>{title}</h1><p>{description}</p><div className={styles.pageHeroMark}><img src="/perumnet-mark.png" alt="" /></div></section>;
 }
 
 export function ServicesPage({ content, language }: { content: CmsContent; language: PublicLanguage }) {
@@ -413,13 +453,93 @@ export function ServicesPage({ content, language }: { content: CmsContent; langu
     <PageHero eyebrow={language === "id" ? "LAYANAN PERUMNET ENTERPRISE" : "PERUMNET ENTERPRISE SERVICES"} title={text(content, language, "services", "page_title", "Infrastruktur yang siap mengikuti ritme bisnis Anda.", "Infrastructure ready to keep pace with your business.")} description={text(content, language, "services", "page_description", "Layanan konsultasi, instalasi, integrasi, dan pemeliharaan.", "Consulting, installation, integration, and maintenance services.")} />
     <section className={styles.detailList}>{content.services.map((service, index) => {
       const Icon = serviceIcons[service.icon as keyof typeof serviceIcons] || Network;
+      const title = localized(service.title, service.titleEn, language);
       return <article key={service.id} id={service.slug} className={styles.serviceDetail}>
         <div className={styles.detailNumber}>{String(index + 1).padStart(2, "0")}</div><div className={styles.detailIcon}><Icon size={34} /></div>
-        <div><h2>{localized(service.title, service.titleEn, language)}</h2><p className={styles.detailLead}>{localized(service.summary, service.summaryEn, language)}</p><p>{localized(service.description, service.descriptionEn, language)}</p></div>
+        <div>
+          <h2><Link href={publicHref(language, `/services/${service.slug}`)}>{title}</Link></h2>
+          <p className={styles.detailLead}>{localized(service.summary, service.summaryEn, language)}</p>
+          <p>{localized(service.description, service.descriptionEn, language)}</p>
+          <Link className={styles.inlineButton} href={publicHref(language, `/services/${service.slug}`)}>{language === "id" ? `Selengkapnya tentang ${title}` : `More about ${title}`} <ArrowRight size={16} /></Link>
+        </div>
         <ul>{(language === "en" && service.featuresEn.length ? service.featuresEn : service.features).map((feature) => <li key={feature}><Check size={16} /> {feature}</li>)}</ul>
       </article>;
     })}</section>
     <section className={styles.simpleCta}><div><h2>{language === "id" ? "Belum yakin layanan mana yang paling tepat?" : "Not sure which service fits best?"}</h2><p>{language === "id" ? "Kami dapat memulai dari survei singkat dan rekomendasi sesuai kebutuhan lokasi." : "We can start with a short discovery session and a recommendation for your site."}</p></div><a href={waLink(content, language)} target="_blank" rel="noreferrer">{language === "id" ? "Jadwalkan konsultasi" : "Schedule a consultation"} <ArrowRight size={18} /></a></section>
+  </PublicShell>;
+}
+
+/**
+ * One CMS service on its own indexable URL.
+ *
+ * Every word on the page comes out of cms_services or cms_site_settings — the
+ * component contributes labels and navigation, nothing about the service
+ * itself. The descriptions are one paragraph today, so the layout is built to
+ * accept more: `description` is split on blank lines and rendered as however
+ * many paragraphs the owner writes.
+ */
+export function ServiceDetailPage({ content, service, language }: { content: CmsContent; service: CmsService; language: PublicLanguage }) {
+  const copy = serviceCopy(service, language);
+  const Icon = serviceIcons[service.icon as keyof typeof serviceIcons] || Network;
+  // One trail, rendered twice: as the visible breadcrumb and as the
+  // BreadcrumbList. They cannot drift apart.
+  const trail = [
+    { name: language === "id" ? "Beranda" : "Home", path: "/" },
+    { name: language === "id" ? "Layanan" : "Services", path: "/services" },
+    { name: copy.title, path: `/services/${service.slug}` },
+  ];
+  const others = content.services.filter((item) => item.slug !== service.slug);
+  const paragraphs = copy.description.split(/\n\s*\n/).map((paragraph) => paragraph.trim()).filter(Boolean);
+
+  return <PublicShell content={content} language={language} active="services">
+    <StructuredData data={serviceStructuredData(content, language, service)} />
+    <StructuredData data={breadcrumbStructuredData(language, trail)} />
+    <PageHero
+      eyebrow={language === "id" ? "LAYANAN PERUMNET ENTERPRISE" : "PERUMNET ENTERPRISE SERVICE"}
+      title={copy.title}
+      description={copy.summary}
+      breadcrumb={
+        <nav className={styles.breadcrumb} aria-label={language === "id" ? "Remah roti" : "Breadcrumb"}>
+          <ol>
+            {trail.map((step, index) => (
+              <li key={step.path}>
+                {index === trail.length - 1
+                  ? <span aria-current="page">{step.name}</span>
+                  : <><Link href={publicHref(language, step.path)}>{step.name}</Link><ChevronRight size={13} aria-hidden="true" /></>}
+              </li>
+            ))}
+          </ol>
+        </nav>
+      }
+    />
+    <article className={`${styles.richPage} ${styles.serviceArticle}`}>
+      <div className={styles.richPageIcon}><Icon size={38} /></div>
+      <div className={styles.serviceBody}>
+        {paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
+        {copy.features.length > 0 && <>
+          <h2>{language === "id" ? "Yang termasuk dalam layanan ini" : "Included in this service"}</h2>
+          <ul className={styles.serviceFeatureList}>{copy.features.map((feature) => <li key={feature}><Check size={16} /> {feature}</li>)}</ul>
+        </>}
+        <div className={styles.serviceActions}>
+          <Link className={styles.inlineButton} href={publicHref(language, "/services")}>{language === "id" ? "Lihat semua layanan" : "View all services"} <ArrowRight size={16} /></Link>
+          <Link className={styles.inlineButton} href={publicHref(language, "/portfolio")}>{language === "id" ? "Lihat hasil pekerjaan" : "View our work"} <ArrowRight size={16} /></Link>
+        </div>
+      </div>
+    </article>
+    {others.length > 0 && <section className={styles.servicesSection}>
+      <div className={styles.sectionHeader}>
+        <div><span className={styles.eyebrowDark}>{language === "id" ? "LAYANAN LAINNYA" : "OTHER SERVICES"}</span><h2>{language === "id" ? "Layanan lain yang kami tangani." : "The other services we deliver."}</h2></div>
+        <p>{language === "id" ? "Setiap layanan memiliki halamannya sendiri." : "Each service has a page of its own."}</p>
+      </div>
+      <div className={styles.serviceGrid}>{others.map((item, index) => <ServiceCard key={item.id} service={item} index={index} language={language} />)}</div>
+    </section>}
+    <section className={styles.simpleCta}>
+      <div>
+        <h2>{language === "id" ? `Ingin membahas ${copy.title} untuk lokasi Anda?` : `Want to discuss ${copy.title} for your site?`}</h2>
+        <p>{language === "id" ? "Ceritakan lokasi dan kebutuhan Anda, kami bantu menentukan langkah pertama." : "Tell us about your location and requirements, and we will help you decide the first step."}</p>
+      </div>
+      <Link href={publicHref(language, "/contact")}>{language === "id" ? "Hubungi kami" : "Contact us"} <ArrowRight size={18} /></Link>
+    </section>
   </PublicShell>;
 }
 

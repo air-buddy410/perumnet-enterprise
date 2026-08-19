@@ -199,6 +199,32 @@
 .portfolioImage img { width: 100%; height: 100%; object-fit: cover; transition: transform .5s ease; }
 .portfolioCard:hover img { transform: scale(1.045); }
 .portfolioImage > span { position: absolute; left: 14px; bottom: 14px; padding: 7px 10px; display: inline-flex; align-items: center; gap: 5px; border-radius: 6px; color: #fff; background: rgba(25,50,56,.82); backdrop-filter: blur(8px); font-size: 12px; }
+.portfolioImageTrigger { width: 100%; height: 100%; display: block; padding: 0; border: 0; color: inherit; background: transparent; cursor: zoom-in; }
+.portfolioImageTrigger:disabled { cursor: default; }
+.portfolioImageTrigger:focus-visible { outline: 3px solid var(--gold); outline-offset: -3px; }
+.portfolioImageTrigger .imageFallback { min-height: 100%; }
+.portfolioGalleryCount { position: absolute; top: 14px; right: 14px; left: auto !important; bottom: auto !important; display: inline-flex; align-items: center; gap: 5px; padding: 7px 9px; border-radius: 6px; color: #fff; background: rgba(25,50,56,.82); backdrop-filter: blur(8px); font-size: 12px; line-height: 1; font-weight: 700; }
+.portfolioLightboxBackdrop { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(9,20,24,.86); backdrop-filter: blur(8px); animation: lightboxFade .18s ease-out; }
+.portfolioLightbox { width: min(1080px,100%); max-height: min(820px,calc(100vh - 48px)); display: grid; grid-template-rows: auto minmax(0,1fr) auto; overflow: hidden; border: 1px solid rgba(255,255,255,.18); border-radius: 16px; background: #102126; box-shadow: 0 24px 70px rgba(0,0,0,.42); }
+.portfolioLightboxTopline { min-height: 58px; padding: 0 14px 0 20px; display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 16px; align-items: center; color: #fff; font-size: 14px; }
+.portfolioLightboxTopline > span:first-child { overflow: hidden; font-family: "Plus Jakarta Sans",sans-serif; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.portfolioLightboxTopline > span:nth-child(2) { color: rgba(255,255,255,.68); font-variant-numeric: tabular-nums; }
+.portfolioLightboxClose, .portfolioLightboxArrow, .portfolioLightboxThumbs button { border: 0; color: #fff; background: transparent; cursor: pointer; }
+.portfolioLightboxClose { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; }
+.portfolioLightboxClose:hover, .portfolioLightboxClose:focus-visible { background: rgba(255,255,255,.14); }
+.portfolioLightboxStage { position: relative; min-height: 0; display: grid; place-items: center; background: #081115; touch-action: pan-y; }
+.portfolioLightboxStage > img { width: 100%; height: 100%; max-height: 660px; object-fit: contain; transition: opacity .18s ease; }
+.portfolioLightboxArrow { position: absolute; top: 50%; width: 46px; height: 46px; display: grid; place-items: center; border-radius: 50%; background: rgba(7,16,19,.72); transform: translateY(-50%); }
+.portfolioLightboxArrow:hover, .portfolioLightboxArrow:focus-visible { background: rgba(255,255,255,.2); }
+.portfolioLightboxArrowPrevious { left: 16px; }
+.portfolioLightboxArrowNext { right: 16px; }
+.portfolioLightboxThumbs { min-height: 82px; padding: 12px 16px; display: flex; gap: 9px; overflow-x: auto; background: #102126; }
+.portfolioLightboxThumbs button { width: 58px; height: 58px; flex: 0 0 58px; overflow: hidden; border: 2px solid transparent; border-radius: 7px; opacity: .58; }
+.portfolioLightboxThumbs button[aria-current="true"] { border-color: var(--gold); opacity: 1; }
+.portfolioLightboxThumbs button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.portfolioLightboxThumbs img { width: 100%; height: 100%; object-fit: cover; }
+@keyframes lightboxFade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .portfolioLightboxBackdrop { animation: none; } .portfolioLightboxStage > img { transition: none; } }
 .imageFallback { width: 100%; height: 100%; display: grid; place-items: center; color: var(--teal); background: linear-gradient(145deg,#e8f5f2,#c7e7e2); }
 .portfolioCopy { padding: 21px 22px 25px; }
 .portfolioCopy p { margin: 0; color: var(--teal-dark); font-size: 12px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
@@ -298,6 +324,26 @@
 .richPageIcon { width: 86px; height: 86px; display: grid; place-items: center; border-radius: 16px; color: var(--teal-dark); background: #e8f7f4; }
 .richPage p { margin: 0 0 24px; color: #52676d; font-size: 17px; line-height: 1.9; }
 
+/* The 430px floor on .richPage is there so a two-paragraph CMS page still
+   fills a screen. A service body is short today and short bodies read better
+   tight than padded out with empty space, so it opts out and grows with
+   whatever the owner writes. */
+.serviceArticle { min-height: 0; padding-bottom: 40px; }
+
+.breadcrumb { margin-bottom: 18px; }
+.breadcrumb ol { list-style: none; margin: 0; padding: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; }
+.breadcrumb li { min-width: 0; display: inline-flex; align-items: center; gap: 10px; color: rgba(255,255,255,.72); color: color-mix(in srgb, var(--surface-text) 72%, transparent); font-size: 13px; font-weight: 700; overflow-wrap: break-word; }
+.breadcrumb a:hover { color: var(--surface-text); text-decoration: underline; }
+.breadcrumb [aria-current="page"] { color: var(--surface-text); }
+.breadcrumb svg { flex: 0 0 auto; opacity: .5; }
+
+.serviceBody h2 { margin: 6px 0 20px; font-family: "Plus Jakarta Sans", sans-serif; font-size: 22px; letter-spacing: -.03em; }
+.serviceFeatureList { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px 22px; }
+.serviceFeatureList li { min-width: 0; display: flex; align-items: center; gap: 9px; color: #4c6268; font-size: 15px; line-height: 1.5; overflow-wrap: break-word; }
+.serviceFeatureList li svg { flex: 0 0 auto; padding: 3px; border-radius: 50%; color: #fff; background: var(--teal); }
+.serviceActions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 26px; }
+.serviceDetail h2 a:hover { color: var(--teal-dark); }
+
 .footer { padding: 76px max(24px,calc((100vw - 1180px)/2)) 0; color: #d8e4e3; background: #20353d; }
 .footerGrid { display: grid; grid-template-columns: 1.4fr .6fr .75fr 1.15fr; gap: 62px; padding-bottom: 58px; }
 .footer .brand strong { color: #fff; }
@@ -394,7 +440,7 @@
   .closingCta, .simpleCta { gap: 28px; }
   .closingCta > a, .simpleCta > a { justify-self: start; }
   .pageHero { min-height: 390px; padding-top: 82px; }
-  .pageHero h1, .pageHero > p { max-width: 60%; }
+  .pageHero h1, .pageHero > p, .pageHero .breadcrumb { max-width: 60%; }
   .pageHeroMark { width: 220px; height: 220px; right: 18px; }
   .pageHeroMark img { width: 172px; height: 172px; }
   .serviceDetail { grid-template-columns: 46px 58px 1fr; }
@@ -452,7 +498,8 @@
   .testimonialSection { padding-top: 76px; padding-bottom: 85px; }
   .closingCta { padding-top: 44px; padding-bottom: 44px; }
   .pageHero { min-height: 510px; padding: 72px 16px 190px; }
-  .pageHero h1, .pageHero > p { max-width: 100%; }
+  .pageHero h1, .pageHero > p, .pageHero .breadcrumb { max-width: 100%; }
+  .serviceFeatureList { grid-template-columns: 1fr; }
   .pageHeroMark { width: 122px; height: 122px; right: 16px; top: auto; bottom: 34px; transform: rotate(-2deg); border-radius: 22px; }
   .pageHeroMark img { width: 96px; height: 96px; border-radius: 16px; }
   .detailList { padding-top: 55px; padding-bottom: 75px; }
@@ -460,6 +507,13 @@
   .detailIcon { grid-column: 2; width: 52px; height: 52px; }
   .serviceDetail > div:nth-child(3), .serviceDetail ul { grid-column: 2; }
   .archiveSection { padding: 60px 0 80px; }
+  .portfolioLightboxBackdrop { padding: 0; }
+  .portfolioLightbox { width: 100%; height: 100dvh; max-height: none; border: 0; border-radius: 0; }
+  .portfolioLightboxTopline { padding-left: 16px; }
+  .portfolioLightboxStage > img { max-height: none; }
+  .portfolioLightboxArrow { width: 40px; height: 40px; }
+  .portfolioLightboxArrowPrevious { left: 10px; }
+  .portfolioLightboxArrowNext { right: 10px; }
   .contactSection { padding: 60px 0 80px; }
   .contactCards > a, .contactCards > div { padding: 18px; grid-template-columns: 30px 1fr auto; }
   .contactPanel { padding: 26px 18px; }

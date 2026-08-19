@@ -114,6 +114,15 @@ export function localizedLabel(language: AppLanguage, value: string) {
   return labels[value] ?? value;
 }
 
+// The four BoQ roles are stored in Indonesian and are the option values of
+// every role filter, so only the visible label is translated — never the value.
+export const BOQ_ROLES = ["Perangkat", "Material", "Jasa", "Mobilitas"] as const;
+
+export function localizedItemCount(language: AppLanguage, count: number) {
+  if (language === "id") return `${count} item`;
+  return `${count} ${count === 1 ? "item" : "items"}`;
+}
+
 export function localizedDate(language: AppLanguage, value?: string | null) {
   if (!value) return language === "id" ? "Belum ditentukan" : "Not specified";
   const source = value.slice(0, 10);
