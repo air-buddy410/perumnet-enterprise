@@ -1191,6 +1191,100 @@ CREATE TABLE IF NOT EXISTS public_form_rate_limits (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (fingerprint_hash, route_key)
 );
+
+-- ── Calon klien (prospek) ────────────────────────────────────────────
+--
+-- TERPISAH dari cms_leads dengan sengaja. cms_leads diisi pengunjung yang
+-- mencentang kotak privasi, dan kolomnya menuntut itu: whatsapp, location,
+-- service_interest, message, dan privacy_consent_at semuanya NOT NULL.
+-- Prospek dikumpulkan tim sendiri dan sering hanya punya nama, perusahaan,
+-- dan email. Memaksakannya ke tabel itu berarti mengisi nilai penambal dan
+-- membuat privacy_consent_at bermakna ganda — persis kolom yang paling mahal
+-- kalau salah dibaca nanti.
+CREATE TABLE IF NOT EXISTS cms_prospects (
+  id TEXT PRIMARY KEY,
+  full_name TEXT NOT NULL,
+  -- Boleh kosong: impor memasukkan kontak yang alamatnya meragukan TANPA email
+  -- dan melaporkan barisnya, alih-alih membuang kontaknya diam-diam.
+  email TEXT,
+  company_name TEXT,
+  job_title TEXT,
+  whatsapp TEXT,
+  location TEXT,
+  industry TEXT,
+  segment TEXT,
+  service_interest TEXT,
+  notes TEXT,
+  -- Dari mana kontak ini didapat. WAJIB: orangnya tidak pernah mencentang
+  -- kotak privasi, jadi catatan ini satu-satunya jawaban yang bisa
+  -- dipertanggungjawabkan atas "dari mana Anda dapat alamat email saya".
+  source TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'New'
+    CHECK (status IN ('New', 'Contacted', 'Qualified', 'Proposal', 'Won', 'Lost')),
+  assigned_to TEXT REFERENCES users(id) ON DELETE SET NULL,
+  opt_out_at TEXT,
+  opt_out_reason TEXT,
+  last_outreach_at TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS cms_prospects_status_idx
+  ON cms_prospects(status, created_at);
+CREATE INDEX IF NOT EXISTS cms_prospects_assigned_idx
+  ON cms_prospects(assigned_to, status);
+-- Satu alamat satu prospek, tapi hanya di antara baris yang masih hidup:
+-- tanpa penjaga WHERE, menghapus lalu memasukkan ulang kontak yang sama akan
+-- ditolak selamanya. Baris tanpa email dikecualikan — kalau tidak, prospek
+-- KEDUA yang belum punya alamat akan ditolak karena bentrok dengan yang
+-- pertama, padahal keduanya sah.
+CREATE UNIQUE INDEX IF NOT EXISTS cms_prospects_email_unique_idx
+  ON cms_prospects(lower(email))
+  WHERE deleted_at IS NULL AND email IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS cms_prospect_templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  body_html TEXT NOT NULL,
+  language TEXT NOT NULL DEFAULT 'id' CHECK (language IN ('id', 'en')),
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS cms_prospect_templates_live_idx
+  ON cms_prospect_templates(deleted_at, name);
+
+-- Riwayat surat yang benar-benar dikirim, menempel pada prospek.
+--
+-- Tabel sendiri, bukan menumpang email_outbox: outbox membuang isi pesan
+-- begitu barisnya mencapai status akhir (lihat pruneEmailOutbox di
+-- server/email.ts), sedangkan riwayat ini harus bertahan sebagai catatan
+-- klien — "surat apa yang sudah kita kirim ke mereka" adalah pertanyaan yang
+-- ditanyakan berbulan-bulan kemudian.
+CREATE TABLE IF NOT EXISTS cms_prospect_outreach (
+  id TEXT PRIMARY KEY,
+  prospect_id TEXT NOT NULL REFERENCES cms_prospects(id) ON DELETE CASCADE,
+  template_id TEXT REFERENCES cms_prospect_templates(id) ON DELETE SET NULL,
+  template_name TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  body_html TEXT,
+  status TEXT NOT NULL DEFAULT 'Queued'
+    CHECK (status IN ('Queued', 'Sent', 'Failed', 'Skipped')),
+  scheduled_for TEXT NOT NULL,
+  sent_at TEXT,
+  failure_reason TEXT,
+  outbox_id TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cms_prospect_outreach_prospect_idx
+  ON cms_prospect_outreach(prospect_id, created_at);
+CREATE INDEX IF NOT EXISTS cms_prospect_outreach_outbox_idx
+  ON cms_prospect_outreach(outbox_id);
 `;
 
 const now = "2026-07-18T06:00:00.000Z";

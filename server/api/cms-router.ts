@@ -18,6 +18,10 @@ import {
   ok,
 } from "./errors";
 import { dispatchLeadApi } from "./lead-router";
+import {
+  dispatchProspectApi,
+  dispatchProspectTemplateApi,
+} from "./prospect-router";
 import { dispatchMailLoginApi } from "./mail-login-router";
 
 const shortText = z.string().trim().min(1).max(180);
@@ -832,6 +836,10 @@ export async function dispatchCmsApi(request: Request, path: string[]) {
   if (resource === "portfolio-gallery-media" && id && request.method === "GET") return portfolioGalleryMediaResponse(request, id);
   if (resource === "partner-media" && id && request.method === "GET") return partnerMediaResponse(request, id);
   if (resource === "leads") return dispatchLeadApi(request, path);
+  if (resource === "prospects") return dispatchProspectApi(request, path);
+  if (resource === "prospect-templates") {
+    return dispatchProspectTemplateApi(request, path);
+  }
 
   const user = await admin(request);
   if (resource === "mail-login") return dispatchMailLoginApi(request, path, user);

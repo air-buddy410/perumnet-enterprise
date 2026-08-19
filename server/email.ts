@@ -14,6 +14,15 @@ interface EmailDeliveryInput {
   html: string;
   senderProfile?: EmailSenderProfile;
   respectPreference?: boolean;
+  /**
+   * ISO waktu paling awal pesan ini boleh dikirim. Dipakai untuk memberi jeda
+   * antar pesan dalam satu kampanye: worker hanya mengambil baris yang
+   * `next_attempt_at`-nya sudah lewat, jadi menjadwalkan ke depan sudah cukup
+   * tanpa mesin antrean tersendiri.
+   *
+   * Kosong berarti sekarang — perilaku setiap pemanggil yang sudah ada.
+   */
+  notBefore?: string;
 }
 
 interface EmailDeliveryResult {
@@ -220,7 +229,9 @@ async function enqueueOutbox(
       status === "Skipped" ? REDACTED_BODY : input.html,
       status,
       emailProviderName(input.senderProfile),
-      timestamp,
+      // Baris Skipped sudah final; menjadwalkannya ke depan tidak ada artinya
+      // dan hanya membuat laporan sulit dibaca.
+      status === "Pending" ? input.notBefore ?? timestamp : timestamp,
       error ?? null,
       timestamp,
       timestamp,
