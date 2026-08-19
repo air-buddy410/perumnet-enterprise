@@ -110,6 +110,39 @@ function serializeCookie(name: string, value: string, maxAge: number) {
 const ABSENT_ACCOUNT_PASSWORD_HASH =
   "$2b$12$hrZ1mh6YKsTSNlHAQsAzy.gvJYs4rUXP2sAoADK/jNt00Im9gQXWq";
 
+/**
+ * Memetakan apa yang diketik di kolom login ke alamat lengkap milik akun yang
+ * benar-benar ada. Yang mengandung `@` dipakai apa adanya; yang tidak
+ * diperlakukan sebagai username, yaitu bagian sebelum `@`.
+ *
+ * Pemetaannya lewat baris yang ADA, bukan dengan menempelkan domain bawaan.
+ * Menempelkan domain berarti mengarang alamat — dan alamat karangan itulah
+ * yang nanti dikirim ke mailcow, persis yang dilarang aturan kedua
+ * `docs/LOGIN-MAILCOW.md`.
+ *
+ * Kalau dua akun punya bagian-lokal yang sama, tidak ada yang dipilih.
+ * Menebak di situ berarti seseorang bisa masuk ke akun orang lain.
+ */
+export async function resolveLoginIdentity(
+  identity: string,
+): Promise<string | null> {
+  const bersih = identity.trim().toLowerCase();
+  if (!bersih) return null;
+  if (bersih.includes("@")) return bersih;
+
+  const { client } = await getDatabase();
+  // LIKE, bukan split_part(): yang terakhir hanya ada di Postgres sedangkan
+  // aplikasi ini juga jalan di libsql. `_` dan `%` sah di bagian-lokal alamat,
+  // jadi keduanya di-escape lebih dulu — tanpa itu `a_b` ikut mencocoki `axb`.
+  const pola = `${bersih.replace(/[\\%_]/g, (c) => `\\${c}`)}@%`;
+  const hasil = await client.execute({
+    sql: "SELECT email FROM users WHERE lower(email) LIKE ? ESCAPE '\\' LIMIT 2",
+    args: [pola],
+  });
+  if (hasil.rows.length !== 1) return null;
+  return String(hasil.rows[0].email).toLowerCase();
+}
+
 export async function verifyCredentials(email: string, password: string) {
   const { client } = await getDatabase();
   const result = await client.execute({

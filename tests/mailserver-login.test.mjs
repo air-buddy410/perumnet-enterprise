@@ -226,3 +226,124 @@ test("alamat tanpa akun ditolak 401, tidak pernah dikirim ke mailcow", async () 
   assert.equal(hasil.status, 401);
   assert.equal(hasil.code, "INVALID_CREDENTIALS");
 });
+
+// ── Jalur reset ditutup saat kata sandi hidup di mailcow ──────────────
+//
+// `reset-password` menulis `users.password_hash`, kolom yang di mode
+// MAILSERVER tidak dibaca untuk akun biasa. Tanpa penjaga, orang yang
+// terkunci menempuh seluruh alur, melihat "berhasil", tetap tidak bisa
+// masuk, DAN kehilangan semua sesinya.
+
+test("forgot-password ditolak 409 saat mode mailserver", async () => {
+  const response = await fetch(`${baseUrl}/api/auth/forgot-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-forwarded-for": "10.1.0.20" },
+    body: JSON.stringify({ email: ADMIN }),
+  });
+  const payload = await response.json().catch(() => null);
+
+  assert.equal(response.status, 409);
+  assert.equal(payload?.error?.code, "PASSWORD_RESET_UNAVAILABLE");
+  // Pesannya harus mengarahkan ke tempat kata sandinya benar-benar hidup.
+  assert.match(payload?.error?.message ?? "", /kata sandi email/i);
+});
+
+test("jawaban forgot-password sama untuk alamat yang tidak terdaftar", async () => {
+  const asing = await fetch(`${baseUrl}/api/auth/forgot-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-forwarded-for": "10.1.0.21" },
+    body: JSON.stringify({ email: "bukan-siapa-siapa@perumnet.id" }),
+  });
+  const payload = await asing.json().catch(() => null);
+
+  // Penjaganya dipasang sebelum akun dicari. Kalau dipasang sesudah, jawaban
+  // yang berbeda antara alamat terdaftar dan tidak akan membocorkan siapa saja
+  // yang punya akun di sini.
+  assert.equal(asing.status, 409);
+  assert.equal(payload?.error?.code, "PASSWORD_RESET_UNAVAILABLE");
+});
+
+test("reset-password ditolak tanpa menyentuh token sama sekali", async () => {
+  const response = await fetch(`${baseUrl}/api/auth/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-forwarded-for": "10.1.0.22" },
+    body: JSON.stringify({ token: "x".repeat(64), password: "kata-sandi-baru-1" }),
+  });
+  const payload = await response.json().catch(() => null);
+
+  // 409, bukan 400 INVALID_RESET_TOKEN: penjaganya berjalan lebih dulu, jadi
+  // token yang sudah terlanjur dibagikan sebelum saklar dinyalakan pun mati.
+  assert.equal(response.status, 409);
+  assert.equal(payload?.error?.code, "PASSWORD_RESET_UNAVAILABLE");
+});
+
+// ── Login dengan username tanpa @ ─────────────────────────────────────
+//
+// Pembedanya memakai fixture "mailserver mati" di berkas ini: username yang
+// BERHASIL dipetakan ke akun akan menempuh jalur mailcow dan berakhir 503,
+// sedangkan yang tidak dikenali berhenti di 401 tanpa pernah dikirim ke sana.
+
+test("username tanpa @ dipetakan ke akun yang ada", async () => {
+  await setelAkunDarurat(ADMIN, 0);
+  const hasil = await masuk("admin", "apa-saja-yang-penting-panjang", "10.1.0.23");
+
+  assert.equal(hasil.status, 503);
+  assert.equal(hasil.code, "MAILSERVER_UNREACHABLE");
+});
+
+test("username yang tidak dikenali berhenti 401, tidak dikirim ke mailcow", async () => {
+  const hasil = await masuk("tidakadaorangini", "apa-saja-yang-penting", "10.1.0.24");
+
+  assert.equal(hasil.status, 401);
+  assert.equal(hasil.code, "INVALID_CREDENTIALS");
+});
+
+test("username yang cocok ke dua akun tidak ditebak", async () => {
+  const client = createClient({ url: `file:${databasePath}` });
+  await client.execute({
+    sql: `INSERT INTO users (id,name,email,password_hash,role,status,created_at,updated_at,allow_local_login)
+          SELECT 'uji-ambigu','Kembar','admin@contoh.test',password_hash,role,status,created_at,updated_at,0
+          FROM users WHERE lower(email)=lower(?)`,
+    args: [ADMIN],
+  });
+  try {
+    const hasil = await masuk("admin", "apa-saja-yang-penting", "10.1.0.25");
+
+    // 401, bukan 503: dua akun berbagi bagian-lokal yang sama, jadi tidak ada
+    // yang dipilih. Menebak di sini berarti seseorang bisa masuk ke akun orang
+    // lain hanya karena username-nya kebetulan sama.
+    assert.equal(hasil.status, 401);
+    assert.equal(hasil.code, "INVALID_CREDENTIALS");
+  } finally {
+    await client.execute({ sql: "DELETE FROM users WHERE id='uji-ambigu'" });
+    client.close();
+  }
+});
+
+// ── GET /api/auth/mode ────────────────────────────────────────────────
+
+test("mode terbaca tanpa masuk, tapi status darurat tidak", async () => {
+  const response = await fetch(`${baseUrl}/api/auth/mode`);
+  const payload = await response.json().catch(() => null);
+
+  assert.equal(response.status, 200);
+  assert.equal(payload?.data?.mode, "MAILSERVER");
+  // Tanpa sesi, `allowLocalLogin` TIDAK ikut. Kalau ikut, siapa pun bisa
+  // menanyakan akun mana yang jadi pintu darurat — dan itu justru akun yang
+  // paling berharga untuk diserang saat mailserver dimatikan.
+  assert.equal("allowLocalLogin" in (payload?.data ?? {}), false);
+});
+
+test("dengan sesi, status darurat ikut terbaca", async () => {
+  await setelAkunDarurat(ADMIN, 1);
+  const masukLagi = await masuk(ADMIN, "kata-sandi-darurat-baru", "10.1.0.26");
+  assert.equal(masukLagi.status, 200);
+
+  const cookie = masukLagi.setCookie?.split(";")[0] ?? "";
+  const response = await fetch(`${baseUrl}/api/auth/mode`, { headers: { cookie } });
+  const payload = await response.json().catch(() => null);
+
+  assert.equal(response.status, 200);
+  assert.equal(payload?.data?.mode, "MAILSERVER");
+  assert.equal(payload?.data?.allowLocalLogin, true);
+});

@@ -30,6 +30,7 @@ import {
   getSessionUser,
   hashResetToken,
   requireUser,
+  resolveLoginIdentity,
   revokeAllSessions,
   revokeOtherSessions,
   revokeSession,
@@ -131,8 +132,23 @@ const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Gunakan format ta
 const nonNegativeMoney = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const positiveMoney = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 
+// Kolom login menerima alamat email ATAU username (bagian sebelum @). Namanya
+// tetap `email` supaya kontrak dengan layar tidak berubah. Validasinya tidak
+// bisa lagi `.email()`, tapi juga tidak dibiarkan bebas: yang lolos hanya
+// bentuk yang mungkin menjadi alamat di sini.
+const loginIdentitySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(254)
+  .regex(
+    /^[a-zA-Z0-9._%+-]+(@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})?$/,
+    "Masukkan email atau username.",
+  )
+  .transform((value) => value.toLowerCase());
+
 const loginSchema = z.object({
-  email: emailSchema,
+  email: loginIdentitySchema,
   password: z.string().min(8).max(128),
   remember: z.boolean().default(false),
 });
@@ -843,26 +859,51 @@ async function handleAuth(request: Request, path: string[]) {
     return ok({ user: await getSessionUser(request) }, 200, { "Cache-Control": "no-store" });
   }
 
+  // Mode yang sedang berlaku, supaya layar tidak menawarkan yang tidak bisa
+  // dipakai — tautan "Lupa kata sandi?" saat kata sandinya hidup di mailcow,
+  // misalnya. `mode` adalah sifat server, jadi boleh dibaca tanpa masuk: layar
+  // login memang harus tahu sebelum ada sesi. `allowLocalLogin` menempel pada
+  // ORANG, jadi hanya ikut kalau ada sesi yang sah — kalau tidak, siapa pun
+  // bisa menanyakan akun mana yang jadi pintu darurat.
+  if (request.method === "GET" && action === "mode") {
+    const user = await getSessionUser(request);
+    if (!user) return ok({ mode: authProviderMode() });
+    const { client } = await getDatabase();
+    const baris = await client.execute({
+      sql: "SELECT allow_local_login FROM users WHERE id=? LIMIT 1",
+      args: [user.id],
+    });
+    return ok({
+      mode: authProviderMode(),
+      allowLocalLogin: Number(baris.rows[0]?.allow_local_login ?? 0) === 1,
+    });
+  }
+
   if (request.method === "POST" && action === "login") {
     const input = loginSchema.parse(await jsonBody(request));
     const { client } = await getDatabase();
+    // Username dipetakan ke alamat lengkap SEBELUM throttle, supaya `budi` dan
+    // `budi@perumnet.id` memakai ember yang sama. Kalau dipisah, satu akun bisa
+    // dicoba dua kali lipat hanya dengan berganti ejaan. Pemetaan ini satu
+    // kueri berindeks, bukan bcrypt — jadi janji di bawah tetap utuh.
+    const alamat = (await resolveLoginIdentity(input.email)) ?? input.email;
     // Checked before any hashing, so a caller who is already blocked cannot
     // keep the server busy running bcrypt on their behalf.
-    await assertAuthRateLimit(client, request, "login", input.email);
+    await assertAuthRateLimit(client, request, "login", alamat);
     let user: AuthUser;
     let jalur: "mailserver" | "lokal";
     try {
-      ({ user, jalur } = await verifyCredentials(input.email, input.password));
+      ({ user, jalur } = await verifyCredentials(alamat, input.password));
     } catch (error) {
       if (
         error instanceof ApiError &&
         ["INVALID_CREDENTIALS", "ACCOUNT_INACTIVE"].includes(error.code)
       ) {
-        await recordAuthFailure(client, request, "login", input.email);
+        await recordAuthFailure(client, request, "login", alamat);
       }
       throw error;
     }
-    await clearAuthRateLimit(client, request, "login", input.email);
+    await clearAuthRateLimit(client, request, "login", alamat);
     // Masuk lewat kata sandi lokal saat mode mailserver menyala berarti akun
     // darurat dipakai. Itu pintu kebakaran yang sah, tapi pemakaiannya harus
     // terlihat — bukan tersembunyi di antara login biasa.
@@ -879,6 +920,25 @@ async function handleAuth(request: Request, path: string[]) {
   }
 
   if (request.method === "POST" && action === "forgot-password") {
+    // ── Reset tidak berlaku saat kata sandi hidup di mailcow ────────
+    //
+    // `reset-password` menulis `users.password_hash`. Di mode MAILSERVER kolom
+    // itu tidak dibaca untuk akun biasa (lihat auth.ts), jadi alurnya berhasil
+    // di layar tapi tidak mengubah apa pun yang menentukan akses — dan sesi
+    // orang itu ikut terhapus, sehingga ia justru lebih terkunci. Ditolak di
+    // sini, sebelum akun dicari, supaya jawabannya tidak membocorkan alamat
+    // mana yang terdaftar.
+    //
+    // Akun darurat ikut ditolak dengan sengaja: kata sandinya disetel lewat
+    // `scripts/setel-akun-darurat.mjs`, dan tautan reset ke kotak surat sendiri
+    // tetap butuh kata sandi email — berputar tanpa jalan keluar.
+    if (authProviderMode() === "MAILSERVER") {
+      throw new ApiError(
+        409,
+        "PASSWORD_RESET_UNAVAILABLE",
+        "Kata sandi yang berlaku di sini adalah kata sandi email Anda. Reset lewat webmail, atau hubungi IT.",
+      );
+    }
     const input = z.object({
       email: emailSchema,
       surface: z.enum(["admin", "panel"]).optional().default("admin"),
@@ -936,6 +996,25 @@ async function handleAuth(request: Request, path: string[]) {
   }
 
   if (request.method === "POST" && action === "reset-password") {
+    // ── Reset tidak berlaku saat kata sandi hidup di mailcow ────────
+    //
+    // `reset-password` menulis `users.password_hash`. Di mode MAILSERVER kolom
+    // itu tidak dibaca untuk akun biasa (lihat auth.ts), jadi alurnya berhasil
+    // di layar tapi tidak mengubah apa pun yang menentukan akses — dan sesi
+    // orang itu ikut terhapus, sehingga ia justru lebih terkunci. Ditolak di
+    // sini, sebelum akun dicari, supaya jawabannya tidak membocorkan alamat
+    // mana yang terdaftar.
+    //
+    // Akun darurat ikut ditolak dengan sengaja: kata sandinya disetel lewat
+    // `scripts/setel-akun-darurat.mjs`, dan tautan reset ke kotak surat sendiri
+    // tetap butuh kata sandi email — berputar tanpa jalan keluar.
+    if (authProviderMode() === "MAILSERVER") {
+      throw new ApiError(
+        409,
+        "PASSWORD_RESET_UNAVAILABLE",
+        "Kata sandi yang berlaku di sini adalah kata sandi email Anda. Reset lewat webmail, atau hubungi IT.",
+      );
+    }
     const input = z
       .object({ token: z.string().min(32).max(200), password: z.string().min(8).max(128) })
       .parse(await jsonBody(request));
