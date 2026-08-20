@@ -119,6 +119,85 @@ export function teksKeParagraf(teks: string) {
 }
 
 /**
+ * Tautan yang boleh hidup di dalam surat.
+ *
+ * Hanya http, https, dan mailto. `javascript:` jelas berbahaya, tapi yang
+ * lebih sering terlewat adalah `data:` — ia bisa membawa satu halaman HTML
+ * utuh di dalam sebuah tautan.
+ */
+function tautanAman(url: string) {
+  const bersih = url.trim();
+  return /^(https?:\/\/|mailto:)[^\s<>"]+$/i.test(bersih) ? bersih : null;
+}
+
+/**
+ * Penanda ringan menjadi HTML dari kumpulan tag yang TERTUTUP.
+ *
+ * Masukannya SUDAH di-escape sebelum sampai ke sini, jadi tidak ada satu pun
+ * tag yang berasal dari pengetik. Seluruh tag di keluaran ditulis fungsi ini
+ * sendiri. Itulah kenapa tidak ada penyanitasi: tidak ada yang perlu
+ * disanitasi.
+ *
+ * Yang dikenali:
+ *   **tebal**            -> <strong>
+ *   *miring*             -> <em>
+ *   [teks](https://…)    -> <a>
+ *   - baris              -> <ul><li>
+ *   1. baris             -> <ol><li>
+ *   baris kosong         -> paragraf baru
+ */
+function penandaKeHtml(baris: string) {
+  return baris
+    .replace(
+      /\[([^\]]{1,200})\]\(([^)\s]{1,500})\)/g,
+      (utuh, teks: string, url: string) => {
+        const aman = tautanAman(url);
+        // Tautan yang ditolak dibiarkan tampil sebagai tulisan, bukan dibuang.
+        // Yang hilang diam-diam tidak pernah diperbaiki siapa pun.
+        return aman
+          ? `<a href="${aman}" style="color:${TEAL}">${teks}</a>`
+          : utuh;
+      },
+    )
+    .replace(/\*\*([^*]{1,500})\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*]{1,500})\*(?!\*)/g, "$1<em>$2</em>");
+}
+
+/**
+ * Isi ber-penanda menjadi paragraf dan daftar.
+ *
+ * Sama seperti `teksKeParagraf`, ditambah daftar berbutir dan bernomor. Daftar
+ * dikenali per blok: satu blok yang SELURUH barisnya diawali penanda daftar
+ * menjadi satu daftar, selebihnya tetap paragraf. Aturan sesederhana itu
+ * disengaja — daftar bersarang di dalam email hampir selalu tampil berbeda di
+ * tiap klien.
+ */
+export function penandaKeParagraf(teks: string) {
+  const gayaP = `margin:0 0 14px;color:${ABU};font-size:15px;line-height:1.75`;
+  const gayaUl = `margin:0 0 14px;padding-left:22px;color:${ABU};font-size:15px;line-height:1.75`;
+  return teks
+    .replace(/\r\n/g, "\n")
+    .split(/\n{2,}/)
+    .map((blok) => blok.trim())
+    .filter(Boolean)
+    .map((blok) => {
+      const baris = blok.split("\n").map((b) => b.trim()).filter(Boolean);
+      const berbutir = baris.length > 0 && baris.every((b) => /^[-*]\s+/.test(b));
+      const bernomor = baris.length > 0 && baris.every((b) => /^\d+[.)]\s+/.test(b));
+      if (berbutir || bernomor) {
+        const tag = berbutir ? "ul" : "ol";
+        const butir = baris
+          .map((b) => b.replace(berbutir ? /^[-*]\s+/ : /^\d+[.)]\s+/, ""))
+          .map((b) => `<li>${penandaKeHtml(b)}</li>`)
+          .join("");
+        return `<${tag} style="${gayaUl}">${butir}</${tag}>`;
+      }
+      return `<p style="${gayaP}">${penandaKeHtml(blok).replaceAll("\n", "<br />")}</p>`;
+    })
+    .join("");
+}
+
+/**
  * Isi surat: placeholder diisi, lalu dijadikan HTML sesuai formatnya.
  *
  * Untuk format teks, isinya di-escape LEBIH DULU baru placeholder diisi.
@@ -133,6 +212,12 @@ export function renderIsiSurat(
   nilai: Record<string, string>,
 ) {
   if (format === "html") return isiPlaceholder(sumber, nilai);
+  if (format === "rich") {
+    // Penanda diproses SEBELUM placeholder diisi. Dibalik, nilai yang
+    // kebetulan memuat dua bintang akan menebalkan separuh surat — dan nilai
+    // itu berasal dari berkas Excel yang diserahkan pihak lain.
+    return isiPlaceholder(penandaKeParagraf(escapeHtml(sumber)), nilai);
+  }
   return teksKeParagraf(isiPlaceholder(escapeHtml(sumber), nilai));
 }
 

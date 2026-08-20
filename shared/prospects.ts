@@ -155,10 +155,25 @@ export const PROSPECT_SOURCE_MIN_LENGTH = 2;
 //
 // Admin mengetik TEKS BIASA. Kop berlogo, tanda tangan, dan catatan kaki
 // ditempelkan server (lihat `server/prospect-letter.ts`), jadi tidak ada yang
-// perlu menulis HTML untuk mengirim surat yang rapi. Format `html` disediakan
-// untuk surat yang memang disusun sebagai markup, dan bukan bawaannya.
+// perlu menulis HTML untuk mengirim surat yang rapi.
+//
+// `rich` untuk surat yang butuh huruf tebal, miring, daftar, dan tautan.
+// Yang disimpan BUKAN HTML: ia penanda ringan (`**tebal**`, `- daftar`,
+// `[teks](url)`) yang diubah server menjadi HTML dari kumpulan tag yang
+// tertutup. Jadi tidak ada satu pun tag yang berasal dari pengetik.
+//
+// Itu keputusan yang disengaja, bukan kemalasan. Repo ini tidak punya
+// penyanitasi HTML, dan menulis penyanitasi sendiri adalah jenis kode yang
+// terlihat benar sampai suatu hari tidak. Menempel dari Word juga membawa
+// markup yang merusak tampilan di klien email dan menaikkan skor spam. Dengan
+// menghasilkan seluruh tag-nya sendiri, aman-nya berasal dari bentuk kodenya,
+// bukan dari daftar larangan yang harus selalu lengkap.
+//
+// `html` masih ada untuk surat yang memang disusun sebagai markup oleh orang
+// yang tahu persis apa yang ia tulis. Ia TIDAK disanitasi — jangan pernah
+// menjadikannya keluaran sebuah editor.
 
-export const prospectLetterFormats = ["text", "html"] as const;
+export const prospectLetterFormats = ["text", "rich", "html"] as const;
 export type ProspectLetterFormat = (typeof prospectLetterFormats)[number];
 
 export const PROSPECT_DEFAULT_LETTER_FORMAT: ProspectLetterFormat = "text";

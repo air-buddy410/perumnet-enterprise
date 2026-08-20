@@ -570,7 +570,15 @@ function sumberDariTemplate(row: Record<string, unknown>): SumberSurat {
   return {
     subject: String(row.subject),
     body: String(row.body_html),
-    format: String(row.body_format ?? "text") === "html" ? "html" : "text",
+    // Dipetakan lewat daftar bersama, bukan lewat satu perbandingan. Versi
+    // sebelumnya berbunyi `=== "html" ? "html" : "text"`, dan begitu format
+    // ketiga ditambahkan ia diam-diam merender 'rich' sebagai teks biasa —
+    // penandanya tampil mentah di surat, tanpa satu pun galat.
+    format: (prospectLetterFormats as readonly string[]).includes(
+      String(row.body_format ?? ""),
+    )
+      ? (String(row.body_format) as ProspectLetterFormat)
+      : "text",
     language: String(row.language) === "en" ? "en" : "id",
     penandatangan: {
       signoff: String(row.sender_signoff ?? ""),
