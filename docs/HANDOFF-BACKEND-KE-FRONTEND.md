@@ -251,7 +251,11 @@ tombol Kirim:
 "berhasil" dari menghitung baris. `selesai` sudah dihitung server; dua layar
 yang menghitung sendiri akan menjawab berbeda untuk pertanyaan yang sama.
 
-### T-13. Satu daftar status, bukan dua salinan
+### ✅ T-13. Satu daftar status, bukan dua salinan — SELESAI 2026-08-20
+
+Implementasi pada `app/panel/prospects-editor.tsx` sudah selesai: tipe, daftar,
+dan label status laporan kini langsung memakai kontrak bersama dari
+`shared/prospects.ts`; salinan lokal di layar dihapus.
 
 - **Layar:** `prospects-editor.tsx` baris ~194.
 - **Apa:** ganti salinan lokal
@@ -279,6 +283,83 @@ yang menghitung sendiri akan menjawab berbeda untuk pertanyaan yang sama.
   apa pun, dan tidak ada pesan galat. Kegagalan yang tidak berbunyi seperti
   itu yang paling lama tidak ketahuan.
 - Sisanya di T-12 tidak perlu diubah. Ini murni menghapus duplikasi.
+
+### T-14. Calon Klien jadi modul izin, dan form kata sandi menampilkan syaratnya
+
+Dua hal terpisah, keduanya kecil.
+
+#### a. Menu Calon Klien mengikuti izin, bukan peran
+
+Penjaganya di server dulu `requireUser(request, ["Admin"])` — modulnya tidak
+bisa diberikan kepada siapa pun tanpa mengubah kode. Sekarang ada modul
+**`prospects`** di `shared/access.ts`.
+
+Bawaannya: **Admin `manage`, Finance `manage`**, Project Manager dan Engineer
+`none`. Diberikan ke Finance atas permintaan pemilik — merekalah yang menyusun
+dan mengirim penawaran.
+
+Di `enterprise-app.tsx`, item navigasinya sekarang:
+
+```ts
+{ id: "prospects", labelKey: "prospects", module: "users", icon: UsersRound, roles: ["Admin"] }
+```
+
+Ganti jadi:
+
+```ts
+{ id: "prospects", labelKey: "prospects", module: "prospects", icon: UsersRound }
+```
+
+— `module` yang benar, dan **`roles` dihapus**: izinnya yang menentukan, bukan
+nama peran. Render-nya juga:
+
+```ts
+{currentView === "prospects" && user.role === "Admin" && <ProspectsEditor />}
+```
+
+jadi `canUse("prospects")`, sama seperti modul lain.
+
+**Layar Pengguna & Akses TIDAK perlu disentuh.** Grid-nya dibuat dari
+`accessModules`, jadi baris "Calon Klien" muncul sendiri dan Admin bisa
+menyalakannya per orang tanpa satu baris kode pun.
+
+Server membedakan dua tingkat: **`view`** cukup untuk melihat daftar, laporan,
+dan pratinjau; **`manage`** wajib untuk menyimpan, mengimpor, dan mengirim.
+Kalau bisa, matikan tombol Kirim/Simpan/Impor saat izinnya hanya `view` —
+server tetap menolak dengan 403, tapi tombol yang selalu gagal itu kasar.
+
+#### b. Form ganti kata sandi menampilkan syarat mailcow
+
+Di mode MAILSERVER, yang diganti adalah kata sandi **mailbox** di mailcow. Ada
+dua pihak yang berhak menolak, dan sampai sekarang syarat mailcow baru
+ketahuan **setelah** kata sandi lama diverifikasi.
+
+Endpoint baru, tanpa sesi pun boleh:
+
+```
+GET /api/auth/password-policy
+→ { "policy": { "minLength": 10, "requireNumbers": false,
+                "requireSpecialChars": false, "requireMixedCase": false,
+                "requireLetters": false, "source": "app" },
+    "description": "Kata sandi harus minimal 10 karakter." }
+```
+
+- Tampilkan `description` **di dekat kolom kata sandi baru, sebelum orang
+  mengetik** — bukan sebagai galat sesudahnya.
+- `minLength` dipakai untuk `minLength` pada input. **Jangan tulis angkanya
+  sebagai konstanta di layar**: nilainya digabung dari aturan aplikasi dan
+  aturan mailcow yang bisa diubah operator kapan saja tanpa deploy.
+- Galat baru: **400 `PASSWORD_TOO_WEAK`**, dengan
+  `details.unmet` berupa array kalimat pendek (`["minimal 12 karakter",
+  "mengandung angka"]`). Tampilkan semuanya, jangan hanya yang pertama —
+  menyuruh orang menebak satu per satu membuat mereka menyerah dan memakai
+  kata sandi seadanya.
+- `source: "mailcow"` berarti syaratnya datang dari mailserver; `"app"` berarti
+  mailcow tidak terjawab atau mode-nya LOCAL, dan yang berlaku aturan aplikasi
+  sendiri. Boleh dipakai untuk menjelaskan, tidak wajib.
+
+Semua string dwibahasa tersedia lewat `shared/password-policy.ts`
+(`describePasswordPolicy`, `passwordProblems`) kalau perlu merender sendiri.
 
 ### Selesai
 
@@ -330,3 +411,8 @@ yang menghitung sendiri akan menjawab berbeda untuk pertanyaan yang sama.
 
   QA terakhir: lint, typecheck, build, dan 231 test lulus; smoke Playwright
   mock kontrak pada `/admin` lulus di 1440×900 dan 375×812 tanpa error console.
+
+- **T-13** — laporan kirim mengimpor `prospectOutreachStatuses`,
+  `prospectOutreachStatusLabels`, dan `ProspectOutreachStatus` dari
+  `shared/prospects.ts`, sehingga status filter, summary, dan label tabel tidak
+  memiliki daftar lokal kedua.

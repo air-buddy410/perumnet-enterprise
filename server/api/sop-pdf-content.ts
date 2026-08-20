@@ -116,6 +116,13 @@ const roleMatrix: Bilingual[][] = [
     ["Kelola", "Manage"],
   ],
   [
+    ["Calon Klien", "Prospects"],
+    ["Kelola", "Manage"],
+    ["Tidak ada", "No access"],
+    ["Tidak ada", "No access"],
+    ["Kelola", "Manage"],
+  ],
+  [
     ["Pengguna & Akses", "Users & Access"],
     ["Kelola", "Manage"],
     ["Tidak ada", "No access"],
