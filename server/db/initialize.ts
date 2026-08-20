@@ -1292,8 +1292,18 @@ CREATE TABLE IF NOT EXISTS cms_prospect_templates (
   -- diketik admin, dan server yang menjadikannya HTML lengkap dengan kop,
   -- tanda tangan, serta catatan kaki. Lihat server/prospect-letter.ts.
   body_html TEXT NOT NULL,
+  -- 'rich' menyimpan PENANDA RINGAN, bukan HTML: **tebal**, - daftar,
+  -- [teks](url). Server yang mengubahnya jadi HTML, dari kumpulan tag yang
+  -- tertutup, sehingga tidak ada satu pun tag yang berasal dari pengetik.
+  -- 'html' masih ada untuk markup yang ditulis sengaja dan TIDAK disanitasi.
+  --
+  -- Catatan untuk yang membaca ini di produksi: database yang sudah jalan
+  -- mendapat kolom ini lewat ensureColumn, yang menambah kolom TANPA CHECK.
+  -- Jadi di sana batasan ini tidak ada, dan yang menjaga nilainya adalah zod
+  -- di server. Itu bukan kelalaian — mengubah CHECK berarti membuat ulang
+  -- tabelnya, dan aturan repo ini menambah skema, bukan mengubahnya.
   body_format TEXT NOT NULL DEFAULT 'text'
-    CHECK (body_format IN ('text', 'html')),
+    CHECK (body_format IN ('text', 'rich', 'html')),
   -- Tanda tangan menempel pada template, bukan diambil dari cms_site_settings.
   -- Surat penawaran ditandatangani ORANG, dan balasannya harus sampai ke kotak
   -- masuk orang itu; alamat umum perusahaan memindahkan balasan ke tempat yang

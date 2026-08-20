@@ -903,3 +903,92 @@ test("alamat kembar dilaporkan sebagai EMAIL_GANDA, bukan alamat tidak sah", asy
   assert.ok(hasil.data.issues.some((i) => i.code === "EMAIL_GANDA"));
   assert.ok(!hasil.data.issues.some((i) => i.code === "EMAIL_TIDAK_SAH"));
 });
+
+// ── Format "rich": penanda ringan, bukan HTML ────────────────────────
+//
+// Editor kaya menuntut huruf tebal, daftar, dan tautan. Yang TIDAK boleh ikut
+// adalah markup yang datang dari luar: menempel dari Word atau dari halaman web
+// membawa skrip, gaya, dan gambar pelacak.
+//
+// Repo ini tidak punya penyanitasi HTML, dan menulis sendiri adalah jenis kode
+// yang terlihat benar sampai suatu hari tidak. Jadi jalannya dibalik: yang
+// disimpan penanda ringan, dan SELURUH tag di keluaran ditulis server. Tes di
+// bawah menjaga sifat itu — bukan menjaga daftar larangan.
+
+async function pratinjauRich(body, perubahan = {}) {
+  const prospek = await tambahProspek(perubahan.prospek ?? {});
+  const t = await buatTemplate({ bodyHtml: body, bodyFormat: "rich" });
+  const lihat = await api(`/api/cms/prospect-templates/${t.data.id}/preview`, {
+    method: "POST",
+    body: JSON.stringify({ prospectId: prospek.data.id }),
+  });
+  assert.equal(lihat.status, 200);
+  return lihat.data.bodyHtml;
+}
+
+test("tebal, miring, dan daftar jadi tag yang benar", async () => {
+  const html = await pratinjauRich(
+    "Ini **tebal** dan *miring*.\n\nDaftarnya:\n\n- satu\n- dua\n\n1. pertama\n2. kedua",
+  );
+  assert.match(html, /<strong>tebal<\/strong>/);
+  assert.match(html, /<em>miring<\/em>/);
+  assert.match(html, /<ul[^>]*>\s*<li>satu<\/li><li>dua<\/li><\/ul>/);
+  assert.match(html, /<ol[^>]*>\s*<li>pertama<\/li><li>kedua<\/li><\/ol>/);
+});
+
+test("HTML yang ditempel TIDAK pernah jadi HTML", async () => {
+  const html = await pratinjauRich(
+    "Sebelum <script>alert(1)</script> sesudah <img src=x onerror=alert(1)> akhir",
+  );
+  // Ini inti seluruh rancangannya: masukan sudah di-escape sebelum penanda
+  // diproses, jadi tidak ada satu pun tag yang bisa berasal dari pengetik.
+  // Yang diuji: apakah ia pernah menjadi ELEMEN. Kata "onerror" yang muncul
+  // sebagai tulisan justru bukti keberhasilan — ia tampil, tidak berjalan.
+  assert.ok(!html.includes("<script>"), "tag script lolos");
+  assert.ok(!/<img[^>]*onerror/i.test(html), "img dengan onerror terbentuk");
+  assert.match(html, /&lt;script&gt;/);
+  assert.match(html, /&lt;img src=x onerror/);
+  // Sengaja TIDAK memeriksa "<img" di seluruh dokumen: kop suratnya memang
+  // memuat satu <img> untuk logo, dan pemeriksaan seperti itu akan gagal
+  // karena alasan yang salah.
+});
+
+test("tautan http dan mailto boleh; javascript dan data ditolak", async () => {
+  const html = await pratinjauRich(
+    "Situs [portofolio](https://enterprise.perumnet.id) dan [surel](mailto:it@perumnet.id).\n\n" +
+      "Jahat [klik](javascript:alert(1)) dan [muat](data:text/html;base64,PHNjcmlwdD4=)",
+  );
+  assert.match(html, /<a href="https:\/\/enterprise\.perumnet\.id"[^>]*>portofolio<\/a>/);
+  assert.match(html, /<a href="mailto:it@perumnet\.id"[^>]*>surel<\/a>/);
+  // `javascript:` sudah jelas. `data:` yang lebih sering terlewat — ia bisa
+  // membawa satu halaman HTML utuh di dalam sebuah tautan.
+  assert.ok(!/<a[^>]+href="javascript:/i.test(html), "anchor javascript terbentuk");
+  assert.ok(!/<a[^>]+href="data:/i.test(html), "anchor data terbentuk");
+  // Ditolak berarti tampil sebagai tulisan, bukan hilang. Yang hilang diam-diam
+  // tidak pernah diperbaiki siapa pun.
+  assert.match(html, /\[klik\]/);
+});
+
+test("nilai prospek tidak bisa menyuntikkan penanda", async () => {
+  const html = await pratinjauRich("Halo {{nama}}, salam.", {
+    prospek: { fullName: "**Budi**" },
+  });
+  // Penanda diproses SEBELUM placeholder diisi. Kalau dibalik, satu nama yang
+  // kebetulan memuat dua bintang akan menebalkan separuh surat — dan nama itu
+  // berasal dari berkas Excel yang diserahkan pihak lain.
+  assert.ok(!html.includes("<strong>Budi</strong>"), "nilai prospek jadi tag");
+  assert.match(html, /\*\*Budi\*\*/);
+});
+
+test("format teks biasa tidak ikut berubah oleh penanda", async () => {
+  const prospek = await tambahProspek();
+  const t = await buatTemplate({ bodyHtml: "Harga **khusus** untuk Anda." });
+  const lihat = await api(`/api/cms/prospect-templates/${t.data.id}/preview`, {
+    method: "POST",
+    body: JSON.stringify({ prospectId: prospek.data.id }),
+  });
+  // Template lama bawaannya "text" dan harus tetap apa adanya. Bintangnya
+  // tampil sebagai bintang.
+  assert.ok(!lihat.data.bodyHtml.includes("<strong>"), "format text ikut ditafsirkan");
+  assert.match(lihat.data.bodyHtml, /\*\*khusus\*\*/);
+});
