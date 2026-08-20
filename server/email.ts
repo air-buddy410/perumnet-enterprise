@@ -166,9 +166,23 @@ export function securityMailUndeliverable() {
 }
 
 export function emailMode() {
-  if (process.env.APP_MODE === "demo") return "capture" as const;
   const configured = process.env.EMAIL_MODE?.toLowerCase();
   if (configured === "capture" || configured === "disabled") return configured;
+  if (process.env.APP_MODE === "demo") {
+    // Demo menahan email SECARA BAWAAN, dan itu tetap begitu. Yang berubah:
+    // sekarang ada jalan keluar, dan jalan itu harus disebut dengan suara
+    // keras — EMAIL_MODE=live di berkas env lingkungan itu sendiri.
+    //
+    // Sengaja tidak ada bawaan yang diam-diam menyalakan: kalau demo bisa
+    // mengirim tanpa ada yang pernah memutuskan demikian, satu impor data
+    // pelanggan sungguhan ke demo cukup untuk menyurati mereka semua dari
+    // lingkungan yang semua orang kira aman.
+    //
+    // APP_MODE=demo TETAP tidak boleh dihapus untuk keperluan ini: nilai itu
+    // juga yang memilih DEMO_DATABASE_URL (server/db/client.ts). Menghapusnya
+    // mengarahkan demo ke database PRODUKSI.
+    return configured === "live" ? ("live" as const) : ("capture" as const);
+  }
   return "live" as const;
 }
 
@@ -315,6 +329,37 @@ export async function sendEmailDelivery(
 }
 
 const retryMinutes = [1, 5, 15, 60] as const;
+
+/**
+ * Menyalin nasib satu baris outbox ke riwayat prospek.
+ *
+ * Riwayatnya WAJIB menyimpan sendiri, bukan membaca lewat join: pruneEmailOutbox
+ * MENGHAPUS baris outbox setelah 180 hari, sedangkan "surat apa yang sudah kita
+ * kirim ke klien ini, dan sampai atau tidak" adalah pertanyaan yang muncul
+ * bertahun-tahun kemudian.
+ *
+ * Sengaja diam kalau barisnya bukan milik prospek — sebagian besar surat di
+ * outbox memang bukan (reset kata sandi, invoice, pemberitahuan proyek).
+ */
+async function syncProspectOutreach(
+  client: DatabaseClient,
+  outboxId: string,
+  status: "Sent" | "Failed",
+  timestamp: string,
+  failureReason?: string,
+) {
+  await client.execute({
+    sql: `UPDATE cms_prospect_outreach
+      SET status=?, sent_at=?, failure_reason=?
+      WHERE outbox_id=?`,
+    args: [
+      status,
+      status === "Sent" ? timestamp : null,
+      failureReason ?? null,
+      outboxId,
+    ],
+  });
+}
 
 function rowReplyTo(row: Record<string, unknown>) {
   const nilai = typeof row.reply_to === "string" ? row.reply_to.trim() : "";
@@ -471,6 +516,7 @@ async function deliverOutboxRow(
         row.id,
       ],
     });
+    await syncProspectOutreach(client, String(row.id), "Sent", timestamp);
     await recordDelivery(
       client,
       input,
@@ -503,6 +549,16 @@ async function deliverOutboxRow(
         : [provider, attempt, retryAt, message, timestamp, row.id],
     });
     if (exhausted) {
+      // Hanya setelah percobaannya habis. Kegagalan yang masih akan diulang
+      // tetap 'Queued' di riwayat — menandainya gagal membuat orang mengejar
+      // sesuatu yang sebentar lagi berhasil sendiri.
+      await syncProspectOutreach(
+        client,
+        String(row.id),
+        "Failed",
+        timestamp,
+        message,
+      );
       await recordDelivery(client, input, {
         id: String(row.id),
         configured: true,

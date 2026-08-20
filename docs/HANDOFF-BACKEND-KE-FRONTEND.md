@@ -171,6 +171,76 @@ surat utuh dari server tanpa menambahkan logo atau footer di sisi layar.
 
 Kontrak backend lengkap tetap berada di `docs/PROSPEK-CALON-KLIEN.md`.
 
+### T-12. Laporan pengiriman email — berhasil, gagal, atau masih diproses
+
+- **Layar:** tab baru di `ProspectsEditor`, misal **"Laporan kirim"**.
+- **Kenapa ini ada:** riwayat outreach dulu ditulis sekali saat tombol Kirim
+  ditekan dan tidak pernah disentuh lagi. Ia bilang `Queued` selamanya —
+  bahkan setelah suratnya benar-benar terkirim atau gagal permanen. Layar yang
+  membacanya menampilkan kabar yang salah dengan penuh percaya diri.
+
+**Sekarang statusnya benar-benar mengikuti kenyataan.** `server/email.ts`
+menyalin nasib tiap baris ke riwayat begitu final.
+
+**Dua endpoint baru, keduanya Admin saja:**
+
+`GET /api/cms/prospects/outreach/batches?limit=30` — satu baris per penekanan
+tombol Kirim:
+```json
+{ "items": [{
+  "batchId": "…", "templateName": "Perkenalan PerumNet Enterprise",
+  "createdAt": "…", "firstScheduledFor": "…", "lastScheduledFor": "…",
+  "lastSentAt": "…",
+  "total": 21, "sent": 18, "failed": 1, "queued": 2, "skipped": 0,
+  "selesai": false
+}] }
+```
+
+`GET /api/cms/prospects/outreach` — per penerima. Parameter: `q`, `status`,
+`batchId`, `prospectId`, `from`, `to`, `page`, `pageSize`.
+```json
+{ "items": [{
+  "id": "…", "batchId": "…", "prospectId": "…", "prospectName": "…",
+  "companyName": "…", "templateName": "…", "recipient": "…", "subject": "…",
+  "status": "Sent", "scheduledFor": "…", "sentAt": "…", "failureReason": "",
+  "attempts": 1, "nextAttemptAt": null, "createdAt": "…", "hasBody": true
+}],
+  "page": 1, "pageSize": 25, "total": 21,
+  "summary": { "Queued": 2, "Sent": 18, "Failed": 1, "Skipped": 0, "total": 21 } }
+```
+
+**Empat status, dan artinya tidak boleh ditukar:**
+
+| Status | Artinya | Jangan tampilkan sebagai |
+|---|---|---|
+| `Queued` | **masih diproses** — menunggu jadwal, atau gagal tapi masih ada sisa percobaan | gagal |
+| `Sent` | benar-benar diterima server surat | — |
+| `Failed` | percobaan habis, tidak akan diulang lagi | sedang diproses |
+| `Skipped` | tidak pernah diantre (opt-out, tanpa email, atau mode capture) | gagal |
+
+**Yang perlu dikerjakan:**
+
+- Daftar batch dulu, lalu klik untuk melihat per penerima. Batch adalah cara
+  orang mengingat pekerjaannya: *"kiriman tadi pagi ke 21 orang"*, bukan 21
+  baris terpisah.
+- Tampilkan `summary` sebagai empat angka. **Keempatnya selalu ada di jawaban,
+  termasuk yang bernilai nol** — jangan sembunyikan yang nol, karena "0 gagal"
+  adalah kabar yang ingin dibaca orang.
+- `selesai: false` pada batch berarti masih ada yang berjalan. Perbarui
+  otomatis selagi tab ini terbuka — polling 15–30 detik cukup. Jangan pasang
+  polling saat tabnya tidak terlihat.
+- `Failed` wajib menampilkan `failureReason` apa adanya. Alasan itu yang
+  membedakan "alamatnya salah ketik" dari "mailserver mati".
+- `attempts` dan `nextAttemptAt` berasal dari `email_outbox` dan **jadi `null`
+  setelah 180 hari** ketika barisnya dipangkas. Statusnya sendiri tetap
+  terbaca. Jangan tampilkan "0 percobaan" untuk `null`.
+- Jeda antar surat membuat batch besar butuh puluhan menit. Tampilkan
+  `lastScheduledFor` supaya tidak dikira macet.
+
+**Yang tidak boleh dilakukan di layar:** menyimpulkan sendiri sebuah batch
+"berhasil" dari menghitung baris. `selesai` sudah dihitung server; dua layar
+yang menghitung sendiri akan menjawab berbeda untuk pertanyaan yang sama.
+
 ### Selesai
 
 - **T-1** — `auth-screen.tsx` dan `panel-app.tsx` membedakan 503

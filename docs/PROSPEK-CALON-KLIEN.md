@@ -149,6 +149,67 @@ yang sudah kita kirim ke mereka"* adalah pertanyaan yang muncul berbulan-bulan
 kemudian. `hasBody: false` berarti isinya sudah hilang; jangan tawarkan tombol
 "lihat isi surat".
 
+## Laporan pengiriman
+
+Sampai 20 Agustus riwayat outreach ditulis sekali saat tombol Kirim ditekan,
+lalu tidak pernah disentuh lagi. Ia bilang `Queued` selamanya — bahkan setelah
+suratnya benar-benar terkirim atau gagal permanen. Layar yang membacanya
+menampilkan kabar yang salah dengan penuh percaya diri, dan tidak ada yang
+tahu sampai ada yang menanyakan surat tertentu.
+
+Sekarang `server/email.ts` menyalin nasib tiap baris outbox ke
+`cms_prospect_outreach` begitu final. **Disalin, bukan dibaca lewat join:**
+`pruneEmailOutbox` MENGHAPUS baris outbox setelah 180 hari, sedangkan *"surat
+apa yang sudah kita kirim ke klien ini, dan sampai atau tidak"* adalah
+pertanyaan yang muncul bertahun-tahun kemudian.
+
+| Status | Artinya |
+|---|---|
+| `Queued` | masih diproses — menunggu jadwal, atau gagal tapi masih ada sisa percobaan |
+| `Sent` | diterima server surat |
+| `Failed` | percobaan habis (5×), tidak akan diulang |
+| `Skipped` | tidak pernah diantre: opt-out, tanpa email, atau mode capture |
+
+Kegagalan yang **masih punya sisa percobaan tetap `Queued`**. Menandainya
+gagal membuat orang mengejar sesuatu yang sebentar lagi berhasil sendiri.
+Tidak ada status `Sending` tersendiri: nilai yang hanya hidup beberapa detik
+tidak menjelaskan apa pun kepada yang membaca laporan.
+
+`batch_id` menandai satu penekanan tombol Kirim. Tanpa itu laporannya cuma
+daftar datar, dan pertanyaan yang sebenarnya orang punya — *"kiriman tadi pagi
+ke 21 orang itu sampai semua tidak?"* — tidak bisa dijawab.
+
+Dua endpoint, keduanya Admin:
+
+| Endpoint | Guna |
+|---|---|
+| `GET /api/cms/prospects/outreach/batches` | satu baris per batch, dengan hitungan per status dan `selesai` |
+| `GET /api/cms/prospects/outreach` | per penerima; `q`, `status`, `batchId`, `prospectId`, `from`, `to`, paginasi, plus `summary` |
+
+`summary` **selalu memuat keempat status**, termasuk yang bernilai nol: layar
+yang membaca `summary.Failed` tidak boleh menampilkan "kosong" hanya karena
+kebetulan belum ada yang gagal.
+
+Tesnya menjalankan **server SMTP sungguhan** (palsu, tapi benar-benar bicara
+SMTP) dan memakai endpoint yang dipakai worker asli. Menandai baris langsung
+di database hanya akan menguji SQL milik tes itu sendiri. Versi pertama server
+palsu itu tidak menyelesaikan jabat tangannya, dan tesnya lulus karena
+timeout — lulus yang menipu, ketahuan dari durasinya 30 detik per tes.
+
+## Demo dan pengiriman sungguhan
+
+Demo menahan email secara bawaan, dan itu tetap begitu. Yang berubah 20
+Agustus: ada jalan keluar, dan jalan itu harus disebut dengan suara keras —
+`EMAIL_MODE=live` di berkas env lingkungan itu sendiri.
+
+**`APP_MODE=demo` TIDAK boleh dihapus untuk keperluan ini.** Nilai itu juga
+yang memilih `DEMO_DATABASE_URL` (`server/db/client.ts`); menghapusnya
+mengarahkan demo ke database **produksi**.
+
+Konsekuensi yang harus disadari: begitu `EMAIL_MODE=live` dipasang, demo bisa
+menyurati siapa pun yang ada di database demo — termasuk kontak sungguhan yang
+diimpor ke sana untuk latihan.
+
 ## Impor workbook
 
 Kolom dipetakan dari **judulnya**, bukan posisinya — susunan berkas sumber
