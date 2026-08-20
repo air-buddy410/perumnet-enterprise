@@ -21,15 +21,38 @@ export const documentEmailKindLabels: Record<
 
 // ── Batas lampiran ───────────────────────────────────────────────────
 //
-// Server SMTP mengizinkan 100 MB, jadi bukan ia yang mengikat. Yang mengikat
-// pekerja email: PM2 mematikannya di 180 MB, dan ia memproses 25 baris tiap
-// putaran. Angka di bawah dipilih supaya satu putaran penuh tetap muat.
+// Server SMTP mengizinkan 100 MB, jadi bukan ia yang mengikat.
+//
+// KOREKSI 20 Agu: yang mengikat BUKAN pekerja email. Proses PM2
+// `perumnet-enterprise-email-worker` (jatah 180 MB) hanya memanggil satu
+// `fetch` ke /api/internal/email-dispatch — ia tidak pernah menyentuh byte
+// lampiran. Yang benar-benar menampung byte adalah `perumnet-enterprise`,
+// jatah 700 MB, proses yang SAMA yang melayani pengguna dan merender PDF.
+//
+// Itu membuat batasnya lebih penting, bukan kurang: kehabisan memori di sana
+// menjatuhkan permintaan pengguna yang sedang berjalan, dan meninggalkan baris
+// outbox berstatus Processing yang baru diambil ulang 10 menit kemudian —
+// sambil dihitung satu percobaan. Lima kali begitu, suratnya gagal permanen
+// karena memori, bukan karena surat.
 
 /** Satu berkas lampiran tambahan. */
 export const ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 
-/** Seluruh lampiran dalam satu email, termasuk dokumen yang dirender. */
-export const ATTACHMENT_TOTAL_MAX_BYTES = 25 * 1024 * 1024;
+/**
+ * Seluruh lampiran dalam satu email, termasuk dokumen yang dirender.
+ *
+ * Diturunkan dari 25 MB ke 10 MB setelah menghitung memorinya. Untuk SMTP,
+ * satu pesan menahan buffer-nya (N) plus hasil encode base64 nodemailer
+ * (~1,37N) — sekitar 2,4N transien, di dalam proses yang juga melayani
+ * pengguna. Lewat Resend lebih boros lagi karena JSON.stringify menyalinnya
+ * sekali lagi.
+ *
+ * Alasan kedua yang berdiri sendiri: banyak gateway email perusahaan membuang
+ * lampiran di atas 10 MB tanpa memberi tahu siapa pun. Surat yang "Terkirim"
+ * tapi lampirannya dicopot di tengah jalan adalah kegagalan paling sulit
+ * dilacak yang bisa dibuat fitur ini.
+ */
+export const ATTACHMENT_TOTAL_MAX_BYTES = 10 * 1024 * 1024;
 
 /** Lampiran TAMBAHAN per email; dokumen resminya tidak dihitung. */
 export const ATTACHMENT_MAX_COUNT = 5;

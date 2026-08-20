@@ -15,7 +15,11 @@ function localStoragePath(id: string) {
 }
 
 export async function storeUploadedFile(
-  namespace: "project-documents" | "project-expenses",
+  // Untuk penyimpanan lokal nilai ini TIDAK dipakai — berkasnya mendarat rata
+  // di UPLOAD_DIR, dinamai id-nya saja. Yang membedakan hanya kunci di R2.
+  // Union-nya sengaja tertutup: itu yang membuat tidak ada yang pernah menulis
+  // ke prefiks R2 yang salah ketik.
+  namespace: "project-documents" | "project-expenses" | "email-attachments",
   id: string,
   mimeType: string,
   content: ArrayBuffer,
