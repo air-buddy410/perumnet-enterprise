@@ -1,7 +1,9 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
+import type { PreparedAttachment } from "./attachments";
 import type { DatabaseClient } from "./db/client";
+import { deleteStoredFile, readStoredFile, storeUploadedFile } from "./storage";
 
 export type EmailDeliveryStatus = "pending" | "sent" | "failed" | "skipped";
 export type EmailSenderProfile = "operational" | "security";
@@ -34,6 +36,20 @@ interface EmailDeliveryInput {
    * mengarahkan balasan ke alamat yang ditentukan pemanggil.
    */
   replyTo?: string;
+  /**
+   * Lampiran, sudah diperiksa pemanggil lewat `server/attachments.ts`.
+   *
+   * Byte-nya TIDAK menumpang baris outbox. Ada lima tempat yang mengosongkan
+   * `body_html` begitu barisnya final dan satu lagi yang menghapus barisnya
+   * setelah 180 hari; payload yang ikut di sana harus diurus di keenamnya, dan
+   * yang terlewat satu berarti berkas menumpuk selamanya atau hilang terlalu
+   * cepat. Lagi pula baris outbox dibaca 25 sekaligus di dalam proses yang
+   * sama yang melayani pengguna.
+   *
+   * Jadi berkasnya lewat `server/storage.ts`, dan baris `email_attachments`
+   * hanya menyimpan rujukannya.
+   */
+  attachments?: PreparedAttachment[];
 }
 
 interface EmailDeliveryResult {
@@ -227,6 +243,131 @@ export function emailProviderName(
 // column migration path in server/db/README.md entirely.
 const REDACTED_BODY = "";
 
+/**
+ * Menulis berkasnya ke storage, lalu memulangkan baris yang siap di-INSERT.
+ *
+ * Berkas ditulis LEBIH DULU, di luar transaksi. Kalau transaksinya gagal,
+ * yang tertinggal berkas yatim — kecil, dan bisa dibersihkan. Urutan
+ * sebaliknya meninggalkan baris yang menunjuk berkas yang tidak pernah ada,
+ * dan itu baru ketahuan saat surat mau dikirim.
+ */
+type LampiranTerkirim = { filename: string; mimeType: string; content: Buffer };
+
+async function simpanBerkasLampiran(attachments: PreparedAttachment[]) {
+  const baris: DatabaseStatementLike[] = [];
+  for (const [urutan, a] of attachments.entries()) {
+    // Id-nya WAJIB cocok /^[a-zA-Z0-9-]+$/ — itu satu-satunya yang berdiri di
+    // depan path traversal pada backend disk lokal (server/storage.ts).
+    // Nama berkas dari pengguna tidak pernah ikut ke sini; ia hidup di kolom.
+    const id = `lampiran-${randomUUID()}`;
+    const { storageUrl, contentBase64 } = await storeUploadedFile(
+      "email-attachments",
+      id,
+      a.mimeType,
+      a.content,
+    );
+    baris.push({
+      id,
+      urutan,
+      filename: a.filename,
+      mimeType: a.mimeType,
+      byteSize: a.byteSize,
+      sha256: a.sha256,
+      storageUrl,
+      contentBase64,
+      generated: a.generated,
+    });
+  }
+  return baris;
+}
+
+interface DatabaseStatementLike {
+  id: string;
+  urutan: number;
+  filename: string;
+  mimeType: string;
+  byteSize: number;
+  sha256: string;
+  storageUrl: string | null;
+  contentBase64: string | null;
+  generated: boolean;
+}
+
+/**
+ * Membaca lampiran satu baris outbox, siap diserahkan ke penyedia.
+ *
+ * Menolak kalau jumlahnya tidak sama dengan `attachment_count`. Itu penjaga
+ * yang membuat "terkirim tanpa lampirannya" mustahil terjadi diam-diam:
+ * melempar di sini mendaratkan barisnya di jalur gagal biasa, lengkap dengan
+ * alasan yang bisa dibaca orang.
+ */
+async function bacaLampiranOutbox(
+  client: DatabaseClient,
+  outboxId: string,
+  jumlahDiharapkan: number,
+) {
+  if (jumlahDiharapkan === 0) return [];
+  const hasil = await client.execute({
+    sql: `SELECT filename,mime_type,storage_url,content_base64
+      FROM email_attachments WHERE outbox_id=? ORDER BY sort_order`,
+    args: [outboxId],
+  });
+  if (hasil.rows.length !== jumlahDiharapkan) {
+    throw new Error(
+      `Lampiran tidak lengkap: ${hasil.rows.length} dari ${jumlahDiharapkan}.`,
+    );
+  }
+  const lampiran: LampiranTerkirim[] = [];
+  for (const row of hasil.rows as unknown as Record<string, unknown>[]) {
+    const storageUrl = row.storage_url ? String(row.storage_url) : null;
+    const base64 = row.content_base64 ? String(row.content_base64) : null;
+    let content: Buffer | null = null;
+    if (storageUrl) {
+      const berkas = await readStoredFile(storageUrl);
+      content = berkas ? Buffer.from(berkas.content) : null;
+    } else if (base64) {
+      content = Buffer.from(base64, "base64");
+    }
+    if (!content) {
+      throw new Error(`Berkas lampiran ${String(row.filename)} tidak ditemukan.`);
+    }
+    lampiran.push({
+      filename: String(row.filename),
+      // readStoredFile TIDAK memulangkan tipe MIME, jadi ia dibaca dari kolom.
+      // Tanpa itu lampirannya terkirim sebagai application/octet-stream dan
+      // klien email menolak membukanya.
+      mimeType: String(row.mime_type),
+      content,
+    });
+  }
+  return lampiran;
+}
+
+/**
+ * Membuang lampiran sebuah baris outbox: berkasnya dulu, barisnya kemudian.
+ *
+ * Urutan itu disengaja. Putus di tengah dengan berkas dihapus lebih dulu
+ * meninggalkan baris yang menunjuk berkas hilang — terbaca, bisa dibereskan.
+ * Sebaliknya meninggalkan berkas yang tidak ditunjuk siapa pun, selamanya.
+ *
+ * Dipanggil di SETIAP tempat `body_html` dikosongkan. Kalau ada satu yang
+ * terlewat, berkasnya menumpuk tanpa ada yang tahu.
+ */
+async function buangLampiranOutbox(client: DatabaseClient, outboxId: string) {
+  const hasil = await client.execute({
+    sql: "SELECT storage_url FROM email_attachments WHERE outbox_id=?",
+    args: [outboxId],
+  });
+  if (!hasil.rows.length) return;
+  for (const row of hasil.rows as unknown as Record<string, unknown>[]) {
+    if (row.storage_url) await deleteStoredFile(String(row.storage_url));
+  }
+  await client.execute({
+    sql: "DELETE FROM email_attachments WHERE outbox_id=?",
+    args: [outboxId],
+  });
+}
+
 async function enqueueOutbox(
   client: DatabaseClient,
   input: EmailDeliveryInput,
@@ -235,11 +376,20 @@ async function enqueueOutbox(
 ) {
   const id = randomUUID();
   const timestamp = new Date().toISOString();
-  await client.execute({
+
+  // Baris Skipped sudah final dan tidak akan pernah dikirim, jadi lampirannya
+  // tidak disimpan sama sekali. Menyimpannya berarti menumpuk berkas yang
+  // tidak pernah dibaca siapa pun.
+  const lampiran =
+    status === "Pending" && input.attachments?.length
+      ? await simpanBerkasLampiran(input.attachments)
+      : [];
+
+  const barisOutbox = {
     sql: `INSERT INTO email_outbox
       (id,user_id,event_type,sender_profile,recipient,reply_to,subject,body_html,status,provider,
-       attempt_count,next_attempt_at,last_error,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)`,
+       attempt_count,attachment_count,next_attempt_at,last_error,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)`,
     args: [
       id,
       input.userId ?? null,
@@ -259,11 +409,49 @@ async function enqueueOutbox(
       emailProviderName(input.senderProfile),
       // Baris Skipped sudah final; menjadwalkannya ke depan tidak ada artinya
       // dan hanya membuat laporan sulit dibaca.
+      lampiran.length,
       status === "Pending" ? input.notBefore ?? timestamp : timestamp,
       error ?? null,
       timestamp,
       timestamp,
     ],
+  };
+
+  if (!lampiran.length) {
+    // Tidak ada lampiran: satu pernyataan, persis seperti sebelumnya. Sengaja
+    // TIDAK dibungkus transaksi — setiap pemanggil lama lewat jalur ini, dan
+    // salah satunya bisa saja sudah berada di dalam transaksi milik sendiri.
+    await client.execute(barisOutbox);
+    return id;
+  }
+
+  // Barisnya dan penunjuk lampirannya harus muncul bersama atau tidak sama
+  // sekali. Baris outbox tanpa penunjuk adalah email yang sampai ke vendor
+  // sebagai surat pengantar TANPA dokumennya — kegagalan terburuk yang bisa
+  // dibuat fitur ini, dan satu-satunya yang tidak menimbulkan galat apa pun.
+  await client.transaction(async (tx) => {
+    await tx.execute(barisOutbox);
+    for (const l of lampiran) {
+      await tx.execute({
+        sql: `INSERT INTO email_attachments
+          (id,outbox_id,filename,mime_type,byte_size,sha256,storage_url,
+           content_base64,generated,sort_order,created_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        args: [
+          l.id,
+          id,
+          l.filename,
+          l.mimeType,
+          l.byteSize,
+          l.sha256,
+          l.storageUrl,
+          l.contentBase64,
+          l.generated ? 1 : 0,
+          l.urutan,
+          timestamp,
+        ],
+      });
+    }
   });
   return id;
 }
@@ -370,7 +558,10 @@ function senderProfile(row: Record<string, unknown>): EmailSenderProfile {
   return row.sender_profile === "security" ? "security" : "operational";
 }
 
-async function sendWithSmtp(row: Record<string, unknown>) {
+async function sendWithSmtp(
+  row: Record<string, unknown>,
+  lampiran: LampiranTerkirim[] = [],
+) {
   const nodemailer = (await import("nodemailer")).default;
   const profile = senderProfile(row);
   const dedicatedSecurity =
@@ -430,12 +621,26 @@ async function sendWithSmtp(row: Record<string, unknown>) {
     to: String(row.recipient),
     subject: String(row.subject),
     html: String(row.body_html),
+    // nodemailer menerima Buffer langsung; tidak ada base64 yang perlu kita
+    // urus sendiri di jalur ini.
+    ...(lampiran.length
+      ? {
+          attachments: lampiran.map((l) => ({
+            filename: l.filename,
+            content: l.content,
+            contentType: l.mimeType,
+          })),
+        }
+      : {}),
   });
   transporter.close();
   return info.messageId;
 }
 
-async function sendWithResend(row: Record<string, unknown>) {
+async function sendWithResend(
+  row: Record<string, unknown>,
+  lampiran: LampiranTerkirim[] = [],
+) {
   const profile = senderProfile(row);
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -459,6 +664,22 @@ async function sendWithResend(row: Record<string, unknown>) {
       to: [String(row.recipient)],
       subject: String(row.subject),
       html: String(row.body_html),
+      // Resend menuntut base64 di dalam JSON, bukan Buffer — dua penyedia,
+      // dua bentuk. Penamaan fieldnya mengikuti REST (`content_type`), sama
+      // seperti `reply_to` di atas, BUKAN camelCase milik SDK-nya.
+      //
+      // Cabang ini tidak pernah berjalan di pemasangan ini: RESEND_API_KEY
+      // kosong di demo maupun produksi, jadi SMTP satu-satunya yang hidup.
+      // Ia tetap ditulis supaya benar, dan hanya bisa diuji lewat pemalsuan.
+      ...(lampiran.length
+        ? {
+            attachments: lampiran.map((l) => ({
+              filename: l.filename,
+              content: l.content.toString("base64"),
+              content_type: l.mimeType,
+            })),
+          }
+        : {}),
     }),
     signal: AbortSignal.timeout(15_000),
   });
@@ -490,11 +711,19 @@ async function deliverOutboxRow(
     html: String(row.body_html),
   };
   try {
+    // Dimuat di dalam try: lampiran yang tidak lengkap atau berkasnya hilang
+    // mendarat di jalur gagal biasa, dengan alasan yang bisa dibaca orang —
+    // bukan mengirim surat pengantar tanpa dokumennya.
+    const lampiran = await bacaLampiranOutbox(
+      client,
+      String(row.id),
+      Number(row.attachment_count ?? 0),
+    );
     const providerId =
       provider === "smtp"
-        ? await sendWithSmtp(row)
+        ? await sendWithSmtp(row, lampiran)
         : provider === "resend"
-          ? await sendWithResend(row)
+          ? await sendWithResend(row, lampiran)
           : undefined;
     if (!providerId && provider === "disabled") {
       throw new Error("Provider email belum dikonfigurasi.");
@@ -516,6 +745,7 @@ async function deliverOutboxRow(
         row.id,
       ],
     });
+    await buangLampiranOutbox(client, String(row.id));
     await syncProspectOutreach(client, String(row.id), "Sent", timestamp);
     await recordDelivery(
       client,
@@ -549,6 +779,7 @@ async function deliverOutboxRow(
         : [provider, attempt, retryAt, message, timestamp, row.id],
     });
     if (exhausted) {
+      await buangLampiranOutbox(client, String(row.id));
       // Hanya setelah percobaannya habis. Kegagalan yang masih akan diulang
       // tetap 'Queued' di riwayat — menandainya gagal membuat orang mengejar
       // sesuatu yang sebentar lagi berhasil sendiri.
@@ -652,6 +883,7 @@ export async function dispatchEmailOutbox(
         status: "skipped",
         error: reason,
       });
+      await buangLampiranOutbox(client, String(row.id));
       // Riwayat prospek WAJIB ikut diberi tahu di sini.
       //
       // Tanpa baris ini barisnya tetap 'Queued' selamanya: outbox sudah final,
@@ -695,6 +927,11 @@ export async function pruneEmailOutbox(client: DatabaseClient) {
         WHERE ${terminal} AND body_html<>''`,
       args: [REDACTED_BODY, timestamp],
     });
+    // Lampirannya ikut. Menyapu badan surat tapi meninggalkan berkasnya berarti
+    // menumpuk PDF di disk yang tidak pernah dibaca siapa pun lagi.
+    for (const row of stale.rows as unknown as Record<string, unknown>[]) {
+      await buangLampiranOutbox(client, String(row.id));
+    }
   }
 
   const expired = await client.execute({
@@ -702,6 +939,14 @@ export async function pruneEmailOutbox(client: DatabaseClient) {
     args: [cutoff],
   });
   if (expired.rows.length) {
+    // Anak barisnya dihapus SENDIRI, tidak mengandalkan ON DELETE CASCADE.
+    // Cascade ditegakkan PostgreSQL, tetapi libsql tidak menyalakan pragma
+    // foreign_keys sama sekali — jadi di pengembangan dan di tes ia tidak
+    // melakukan apa-apa, dan yang tertinggal baris yatim yang menunjuk berkas
+    // yang juga sudah tidak dihapus siapa pun.
+    for (const row of expired.rows as unknown as Record<string, unknown>[]) {
+      await buangLampiranOutbox(client, String(row.id));
+    }
     await client.execute({
       sql: `DELETE FROM email_outbox WHERE ${terminal} AND created_at<?`,
       args: [cutoff],
@@ -718,7 +963,8 @@ export async function retryEmailOutbox(
   outboxId: string,
 ): Promise<RetryEmailOutboxResult> {
   const current = await client.execute({
-    sql: "SELECT id,body_html FROM email_outbox WHERE id=? AND status='Failed' LIMIT 1",
+    sql: `SELECT id,body_html,attachment_count FROM email_outbox
+      WHERE id=? AND status='Failed' LIMIT 1`,
     args: [outboxId],
   });
   const row = current.rows[0];
@@ -726,6 +972,17 @@ export async function retryEmailOutbox(
   // A row that exhausted its retries had its body redacted. Re-queueing it
   // would send an empty message that looks delivered; say so instead.
   if (!String(row.body_html ?? "")) return "body-purged";
+  // Alasan yang sama untuk lampirannya. Baris yang lampirannya sudah dibuang
+  // akan terkirim sebagai surat pengantar tanpa dokumen yang dijanjikannya —
+  // terlihat berhasil, dan justru itu masalahnya.
+  const diharapkan = Number(row.attachment_count ?? 0);
+  if (diharapkan > 0) {
+    const ada = await client.execute({
+      sql: "SELECT COUNT(*) AS jumlah FROM email_attachments WHERE outbox_id=?",
+      args: [outboxId],
+    });
+    if (Number(ada.rows[0]?.jumlah ?? 0) !== diharapkan) return "body-purged";
+  }
   const timestamp = new Date().toISOString();
   await client.execute({
     sql: `UPDATE email_outbox SET status='Pending',attempt_count=0,
