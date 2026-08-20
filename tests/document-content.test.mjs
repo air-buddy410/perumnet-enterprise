@@ -18,7 +18,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { after, before, test } from "node:test";
 import { PDFParse } from "pdf-parse";
@@ -579,7 +579,11 @@ test("the operations manual numbers its pages, dates itself in Asia/Makassar, an
   );
 
   // (7) One layout pass, and the table of contents is still right: each of the
-  // 19 rows must point at the page its chapter actually starts on.
+  // Every row must point at the page its chapter actually starts on. The count
+  // is read from the source rather than written here: it used to be the
+  // literal 19, and adding a twentieth chapter shifted every row by one so the
+  // failure read "chapter 1 starts on page 5" instead of "there are 20 now".
+  const chapterCount = countGuideChapters();
   const tocIndex = manual.pages.findIndex((page) => /Daftar isi/.test(page));
   assert.ok(tocIndex >= 0, "the manual has a table of contents");
   // The footer is written after the contents rows, so it sits at the end of the
@@ -589,12 +593,12 @@ test("the operations manual numbers its pages, dates itself in Asia/Makassar, an
     .replace(/Halaman \d+ dari \d+/, "")
     .split(/\s+/)
     .filter(Boolean);
-  const listed = tokens.slice(-19).map(Number);
-  assert.equal(listed.length, 19);
+  const listed = tokens.slice(-chapterCount).map(Number);
+  assert.equal(listed.length, chapterCount);
   for (const [index, target] of listed.entries()) {
     assert.ok(
       Number.isInteger(target) && target > tocIndex + 1 && target <= manual.total,
-      `contents row ${index + 1} points at a real page, got ${tokens.slice(-19)[index]}`,
+      `contents row ${index + 1} points at a real page, got ${tokens.slice(-chapterCount)[index]}`,
     );
     if (index > 0) {
       assert.ok(target > listed[index - 1], "chapters are listed in order");
@@ -611,6 +615,24 @@ test("the operations manual numbers its pages, dates itself in Asia/Makassar, an
 });
 
 // ------------------------------------------------------------------- (3) ---
+
+function countGuideChapters() {
+  const source = readFileSync(
+    new URL("../server/api/sop-pdf-content.ts", import.meta.url),
+    "utf8",
+  );
+  const opening = "export const guideChapters: Chapter[] = [";
+  const start = source.indexOf(opening);
+  assert.notEqual(start, -1, "guideChapters must still be a plain array literal");
+  const end = source.indexOf("\n];", start);
+  const entries = source
+    .slice(start + opening.length, end)
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  assert.ok(entries.length > 0, "guideChapters must not be empty");
+  return entries.length;
+}
 
 test("the English editions print English", async () => {
   await loginAsAdmin("en");
