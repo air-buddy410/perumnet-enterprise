@@ -393,3 +393,4 @@ test("bukan Admin tidak bisa membaca laporan pengiriman", async () => {
   const response = await fetch(`${baseUrl}/api/cms/prospects/outreach`);
   assert.equal(response.status, 401);
 });
+

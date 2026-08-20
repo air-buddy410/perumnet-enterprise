@@ -123,6 +123,41 @@ CREATE INDEX IF NOT EXISTS email_outbox_status_retry_idx
 CREATE INDEX IF NOT EXISTS email_outbox_user_idx
   ON email_outbox(user_id,created_at);
 
+-- Lampiran email. Berkasnya TIDAK disimpan di baris email_outbox.
+--
+-- Dua alasan. Pertama, ada lima tempat berbeda yang mengosongkan
+-- email_outbox.body_html begitu barisnya final, dan satu lagi yang menghapus
+-- barisnya setelah 180 hari; payload yang menumpang di sana harus diurus di
+-- keenamnya, dan yang terlewat satu berarti berkas menumpuk selamanya atau
+-- hilang terlalu cepat. Kedua, pekerja email dijatah 180 MB oleh PM2 dan
+-- membaca 25 baris sekaligus — baris yang membawa megabyte membuat jatah itu
+-- habis di tengah putaran.
+--
+-- Yang disimpan di sini rujukannya; isinya lewat server/storage.ts, sama
+-- seperti dokumen proyek dan lampiran belanja.
+CREATE TABLE IF NOT EXISTS email_attachments (
+  id TEXT PRIMARY KEY,
+  outbox_id TEXT NOT NULL REFERENCES email_outbox(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+  -- Untuk membuktikan berkas yang tersimpan masih berkas yang sama, dan untuk
+  -- menghindari menyimpan PDF identik berkali-kali saat satu dokumen dikirim
+  -- ke beberapa penerima.
+  sha256 TEXT NOT NULL,
+  -- Salah satunya terisi, mengikuti backend penyimpanan yang aktif.
+  -- readProjectFile TIDAK memulangkan tipe MIME, jadi mime_type di atas wajib
+  -- ada: tanpa itu lampiran terkirim sebagai application/octet-stream dan
+  -- klien email menolak membukanya.
+  storage_url TEXT,
+  content_base64 TEXT,
+  -- Dokumen yang dirender aplikasi, bukan yang diunggah orang. Dipakai layar
+  -- untuk membedakan keduanya, dan dipakai pemeriksaan batas: batas jumlah
+  -- hanya berlaku untuk lampiran tambahan.
+  generated INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS user_permissions (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   permissions_json TEXT NOT NULL,
@@ -3107,6 +3142,13 @@ async function ensurePortfolioGalleryLimit(client: DatabaseClient) {
  */
 async function ensureProspectLetterFormat(client: DatabaseClient) {
   await ensureColumn(client, "email_outbox", "reply_to", "TEXT");
+  // Tabelnya dibuat schemaSql, jadi indeksnya aman di sana juga — tetapi
+  // ditaruh di sini supaya seragam dengan aturan kolom baru, dan supaya tidak
+  // ada yang perlu menimbang ulang tiap kali.
+  await client.execute(
+    `CREATE INDEX IF NOT EXISTS email_attachments_outbox_idx
+       ON email_attachments(outbox_id)`,
+  );
   await ensureColumn(client, "cms_prospect_outreach", "batch_id", "TEXT");
   // Indeksnya DI SINI, bukan di schemaSql. schemaSql berjalan lebih dulu, dan
   // pada database yang tabelnya sudah ada CREATE TABLE IF NOT EXISTS adalah

@@ -344,7 +344,7 @@ const retryMinutes = [1, 5, 15, 60] as const;
 async function syncProspectOutreach(
   client: DatabaseClient,
   outboxId: string,
-  status: "Sent" | "Failed",
+  status: "Sent" | "Failed" | "Skipped",
   timestamp: string,
   failureReason?: string,
 ) {
@@ -652,6 +652,15 @@ export async function dispatchEmailOutbox(
         status: "skipped",
         error: reason,
       });
+      // Riwayat prospek WAJIB ikut diberi tahu di sini.
+      //
+      // Tanpa baris ini barisnya tetap 'Queued' selamanya: outbox sudah final,
+      // tidak ada yang akan menyentuhnya lagi, tapi laporan pengiriman terus
+      // berkata "Masih diproses" dan `selesai` sebuah batch tidak pernah
+      // menjadi true. Persis kebohongan yang laporan itu dibuat untuk
+      // mencegah — dan ia hanya muncul saat kredensial pengirim hilang, yaitu
+      // saat orang paling butuh laporannya benar.
+      await syncProspectOutreach(client, String(row.id), "Skipped", lockedAt, reason);
       results.push({ id: String(row.id), status: "skipped", error: reason });
       continue;
     }
