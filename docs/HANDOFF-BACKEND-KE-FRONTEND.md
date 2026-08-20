@@ -146,12 +146,14 @@ Perinciannya di bagian masing-masing di bawah.
 
 | | Tugas | Keadaan |
 |---|---|---|
-| **T-16** | Kirim SPK/PO ke vendor — dialog kirim, riwayat, batas unggah | sedang dikerjakan |
-| **T-18a** | **Pengelola template surat dokumen** | belum mulai — **tanpa ini tombol Kirim tidak punya template untuk dipilih** |
-| **T-18b** | Alamat email klien di form proyek | belum mulai |
-| **T-18c** | Kirim dari Quotation dan Invoice | belum mulai |
+| **T-16** | Kirim SPK/PO ke vendor — dialog kirim, riwayat, batas unggah | ✅ selesai (`document-email-dialog.tsx`) |
+| **T-18a** | **Pengelola template surat dokumen** | **belum mulai — satu-satunya yang tersisa, dan tanpa ini tombol Kirim tidak punya template untuk dipilih** |
+| **T-18b** | Alamat email klien di form proyek | ✅ selesai (`project-view.tsx`) |
+| **T-18c** | Kirim dari Quotation dan Invoice | ✅ selesai |
 
-T-1 sampai T-15 dan T-17 sudah selesai; catatannya ada di §Selesai.
+T-1 sampai T-17 sudah selesai; catatannya ada di §Selesai. **Diperiksa ulang
+21 Agustus: tinggal T-18a.** Semua layar lain sudah ada di `main`, termasuk
+editor kaya T-17 yang sempat tertinggal belum di-commit.
 
 **Backend Fase 1–3 seluruhnya sudah selesai dan bertes (291/291), dan sudah
 masuk `main`.** Yang menahan peluncuran tinggal layar. Belum ada satu pun yang
