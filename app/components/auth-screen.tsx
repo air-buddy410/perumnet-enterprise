@@ -11,6 +11,7 @@ interface AuthScreenProps {
 }
 
 type AuthMode = "login" | "forgot" | "reset";
+type AuthProviderMode = "LOCAL" | "MAILSERVER";
 
 export function AuthScreen({ language, onLogin }: AuthScreenProps) {
   const id = language === "id";
@@ -32,6 +33,7 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [mailserverUnavailable, setMailserverUnavailable] = useState(false);
+  const [authProviderMode, setAuthProviderMode] = useState<AuthProviderMode | null>(null);
   const [sent, setSent] = useState(false);
   const [resetToken, setResetToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -45,6 +47,19 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
       }, 0);
       return () => window.clearTimeout(update);
     }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    api<{ mode: AuthProviderMode }>("/api/auth/mode")
+      .then(({ mode: currentMode }) => {
+        if (!active || (currentMode !== "LOCAL" && currentMode !== "MAILSERVER")) return;
+        setAuthProviderMode(currentMode);
+      })
+      .catch(() => {
+        // Fail closed: do not offer a reset flow until the server mode is known.
+      });
+    return () => { active = false; };
   }, []);
 
   async function submitLogin(event: FormEvent<HTMLFormElement>) {
@@ -197,11 +212,11 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
                 onSubmit={submitLogin}
               >
                 <label className="field">
-                  <span>Email</span>
+                  <span>{id ? "Email atau username" : "Email or username"}</span>
                   <span className="input-with-icon">
                     <Mail size={17} />
                     <input
-                      type="email"
+                      type="text"
                       name="perumnet-login-email"
                       value={email}
                       onChange={(event) => setEmail(event.target.value)}
@@ -247,11 +262,15 @@ export function AuthScreen({ language, onLogin }: AuthScreenProps) {
                         : "Remember me for 30 days"}
                     </span>
                   </label>
-                  {!mailserverUnavailable && (
+                  {authProviderMode === "MAILSERVER" ? (
+                    <span className="auth-recovery-note">
+                      {id ? "Reset password email lewat webmail atau hubungi IT." : "Reset your email password through webmail or contact IT."}
+                    </span>
+                  ) : authProviderMode === "LOCAL" && !mailserverUnavailable ? (
                     <button className="text-button" type="button" onClick={() => setMode("forgot")}>
                       {id ? "Lupa kata sandi?" : "Forgot password?"}
                     </button>
-                  )}
+                  ) : null}
                 </div>
                 {error && (
                   <p className="form-error" role="alert">
