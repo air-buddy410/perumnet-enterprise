@@ -14,6 +14,11 @@ import {
 } from "@/shared/access";
 import { writeAuditLog } from "../audit";
 import { authProviderMode, verifyMailserverPassword } from "../mail-auth";
+import {
+  listClientDocumentDeliveries,
+  previewClientDocumentEmail,
+  sendClientDocumentEmail,
+} from "./client-document-email";
 import { dispatchDocumentEmailTemplateApi } from "./document-email-router";
 import { getPasswordPolicy, mailcowConfig, setMailboxPassword } from "../mailcow";
 import {
@@ -171,6 +176,11 @@ const coordinateSchema = z.number().finite().nullable().optional();
 const projectSchema = z.object({
   name: z.string().trim().min(3).max(160),
   client: z.string().trim().min(2).max(160),
+  // Boleh kosong: sebagian besar proyek lama tidak punya alamat klien, dan
+  // memaksanya akan membuat setiap penyuntingan proyek gagal sampai seseorang
+  // mengarang alamat. Bentuknya mengikuti vendorSchema.email.
+  clientEmail: z.union([z.literal(""), emailSchema]).optional(),
+  clientContactName: z.string().trim().max(160).optional(),
   location: z.string().trim().min(2).max(160).default("Bali"),
   status: z.enum(["Aktif", "Selesai", "Draft"]).default("Draft"),
   startDate: isoDateSchema.optional(),
@@ -1329,6 +1339,8 @@ async function listProjects(searchParams: URLSearchParams, user: AuthUser) {
       code: String(row.code),
       name: String(row.name),
       client: String(row.client),
+      clientEmail: row.client_email ? String(row.client_email) : "",
+      clientContactName: row.client_contact_name ? String(row.client_contact_name) : "",
       location: String(row.location),
       status: String(row.status),
       progress,
@@ -1391,8 +1403,8 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     await client.batch(
       [
         {
-          sql: "INSERT INTO projects (id,code,name,client,location,status,start_date,target_date,value,manager_id,created_by,latitude,longitude,coordinate_source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-          args: [id, code, input.name, input.client, input.location, input.status, input.startDate ?? null, input.targetDate ?? null, input.value, input.managerId ?? user.id, user.id, pin?.latitude ?? null, pin?.longitude ?? null, pinnedByHand ? "manual" : null, timestamp, timestamp],
+          sql: "INSERT INTO projects (id,code,name,client,client_email,client_contact_name,location,status,start_date,target_date,value,manager_id,created_by,latitude,longitude,coordinate_source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          args: [id, code, input.name, input.client, input.clientEmail || null, input.clientContactName || null, input.location, input.status, input.startDate ?? null, input.targetDate ?? null, input.value, input.managerId ?? user.id, user.id, pin?.latitude ?? null, pin?.longitude ?? null, pinnedByHand ? "manual" : null, timestamp, timestamp],
         },
         {
           sql: "INSERT INTO project_members (project_id,user_id,created_at) VALUES (?,?,?) ON CONFLICT (project_id,user_id) DO NOTHING",
@@ -1680,10 +1692,18 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     const pinnedByHand = pin !== null && pin.latitude !== null;
     const location = String(input.location ?? current.location);
     await client.execute({
-      sql: "UPDATE projects SET name=?,client=?,location=?,status=?,start_date=?,target_date=?,value=?,manager_id=?,latitude=?,longitude=?,coordinate_source=?,geocoded_query=?,geocoded_label=?,updated_at=? WHERE id=?",
+      sql: "UPDATE projects SET name=?,client=?,client_email=?,client_contact_name=?,location=?,status=?,start_date=?,target_date=?,value=?,manager_id=?,latitude=?,longitude=?,coordinate_source=?,geocoded_query=?,geocoded_label=?,updated_at=? WHERE id=?",
       args: [
         input.name ?? current.name,
         input.client ?? current.client,
+        // String kosong berarti "hapus alamatnya", bukan "jangan diubah" —
+        // itulah kenapa dibandingkan dengan undefined, bukan dipakai ?? saja.
+        input.clientEmail === undefined
+          ? current.client_email ?? null
+          : input.clientEmail || null,
+        input.clientContactName === undefined
+          ? current.client_contact_name ?? null
+          : input.clientContactName || null,
         input.location ?? current.location,
         input.status ?? current.status,
         input.startDate === undefined ? current.start_date : input.startDate,
@@ -3460,6 +3480,16 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
       includeFinance: true,
     });
     return created(await getInvoice(client, id));
+  }
+
+  if (invoiceId && action === "send-email" && request.method === "POST") {
+    return sendClientDocumentEmail(client, request, user, "invoice", invoiceId);
+  }
+  if (invoiceId && action === "send-email-preview" && request.method === "POST") {
+    return previewClientDocumentEmail(client, request, user, "invoice", invoiceId);
+  }
+  if (invoiceId && action === "deliveries" && request.method === "GET") {
+    return listClientDocumentDeliveries(client, user, "invoice", invoiceId);
   }
 
   if (invoiceId && action === "pdf" && request.method === "GET") {
