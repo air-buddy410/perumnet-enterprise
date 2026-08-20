@@ -14,6 +14,7 @@ import {
   PROSPECT_DEFAULT_LETTER_FORMAT,
   PROSPECT_STARTER_TEMPLATE,
   prospectLetterFormats,
+  prospectOutreachStatuses,
   prospectSegments,
   prospectStatuses,
   type ProspectLetterFormat,
@@ -601,8 +602,6 @@ async function previewTemplate(request: Request, id: string) {
 // dan dua endpoint di bawah membacanya: satu per-batch (satu penekanan tombol
 // Kirim), satu per-penerima.
 
-const outreachStatuses = ["Queued", "Sent", "Failed", "Skipped"] as const;
-
 function mapOutreachLog(row: Record<string, unknown>) {
   return {
     id: String(row.id),
@@ -644,7 +643,7 @@ function outreachWhere(url: URL) {
   }
 
   const status = url.searchParams.get("status");
-  if (status && (outreachStatuses as readonly string[]).includes(status)) {
+  if (status && (prospectOutreachStatuses as readonly string[]).includes(status)) {
     clauses.push("o.status=?");
     args.push(status);
   }
@@ -683,7 +682,9 @@ function outreachWhere(url: URL) {
  * "kosong" hanya karena kebetulan belum ada yang gagal.
  */
 function ringkasStatus(rows: Record<string, unknown>[]) {
-  const hasil: Record<string, number> = { Queued: 0, Sent: 0, Failed: 0, Skipped: 0 };
+  const hasil: Record<string, number> = Object.fromEntries(
+    prospectOutreachStatuses.map((s) => [s, 0]),
+  );
   let total = 0;
   for (const row of rows) {
     const status = String(row.status);

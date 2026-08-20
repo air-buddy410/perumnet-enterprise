@@ -103,6 +103,35 @@ export const prospectPlaceholderHints: Record<
  */
 export const prospectPlaceholderPattern = /\{\{\s*([a-z_]+)\s*\}\}/g;
 
+// ── Status pengiriman surat ──────────────────────────────────────────
+//
+// Daftar ini sempat hidup dua kali — satu di router, satu lagi di layar —
+// tanpa keduanya tahu. Kalau suatu saat berbeda, server diam-diam mengabaikan
+// nilai penyaring yang tidak dikenalnya: filternya terlihat berfungsi, tapi
+// tidak mempersempit apa pun. Kegagalan yang tidak berbunyi seperti itu yang
+// paling lama tidak ketahuan.
+
+export const prospectOutreachStatuses = [
+  "Queued",
+  "Sent",
+  "Failed",
+  "Skipped",
+] as const;
+export type ProspectOutreachStatus = (typeof prospectOutreachStatuses)[number];
+
+export const prospectOutreachStatusLabels: Record<
+  ProspectOutreachStatus,
+  { id: string; en: string }
+> = {
+  // "Masih diproses", bukan "Menunggu": baris ini juga menampung kegagalan
+  // yang masih punya sisa percobaan, dan menyebutnya menunggu membuat orang
+  // mengira tidak ada yang pernah salah.
+  Queued: { id: "Masih diproses", en: "In progress" },
+  Sent: { id: "Terkirim", en: "Sent" },
+  Failed: { id: "Gagal", en: "Failed" },
+  Skipped: { id: "Tidak dikirim", en: "Not sent" },
+};
+
 // ── Batas pengiriman ─────────────────────────────────────────────────
 //
 // Mailcow yang membawa email penawaran ini juga membawa invoice dan tautan

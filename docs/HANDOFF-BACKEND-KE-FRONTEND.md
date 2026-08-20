@@ -171,7 +171,17 @@ surat utuh dari server tanpa menambahkan logo atau footer di sisi layar.
 
 Kontrak backend lengkap tetap berada di `docs/PROSPEK-CALON-KLIEN.md`.
 
-### T-12. Laporan pengiriman email — berhasil, gagal, atau masih diproses
+### ✅ T-12. Laporan pengiriman email — SELESAI 2026-08-20
+
+Implementasi tab **Laporan kirim** sudah selesai di
+`app/panel/prospects-editor.tsx`: daftar batch, detail per penerima, empat
+summary status dari server, filter pencarian/status/tanggal, pagination,
+alasan gagal apa adanya, serta polling 20 detik yang berhenti saat halaman
+tidak terlihat. Tampilan responsif berada di
+`app/panel/prospects.module.css`.
+
+Kontrak backend dan batas status tetap berada di `docs/PROSPEK-CALON-KLIEN.md`.
+
 
 - **Layar:** tab baru di `ProspectsEditor`, misal **"Laporan kirim"**.
 - **Kenapa ini ada:** riwayat outreach dulu ditulis sekali saat tombol Kirim
@@ -218,7 +228,7 @@ tombol Kirim:
 | `Failed` | percobaan habis, tidak akan diulang lagi | sedang diproses |
 | `Skipped` | tidak pernah diantre (opt-out, tanpa email, atau mode capture) | gagal |
 
-**Yang perlu dikerjakan:**
+**Kontrak yang dipenuhi:**
 
 - Daftar batch dulu, lalu klik untuk melihat per penerima. Batch adalah cara
   orang mengingat pekerjaannya: *"kiriman tadi pagi ke 21 orang"*, bukan 21
@@ -240,6 +250,35 @@ tombol Kirim:
 **Yang tidak boleh dilakukan di layar:** menyimpulkan sendiri sebuah batch
 "berhasil" dari menghitung baris. `selesai` sudah dihitung server; dua layar
 yang menghitung sendiri akan menjawab berbeda untuk pertanyaan yang sama.
+
+### T-13. Satu daftar status, bukan dua salinan
+
+- **Layar:** `prospects-editor.tsx` baris ~194.
+- **Apa:** ganti salinan lokal
+
+  ```ts
+  const outreachStatuses: OutreachStatus[] = ["Queued", "Sent", "Failed", "Skipped"];
+  ```
+
+  dengan impor dari kontrak bersama:
+
+  ```ts
+  import {
+    prospectOutreachStatuses,
+    prospectOutreachStatusLabels,
+  } from "../../shared/prospects";
+  ```
+
+  `prospectOutreachStatusLabels` sudah dwibahasa (`{ id, en }`), sama polanya
+  dengan `prospectStatusLabels` yang tab daftar prospek pakai.
+
+- **Kenapa:** daftarnya sempat hidup dua kali — satu di layar, satu di router —
+  tanpa keduanya tahu. Router sekarang sudah memakai versi bersama. Kalau
+  suatu saat isinya berbeda, server **diam-diam mengabaikan** nilai penyaring
+  yang tidak dikenalnya: filternya terlihat berfungsi tapi tidak mempersempit
+  apa pun, dan tidak ada pesan galat. Kegagalan yang tidak berbunyi seperti
+  itu yang paling lama tidak ketahuan.
+- Sisanya di T-12 tidak perlu diubah. Ini murni menghapus duplikasi.
 
 ### Selesai
 
@@ -283,6 +322,11 @@ yang menghitung sendiri akan menjawab berbeda untuk pertanyaan yang sama.
   tombol **Pakai contoh**, tanda tangan per orang, dan `bodyFormat: "text"`;
   preview menampilkan dokumen surat utuh dari server dalam frame tinggi tanpa
   menambahkan logo, tanda tangan, atau catatan kaki dari UI.
+
+- **T-12** — tab **Laporan kirim** menampilkan batch sebelum detail penerima,
+  summary empat status dari server, filter lengkap, pagination, `failureReason`
+  apa adanya, nilai null sebagai `—`, serta polling yang hanya berjalan saat
+  tab terlihat. QA browser dilakukan pada desktop, tablet, dan mobile.
 
   QA terakhir: lint, typecheck, build, dan 231 test lulus; smoke Playwright
   mock kontrak pada `/admin` lulus di 1440×900 dan 375×812 tanpa error console.
