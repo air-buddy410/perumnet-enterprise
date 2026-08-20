@@ -1,4 +1,5 @@
-// Mengirim SPK/PO ke vendor lewat email, dengan PDF-nya sebagai lampiran.
+// Mengirim dokumen resmi lewat email, dengan PDF-nya sebagai lampiran:
+// SPK/PO ke vendor, quotation dan invoice ke klien.
 //
 // Tes terpenting di berkas ini adalah yang menjaga uang: SPK punya dua edisi,
 // dan yang internal memuat kolom Budget — harga modal PerumNet per item. Yang
@@ -366,6 +367,7 @@ before(async () => {
 
   konteks = {
     projectId: project.id,
+    quotationId: sent.id,
     orderBeremail: await buatOrder(vendorBerEmail.id),
     orderTanpaEmail: await buatOrder(vendorTanpaEmail.id),
     templateId: template.id,
@@ -505,4 +507,213 @@ test("berkas arsip TIDAK ikut terhapus saat outbox dibersihkan", async () => {
       "berkas arsip ikut terhapus bersama outbox",
     );
   }
+});
+
+// ── Quotation dan invoice ke klien ───────────────────────────────────
+//
+// Sampai 20 Agustus tidak ada alamat klien di mana pun dalam skema ini; kolom
+// client_email di proyek baru ditambahkan untuk ini. Karena itu tes pertamanya
+// justru keadaan "belum diisi", yang akan jadi keadaan setiap proyek lama.
+
+test("proyek tanpa email klien ditolak, dan tidak ada apa pun yang tertulis", async () => {
+  const sebelumnya = diterimaSmtp.length;
+  const template = await json(
+    "/api/document-email-templates",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        documentKind: "quotation",
+        name: "Pengantar Penawaran",
+        subject: "Penawaran {{nomor}} untuk {{klien}}",
+        bodyHtml: "Yth. {{klien}},\n\nTerlampir penawaran {{nomor}} senilai {{nilai}}.",
+        senderName: "Admin Uji",
+        senderEmail: "admin.uji@perumnet.id",
+      }),
+    },
+    201,
+  );
+  konteks.templateQuotation = template.id;
+
+  const form = new FormData();
+  form.set("templateId", template.id);
+  const gagal = await galat(`/api/quotations/${konteks.quotationId}/send-email`, {
+    method: "POST",
+    body: form,
+  });
+  assert.equal(gagal.status, 409);
+  assert.equal(gagal.code, "CLIENT_EMAIL_MISSING");
+  assert.match(gagal.message, /Manajemen Proyek/);
+  assert.equal(diterimaSmtp.length, sebelumnya, "ada surat yang terlanjur keluar");
+
+  const riwayat = await json(`/api/quotations/${konteks.quotationId}/deliveries`);
+  assert.equal(riwayat.items.length, 0);
+});
+
+test("alamat klien tersimpan di proyek dan terbaca kembali", async () => {
+  const diubah = await json(`/api/projects/${konteks.projectId}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      clientEmail: "klien@contoh.test",
+      clientContactName: "Bapak Klien",
+    }),
+  });
+  assert.equal(diubah.clientEmail, "klien@contoh.test");
+  assert.equal(diubah.clientContactName, "Bapak Klien");
+});
+
+test("quotation terkirim ke klien, dan PDF-nya ikut", async () => {
+  const sebelumnya = diterimaSmtp.length;
+  const form = new FormData();
+  form.set("templateId", konteks.templateQuotation);
+  const hasil = await json(`/api/quotations/${konteks.quotationId}/send-email`, {
+    method: "POST",
+    body: form,
+  });
+  assert.equal(hasil.recipient, "klien@contoh.test");
+  assert.equal(hasil.recipientName, "Bapak Klien");
+
+  await jalankanWorker();
+  assert.ok(diterimaSmtp.length > sebelumnya, "tidak ada surat yang keluar");
+  const pdf = pdfDariPesan(diterimaSmtp[diterimaSmtp.length - 1].pesan);
+  assert.ok(pdf, "tidak ada lampiran PDF");
+  assert.equal(pdf.subarray(0, 4).toString(), "%PDF");
+});
+
+test("invoice terkirim, dan statusnya TIDAK ikut diubah", async () => {
+  const invoice = await json(
+    "/api/invoices",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: konteks.projectId,
+        quotationId: konteks.quotationId,
+        type: "DP",
+        issueDate: "2026-08-02",
+        dueDate: "2026-09-02",
+        calculationMode: "Percent",
+        installmentBps: 5000,
+      }),
+    },
+    201,
+  );
+  const template = await json(
+    "/api/document-email-templates",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        documentKind: "invoice",
+        name: "Pengantar Invoice",
+        subject: "Invoice {{nomor}}",
+        bodyHtml:
+          "Yth. {{klien}},\n\nInvoice {{nomor}} senilai {{nilai}} jatuh tempo {{jatuh_tempo}}. Sisa {{sisa}}.",
+        senderName: "Admin Uji",
+        senderEmail: "admin.uji@perumnet.id",
+      }),
+    },
+    201,
+  );
+
+  const form = new FormData();
+  form.set("templateId", template.id);
+  const hasil = await json(`/api/invoices/${invoice.id}/send-email`, {
+    method: "POST",
+    body: form,
+  });
+  assert.equal(hasil.status, "Queued");
+
+  const sesudah = await json(`/api/invoices/${invoice.id}`);
+  // Status invoice adalah keadaan PEMBAYARAN, bukan pengiriman. Menumpanginya
+  // akan mencampur dua hal yang kebetulan sama-sama bernama "status".
+  assert.equal(sesudah.status, "Belum Lunas");
+
+  const riwayat = await json(`/api/invoices/${invoice.id}/deliveries`);
+  assert.equal(riwayat.items.length, 1);
+  assert.equal(riwayat.items[0].recipient, "klien@contoh.test");
+});
+
+test("quotation Draft ikut ditandai terkirim, lewat transisi yang sama", async () => {
+  // Proyek sendiri: quotation-nya sengaja DIBIARKAN Draft.
+  const project = await json(
+    "/api/projects",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Proyek Draft Kirim",
+        client: "Klien Draft",
+        clientEmail: "draft@contoh.test",
+        clientContactName: "Ibu Draft",
+        location: "Denpasar",
+        status: "Aktif",
+        value: 0,
+      }),
+    },
+    201,
+  );
+  await json(
+    `/api/boq/items?projectId=${project.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        category: "Jasa",
+        description: "Pekerjaan draft",
+        quantity: 1,
+        unit: "paket",
+        costPrice: 1_000_000,
+        sellingPrice: 3_000_000,
+      }),
+    },
+    201,
+  );
+  // Baris quotation baru dibuat saat pertama kali diminta, jadi ia harus
+  // disentuh dulu. Tanpa ini tabelnya kosong dan tesnya gagal karena alasan
+  // yang tidak ada hubungannya dengan yang sedang diuji.
+  // PATCH-lah yang membuat barisnya, bukan GET. Diberi perubahan yang tidak
+  // menyentuh status supaya ia tetap Draft — itu yang sedang diuji.
+  await json(`/api/quotations?projectId=${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ validUntil: "2099-12-31" }),
+  });
+
+  // Dibaca langsung dari database: bentuk jawaban GET /api/quotations bukan
+  // yang sedang diuji di sini, dan menebaknya hanya menambah cara gagal.
+  const { createClient: bukaDb } = await import("@libsql/client");
+  const dbAwal = bukaDb({ url: `file:${databasePath}` });
+  const cari = await dbAwal.execute({
+    sql: "SELECT id,status FROM quotations WHERE project_id=? LIMIT 1",
+    args: [project.id],
+  });
+  dbAwal.close();
+  const quotationId = String(cari.rows[0]?.id ?? "");
+  assert.ok(quotationId, "quotation Draft tidak ketemu");
+  assert.equal(String(cari.rows[0].status), "Draft", "quotation-nya bukan Draft");
+
+  const form = new FormData();
+  form.set("templateId", konteks.templateQuotation);
+  const hasil = await json(`/api/quotations/${quotationId}/send-email`, {
+    method: "POST",
+    body: form,
+  });
+  assert.equal(hasil.recipient, "draft@contoh.test");
+
+  // Statusnya ikut berubah — dan lewat transisi yang SAMA dengan tombol
+  // "Tandai sudah dikirim", bukan UPDATE terpisah. Transisi itu juga mengunci
+  // item BoQ; salinan kedua yang melewatkannya akan mengirim penawaran yang
+  // angkanya belum terkunci.
+  const { createClient } = await import("@libsql/client");
+  const client = createClient({ url: `file:${databasePath}` });
+  const baris = await client.execute({
+    sql: "SELECT status FROM quotations WHERE id=?",
+    args: [quotationId],
+  });
+  const terkunci = await client.execute({
+    sql: "SELECT COUNT(*) AS jumlah FROM quotation_items WHERE quotation_id=?",
+    args: [quotationId],
+  });
+  client.close();
+
+  assert.equal(String(baris.rows[0].status), "Sent");
+  assert.ok(
+    Number(terkunci.rows[0].jumlah) > 0,
+    "item BoQ tidak ikut terkunci — transisinya dilewati",
+  );
 });

@@ -16,6 +16,11 @@ import {
 import { snapshotQuotationItems } from "../quotation-snapshot";
 import { lockDocumentTaxes } from "../tax";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
+import {
+  listClientDocumentDeliveries,
+  previewClientDocumentEmail,
+  sendClientDocumentEmail,
+} from "./client-document-email";
 import { renderBusinessPdf } from "./pdf";
 
 const idSchema = z.string().trim().min(1).max(100);
@@ -686,6 +691,78 @@ export async function handleBoqScopes(
   throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
 }
 
+/**
+ * Menandai satu Quotation sudah dikirim ke klien.
+ *
+ * Diekstrak dari penangan rutenya supaya jalur "kirim lewat email" memakai
+ * transisi yang SAMA, bukan salinannya. Yang terjadi di sini bukan sekadar
+ * mengubah satu kolom: ia memeriksa aturan pajak, mengunci item BoQ lewat
+ * snapshotQuotationItems, dan menyinkronkan nilai komersial proyek. Salinan
+ * kedua yang melewatkan salah satunya akan mengirim penawaran yang angkanya
+ * belum terkunci — dan itu baru ketahuan saat klien menagih selisihnya.
+ */
+export async function tandaiQuotationTerkirim(
+  client: DatabaseClient,
+  request: Request,
+  user: AuthUser,
+  quotation: Record<string, unknown>,
+) {
+  const quotationId = String(quotation.id);
+  // Scope dan proyeknya dicari SENDIRI, tidak dipercayakan pada bentuk baris
+  // pemanggil. Penangan rutenya memakai alias `boq_scope_id`; pemanggil lain
+  // tidak tahu itu, dan yang terjadi bukan galat yang jelas melainkan
+  // "undefined cannot be passed as argument to the database" jauh di dalam
+  // driver. Satu kueri kecil menghapus seluruh kelas kesalahan itu.
+  const dasar = await client.execute({
+    sql: "SELECT scope_id,project_id FROM quotations WHERE id=? LIMIT 1",
+    args: [quotationId],
+  });
+  const baris = dasar.rows[0] as unknown as Record<string, unknown> | undefined;
+  if (!baris) throw new ApiError(404, "NOT_FOUND", "Quotation tidak ditemukan.");
+  const scopeId = baris.scope_id ? String(baris.scope_id) : null;
+  const projectId = String(baris.project_id ?? "");
+  await client.transaction(async (tx) => {
+    await tx.execute({
+      sql: "UPDATE quotations SET updated_at=updated_at WHERE id=?",
+      args: [quotationId],
+    });
+    const locked = await tx.execute({
+      sql: "SELECT status,tax_enabled FROM quotations WHERE id=? LIMIT 1",
+      args: [quotationId],
+    });
+    const currentStatus = String(locked.rows[0]?.status);
+    if (Number(locked.rows[0]?.tax_enabled) === 1) {
+      const tax = await tx.execute({
+        sql: "SELECT id FROM document_taxes WHERE document_type='Quotation' AND document_id=? LIMIT 1",
+        args: [quotationId],
+      });
+      if (!tax.rows.length) {
+        throw new ApiError(409, "TAX_RULE_REQUIRED", "Pilih minimal satu aturan pajak sebelum mengirim Quotation.");
+      }
+    }
+    assertQuotationTransition(currentStatus, "Sent");
+    await tx.batch([
+      {
+        sql: "UPDATE quotations SET status=?,updated_at=? WHERE id=?",
+        args: ["Sent", now(), quotationId],
+      },
+      ...(scopeId
+        ? [
+            {
+              sql: "UPDATE boq_scopes SET status=?,updated_at=? WHERE id=?",
+              args: ["Sent", now(), scopeId],
+            },
+          ]
+        : []),
+    ], "write");
+  });
+  await snapshotQuotationItems(client, quotationId);
+  await syncProjectCommercialValue(client, projectId);
+  await writeAuditLog(client, request, user, "send", "quotation", quotationId, {
+    status: "Sent",
+  });
+}
+
 export async function handleQuotationLifecycle(
   request: Request,
   path: string[],
@@ -799,9 +876,28 @@ export async function handleQuotationLifecycle(
     return ok(await scopeDetail(client, String(quotation.boq_scope_id)));
   }
 
-  if (request.method === "POST" && ["send", "reject", "void"].includes(action ?? "")) {
-    const nextStatus =
-      action === "send" ? "Sent" : action === "reject" ? "Rejected" : "Void";
+  if (request.method === "POST" && action === "send-email") {
+    return sendClientDocumentEmail(client, request, user, "quotation", quotationId);
+  }
+  if (request.method === "POST" && action === "send-email-preview") {
+    return previewClientDocumentEmail(client, request, user, "quotation", quotationId);
+  }
+  if (request.method === "GET" && action === "deliveries") {
+    return listClientDocumentDeliveries(client, user, "quotation", quotationId);
+  }
+
+  if (request.method === "POST" && action === "send") {
+    await tandaiQuotationTerkirim(
+      client,
+      request,
+      user,
+      quotation as unknown as Record<string, unknown>,
+    );
+    return ok(await scopeDetail(client, String(quotation.boq_scope_id)));
+  }
+
+  if (request.method === "POST" && ["reject", "void"].includes(action ?? "")) {
+    const nextStatus = action === "reject" ? "Rejected" : "Void";
     await client.transaction(async (tx) => {
       await tx.execute({
         sql: "UPDATE quotations SET updated_at=updated_at WHERE id=?",
@@ -812,15 +908,6 @@ export async function handleQuotationLifecycle(
         args: [quotationId],
       });
       const currentStatus = String(locked.rows[0]?.status);
-      if (nextStatus === "Sent" && Number(locked.rows[0]?.tax_enabled) === 1) {
-        const tax = await tx.execute({
-          sql: "SELECT id FROM document_taxes WHERE document_type='Quotation' AND document_id=? LIMIT 1",
-          args: [quotationId],
-        });
-        if (!tax.rows.length) {
-          throw new ApiError(409, "TAX_RULE_REQUIRED", "Pilih minimal satu aturan pajak sebelum mengirim Quotation.");
-        }
-      }
       assertQuotationTransition(currentStatus, nextStatus);
       if (nextStatus === "Void") {
         const usage = await tx.execute({
@@ -870,7 +957,6 @@ export async function handleQuotationLifecycle(
         },
       ], "write");
     });
-    if (nextStatus === "Sent") await snapshotQuotationItems(client, quotationId);
     await syncProjectCommercialValue(client, String(quotation.project_id));
     await writeAuditLog(client, request, user, action ?? "update", "quotation", quotationId, {
       status: nextStatus,

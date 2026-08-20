@@ -187,6 +187,17 @@ CREATE TABLE IF NOT EXISTS projects (
   code TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   client TEXT NOT NULL,
+  -- Ke mana quotation dan invoice dikirim. Sampai 20 Agustus tidak ada alamat
+  -- klien di mana pun dalam skema ini: kolom client cuma nama perusahaan, dan
+  -- satu-satunya data PIC klien yang pernah tersimpan adalah nama pada BAST,
+  -- tanpa alamat.
+  --
+  -- Satu alamat per proyek, bukan tabel kontak klien tersendiri. Itu keputusan
+  -- pemilik, dan kalau suatu saat perlu beberapa PIC per klien (penagihan ke
+  -- Finance, penawaran ke Direktur), tabel itu bisa ditambahkan tanpa membuang
+  -- kolom ini.
+  client_email TEXT,
+  client_contact_name TEXT,
   location TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Aktif', 'Selesai', 'Draft')),
   start_date TEXT,
@@ -3288,6 +3299,13 @@ async function ensureProspectLetterFormat(client: DatabaseClient) {
        ON email_attachments(outbox_id)`,
   );
   await ensureColumn(client, "cms_prospect_outreach", "batch_id", "TEXT");
+  await ensureColumn(client, "projects", "client_email", "TEXT");
+  await ensureColumn(client, "projects", "client_contact_name", "TEXT");
+  // TIDAK ada indeks atas keduanya, dan memang tidak perlu: tidak ada satu pun
+  // kueri yang mencari proyek BERDASARKAN alamat kliennya. Ditulis di sini
+  // supaya yang berikutnya tidak menambahkannya "sekalian" ke schemaSql —
+  // indeks atas kolom baru di sana mematikan demo dan produksi 4 menit pada
+  // 20 Agustus.
   // email_attachments sudah hidup di demo dan produksi sejak 3c3df93, jadi
   // kolom ini tidak bisa hanya ada di schemaSql. Bawaannya 1 — mempertahankan
   // perilaku baris yang sudah ada, yang memang memiliki berkasnya sendiri.
