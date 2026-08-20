@@ -1655,6 +1655,141 @@ export const chapterCatalog: Chapter = {
   ],
 };
 
+export const chapterProspects: Chapter = {
+  id: "prospects",
+  title: ["Calon Klien dan surat penawaran", "Prospects and outreach letters"],
+  blocks: [
+    {
+      kind: "lead",
+      text: [
+        "Calon Klien adalah daftar kontak yang dikumpulkan tim sendiri — dari kartu nama, telepon masuk, atau berkas yang diserahkan pimpinan. Berbeda dengan Lead yang datang dari formulir situs, orang-orang ini tidak pernah meminta dihubungi. Karena itu dua hal wajib menempel pada setiap kontak: catatan dari mana kontaknya didapat, dan cara berhenti dihubungi.",
+        "Prospects is a list of contacts gathered by the team itself — from business cards, incoming calls, or a file handed over by management. Unlike Leads, which arrive through the website form, these people never asked to be contacted. That is why two things are attached to every contact: a written note of where it came from, and a way to stop being contacted.",
+      ],
+    },
+    {
+      kind: "meta",
+      rows: [
+        {
+          label: ["Siapa yang boleh", "Who may do it"],
+          value: ["Admin dan Finance secara bawaan. Admin dapat memberikannya kepada siapa pun lewat Pengguna & Akses, modul Calon Klien. Izin Lihat cukup untuk membaca daftar, laporan, dan pratinjau; izin Kelola diperlukan untuk menyimpan, mengimpor, dan mengirim.", "Admin and Finance by default. An Admin can grant it to anyone through Users & Access, module Prospects. View is enough to read the list, the report, and previews; Manage is required to save, import, and send."],
+        },
+        {
+          label: ["Di mana", "Where"],
+          value: ["Menu Calon Klien, dengan lima tab: Daftar prospek, Tambah prospek, Impor XLSX, Susun email, Template surat, dan Laporan kirim.", "The Prospects menu, with tabs for the list, adding a contact, importing XLSX, composing an email, letter templates, and the delivery report."],
+        },
+        {
+          label: ["Prasyarat", "Prerequisites"],
+          value: ["Catatan sumber kontak untuk setiap orang, dan satu template surat yang sudah disimpan. Pengiriman hanya berjalan bila mailserver sudah dikonfigurasi.", "A source note for every contact, and one saved letter template. Sending only works when the mail server is configured."],
+        },
+      ],
+    },
+    {
+      kind: "steps",
+      items: [
+        [
+          "Tambahkan kontak satu per satu lewat Tambah prospek, atau banyak sekaligus lewat Impor XLSX. Kolom yang dikenali: Nama, Email, Perusahaan, Jabatan, No.Telepon, Kota, dan Industri. Judul kolom dibaca dari isinya, bukan dari urutannya, jadi susunan kolom boleh berbeda.",
+          "Add contacts one at a time under Add prospect, or many at once under Import XLSX. The recognised columns are Name, Email, Company, Job title, Phone, City, and Industry. Headings are matched by their text, not their position, so the column order may differ.",
+        ],
+        [
+          "Nama lembar di dalam berkas Excel menentukan segmen: Konstruksi & Arsitektur, Developer, Smart Home, atau Hotel & Villa. Lembar dengan nama lain masuk ke segmen Lainnya.",
+          "The worksheet name inside the Excel file decides the segment: Construction & Architecture, Developer, Smart Home, or Hotel & Villa. Any other sheet name lands in Other.",
+        ],
+        [
+          "Jalankan impor sebagai uji kering lebih dulu. Laporannya menyebut berapa baris terbaca, berapa akan tersimpan, dan setiap masalah lengkap dengan nama lembar dan nomor barisnya. Baris bermasalah dilaporkan, bukan dibuang diam-diam: sel yang memuat dua alamat email membuat kontaknya tetap masuk tanpa email, dan alamat yang sudah dipakai prospek lain dilewati.",
+          "Run the import as a dry run first. The report states how many rows were read, how many would be saved, and every problem with its sheet name and row number. Problem rows are reported rather than silently dropped: a cell holding two email addresses still saves the contact without an email, and an address already used by another prospect is skipped.",
+        ],
+        [
+          "Buka Template surat dan tekan Pakai contoh untuk memulai dari naskah perkenalan yang sudah ada. Isi surat diketik sebagai teks biasa — baris kosong memisahkan paragraf. Kop berlogo, tanda tangan, alamat kantor, dan catatan cara berhenti dihubungi ditambahkan aplikasi; tidak ada yang perlu menulis HTML.",
+          "Open Letter templates and press Use example to start from the existing introduction text. The body is typed as plain text — a blank line separates paragraphs. The letterhead with the logo, the signature, the office address, and the note on how to stop receiving letters are added by the application; nobody needs to write HTML.",
+        ],
+        [
+          "Isi tanda tangan dengan nama dan kontak orang yang mengirim, bukan alamat umum perusahaan. Balasan calon klien diarahkan ke alamat itu, sehingga jawaban mereka sampai ke kotak masuk orang yang menunggunya.",
+          "Fill in the signature with the name and contact details of the person sending, not a general company address. Replies from the prospect are directed there, so their answer reaches the inbox of the person waiting for it.",
+        ],
+        [
+          "Sisipkan placeholder lewat tombol, jangan mengetiknya sendiri: {{nama}}, {{perusahaan}}, {{jabatan}}, {{kota}}, dan {{segmen}}. Placeholder yang salah ketik sengaja dibiarkan terlihat apa adanya di surat, supaya kesalahannya ketahuan pada pratinjau pertama dan bukan setelah terkirim ke ratusan orang.",
+          "Insert placeholders using the buttons rather than typing them: {{nama}}, {{perusahaan}}, {{jabatan}}, {{kota}}, and {{segmen}}. A mistyped placeholder is deliberately left visible in the letter, so the mistake shows up in the first preview instead of after it reaches hundreds of people.",
+        ],
+        [
+          "Jalankan pratinjau ke satu kontak nyata sebelum mengirim. Yang tampil di pratinjau adalah surat yang sama persis dengan yang akan diterima calon klien, bukan perkiraan.",
+          "Run a preview against one real contact before sending. What the preview shows is exactly the letter the prospect will receive, not an approximation.",
+        ],
+        [
+          "Pilih penerima di Daftar prospek, lalu Susun email. Kotak centang mati sendiri untuk kontak yang tidak boleh disurati: tanpa alamat email, atau sudah meminta berhenti dihubungi. Jeda antar surat bawaannya 60 detik, jadi 40 penerima memakan sekitar 40 menit — itu bukan macet.",
+          "Select recipients in the prospect list, then Compose email. The checkbox is disabled for contacts who may not be written to: those without an email address, or who have asked to stop. The default gap between letters is 60 seconds, so 40 recipients take about 40 minutes — that is not a stall.",
+        ],
+        [
+          "Buka Laporan kirim untuk melihat hasilnya. Satu penekanan tombol Kirim tampil sebagai satu batch, dengan hitungan per status, dan bisa dibuka untuk melihat setiap penerima satu per satu.",
+          "Open the delivery report to see the outcome. One press of the Send button appears as one batch, with a count per status, and can be opened to see each recipient individually.",
+        ],
+      ],
+    },
+    {
+      kind: "table",
+      widths: [26, 74],
+      head: [["Status", "Status"], ["Artinya", "What it means"]],
+      rows: [
+        [
+          ["Masih diproses", "In progress"],
+          ["Surat menunggu jadwalnya, atau sempat gagal tetapi masih akan diulang. Bukan kegagalan — jangan dikejar.", "The letter is waiting for its slot, or failed once but will still be retried. Not a failure — no need to chase it."],
+        ],
+        [
+          ["Terkirim", "Sent"],
+          ["Sudah diterima server surat penerima.", "Accepted by the recipient's mail server."],
+        ],
+        [
+          ["Gagal", "Failed"],
+          ["Lima percobaan sudah habis dan tidak akan diulang lagi. Alasannya tertulis pada barisnya.", "Five attempts have been used and it will not be retried. The reason is written on the row."],
+        ],
+        [
+          ["Tidak dikirim", "Not sent"],
+          ["Tidak pernah masuk antrean: kontaknya minta berhenti dihubungi, tidak punya alamat email, atau lingkungan ini memang menahan email.", "It never entered the queue: the contact asked to stop, has no email address, or this environment holds email back on purpose."],
+        ],
+      ],
+    },
+    {
+      kind: "note",
+      title: ["Menghormati permintaan berhenti", "Honouring a request to stop"],
+      text: [
+        "Bila seseorang meminta tidak dihubungi lagi, buka detail kontaknya dan tandai Jangan hubungi lagi. Server menolak mengirim ke kontak tersebut sejak saat itu, dan penolakannya tidak bergantung pada layar — siapa pun yang mencoba tetap ditolak. Tanda ini tidak bisa dibatalkan lewat layar, dan memang disengaja.",
+        "If someone asks not to be contacted again, open their contact detail and mark Do not contact. From that moment the server refuses to send to that contact, and the refusal does not depend on the screen — anyone who tries is refused. The mark cannot be undone from the screen, and that is deliberate.",
+      ],
+    },
+    {
+      kind: "locked",
+      text: [
+        "Surat yang sudah masuk antrean tidak bisa ditarik kembali; yang bisa dilakukan hanyalah membatalkan sisanya dengan menandai kontak berhenti dihubungi. Riwayat surat menempel pada kontaknya dan bertahan meski catatan pengiriman aslinya sudah dibersihkan, karena pertanyaan surat apa yang pernah kita kirim ke klien ini muncul bertahun-tahun kemudian. Jumlah percobaan dan jadwal ulang hilang setelah 180 hari; statusnya tetap terbaca.",
+        "A letter already queued cannot be recalled; all that can be done is to stop the rest by marking the contact as do-not-contact. The letter history stays attached to the contact and survives even after the original delivery record is cleaned up, because the question of what we have sent this client comes up years later. Attempt counts and retry schedules disappear after 180 days; the status itself stays readable.",
+      ],
+    },
+    {
+      kind: "pitfalls",
+      items: [
+        [
+          "Mengirim tanpa pratinjau. Pratinjau adalah satu-satunya tempat kesalahan ketik dan placeholder yang keliru masih bisa diperbaiki tanpa biaya.",
+          "Sending without a preview. The preview is the only place where a typo or a wrong placeholder can still be fixed at no cost.",
+        ],
+        [
+          "Mengosongkan jeda antar surat agar cepat selesai. Mailserver yang sama membawa invoice dan tautan pemulihan kata sandi; reputasi yang rusak karena satu kampanye membuat keduanya ikut tidak sampai, dan itu baru ketahuan saat ada yang tidak bisa masuk atau tidak menerima tagihan.",
+          "Removing the gap between letters to finish faster. The same mail server carries invoices and password recovery links; a reputation damaged by one campaign stops those arriving too, and that only surfaces when someone cannot sign in or never receives a bill.",
+        ],
+        [
+          "Mengisi catatan sumber seadanya. Catatan itu satu-satunya jawaban ketika seseorang bertanya dari mana Anda mendapatkan alamat saya.",
+          "Filling the source note carelessly. That note is the only answer available when someone asks where you got their address.",
+        ],
+        [
+          "Membaca status Masih diproses sebagai kegagalan lalu mengirim ulang. Surat yang sama akan sampai dua kali.",
+          "Reading In progress as a failure and sending again. The same letter then arrives twice.",
+        ],
+        [
+          "Menguji dengan data pelanggan sungguhan di lingkungan demo. Bila lingkungan itu diizinkan mengirim, surat uji benar-benar sampai ke mereka.",
+          "Testing with real customer data in the demo environment. If that environment is allowed to send, the test letters really do reach them.",
+        ],
+      ],
+    },
+  ],
+};
+
 export const chapterAccess: Chapter = {
   id: "access",
   title: ["Mengatur akun, hak akses, dan preferensi", "Managing accounts, permissions, and preferences"],
@@ -1691,8 +1826,8 @@ export const chapterAccess: Chapter = {
           "An Admin creates the account with an email address and a starting password of at least 10 characters, then picks the role: Admin, Project Manager, Engineer, or Finance.",
         ],
         [
-          "Untuk setiap modul, pilih Tidak ada, Lihat, atau Kelola. Pengaturan bawaan peran sudah terisi otomatis; ubah hanya bila memang perlu.",
-          "For each module, choose No access, View, or Manage. The role defaults are filled in automatically; change them only where genuinely needed.",
+          "Untuk setiap modul, pilih Tidak ada, Lihat, atau Kelola. Pengaturan bawaan peran sudah terisi otomatis; ubah hanya bila memang perlu. Daftar modul di layar ini mengikuti modul yang benar-benar ada di aplikasi, jadi modul baru muncul dengan sendirinya — termasuk Calon Klien, yang bawaannya Kelola untuk Admin dan Finance serta Tidak ada untuk peran lain.",
+          "For each module, choose No access, View, or Manage. The role defaults are filled in automatically; change them only where genuinely needed. The module list on this screen follows the modules the application actually has, so a new module appears on its own — including Prospects, which defaults to Manage for Admin and Finance and No access for the other roles.",
         ],
         [
           "Untuk Project Manager dan Engineer, tentukan proyek mana saja yang boleh mereka buka dengan menambahkan mereka sebagai anggota proyek. Admin dan Finance selalu melihat seluruh proyek.",
@@ -1707,8 +1842,8 @@ export const chapterAccess: Chapter = {
           "Changing your own email address does not take effect immediately. The account keeps its old address until the confirmation link sent to the new address is opened, and the old address is notified that a change was requested. The confirmation link is valid for 60 minutes. Once the address really changes, every session on that account ends and the owner signs in again with the new address.",
         ],
         [
-          "Buka Pengaturan untuk memilih Bahasa Indonesia atau English, mengatur notifikasi email, dan mengganti kata sandi. Mengganti kata sandi sendiri memerlukan kata sandi lama, dan kata sandi baru minimal 10 karakter. Mengganti kata sandi sendiri juga langsung mengakhiri sesi Anda di seluruh perangkat lain; hanya perangkat yang Anda pakai saat itu tetap masuk.",
-          "Open Settings to choose Indonesian or English, set email notifications, and change your password. Changing your own password requires the current password, and the new one must be at least 10 characters. Changing your own password also immediately ends your sessions on every other device; only the device you are using stays signed in.",
+          "Buka Pengaturan untuk memilih Bahasa Indonesia atau English, mengatur notifikasi email, dan mengganti kata sandi. Mengganti kata sandi sendiri memerlukan kata sandi lama. Syarat kata sandi barunya ditampilkan di form itu sendiri dan tidak selalu sama: aplikasi menuntut minimal 10 karakter, dan bila mailserver menuntut lebih — panjang lain, angka, huruf besar-kecil, atau karakter spesial — syarat yang lebih ketat itulah yang berlaku. Karena itu jangan menghafal angkanya; baca yang tertulis di form. Mengganti kata sandi sendiri juga langsung mengakhiri sesi Anda di seluruh perangkat lain; hanya perangkat yang Anda pakai saat itu tetap masuk.",
+          "Open Settings to choose Indonesian or English, set email notifications, and change your password. Changing your own password requires the current password. The requirements for the new one are shown on the form itself and are not always the same: the application asks for at least 10 characters, and where the mail server asks for more — a different length, a digit, mixed case, or a special character — the stricter requirement applies. So do not memorise the number; read what the form says. Changing your own password also immediately ends your sessions on every other device; only the device you are using stays signed in.",
         ],
         [
           "Bila seseorang berhenti, Admin menonaktifkan akunnya, bukan menghapusnya. Menonaktifkan langsung mengakhiri seluruh sesi aktif orang tersebut sekaligus menjaga jejak dokumen yang pernah ia buat.",
@@ -1737,6 +1872,10 @@ export const chapterAccess: Chapter = {
         [
           "Berbagi satu akun untuk beberapa orang. Jejak audit menjadi tidak berarti, dan aturan pemisahan pembuat dan penyetuju dokumen menjadi tidak berlaku.",
           "Sharing one account between several people. The audit trail becomes meaningless, and the rule separating who submits a document from who approves it stops working.",
+        ],
+        [
+          "Mengira kata sandi aplikasi terpisah dari kata sandi email. Bila aplikasi memakai akun mailserver, kata sandi yang Anda ganti di Pengaturan adalah kata sandi kotak surat Anda — webmail dan aplikasi lain ikut berganti.",
+          "Assuming the application password is separate from the email password. When the application uses mail server accounts, the password you change in Settings is your mailbox password — webmail and other applications change with it.",
         ],
       ],
     },
@@ -2004,6 +2143,31 @@ export const chapterMessages: Chapter = {
     {
       kind: "messages",
       rows: [
+        {
+          message: ["Alamat email itu sudah terdaftar pada prospek lain.", "That email address is already listed on another prospect."],
+          meaning: ["Satu alamat email hanya boleh menempel pada satu calon klien. Dua perusahaan yang berbagi satu alamat hampir selalu berarti salah tempel.", "One email address may belong to only one prospect. Two companies sharing an address is almost always a copy-paste mistake."],
+          action: ["Aplikasi menunjukkan prospek lama yang memakai alamat itu; buka dan periksa. Bila memang orang yang berbeda, pakai alamat masing-masing. Pada impor, baris seperti ini dilewati dan dilaporkan lengkap dengan nomor barisnya.", "The application points to the existing prospect using that address; open it and check. If they really are different people, use their own addresses. During an import such rows are skipped and reported with their row number."],
+        },
+        {
+          message: ["Peran Anda tidak memiliki akses ke Calon Klien.", "Your role does not have access to Prospects."],
+          meaning: ["Modul Calon Klien belum dinyalakan untuk akun Anda.", "The Prospects module has not been enabled for your account."],
+          action: ["Minta Admin membuka Pengguna & Akses, mencari nama Anda, dan menyetel modul Calon Klien ke Lihat atau Kelola. Pesan serupa yang menyebut Anda hanya bisa melihat berarti izinnya baru Lihat, sedangkan menyimpan, mengimpor, dan mengirim memerlukan Kelola.", "Ask an Admin to open Users & Access, find your name, and set the Prospects module to View or Manage. A similar message saying you can only view means the permission is still View, while saving, importing, and sending require Manage."],
+        },
+        {
+          message: ["Kata sandi baru harus minimal sekian karakter, mengandung angka, dan seterusnya.", "The new password must be at least so many characters, contain a digit, and so on."],
+          meaning: ["Kata sandi baru belum memenuhi syarat yang berlaku. Syarat itu gabungan aturan aplikasi dan aturan mailserver, dan yang berlaku selalu yang lebih ketat.", "The new password does not meet the requirements in force. Those combine the application's own rule and the mail server's, and the stricter one always applies."],
+          action: ["Pesannya menyebut seluruh syarat yang belum terpenuhi sekaligus, bukan satu per satu. Perbaiki semuanya lalu ulangi. Syarat yang sama juga tertulis di dekat kolom kata sandi baru sebelum Anda mengetik.", "The message lists every unmet requirement at once rather than one at a time. Fix them all and try again. The same requirements are also written next to the new-password field before you start typing."],
+        },
+        {
+          message: ["Penggantian kata sandi email belum disiapkan di server ini. Hubungi IT.", "Changing the email password has not been set up on this server. Contact IT."],
+          meaning: ["Aplikasi memakai akun mailserver untuk login, tetapi sambungan ke mailserver untuk mengganti kata sandi belum dikonfigurasi. Aplikasi memilih menolak dengan jelas daripada diam-diam mengganti kata sandi di tempat yang salah.", "The application uses mail server accounts for sign-in, but the connection used to change the password is not configured. The application refuses plainly rather than quietly changing a password in the wrong place."],
+          action: ["Hubungi administrator sistem. Sampai itu beres, kata sandi email dapat diganti lewat webmail.", "Contact the system administrator. Until it is resolved, the email password can be changed through webmail."],
+        },
+        {
+          message: ["Mailserver sedang tidak bisa dihubungi, jadi kata sandi belum diganti.", "The mail server cannot be reached, so the password has not been changed."],
+          meaning: ["Sambungan ke mailserver gagal. Kata sandi lama Anda masih berlaku dan tidak ada yang berubah.", "The connection to the mail server failed. Your old password still works and nothing changed."],
+          action: ["Coba lagi beberapa saat kemudian. Bila berulang, laporkan ke administrator sistem — pesan ini berbeda dari kata sandi salah, dan tidak perlu mereset apa pun.", "Try again shortly. If it keeps happening, report it to the system administrator — this message is not the same as a wrong password, and nothing needs resetting."],
+        },
         {
           message: ["Invoice termin hanya dapat dibuat dari Quotation yang sudah diterima klien.", "Installment invoices can only be created from a quotation the client has accepted."],
           meaning: ["Penawaran belum berstatus Diterima, jadi belum ada nilai kontrak yang boleh ditagihkan.", "The quotation is not Accepted yet, so there is no contract value to bill against."],
@@ -2489,6 +2653,7 @@ export const guideChapters: Chapter[] = [
   chapterTax,
   chapterProfit,
   chapterCatalog,
+  chapterProspects,
   chapterAccess,
   chapterExample,
   chapterGlossary,

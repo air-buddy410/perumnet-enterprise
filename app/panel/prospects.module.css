@@ -3,6 +3,13 @@
   color: var(--ink);
 }
 
+.formFieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 .sectionTitle {
   margin-bottom: 25px;
   display: flex;
@@ -30,6 +37,7 @@
 .tab, .tabActive { min-height: 38px; padding: 0 12px; display: inline-flex; align-items: center; gap: 7px; border: 0; border-radius: 7px; color: #65777b; background: transparent; font-size: 12px; font-weight: 800; cursor: pointer; }
 .tab:hover { color: var(--teal-dark); background: #f1faf8; }
 .tabActive { color: var(--teal-dark); background: #e7f7f4; box-shadow: inset 0 0 0 1px #c6e9e4; }
+.tab:disabled, .tabActive:disabled { cursor: not-allowed; opacity: .52; }
 
 .notice { margin-bottom: 16px; padding: 11px 13px; display: grid; grid-template-columns: 20px minmax(0, 1fr) 24px; align-items: center; gap: 8px; border-radius: 8px; font-size: 12px; }
 .notice p { margin: 0; line-height: 1.45; }

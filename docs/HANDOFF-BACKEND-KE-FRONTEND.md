@@ -284,9 +284,13 @@ dan label status laporan kini langsung memakai kontrak bersama dari
   itu yang paling lama tidak ketahuan.
 - Sisanya di T-12 tidak perlu diubah. Ini murni menghapus duplikasi.
 
-### T-14. Calon Klien jadi modul izin, dan form kata sandi menampilkan syaratnya
+### ✅ T-14. Calon Klien jadi modul izin, dan form kata sandi menampilkan syaratnya — SELESAI 2026-08-20
 
 Dua hal terpisah, keduanya kecil.
+
+Implementasi frontend selesai di `enterprise-app.tsx`, `prospects-editor.tsx`,
+`settings-view.tsx`, dan stylesheet terkait. Backend/API, shared contract,
+database, dan test tidak diubah.
 
 #### a. Menu Calon Klien mengikuti izin, bukan peran
 
@@ -301,7 +305,7 @@ dan mengirim penawaran.
 Di `enterprise-app.tsx`, item navigasinya sekarang:
 
 ```ts
-{ id: "prospects", labelKey: "prospects", module: "users", icon: UsersRound, roles: ["Admin"] }
+{ id: "prospects", labelKey: "prospects", module: "prospects", icon: UsersRound }
 ```
 
 Ganti jadi:
@@ -327,6 +331,10 @@ Server membedakan dua tingkat: **`view`** cukup untuk melihat daftar, laporan,
 dan pratinjau; **`manage`** wajib untuk menyimpan, mengimpor, dan mengirim.
 Kalau bisa, matikan tombol Kirim/Simpan/Impor saat izinnya hanya `view` —
 server tetap menolak dengan 403, tapi tombol yang selalu gagal itu kasar.
+
+Frontend menerapkan mode **read-only lengkap**: daftar, laporan, komposer, dan
+preview tetap tersedia; tambah, impor, simpan, ubah opt-out, hapus, template,
+dan antre kirim dinonaktifkan dengan penjelasan izin.
 
 #### b. Form ganti kata sandi menampilkan syarat mailcow
 
@@ -416,3 +424,8 @@ Semua string dwibahasa tersedia lewat `shared/password-policy.ts`
   `prospectOutreachStatusLabels`, dan `ProspectOutreachStatus` dari
   `shared/prospects.ts`, sehingga status filter, summary, dan label tabel tidak
   memiliki daftar lokal kedua.
+
+- **T-14** — menu Calon Klien mengikuti modul `prospects` dan `canUse`, dengan
+  kontrol read-only untuk izin `view`; form password membaca policy dinamis,
+  menerapkan `minLength`, menampilkan deskripsi sebelum mengetik, dan merender
+  seluruh `details.unmet` dari `PASSWORD_TOO_WEAK`.

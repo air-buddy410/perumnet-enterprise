@@ -13,7 +13,8 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
-import { api, messageOf } from "../api-client";
+import { APP_PASSWORD_POLICY, describePasswordPolicy, type PasswordPolicy } from "../../shared/password-policy";
+import { api, ApiClientError, messageOf } from "../api-client";
 import type { AppLanguage } from "../i18n";
 
 interface SettingsViewProps {
@@ -40,6 +41,11 @@ interface AuthModeResponse {
   allowLocalLogin?: boolean;
 }
 
+interface PasswordPolicyResponse {
+  policy: PasswordPolicy;
+  description: string;
+}
+
 export function SettingsView({
   language,
   notify,
@@ -57,8 +63,14 @@ export function SettingsView({
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordPolicy, setPasswordPolicy] = useState<PasswordPolicy>(APP_PASSWORD_POLICY);
+  const [passwordPolicyDescription, setPasswordPolicyDescription] = useState("");
+  const [passwordUnmet, setPasswordUnmet] = useState<string[]>([]);
   const id = language === "id";
   const usesLocalPassword = authMode?.allowLocalLogin === true;
+  const policyDescription = id
+    ? passwordPolicyDescription || describePasswordPolicy(passwordPolicy, "id")
+    : describePasswordPolicy(passwordPolicy, "en");
 
   useEffect(() => {
     let active = true;
@@ -66,8 +78,9 @@ export function SettingsView({
       api<{ preferredLanguage: AppLanguage; emailNotifications: boolean; emailDeliveryConfigured: boolean; emailMode: string; emailProvider: string }>("/api/settings"),
       api<EmailDelivery[]>("/api/notifications/email"),
       api<AuthModeResponse>("/api/auth/mode").catch(() => null),
+      api<PasswordPolicyResponse>("/api/auth/password-policy").catch(() => null),
     ])
-      .then(([settings, deliveries, currentAuthMode]) => {
+      .then(([settings, deliveries, currentAuthMode, currentPasswordPolicy]) => {
         if (!active) return;
         setSelectedLanguage(settings.preferredLanguage);
         setEmailNotifications(settings.emailNotifications);
@@ -76,6 +89,10 @@ export function SettingsView({
         setEmailProvider(settings.emailProvider);
         setEmailDeliveries(deliveries);
         if (currentAuthMode) setAuthMode(currentAuthMode);
+        if (currentPasswordPolicy) {
+          setPasswordPolicy(currentPasswordPolicy.policy);
+          setPasswordPolicyDescription(currentPasswordPolicy.description);
+        }
       })
       .catch((error) => notify(messageOf(error, language)));
     return () => { active = false; };
@@ -150,6 +167,7 @@ export function SettingsView({
 
   async function changePassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setPasswordUnmet([]);
     if (newPassword !== confirmPassword) {
       notify(id ? "Konfirmasi kata sandi tidak sama." : "Password confirmation does not match.");
       return;
@@ -172,6 +190,19 @@ export function SettingsView({
             : "Password updated successfully.",
       );
     } catch (error) {
+      if (
+        error instanceof ApiClientError &&
+        error.code === "PASSWORD_TOO_WEAK" &&
+        error.details &&
+        typeof error.details === "object" &&
+        Array.isArray((error.details as { unmet?: unknown }).unmet)
+      ) {
+        setPasswordUnmet(
+          (error.details as { unmet: unknown[] }).unmet.filter(
+            (item): item is string => typeof item === "string",
+          ),
+        );
+      }
       notify(messageOf(error, language));
     }
   }
@@ -262,12 +293,14 @@ export function SettingsView({
           <div className="settings-form-actions"><button className="button primary" type="submit"><Save size={16} /> {id ? "Simpan preferensi" : "Save preferences"}</button></div>
         </form>
         <form className="panel settings-card" onSubmit={changePassword}>
-          <div className="settings-section-head"><span className="metric-icon orange"><LockKeyhole size={20} /></span><div><h2>{usesLocalPassword ? (id ? "Keamanan password aplikasi" : "Application password security") : (id ? "Keamanan password email" : "Email password security")}</h2><p>{usesLocalPassword ? (id ? "Gunakan minimal 10 karakter. Password ini dipakai untuk masuk ke aplikasi PerumNet Enterprise." : "Use at least 10 characters. This password is used to sign in to PerumNet Enterprise.") : (id ? "Gunakan minimal 10 karakter. Password ini dipakai untuk webmail dan aplikasi PerumNet lain." : "Use at least 10 characters. This password is used for webmail and other PerumNet apps.")}</p></div></div>
+          <div className="settings-section-head"><span className="metric-icon orange"><LockKeyhole size={20} /></span><div><h2>{usesLocalPassword ? (id ? "Keamanan password aplikasi" : "Application password security") : (id ? "Keamanan password email" : "Email password security")}</h2><p>{usesLocalPassword ? (id ? "Syarat password mengikuti aturan keamanan aplikasi." : "Password requirements follow the application security policy.") : (id ? "Syarat password mengikuti aturan aplikasi dan mailserver." : "Password requirements follow the application and mailserver policies.")}</p></div></div>
+          <div className="security-note password-policy-note" id="password-policy-note"><ShieldCheck size={18} /><div><strong>{id ? "Syarat kata sandi baru" : "New password requirements"}</strong><span>{policyDescription}</span></div></div>
           <div className="form-grid single-column">
             <label className="field full"><span>{usesLocalPassword ? (id ? "Password saat ini" : "Current password") : (id ? "Password email saat ini" : "Current email password")}</span><input type="password" required minLength={8} value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" /></label>
-            <label className="field full"><span>{usesLocalPassword ? (id ? "Password baru" : "New password") : (id ? "Password email baru" : "New email password")}</span><input type="password" required minLength={10} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" /></label>
-            <label className="field full"><span>{usesLocalPassword ? (id ? "Ulangi password baru" : "Repeat new password") : (id ? "Ulangi password email baru" : "Repeat new email password")}</span><input type="password" required minLength={10} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" /></label>
+            <label className="field full"><span>{usesLocalPassword ? (id ? "Password baru" : "New password") : (id ? "Password email baru" : "New email password")}</span><input type="password" required minLength={passwordPolicy.minLength} value={newPassword} onChange={(event) => { setNewPassword(event.target.value); setPasswordUnmet([]); }} autoComplete="new-password" aria-describedby="password-policy-note" /></label>
+            <label className="field full"><span>{usesLocalPassword ? (id ? "Ulangi password baru" : "Repeat new password") : (id ? "Ulangi password email baru" : "Repeat new email password")}</span><input type="password" required minLength={passwordPolicy.minLength} value={confirmPassword} onChange={(event) => { setConfirmPassword(event.target.value); setPasswordUnmet([]); }} autoComplete="new-password" aria-describedby="password-policy-note" /></label>
           </div>
+          {passwordUnmet.length ? <div className="form-error password-policy-error" role="alert"><strong>{id ? "Syarat yang belum terpenuhi:" : "Requirements still missing:"}</strong><ul>{passwordUnmet.map((problem, index) => <li key={`${problem}-${index}`}>{problem}</li>)}</ul></div> : null}
           <div className="security-note"><ShieldCheck size={18} /><span>{usesLocalPassword ? (id ? "Perubahan hanya berlaku untuk akun aplikasi ini dan dicatat di audit log keamanan." : "Changes apply only to this application account and are recorded in the security audit log.") : (id ? "Perubahan berlaku untuk webmail dan aplikasi PerumNet lain, serta dicatat di audit log keamanan." : "Changes apply to webmail and other PerumNet apps and are recorded in the security audit log.")}</span></div>
           <div className="settings-form-actions"><button className="button secondary" type="submit"><LockKeyhole size={16} /> {usesLocalPassword ? (id ? "Perbarui password" : "Update password") : (id ? "Perbarui password email" : "Update email password")}</button></div>
         </form>
