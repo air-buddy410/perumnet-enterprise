@@ -9,6 +9,8 @@ import { getDatabase, type DatabaseClient } from "../db/client";
 import { claimSequence } from "../db/counters";
 import { notifyProjectStakeholders } from "../email";
 import { documentTaxSummary, lockDocumentTaxes } from "../tax";
+import { prepareUploadedAttachment, type PreparedAttachment } from "../attachments";
+import { kirimDokumen, susunKiriman } from "../document-delivery";
 import { ApiError, created, jsonBody, noContent, ok, partialPatchSchema } from "./errors";
 import { renderBusinessPdf } from "./pdf";
 
@@ -1300,6 +1302,250 @@ async function approveOrder(
   return getOrder(client, orderId);
 }
 
+/**
+ * Uang dan tanggal untuk ditaruh di badan surat. Formatnya sama dengan yang
+ * dipakai PDF-nya, supaya angka di surat dan angka di lampiran tidak berbeda
+ * bentuk dan membuat orang bertanya-tanya apakah keduanya dokumen yang sama.
+ */
+function nilaiRupiah(value: unknown, language: "id" | "en") {
+  return new Intl.NumberFormat(language === "en" ? "en-US" : "id-ID", {
+    style: "currency",
+    currency: "IDR",
+    maximumFractionDigits: 0,
+  }).format(Math.round(Number(value ?? 0)));
+}
+
+/**
+ * Menyiapkan segalanya untuk mengirim SPK/PO ke vendor, DAN memeriksa seluruh
+ * syaratnya sebelum satu berkas pun dirender atau ditulis.
+ *
+ * Urutannya disengaja: yang gagal harus gagal sebelum ada berkas yang tersimpan
+ * dan sebelum status dokumennya berubah.
+ */
+async function siapkanKirimSpk(
+  client: DatabaseClient,
+  user: AuthUser,
+  orderId: string,
+  templateId: string,
+) {
+  assertManage(user, "procurement");
+  const order = await getOrder(client, orderId);
+  await assertProjectAccess(client, user, order.projectId);
+
+  if (
+    order.approvalStatus !== "Approved" ||
+    !["Disetujui", "Dikirim"].includes(String(order.workflowStatus))
+  ) {
+    throw new ApiError(
+      409,
+      "ORDER_NOT_SENDABLE",
+      "Hanya dokumen yang sudah Disetujui yang dapat dikirim ke vendor.",
+      { workflowStatus: order.workflowStatus, approvalStatus: order.approvalStatus },
+    );
+  }
+
+  const vendor = await client.execute({
+    sql: "SELECT id,name,email,contact FROM vendors WHERE id=? LIMIT 1",
+    args: [order.vendorId],
+  });
+  const barisVendor = vendor.rows[0] as unknown as Record<string, unknown> | undefined;
+  const alamat = String(barisVendor?.email ?? "").trim();
+  if (!alamat) {
+    // Bukan galat sistem, dan pesannya harus menyebut siapa yang bisa
+    // membetulkannya: hanya Admin dan Finance yang boleh mengubah data vendor,
+    // jadi Project Manager yang mentok di sini perlu tahu harus minta ke siapa
+    // — bukan sekadar tahu bahwa ia mentok.
+    throw new ApiError(
+      409,
+      "VENDOR_EMAIL_MISSING",
+      `Vendor ${String(barisVendor?.name ?? "ini")} belum punya alamat email. Isi lebih dulu di Procurement & Vendor — yang boleh mengubahnya Admin atau Finance.`,
+      { vendorId: order.vendorId, vendorName: String(barisVendor?.name ?? "") },
+    );
+  }
+
+  const template = await client.execute({
+    sql: `SELECT * FROM document_email_templates
+      WHERE id=? AND deleted_at IS NULL LIMIT 1`,
+    args: [templateId],
+  });
+  const t = template.rows[0] as unknown as Record<string, unknown> | undefined;
+  if (!t) throw new ApiError(404, "NOT_FOUND", "Template surat tidak ditemukan.");
+  if (String(t.document_kind) !== "spk") {
+    // Template invoice yang dipakai untuk SPK akan merender {{jatuh_tempo}}
+    // mentah di kotak masuk vendor.
+    throw new ApiError(
+      422,
+      "TEMPLATE_KIND_MISMATCH",
+      "Template ini bukan untuk SPK/PO.",
+      { documentKind: String(t.document_kind) },
+    );
+  }
+
+  const language = String(t.language) === "en" ? "en" : "id";
+  return {
+    order,
+    template: t,
+    language: language as "id" | "en",
+    recipient: alamat,
+    recipientName: String(barisVendor?.name ?? ""),
+    nilai: {
+      nomor: String(order.number ?? ""),
+      vendor: String(order.vendor ?? ""),
+      proyek: String(order.project ?? ""),
+      nilai: nilaiRupiah(order.cost, language as "id" | "en"),
+      mulai: String(order.startDate ?? ""),
+      selesai: String(order.endDate ?? ""),
+    } as Record<string, string>,
+    penandatangan: {
+      signoff: String(t.sender_signoff ?? ""),
+      name: String(t.sender_name ?? ""),
+      email: String(t.sender_email ?? ""),
+      phone: String(t.sender_phone ?? ""),
+    },
+    sumber: {
+      subject: String(t.subject),
+      body: String(t.body_html),
+      format: String(t.body_format ?? "text") as "text" | "rich" | "html",
+    },
+  };
+}
+
+/** Lampiran tambahan dari multipart, diperiksa isinya satu per satu. */
+async function bacaLampiranTambahan(form: FormData): Promise<PreparedAttachment[]> {
+  const hasil: PreparedAttachment[] = [];
+  for (const nilai of form.getAll("files")) {
+    if (!(nilai instanceof File) || !nilai.size) continue;
+    hasil.push(
+      prepareUploadedAttachment(nilai.name, nilai.type, await nilai.arrayBuffer()),
+    );
+  }
+  return hasil;
+}
+
+async function previewOrderEmail(request: Request, user: AuthUser, orderId: string) {
+  const { client } = await getDatabase();
+  const input = z
+    .object({ templateId: idSchema })
+    .parse(await jsonBody(request));
+  const siap = await siapkanKirimSpk(client, user, orderId, input.templateId);
+  const { surat, lampiran } = await susunKiriman(client, {
+    kind: "spk",
+    documentId: orderId,
+    documentNumber: String(siap.order.number ?? ""),
+    projectId: siap.order.projectId,
+    audience: "vendor",
+    vendorId: siap.order.vendorId,
+    recipient: siap.recipient,
+    recipientName: siap.recipientName,
+    templateId: String(siap.template.id),
+    templateName: String(siap.template.name),
+    language: siap.language,
+    subject: siap.sumber.subject,
+    body: siap.sumber.body,
+    format: siap.sumber.format,
+    penandatangan: siap.penandatangan,
+    nilai: siap.nilai,
+  });
+  return ok(
+    {
+      subject: surat.subject,
+      bodyHtml: surat.html,
+      recipient: siap.recipient,
+      recipientName: siap.recipientName,
+      attachments: lampiran.map((l) => ({
+        filename: l.filename,
+        byteSize: l.byteSize,
+        generated: l.generated,
+      })),
+    },
+    200,
+    { "Cache-Control": "no-store" },
+  );
+}
+
+async function sendOrderEmail(request: Request, user: AuthUser, orderId: string) {
+  const { client } = await getDatabase();
+  const form = await request.formData();
+  const templateId = String(form.get("templateId") ?? "").trim();
+  if (!templateId) {
+    throw new ApiError(422, "TEMPLATE_REQUIRED", "Pilih template surat lebih dulu.");
+  }
+
+  const siap = await siapkanKirimSpk(client, user, orderId, templateId);
+  const tambahan = await bacaLampiranTambahan(form);
+
+  // Status diubah SEBELUM dokumennya dirender. Untuk SPK urutannya tidak
+  // menggigit, tapi aturannya berlaku umum dan dipakai juga oleh quotation
+  // nanti: merender PDF quotation berstatus Draft MENULIS ke database, dan
+  // pekerjaan kirim tidak boleh diam-diam menulis ulang angka uang.
+  if (String(siap.order.workflowStatus) === "Disetujui") {
+    await client.execute({
+      sql: "UPDATE spks SET workflow_status='Dikirim',status='Dikirim',updated_at=? WHERE id=?",
+      args: [now(), orderId],
+    });
+  }
+
+  const hasil = await kirimDokumen(client, request, user, {
+    kind: "spk",
+    documentId: orderId,
+    documentNumber: String(siap.order.number ?? ""),
+    projectId: siap.order.projectId,
+    audience: "vendor",
+    vendorId: siap.order.vendorId,
+    recipient: siap.recipient,
+    recipientName: siap.recipientName,
+    templateId: String(siap.template.id),
+    templateName: String(siap.template.name),
+    language: siap.language,
+    subject: siap.sumber.subject,
+    body: siap.sumber.body,
+    format: siap.sumber.format,
+    penandatangan: siap.penandatangan,
+    nilai: siap.nilai,
+    tambahan,
+  });
+
+  return ok({ ...hasil, order: await getOrder(client, orderId) });
+}
+
+async function listOrderDeliveries(user: AuthUser, orderId: string) {
+  const { client } = await getDatabase();
+  assertManage(user, "procurement");
+  const hasil = await client.execute({
+    sql: `SELECT d.*,u.name AS created_by_name FROM document_deliveries d
+      LEFT JOIN users u ON u.id=d.created_by
+      WHERE d.document_kind='spk' AND d.document_id=?
+      ORDER BY d.created_at DESC`,
+    args: [orderId],
+  });
+  const items = [];
+  for (const row of hasil.rows as unknown as Record<string, unknown>[]) {
+    const lampiran = await client.execute({
+      sql: `SELECT filename,byte_size,kind FROM document_delivery_attachments
+        WHERE delivery_id=? ORDER BY sort_order`,
+      args: [String(row.id)],
+    });
+    items.push({
+      id: String(row.id),
+      recipient: String(row.recipient),
+      recipientName: String(row.recipient_name ?? ""),
+      subject: String(row.subject),
+      status: String(row.status),
+      scheduledFor: String(row.scheduled_for),
+      sentAt: row.sent_at ? String(row.sent_at) : null,
+      failureReason: String(row.failure_reason ?? ""),
+      createdAt: String(row.created_at),
+      createdByName: String(row.created_by_name ?? ""),
+      attachments: (lampiran.rows as unknown as Record<string, unknown>[]).map((a) => ({
+        filename: String(a.filename),
+        byteSize: Number(a.byte_size ?? 0),
+        generated: String(a.kind) === "document",
+      })),
+    });
+  }
+  return ok({ items }, 200, { "Cache-Control": "no-store" });
+}
+
 async function sendOrder(request: Request, user: AuthUser, orderId: string) {
   const { client } = await getDatabase();
   assertManage(user, "procurement");
@@ -1910,6 +2156,22 @@ export async function handleProcurementOrders(
   }
   if (request.method === "POST" && orderId && action === "send") {
     return ok(await sendOrder(request, user, orderId));
+  }
+  // Endpoint TERPISAH dari "send" di atas. "send" berarti seseorang menyatakan
+  // sudah mengirimkannya lewat cara lain, dan ia gerbang yang membuat dokumen
+  // bisa dibayar. Menggabungkan keduanya berarti kemampuan membayar bergantung
+  // pada jabat tangan SMTP.
+  if (request.method === "POST" && orderId && action === "send-email") {
+    // TIDAK dibungkus ok() lagi: sendOrderEmail sudah memulangkan Response.
+    // Membungkusnya dua kali menghasilkan {"data":{}} dengan status 200 —
+    // terlihat berhasil, isinya kosong.
+    return sendOrderEmail(request, user, orderId);
+  }
+  if (request.method === "POST" && orderId && action === "send-email-preview") {
+    return previewOrderEmail(request, user, orderId);
+  }
+  if (request.method === "GET" && orderId && action === "deliveries") {
+    return listOrderDeliveries(user, orderId);
   }
   if (request.method === "POST" && orderId && action === "complete") {
     return ok(await completeOrder(request, user, orderId));

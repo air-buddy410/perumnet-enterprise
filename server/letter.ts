@@ -8,7 +8,13 @@ import {
 } from "../shared/prospects";
 
 /**
- * Menyusun surat penawaran yang benar-benar dikirim ke calon klien.
+ * Menyusun surat yang benar-benar dikirim keluar perusahaan.
+ *
+ * Dulu bernama prospect-letter.ts dan hanya melayani surat penawaran ke calon
+ * klien. Namanya diubah saat pengiriman dokumen (SPK/PO, quotation, invoice)
+ * ikut memakainya: kop, tanda tangan, dan penanda ringan sama persis, dan dua
+ * salinan renderer berarti satu di antaranya akan tertinggal.
+ *
  *
  * Sebelum berkas ini ada, isi template dikirim apa adanya: admin harus menulis
  * HTML sendiri, dan yang sampai ke calon klien adalah potongan HTML telanjang
@@ -301,6 +307,16 @@ export interface LetterInput {
   identitas: SenderIdentity;
   language?: "id" | "en";
   penandatangan?: Penandatangan;
+  /**
+   * Catatan kaki di bawah tanda tangan.
+   *
+   * Kosong = pakai catatan opt-out bawaan, yang benar untuk surat penawaran:
+   * penerimanya tidak pernah meminta dihubungi. `null` = tanpa catatan kaki,
+   * untuk surat yang penerimanya memang sudah punya hubungan dengan kita —
+   * menyuruh vendor yang sedang mengerjakan SPK membalas "BERHENTI" bukan cuma
+   * salah, tapi terbaca seperti kita tidak tahu sedang berbicara dengan siapa.
+   */
+  catatanKaki?: string | null;
 }
 
 /**
@@ -318,10 +334,16 @@ export function susunSurat(input: LetterInput) {
   const logo = applicationUrl("/perumnet-enterprise-logo.png");
   const salam =
     penandatangan.signoff || (language === "en" ? "Best regards," : "Hormat kami,");
-  const catatanKaki =
+  const catatanKakiBawaan =
     language === "en"
       ? `You received this message because ${escapeHtml(identitas.companyName)} recorded your business contact details. Reply with the word STOP and we will not contact you again.`
       : `Anda menerima surat ini karena kontak bisnis Anda tercatat pada ${escapeHtml(identitas.companyName)}. Balas dengan kata BERHENTI, dan kami tidak akan menghubungi Anda lagi.`;
+  const catatanKaki =
+    input.catatanKaki === undefined
+      ? catatanKakiBawaan
+      : input.catatanKaki
+        ? escapeHtml(input.catatanKaki)
+        : null;
 
   const namaOrang = penandatangan.name
     ? `<div style="margin:0 0 2px;color:${TINTA};font-size:15px;font-weight:700">${escapeHtml(penandatangan.name)}</div>`
@@ -351,7 +373,11 @@ export function susunSurat(input: LetterInput) {
           <div style="margin:0 0 6px;color:${ABU_MUDA};font-size:12px;line-height:1.6">${escapeHtml(identitas.address)}</div>
           <div style="color:${ABU};font-size:12px;line-height:1.8">${barisKontak(identitas, penandatangan, language)}</div>
         </div>
-        <p style="margin:20px 0 0;padding-top:14px;border-top:1px solid ${GARIS};color:${ABU_MUDA};font-size:11px;line-height:1.6">${catatanKaki}</p>
+        ${
+          catatanKaki
+            ? `<p style="margin:20px 0 0;padding-top:14px;border-top:1px solid ${GARIS};color:${ABU_MUDA};font-size:11px;line-height:1.6">${catatanKaki}</p>`
+            : ""
+        }
       </div>
     </div>
   </div>

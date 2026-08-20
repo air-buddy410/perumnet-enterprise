@@ -163,6 +163,12 @@ CREATE TABLE IF NOT EXISTS email_attachments (
   -- untuk membedakan keduanya, dan dipakai pemeriksaan batas: batas jumlah
   -- hanya berlaku untuk lampiran tambahan.
   generated INTEGER NOT NULL DEFAULT 0,
+  -- 1 = baris ini yang MEMILIKI berkasnya dan wajib menghapusnya saat
+  -- dibersihkan. 0 = ada arsip lain yang memilikinya
+  -- (document_delivery_attachments), dan pembersihan cukup membuang
+  -- penunjuknya. Tanpa kolom ini aturan kepemilikan cuma ada di kepala orang,
+  -- dan penghapus yang salah membuang arsip pengiriman yang masih dipakai.
+  owns_bytes INTEGER NOT NULL DEFAULT 1,
   -- Urutan lampiran seperti yang dipilih pengirim. Tanpa ini urutannya
   -- ditentukan database, dan dokumen resmi bisa muncul di bawah company
   -- profile — kecil, tapi terlihat asal-asalan oleh yang menerimanya.
@@ -1302,7 +1308,7 @@ CREATE TABLE IF NOT EXISTS cms_prospect_templates (
   -- Namanya tetap body_html karena kolomnya sudah terpasang di demo, tapi
   -- isinya mengikuti body_format: 'text' (bawaan) berarti teks biasa yang
   -- diketik admin, dan server yang menjadikannya HTML lengkap dengan kop,
-  -- tanda tangan, serta catatan kaki. Lihat server/prospect-letter.ts.
+  -- tanda tangan, serta catatan kaki. Lihat server/letter.ts.
   body_html TEXT NOT NULL,
   -- 'rich' menyimpan PENANDA RINGAN, bukan HTML: **tebal**, - daftar,
   -- [teks](url). Server yang mengubahnya jadi HTML, dari kumpulan tag yang
@@ -1371,6 +1377,106 @@ CREATE INDEX IF NOT EXISTS cms_prospect_outreach_outbox_idx
   ON cms_prospect_outreach(outbox_id);
 CREATE INDEX IF NOT EXISTS cms_prospect_outreach_status_idx
   ON cms_prospect_outreach(status, created_at);
+
+-- Template surat pengantar dokumen. Bentuknya sama dengan template prospek,
+-- tetapi tabelnya sendiri: kolom prospek tidak berlaku di sini, dan izinnya
+-- berbeda (procurement/billing, bukan prospects).
+CREATE TABLE IF NOT EXISTS document_email_templates (
+  id TEXT PRIMARY KEY,
+  -- Satu template ditulis untuk SATU jenis dokumen. Memakai template invoice
+  -- untuk SPK akan merender {{jatuh_tempo}} mentah di kotak masuk vendor.
+  document_kind TEXT NOT NULL CHECK (document_kind IN ('spk', 'quotation', 'invoice')),
+  name TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  body_html TEXT NOT NULL,
+  body_format TEXT NOT NULL DEFAULT 'text'
+    CHECK (body_format IN ('text', 'rich', 'html')),
+  sender_signoff TEXT NOT NULL DEFAULT '',
+  sender_name TEXT NOT NULL DEFAULT '',
+  sender_email TEXT NOT NULL DEFAULT '',
+  sender_phone TEXT NOT NULL DEFAULT '',
+  language TEXT NOT NULL DEFAULT 'id' CHECK (language IN ('id', 'en')),
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS document_email_templates_kind_idx
+  ON document_email_templates(document_kind, deleted_at, name);
+
+-- Riwayat dokumen resmi yang benar-benar dikirim keluar perusahaan.
+--
+-- Tabel sendiri, alasan yang sama seperti cms_prospect_outreach: outbox
+-- mengosongkan isi surat begitu barisnya final dan menghapus barisnya setelah
+-- 180 hari. "SPK mana yang sudah kita kirim ke vendor ini, kapan, ke alamat
+-- mana, dan berkas apa yang menempel" adalah pertanyaan yang muncul saat ada
+-- sengketa — bertahun-tahun kemudian, bukan bulan depan.
+CREATE TABLE IF NOT EXISTS document_deliveries (
+  id TEXT PRIMARY KEY,
+  document_kind TEXT NOT NULL CHECK (document_kind IN ('spk', 'quotation', 'invoice')),
+  document_id TEXT NOT NULL,
+  -- Nomornya DISALIN, bukan di-join. Dokumennya bisa dibatalkan atau dihapus;
+  -- riwayatnya harus tetap bisa menyebut nomor yang saat itu dikirim.
+  document_number TEXT NOT NULL,
+  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  audience TEXT NOT NULL CHECK (audience IN ('vendor', 'client')),
+  -- SET NULL, bukan CASCADE: menghapus vendor tidak boleh menghapus catatan
+  -- bahwa kita pernah mengirimi mereka SPK.
+  vendor_id TEXT REFERENCES vendors(id) ON DELETE SET NULL,
+  recipient TEXT NOT NULL,
+  recipient_name TEXT NOT NULL DEFAULT '',
+  template_id TEXT REFERENCES document_email_templates(id) ON DELETE SET NULL,
+  template_name TEXT NOT NULL,
+  language TEXT NOT NULL DEFAULT 'id' CHECK (language IN ('id', 'en')),
+  subject TEXT NOT NULL,
+  body_html TEXT,
+  status TEXT NOT NULL DEFAULT 'Queued'
+    CHECK (status IN ('Queued', 'Sent', 'Failed', 'Skipped')),
+  scheduled_for TEXT NOT NULL,
+  sent_at TEXT,
+  failure_reason TEXT,
+  outbox_id TEXT,
+  -- Edisi dokumen yang BENAR-BENAR dilampirkan. CHECK-nya hanya mengizinkan
+  -- 'vendor' dengan sengaja: edisi internal SPK memuat kolom Budget, yaitu
+  -- harga modal PerumNet per item. Kalau suatu hari ada yang ingin mengirim
+  -- salinan internal lewat jalur ini, ia harus mengubah CHECK ini — dan
+  -- perubahan itu terbaca saat review.
+  document_edition TEXT NOT NULL DEFAULT 'vendor'
+    CHECK (document_edition = 'vendor'),
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS document_deliveries_document_idx
+  ON document_deliveries(document_kind, document_id, created_at);
+CREATE INDEX IF NOT EXISTS document_deliveries_outbox_idx
+  ON document_deliveries(outbox_id);
+CREATE INDEX IF NOT EXISTS document_deliveries_status_idx
+  ON document_deliveries(status, created_at);
+
+-- Arsip lampiran, DISIMPAN PERMANEN atas keputusan pemilik.
+--
+-- Ia yang MEMILIKI byte-nya; baris email_attachments hanya menumpang menunjuk
+-- ke berkas yang sama dan menandai dirinya bukan pemilik, sehingga pembersihan
+-- outbox membuang penunjuknya saja. Satu pemilik, bukan penghitung rujukan:
+-- penghitung rujukan adalah tempat "penunjuk terakhir hilang dan membawa serta
+-- arsip pengiriman lain" tinggal.
+CREATE TABLE IF NOT EXISTS document_delivery_attachments (
+  id TEXT PRIMARY KEY,
+  delivery_id TEXT NOT NULL REFERENCES document_deliveries(id) ON DELETE CASCADE,
+  -- 'document' = PDF resmi yang dirender aplikasi.
+  -- 'extra'    = berkas yang diunggah admin.
+  kind TEXT NOT NULL CHECK (kind IN ('document', 'extra')),
+  filename TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+  sha256 TEXT NOT NULL,
+  storage_url TEXT,
+  content_base64 TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS document_delivery_attachments_delivery_idx
+  ON document_delivery_attachments(delivery_id, sort_order);
 `;
 
 const now = "2026-07-18T06:00:00.000Z";
@@ -3182,6 +3288,15 @@ async function ensureProspectLetterFormat(client: DatabaseClient) {
        ON email_attachments(outbox_id)`,
   );
   await ensureColumn(client, "cms_prospect_outreach", "batch_id", "TEXT");
+  // email_attachments sudah hidup di demo dan produksi sejak 3c3df93, jadi
+  // kolom ini tidak bisa hanya ada di schemaSql. Bawaannya 1 — mempertahankan
+  // perilaku baris yang sudah ada, yang memang memiliki berkasnya sendiri.
+  await ensureColumn(
+    client,
+    "email_attachments",
+    "owns_bytes",
+    "INTEGER NOT NULL DEFAULT 1",
+  );
   // Indeksnya DI SINI, bukan di schemaSql. schemaSql berjalan lebih dulu, dan
   // pada database yang tabelnya sudah ada CREATE TABLE IF NOT EXISTS adalah
   // no-op — kolomnya belum ada, CREATE INDEX-nya gagal, dan seluruh

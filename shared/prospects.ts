@@ -173,10 +173,19 @@ export const PROSPECT_SOURCE_MIN_LENGTH = 2;
 // yang tahu persis apa yang ia tulis. Ia TIDAK disanitasi — jangan pernah
 // menjadikannya keluaran sebuah editor.
 
-export const prospectLetterFormats = ["text", "rich", "html"] as const;
-export type ProspectLetterFormat = (typeof prospectLetterFormats)[number];
+// Diteruskan dari shared/email-delivery.ts. Nama lamanya dipertahankan supaya
+// layar dan router yang sudah ada tidak perlu diubah hanya karena rumahnya
+// pindah.
+export {
+  letterBodyFormats as prospectLetterFormats,
+  type LetterBodyFormat as ProspectLetterFormat,
+} from "./email-delivery";
 
-export const PROSPECT_DEFAULT_LETTER_FORMAT: ProspectLetterFormat = "text";
+// `export ... from` hanya meneruskan; ia tidak membawa namanya ke ruang lingkup
+// berkas ini. Jadi tipenya diimpor sekali lagi untuk dipakai di bawah.
+import type { LetterBodyFormat } from "./email-delivery";
+
+export const PROSPECT_DEFAULT_LETTER_FORMAT: LetterBodyFormat = "text";
 
 /**
  * Naskah perkenalan milik PerumNet Enterprise, supaya kotak template tidak

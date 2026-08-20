@@ -26,6 +26,18 @@ export interface PreparedAttachment {
   sha256: string;
   /** Dokumen yang dirender aplikasi, bukan yang diunggah orang. */
   generated: boolean;
+  /**
+   * Berkasnya SUDAH tersimpan dan ada arsip lain yang memilikinya.
+   *
+   * Dipakai pengiriman dokumen: arsip pengiriman menyimpan byte-nya sekali dan
+   * memilikinya selamanya, sedangkan baris outbox cukup menunjuk ke berkas yang
+   * sama dan menandai dirinya bukan pemilik. Saat outbox dibersihkan, yang
+   * dibuang penunjuknya saja.
+   *
+   * Kosong berarti baris outbox yang menyimpan dan memiliki berkasnya sendiri —
+   * perilaku setiap pemanggil yang tidak punya arsip.
+   */
+  tersimpanDiArsip?: { storageUrl: string | null; contentBase64: string | null };
 }
 
 /**
