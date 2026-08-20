@@ -438,6 +438,117 @@ Semua string dwibahasa tersedia lewat `shared/password-policy.ts`
 Berkas itu `server-only`, jadi **tidak bisa diimpor** ke layar — salin
 teksnya, jangan mencoba mengimpornya.
 
+### T-16. Kirim SPK/PO ke vendor lewat email — layarnya
+
+**Boleh dimulai SEKARANG, sebelum backend selesai.** Kontrak di bawah sudah
+dikunci; kalau saya harus mengubahnya, saya kabari lebih dulu, tidak diam-diam.
+
+Konstanta batas dan daftar placeholder ada di **`shared/document-email.ts`** —
+impor dari sana, **jangan menulis angkanya di layar**. Status pengiriman ada di
+**`shared/email-delivery.ts`** (`emailDeliveryStatuses`,
+`emailDeliveryStatusLabels`), sama persis dengan yang tab Laporan kirim pakai.
+
+#### Kenapa ini ada
+
+Hari ini alurnya: unduh PDF → kirim lewat email pribadi atau WhatsApp → kembali
+ke aplikasi → tekan "Kirim" supaya statusnya jadi Dikirim. Dua tombol untuk satu
+kejadian, dan yang lupa menekan tombol kedua meninggalkan SPK berstatus
+Disetujui padahal sudah di tangan vendor.
+
+**Dokumennya TIDAK diunggah.** Aplikasi merender PDF-nya sendiri saat tombol
+Kirim ditekan. Unggahan hanya untuk lampiran *tambahan*.
+
+#### Endpoint
+
+**`GET /api/document-email-templates?documentType=spk`**
+```json
+{ "items": [{ "id": "…", "name": "…", "subject": "…", "bodyHtml": "…",
+              "bodyFormat": "text", "documentType": "spk",
+              "senderSignoff": "…", "senderName": "…",
+              "senderEmail": "…", "senderPhone": "…",
+              "language": "id", "createdAt": "…", "updatedAt": "…" }],
+  "defaults": { "starter": { "name": "…", "subject": "…", "bodyHtml": "…",
+                             "bodyFormat": "text" },
+                "senderSignoff": "Hormat kami,",
+                "senderName": "<akun yang masuk>",
+                "senderEmail": "<akun yang masuk>",
+                "senderPhone": "" } }
+```
+`POST` / `PATCH /:id` / `DELETE /:id` sama polanya dengan template prospek.
+
+**`POST /api/document-email-templates/:id/preview`** — body
+`{ "documentType": "spk", "documentId": "…" }`
+```json
+{ "subject": "…", "bodyHtml": "<dokumen HTML utuh>",
+  "recipient": "vendor@contoh.id", "recipientName": "PT Vendor",
+  "attachments": [{ "filename": "PO-2026-001.pdf", "byteSize": 84213 }] }
+```
+`bodyHtml` sudah surat lengkap berkop dan bertanda tangan — tampilkan di
+`<iframe srcDoc sandbox="">` seperti `PreviewFrame` yang sudah ada.
+`attachments` di sini **hanya dokumen yang dirender**; lampiran tambahan belum
+ikut karena belum diunggah.
+
+**`POST /api/procurement-orders/:id/send-email`** — **multipart/form-data**
+| field | isi |
+|---|---|
+| `templateId` | id template |
+| `files` | 0–5 berkas tambahan (boleh diulang) |
+
+```json
+{ "deliveryId": "…", "recipient": "…", "status": "Queued",
+  "scheduledFor": "…",
+  "attachments": [{ "filename": "PO-2026-001.pdf", "byteSize": 84213,
+                    "generated": true },
+                  { "filename": "company-profile.pdf", "byteSize": 1200334,
+                    "generated": false }] }
+```
+
+**`GET /api/document-deliveries?documentType=spk&documentId=…`** — riwayat
+kirim dokumen itu:
+```json
+{ "items": [{ "id": "…", "recipient": "…", "recipientName": "…",
+              "subject": "…", "status": "Sent",
+              "scheduledFor": "…", "sentAt": "…", "failureReason": "",
+              "attachments": [{ "filename": "…", "byteSize": 0 }],
+              "createdAt": "…", "createdByName": "…" }] }
+```
+
+#### Kode galat yang WAJIB ditangani
+
+| HTTP | code | Tampilkan sebagai |
+|---|---|---|
+| 409 | `VENDOR_EMAIL_MISSING` | **bukan galat sistem.** `details.vendorName` ada; pesannya menyebut bahwa alamat vendor perlu diisi di Procurement & Vendor, dan bahwa yang boleh mengubahnya **Admin atau Finance**. Sediakan tautan ke vendornya |
+| 409 | `ORDER_NOT_SENDABLE` | SPK belum Disetujui. Arahkan menyelesaikan persetujuan dulu |
+| 413 | `ATTACHMENT_TOO_LARGE` | `details.filename` + batas per berkas |
+| 413 | `ATTACHMENT_TOTAL_TOO_LARGE` | total melebihi batas; sebutkan totalnya |
+| 422 | `ATTACHMENT_TOO_MANY` | lebih dari `ATTACHMENT_MAX_COUNT` |
+| 415 | `INVALID_FILE_CONTENT` | isi berkas tidak cocok dengan jenisnya |
+| 403 | `FORBIDDEN` | butuh izin Kelola pada Procurement |
+
+#### Yang perlu dikerjakan
+
+- Tombol **"Kirim ke vendor"** di detail SPK/PO. Aktif hanya saat izin
+  Procurement **Kelola** dan SPK sudah Disetujui.
+- Dialog kirim: pilih template · alamat penerima **ditampilkan, tidak bisa
+  diedit** (datang dari data vendor) · daftar lampiran (dokumen yang dirender
+  ditandai jelas sebagai otomatis) · tambah berkas · **pratinjau wajib sebelum
+  tombol Kirim aktif**, sama seperti komposer prospek.
+- Batas unggah diperiksa **juga di layar** supaya orang tidak menunggu unggahan
+  10 MB hanya untuk ditolak. Server tetap memeriksa ulang — layar bukan penjaga.
+- **Riwayat kirim** di detail dokumen: status, kapan, ke siapa, lampiran apa.
+- Setelah kirim berhasil, muat ulang dokumennya: **statusnya ikut berubah jadi
+  Dikirim**. Jangan menebak status baru di layar; baca dari server.
+
+#### Yang TIDAK boleh dilakukan di layar
+
+- **Jangan menyediakan unggah untuk dokumen resminya.** Hanya lampiran
+  tambahan. Kalau muncul kebutuhan "ganti PDF-nya", itu keputusan backend.
+- **Jangan menampilkan atau menawarkan salinan internal.** SPK punya edisi
+  internal yang memuat anggaran PerumNet per item; ia tidak boleh sampai ke
+  vendor. Jalur email tidak menerima pilihan edisi sama sekali.
+- Jangan menyimpulkan sendiri apakah pengiriman "selesai" dari menghitung
+  baris — baca `status` per baris.
+
 ### Selesai
 
 - **T-1** — `auth-screen.tsx` dan `panel-app.tsx` membedakan 503
