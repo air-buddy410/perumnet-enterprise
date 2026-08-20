@@ -822,3 +822,84 @@ test("surat keamanan TIDAK pernah memakai alamat balasan dari pemanggil", async 
   // ini bisa diisi pemanggil, jalur pemulihan akun ikut bisa diarahkan.
   assert.equal(baris.rows[0].reply_to, null);
 });
+
+// ── Kontak tanpa email juga disaring kembarnya ───────────────────────
+//
+// Alamat email punya indeks unik di database, jadi kembarnya selalu tertangkap.
+// Kontak TANPA email tidak punya kunci unik apa pun — dan itu bukan kasus
+// pinggiran: baris yang selnya memuat dua alamat sengaja disimpan tanpa email.
+// Sebelum pemeriksaan ini ada, mengunggah ulang berkas yang sama (hal yang
+// wajar setelah berkasnya diperbaiki) menghasilkan salinan berlipat.
+
+test("baris tanpa email yang sama persis dilewati, bukan disalin berkali-kali", async () => {
+  const baris = [
+    ["Kontak Kembar", "", "PT Kembar", "", "", ""],
+    ["Kontak Kembar", "", "PT Kembar", "", "", ""],
+  ];
+  const hasil = await unggah(await workbook(baris));
+  assert.equal(hasil.data.disimpan, 1);
+  assert.equal(hasil.data.dilewati, 1);
+  assert.ok(hasil.data.issues.some((i) => i.code === "KONTAK_GANDA"));
+});
+
+test("mengunggah ulang berkas yang sama tidak menambah satu baris pun", async () => {
+  const baris = [
+    ["Ulang Tanpa Email", "", "PT Ulang", "", "", ""],
+    ["Ulang Punya Email", "ulang@contoh.test", "PT Ulang", "", "", ""],
+  ];
+  const pertama = await unggah(await workbook(baris));
+  assert.equal(pertama.data.disimpan, 2);
+
+  const kedua = await unggah(await workbook(baris));
+  // Nol. Berkas kontak sering diunggah ulang setelah diperbaiki; kalau yang
+  // tanpa email lolos, daftarnya menggembung tanpa ada yang menyadarinya.
+  assert.equal(kedua.data.disimpan, 0);
+  assert.equal(kedua.data.dilewati, 2);
+});
+
+test("nama dan perusahaan dibandingkan tanpa peduli huruf besar dan spasi", async () => {
+  const baris = [
+    ["Ejaan Beda", "", "PT Ejaan", "", "", ""],
+    ["  ejaan beda  ", "", "  pt ejaan  ", "", "", ""],
+  ];
+  const hasil = await unggah(await workbook(baris));
+  assert.equal(hasil.data.disimpan, 1);
+  assert.equal(hasil.data.dilewati, 1);
+});
+
+test("nama berbeda di perusahaan yang sama TIDAK dianggap kembar", async () => {
+  const baris = [
+    ["Orang Pertama", "", "PT Bersama", "", "", ""],
+    ["Orang Kedua", "", "PT Bersama", "", "", ""],
+  ];
+  const hasil = await unggah(await workbook(baris));
+  // Dua orang di satu kantor memang dua kontak. Penyaring yang kebablasan
+  // menghapus kontak yang sah, dan itu tidak terlihat sampai ada yang mencari.
+  assert.equal(hasil.data.disimpan, 2);
+  assert.equal(hasil.data.dilewati, 0);
+});
+
+test("uji kering dan impor sungguhan sepakat untuk kontak tanpa email", async () => {
+  const baris = [
+    ["Sepakat Satu", "", "PT Sepakat", "", "", ""],
+    ["Sepakat Satu", "", "PT Sepakat", "", "", ""],
+    ["Sepakat Dua", "", "PT Sepakat", "", "", ""],
+  ];
+  const kering = await unggah(await workbook(baris), { dryRun: "1" });
+  const sungguhan = await unggah(await workbook(baris));
+  assert.equal(kering.data.disimpan, sungguhan.data.disimpan);
+  assert.equal(kering.data.dilewati, sungguhan.data.dilewati);
+  assert.equal(sungguhan.data.disimpan, 2);
+});
+
+test("alamat kembar dilaporkan sebagai EMAIL_GANDA, bukan alamat tidak sah", async () => {
+  const baris = [
+    ["Kode Satu", "kode@contoh.test", "PT A", "", "", ""],
+    ["Kode Dua", "KODE@Contoh.TEST", "PT B", "", "", ""],
+  ];
+  const hasil = await unggah(await workbook(baris));
+  // Alamat kembar itu sah bentuknya; yang salah adalah dipakai dua kali.
+  // Layar yang bercabang pada kode ini akan menampilkan alasan yang keliru.
+  assert.ok(hasil.data.issues.some((i) => i.code === "EMAIL_GANDA"));
+  assert.ok(!hasil.data.issues.some((i) => i.code === "EMAIL_TIDAK_SAH"));
+});
