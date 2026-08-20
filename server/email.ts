@@ -23,6 +23,17 @@ interface EmailDeliveryInput {
    * Kosong berarti sekarang — perilaku setiap pemanggil yang sudah ada.
    */
   notBefore?: string;
+  /**
+   * Alamat yang menerima balasan, kalau berbeda dari bawaan EMAIL_REPLY_TO.
+   *
+   * Surat penawaran ditandatangani orang, dan menekan Reply adalah cara paling
+   * wajar calon klien membalas. Tanpa ini balasannya mendarat di kotak masuk
+   * umum, dan orang yang menandatangani tidak pernah tahu balasannya datang.
+   *
+   * Diabaikan untuk profil "security": tautan reset kata sandi tidak boleh
+   * mengarahkan balasan ke alamat yang ditentukan pemanggil.
+   */
+  replyTo?: string;
 }
 
 interface EmailDeliveryResult {
@@ -212,15 +223,18 @@ async function enqueueOutbox(
   const timestamp = new Date().toISOString();
   await client.execute({
     sql: `INSERT INTO email_outbox
-      (id,user_id,event_type,sender_profile,recipient,subject,body_html,status,provider,
+      (id,user_id,event_type,sender_profile,recipient,reply_to,subject,body_html,status,provider,
        attempt_count,next_attempt_at,last_error,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,?)`,
+      VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)`,
     args: [
       id,
       input.userId ?? null,
       input.eventType,
       input.senderProfile ?? "operational",
       input.recipient,
+      // Baris security TIDAK pernah memakai reply-to dari pemanggil: tautan
+      // reset kata sandi harus membalas ke alamat milik sistem.
+      input.senderProfile === "security" ? null : input.replyTo ?? null,
       input.subject,
       // A Skipped row is already terminal: nobody will ever send it, and
       // nothing reads the stored body. Keeping the HTML would keep a live
@@ -302,6 +316,11 @@ export async function sendEmailDelivery(
 
 const retryMinutes = [1, 5, 15, 60] as const;
 
+function rowReplyTo(row: Record<string, unknown>) {
+  const nilai = typeof row.reply_to === "string" ? row.reply_to.trim() : "";
+  return nilai || undefined;
+}
+
 function senderProfile(row: Record<string, unknown>): EmailSenderProfile {
   return row.sender_profile === "security" ? "security" : "operational";
 }
@@ -359,7 +378,8 @@ async function sendWithSmtp(row: Record<string, unknown>) {
     replyTo:
       (profile === "security"
         ? process.env.SECURITY_EMAIL_REPLY_TO
-        : undefined) ??
+        : // Nilai per-baris hanya untuk surat non-security.
+          rowReplyTo(row)) ??
       process.env.EMAIL_REPLY_TO ??
       "PerumNet Enterprise <it@perumnet.id>",
     to: String(row.recipient),
@@ -388,7 +408,7 @@ async function sendWithResend(row: Record<string, unknown>) {
       reply_to:
         (profile === "security"
           ? process.env.SECURITY_EMAIL_REPLY_TO
-          : undefined) ??
+          : rowReplyTo(row)) ??
         process.env.EMAIL_REPLY_TO ??
         "it@perumnet.id",
       to: [String(row.recipient)],

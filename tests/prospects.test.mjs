@@ -719,3 +719,106 @@ test("daftar template membawa naskah awal dan tanda tangan dari akun yang masuk"
   assert.equal(bawaan.senderEmail, ADMIN);
   assert.ok(bawaan.senderName.length > 0);
 });
+
+// ── Balasan mengikuti tanda tangan ───────────────────────────────────
+//
+// Surat keluar dari alamat sistem (EMAIL_FROM), tapi yang menandatangani
+// adalah orang. Menekan Reply adalah cara paling wajar calon klien membalas;
+// kalau balasannya mendarat di kotak masuk umum, orang yang menunggu balasan
+// itu tidak pernah tahu balasannya sudah datang.
+
+test("balasan diarahkan ke penanda tangan, bukan ke alamat umum", async () => {
+  const prospek = await tambahProspek();
+  const t = await buatTemplate({
+    senderName: "Suci",
+    senderEmail: "orang@contoh.test",
+  });
+  const kirim = await api("/api/cms/prospects/outreach", {
+    method: "POST",
+    body: JSON.stringify({ prospectIds: [prospek.data.id], templateId: t.data.id }),
+  });
+  assert.equal(kirim.status, 200);
+
+  const client = db();
+  const baris = await client.execute({
+    sql: "SELECT reply_to FROM email_outbox WHERE recipient=? LIMIT 1",
+    args: [prospek.data.email],
+  });
+  client.close();
+
+  assert.equal(String(baris.rows[0].reply_to), '"Suci" <orang@contoh.test>');
+});
+
+test("tanda tangan tanpa email tidak mengarang alamat balasan", async () => {
+  const prospek = await tambahProspek();
+  const t = await buatTemplate({ senderName: "Suci" });
+  await api("/api/cms/prospects/outreach", {
+    method: "POST",
+    body: JSON.stringify({ prospectIds: [prospek.data.id], templateId: t.data.id }),
+  });
+
+  const client = db();
+  const baris = await client.execute({
+    sql: "SELECT reply_to FROM email_outbox WHERE recipient=? LIMIT 1",
+    args: [prospek.data.email],
+  });
+  client.close();
+
+  // NULL berarti "pakai bawaan EMAIL_REPLY_TO", bukan alamat tebakan.
+  assert.equal(baris.rows[0].reply_to, null);
+});
+
+test("baris baru di nama penanda tangan tidak menyelundupkan header", async () => {
+  const prospek = await tambahProspek();
+  const t = await buatTemplate({
+    senderName: "Suci\r\nBcc: diam-diam@contoh.test",
+    senderEmail: "orang@contoh.test",
+  });
+  await api("/api/cms/prospects/outreach", {
+    method: "POST",
+    body: JSON.stringify({ prospectIds: [prospek.data.id], templateId: t.data.id }),
+  });
+
+  const client = db();
+  const baris = await client.execute({
+    sql: "SELECT reply_to FROM email_outbox WHERE recipient=? LIMIT 1",
+    args: [prospek.data.email],
+  });
+  client.close();
+
+  const nilai = String(baris.rows[0].reply_to);
+  // CR/LF di header email mentah berarti header tambahan yang ditulis orang
+  // lain. Nilainya boleh jelek, tapi tidak boleh berbaris ganda.
+  assert.ok(!/[\r\n]/.test(nilai), `reply_to memuat baris baru: ${JSON.stringify(nilai)}`);
+  // Sisa teksnya boleh ikut, asal tetap di dalam nama tampilan yang dikutip —
+  // di sana ia cuma tulisan, bukan header.
+  assert.match(nilai, /^"[^"]*" <orang@contoh\.test>$/);
+});
+
+test("surat keamanan TIDAK pernah memakai alamat balasan dari pemanggil", async () => {
+  const sebelum = db();
+  const awal = await sebelum.execute(
+    "SELECT count(*) AS n FROM email_outbox WHERE sender_profile='security'",
+  );
+  sebelum.close();
+
+  const minta = await api("/api/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email: ADMIN }),
+  });
+  assert.ok([200, 202, 204, 409].includes(minta.status), `status tak terduga: ${minta.status}`);
+
+  const client = db();
+  const baris = await client.execute(
+    "SELECT reply_to FROM email_outbox WHERE sender_profile='security' ORDER BY created_at DESC LIMIT 1",
+  );
+  const sesudah = await client.execute(
+    "SELECT count(*) AS n FROM email_outbox WHERE sender_profile='security'",
+  );
+  client.close();
+
+  if (Number(sesudah.rows[0].n) === Number(awal.rows[0].n)) return; // mode mailserver: tidak ada baris
+  // Tautan reset kata sandi harus membalas ke alamat milik sistem. Kalau kolom
+  // ini bisa diisi pemanggil, jalur pemulihan akun ikut bisa diarahkan.
+  assert.equal(baris.rows[0].reply_to, null);
+});

@@ -20,6 +20,7 @@ import {
 } from "../../shared/prospects";
 import { bacaWorkbookProspek } from "../prospect-import";
 import {
+  alamatBalasan,
   muatIdentitas,
   renderIsiSurat,
   renderSubjek,
@@ -670,6 +671,10 @@ async function sendOutreach(request: Request, user: AuthUser) {
       subject,
       html,
       notBefore: jadwal,
+      // Balasan mengikuti tanda tangan. Tanpa ini calon klien yang menekan
+      // Reply — cara paling wajar membalas — mendarat di alamat umum, dan
+      // orang yang menandatangani tidak pernah tahu balasannya sudah datang.
+      replyTo: alamatBalasan(sumber.penandatangan),
       // Calon klien bukan pengguna aplikasi ini, jadi preferensi notifikasi
       // per-pengguna tidak berlaku untuknya — memeriksanya berarti memeriksa
       // baris yang tidak ada.

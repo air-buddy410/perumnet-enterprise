@@ -99,6 +99,11 @@ CREATE TABLE IF NOT EXISTS email_outbox (
   event_type TEXT NOT NULL,
   sender_profile TEXT NOT NULL DEFAULT 'operational',
   recipient TEXT NOT NULL,
+  -- Alamat penerima balasan, kalau berbeda dari EMAIL_REPLY_TO. Surat
+  -- penawaran ditandatangani orang; menekan Reply harus mendarat di kotak
+  -- masuk orang itu, bukan di alamat umum yang tidak menunggunya. Selalu NULL
+  -- untuk profil security.
+  reply_to TEXT,
   subject TEXT NOT NULL,
   body_html TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'Pending'
@@ -3091,6 +3096,7 @@ async function ensurePortfolioGalleryLimit(client: DatabaseClient) {
  * dirender sebagai teks biasa, yang aman, bukan sebagai HTML yang dipercaya.
  */
 async function ensureProspectLetterFormat(client: DatabaseClient) {
+  await ensureColumn(client, "email_outbox", "reply_to", "TEXT");
   const columns: Array<[string, string]> = [
     ["body_format", "TEXT NOT NULL DEFAULT 'text'"],
     ["sender_signoff", "TEXT NOT NULL DEFAULT ''"],
