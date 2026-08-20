@@ -1312,8 +1312,6 @@ CREATE INDEX IF NOT EXISTS cms_prospect_outreach_prospect_idx
   ON cms_prospect_outreach(prospect_id, created_at);
 CREATE INDEX IF NOT EXISTS cms_prospect_outreach_outbox_idx
   ON cms_prospect_outreach(outbox_id);
-CREATE INDEX IF NOT EXISTS cms_prospect_outreach_batch_idx
-  ON cms_prospect_outreach(batch_id, created_at);
 CREATE INDEX IF NOT EXISTS cms_prospect_outreach_status_idx
   ON cms_prospect_outreach(status, created_at);
 `;
@@ -3110,6 +3108,15 @@ async function ensurePortfolioGalleryLimit(client: DatabaseClient) {
 async function ensureProspectLetterFormat(client: DatabaseClient) {
   await ensureColumn(client, "email_outbox", "reply_to", "TEXT");
   await ensureColumn(client, "cms_prospect_outreach", "batch_id", "TEXT");
+  // Indeksnya DI SINI, bukan di schemaSql. schemaSql berjalan lebih dulu, dan
+  // pada database yang tabelnya sudah ada CREATE TABLE IF NOT EXISTS adalah
+  // no-op — kolomnya belum ada, CREATE INDEX-nya gagal, dan seluruh
+  // initializeDatabase ikut gagal. Demo dan produksi mati 4 menit pada
+  // 2026-08-20 karena baris ini sempat berada di schemaSql.
+  await client.execute(
+    `CREATE INDEX IF NOT EXISTS cms_prospect_outreach_batch_idx
+       ON cms_prospect_outreach(batch_id, created_at)`,
+  );
   const columns: Array<[string, string]> = [
     ["body_format", "TEXT NOT NULL DEFAULT 'text'"],
     ["sender_signoff", "TEXT NOT NULL DEFAULT ''"],
