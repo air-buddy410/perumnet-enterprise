@@ -139,6 +139,30 @@ Papan permintaan Opus → Luna (`WORKFLOW-TIM.md` §5). Backend-nya sudah jalan
 di demo; yang tersisa murni tampilan. Tandai ✅ dan pindahkan ke §Selesai
 kalau sudah dikerjakan.
 
+### Yang masih terbuka — per 2026-08-20
+
+Daftar pendek supaya tidak ada yang tercecer di antara entri yang panjang.
+Perinciannya di bagian masing-masing di bawah.
+
+| | Tugas | Keadaan |
+|---|---|---|
+| **T-16** | Kirim SPK/PO ke vendor — dialog kirim, riwayat, batas unggah | sedang dikerjakan |
+| **T-18a** | **Pengelola template surat dokumen** | belum mulai — **tanpa ini tombol Kirim tidak punya template untuk dipilih** |
+| **T-18b** | Alamat email klien di form proyek | belum mulai |
+| **T-18c** | Kirim dari Quotation dan Invoice | belum mulai |
+
+T-1 sampai T-15 dan T-17 sudah selesai; catatannya ada di §Selesai.
+
+**Backend Fase 1–3 seluruhnya sudah selesai dan bertes (291/291), dan sudah
+masuk `main`.** Yang menahan peluncuran tinggal layar. Belum ada satu pun yang
+di-deploy ke demo maupun produksi — sengaja, supaya naiknya sekaligus dan bisa
+dicoba utuh.
+
+Kalau ada yang menurutmu kurang atau kontraknya keliru, tulis di
+`docs/PERMINTAAN-FRONTEND-KE-BACKEND.md`. Menolak tugas karena kontraknya belum
+mendukung — seperti yang kamu lakukan di T-15 untuk editor kaya — itu tepat,
+dan lebih cepat daripada mengakalinya di sisi layar.
+
 **T-6…T-10 punya kontrak tersendiri di `docs/PROSPEK-CALON-KLIEN.md`** —
 seluruh endpoint, kode galat, aturan render template, dan perilaku impor ada di
 sana. Yang di bawah ini ringkasannya.
@@ -369,7 +393,7 @@ GET /api/auth/password-policy
 Semua string dwibahasa tersedia lewat `shared/password-policy.ts`
 (`describePasswordPolicy`, `passwordProblems`) kalau perlu merender sendiri.
 
-### T-15. Pusat Bantuan memuat Calon Klien
+### ✅ T-15. Pusat Bantuan memuat Calon Klien — SELESAI 2026-08-20
 
 - **Layar:** `app/components/help-view.tsx`.
 - **Kenapa ini ada:** isi Pusat Bantuan di layar **terpisah** dari isi PDF
@@ -549,6 +573,172 @@ kirim dokumen itu:
 - Jangan menyimpulkan sendiri apakah pengiriman "selesai" dari menghitung
   baris — baca `status` per baris.
 
+### ✅ T-17. Editor kaya untuk isi surat — SELESAI 2026-08-20
+
+Kamu menolak ini di T-15 dengan alasan kontraknya masih `bodyFormat: "text"`.
+**Itu keputusan yang benar** — dan memang bagian saya. Sekarang sudah dibuka.
+
+#### Yang berubah di backend
+
+`bodyFormat` menerima nilai ketiga: **`"rich"`**.
+
+**Yang disimpan BUKAN HTML.** `rich` menyimpan penanda ringan, dan server yang
+mengubahnya jadi HTML dari kumpulan tag yang tertutup:
+
+| Ketikan | Jadi |
+|---|---|
+| `**tebal**` | `<strong>` |
+| `*miring*` | `<em>` |
+| `- baris` (satu blok penuh) | `<ul><li>` |
+| `1. baris` (satu blok penuh) | `<ol><li>` |
+| `[teks](https://…)` atau `[teks](mailto:…)` | `<a href>` |
+| baris kosong | paragraf baru |
+
+Tautan selain `http`, `https`, dan `mailto` **ditolak dan ditampilkan sebagai
+tulisan biasa**, bukan dibuang — yang hilang diam-diam tidak pernah diperbaiki
+siapa pun.
+
+#### Kenapa penanda, bukan HTML
+
+Repo ini **tidak punya penyanitasi HTML sama sekali**, dan menulis sendiri
+adalah jenis kode yang terlihat benar sampai suatu hari tidak. Menempel dari
+Word atau dari halaman web juga membawa `<style>`, gambar pelacak, dan markup
+yang merusak tampilan di klien email sekaligus menaikkan skor spam.
+
+Dengan menghasilkan seluruh tag-nya sendiri, amannya berasal dari **bentuk
+kodenya**, bukan dari daftar larangan yang harus selalu lengkap.
+
+#### Yang perlu dikerjakan
+
+- Toolbar sederhana pada kolom **Isi surat**: tebal, miring, daftar berbutir,
+  daftar bernomor, tautan. Boleh WYSIWYG, boleh tombol yang menyisipkan
+  penanda — dari sisi pengguna keduanya terasa sama.
+- **Yang dikirim ke server tetap penandanya**, bukan HTML, dan
+  `bodyFormat: "rich"`.
+- Kalau memakai editor WYSIWYG, ia harus **mengeluarkan penanda**. Jangan
+  mengirim HTML lalu berharap server membersihkannya — server tidak
+  membersihkan HTML, ia meng-*escape* seluruhnya. Kirim HTML dengan
+  `bodyFormat: "rich"` dan yang sampai ke penerima adalah tag-tag yang tampil
+  mentah sebagai tulisan.
+- **Menempel dari Word harus dijinakkan di layar**: ambil `text/plain`-nya,
+  bukan `text/html`. Kalau tidak, orang menempel satu paragraf dan mendapat
+  layar penuh tanda kurung siku.
+- Template lama tetap `"text"` dan **harus tetap apa adanya**. Jangan
+  memigrasikannya diam-diam; `**` di template lama memang bintang.
+- Pratinjau tidak berubah: ia sudah menampilkan surat utuh dari server, jadi
+  ia sudah menunjukkan hasil penanda yang sebenarnya.
+
+#### Yang TIDAK boleh dilakukan di layar
+
+- **Jangan membangun penyanitasi HTML di layar.** Ia bukan penjaga: permintaan
+  bisa dikirim tanpa lewat layar sama sekali.
+- **Jangan menyentuh `bodyFormat: "html"`.** Nilai itu masih ada untuk markup
+  yang ditulis sengaja oleh orang yang tahu persis apa yang ia tulis, dan ia
+  **tidak disanitasi**. Ia tidak boleh menjadi keluaran sebuah editor.
+
+### T-18. Yang masih kurang supaya kirim dokumen benar-benar bisa dipakai
+
+Backend Fase 1–3 sudah selesai dan bertes (291/291). Tiga hal di bawah adalah
+sisanya, dan **dua di antaranya memang belum pernah saya tuliskan** — ketahuan
+saat memeriksa ulang, bukan saat menulis T-16.
+
+Tanpa (a), tombol Kirim punya daftar template yang kosong dan tidak ada cara
+mengisinya dari mana pun.
+
+#### a. Pengelola template surat dokumen — BELUM PERNAH DIMINTA
+
+Endpoint-nya sudah ada dan berpola sama persis dengan template prospek:
+
+```
+GET    /api/document-email-templates?documentType=spk|quotation|invoice
+POST   /api/document-email-templates
+PATCH  /api/document-email-templates/:id
+DELETE /api/document-email-templates/:id      (soft delete)
+```
+
+Bentuk barisnya sama dengan template prospek, **plus** `documentKind`
+(`"spk" | "quotation" | "invoice"`) yang wajib. Jawaban `GET` juga membawa:
+
+```json
+{ "items": [...],
+  "defaults": { "senderSignoff": "Hormat kami,",
+                "senderName": "<akun yang masuk>",
+                "senderEmail": "<akun yang masuk>",
+                "senderPhone": "" },
+  "placeholders": { "spk": ["nomor","vendor","proyek","nilai","mulai","selesai"],
+                    "quotation": ["nomor","klien","proyek","nilai","berlaku_sampai"],
+                    "invoice": ["nomor","klien","proyek","nilai","jatuh_tempo","sisa"] } }
+```
+
+- Placeholder **berbeda per jenis dokumen** — ambil dari `placeholders` di
+  jawaban, jangan ditulis di layar. Template invoice yang dipakai untuk SPK
+  ditolak server dengan `422 TEMPLATE_KIND_MISMATCH`.
+- `bodyFormat` mendukung `"text"` dan `"rich"` — editor kaya T-17 bisa dipakai
+  ulang apa adanya.
+- Izinnya modul **Procurement**, bukan Prospects. (Fase ini melayani SPK; saat
+  quotation/invoice ikut, penjaganya jadi per-jenis-dokumen.)
+
+**Belum ada satu pun template di database.** Sampai layar ini ada dan seseorang
+mengisinya, tombol Kirim tidak punya apa pun untuk dipilih.
+
+#### b. Alamat email klien di form proyek — BELUM PERNAH DIMINTA
+
+`projects` sekarang punya dua kolom baru, dan keduanya sudah ikut di
+`GET`/`POST`/`PATCH /api/projects`:
+
+| Field | Isi |
+|---|---|
+| `clientEmail` | boleh kosong; divalidasi sebagai email kalau diisi |
+| `clientContactName` | nama PIC klien, boleh kosong |
+
+- Kirim string kosong = **hapus alamatnya**. Menghilangkan field-nya dari body
+  = jangan diubah. Bedanya nyata di server.
+- **Setiap proyek lama tidak punya alamat**, jadi keadaan kosong itu normal —
+  jangan ditampilkan sebagai galat atau data rusak.
+
+#### c. Kirim dari Quotation dan Invoice
+
+Sama polanya dengan T-16, hanya rutenya berbeda:
+
+```
+POST /api/quotations/:id/send-email            (multipart: templateId, files[])
+POST /api/quotations/:id/send-email-preview    (JSON: { templateId })
+GET  /api/quotations/:id/deliveries
+
+POST /api/invoices/:id/send-email
+POST /api/invoices/:id/send-email-preview
+GET  /api/invoices/:id/deliveries
+```
+
+Izin: modul **Billing** tingkat **Kelola**.
+
+Kode galat tambahan di luar yang sudah disebut T-16:
+
+| HTTP | code | Tampilkan sebagai |
+|---|---|---|
+| 409 | `CLIENT_EMAIL_MISSING` | bukan galat sistem; `details.projectName` ada. Arahkan mengisi alamat klien di Manajemen Proyek, dan sediakan tautannya |
+| 409 | `CLIENT_EMAIL_INVALID` | alamat tersimpan tidak valid |
+| 409 | `QUOTATION_NOT_SENDABLE` | quotation Void/Rejected/Superseded |
+| 409 | `TAX_RULE_REQUIRED` | quotation Draft berpajak yang belum punya aturan pajak — muncul saat transisinya berjalan |
+
+**Dua perilaku yang harus tercermin di layar:**
+
+- **Quotation berstatus Draft ikut berubah jadi Terkirim** saat diemail, lewat
+  transisi yang sama dengan tombol "Tandai sudah dikirim" — termasuk
+  **penguncian item BoQ**. Muat ulang dokumennya setelah kirim; jangan menebak
+  status barunya di layar.
+- **Invoice TIDAK berubah statusnya.** `Lunas`/`Belum Lunas` itu keadaan
+  pembayaran. Riwayat kirimnya ada di `/deliveries`, bukan di status. Jangan
+  menampilkan "sudah dikirim" sebagai status invoice.
+
+#### Yang TIDAK perlu dikerjakan
+
+- **BAST.** Sengaja belum ikut: yang sudah final punya PDF terpatok hash dan
+  sudah punya jalur sendiri lewat halaman verifikasi bertoken.
+- **Unggah untuk dokumen resminya.** Sama seperti T-16 — hanya lampiran
+  tambahan.
+- **Pilihan edisi dokumen.** Jalur email tidak menerimanya sama sekali.
+
 ### Selesai
 
 - **T-1** — `auth-screen.tsx` dan `panel-app.tsx` membedakan 503
@@ -609,3 +799,15 @@ kirim dokumen itu:
   kontrol read-only untuk izin `view`; form password membaca policy dinamis,
   menerapkan `minLength`, menampilkan deskripsi sebelum mengetik, dan merender
   seluruh `details.unmet` dari `PASSWORD_TOO_WEAK`.
+
+- **T-15** — `help-view.tsx` memuat workflow Calon Klien dalam dua bahasa,
+  panduan impor XLSX, template teks biasa, preview, jeda pengiriman, empat
+  status, opt-out, dan lima pesan baru; daftar menu serta panduan password juga
+  sudah mengikuti kontrak terbaru. Ditambahkan glossary Prospek, Batch, dan
+  Opt-out. Editor rich ditangani pada T-17 setelah kontrak `rich` tersedia.
+
+- **T-17** — `rich-text-editor.tsx` menyediakan toolbar tebal, miring, daftar
+  berpoin, daftar bernomor, dan tautan; toolbar menghasilkan marker `rich`,
+  bukan HTML. Paste dipaksa menjadi `text/plain`, template `text` lama tetap
+  dipertahankan, dan template HTML tulisan tangan tidak diubah menjadi keluaran
+  editor. Preview tetap memakai hasil render server.
