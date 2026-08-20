@@ -590,6 +590,223 @@ async function previewTemplate(request: Request, id: string) {
   });
 }
 
+// ── Laporan pengiriman ───────────────────────────────────────────────
+//
+// Sebelum ini riwayat outreach ditulis sekali saat tombol Kirim ditekan, lalu
+// tidak pernah disentuh lagi — ia bilang "Queued" selamanya, bahkan setelah
+// suratnya benar-benar terkirim atau gagal permanen. Layar yang membacanya
+// menampilkan kabar yang salah dengan penuh percaya diri.
+//
+// Sekarang server/email.ts menyalin nasib tiap baris ke sini begitu final,
+// dan dua endpoint di bawah membacanya: satu per-batch (satu penekanan tombol
+// Kirim), satu per-penerima.
+
+const outreachStatuses = ["Queued", "Sent", "Failed", "Skipped"] as const;
+
+function mapOutreachLog(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    batchId: row.batch_id ? String(row.batch_id) : null,
+    prospectId: String(row.prospect_id),
+    prospectName: text(row.prospect_name),
+    companyName: text(row.company_name),
+    templateId: row.template_id ? String(row.template_id) : null,
+    templateName: text(row.template_name),
+    recipient: text(row.recipient),
+    subject: text(row.subject),
+    status: String(row.status),
+    scheduledFor: String(row.scheduled_for),
+    sentAt: row.sent_at ? String(row.sent_at) : null,
+    failureReason: text(row.failure_reason),
+    createdAt: String(row.created_at),
+    // Dari email_outbox selama barisnya masih ada. Setelah 180 hari
+    // pruneEmailOutbox menghapusnya dan nilai ini jadi null — statusnya
+    // sendiri tetap terbaca karena disalin ke riwayat.
+    attempts: row.attempt_count === null || row.attempt_count === undefined
+      ? null
+      : Number(row.attempt_count),
+    nextAttemptAt: row.next_attempt_at ? String(row.next_attempt_at) : null,
+    hasBody: Number(row.has_body) === 1,
+  };
+}
+
+function outreachWhere(url: URL) {
+  const clauses: string[] = ["1=1"];
+  const args: unknown[] = [];
+
+  const q = url.searchParams.get("q")?.trim();
+  if (q) {
+    clauses.push(
+      "(lower(o.recipient) LIKE ? OR lower(o.subject) LIKE ? OR lower(p.full_name) LIKE ? OR lower(p.company_name) LIKE ?)",
+    );
+    const pola = `%${q.toLowerCase()}%`;
+    args.push(pola, pola, pola, pola);
+  }
+
+  const status = url.searchParams.get("status");
+  if (status && (outreachStatuses as readonly string[]).includes(status)) {
+    clauses.push("o.status=?");
+    args.push(status);
+  }
+
+  const batchId = url.searchParams.get("batchId")?.trim();
+  if (batchId) {
+    clauses.push("o.batch_id=?");
+    args.push(batchId);
+  }
+
+  const prospectId = url.searchParams.get("prospectId")?.trim();
+  if (prospectId) {
+    clauses.push("o.prospect_id=?");
+    args.push(prospectId);
+  }
+
+  const from = url.searchParams.get("from")?.trim();
+  if (from) {
+    clauses.push("o.created_at>=?");
+    args.push(from);
+  }
+  const to = url.searchParams.get("to")?.trim();
+  if (to) {
+    clauses.push("o.created_at<=?");
+    args.push(to);
+  }
+
+  return { clauses, args };
+}
+
+/**
+ * Hitungan per status, SELALU lengkap keempatnya.
+ *
+ * Status yang tidak punya baris tetap dipulangkan sebagai 0, bukan hilang dari
+ * objeknya: layar yang membaca `summary.Failed` tidak boleh menampilkan
+ * "kosong" hanya karena kebetulan belum ada yang gagal.
+ */
+function ringkasStatus(rows: Record<string, unknown>[]) {
+  const hasil: Record<string, number> = { Queued: 0, Sent: 0, Failed: 0, Skipped: 0 };
+  let total = 0;
+  for (const row of rows) {
+    const status = String(row.status);
+    const jumlah = Number(row.jumlah ?? 0);
+    if (status in hasil) hasil[status] = jumlah;
+    total += jumlah;
+  }
+  return { ...hasil, total };
+}
+
+async function listOutreachLog(request: Request) {
+  const { client } = await getDatabase();
+  const url = new URL(request.url);
+  const page = Math.max(1, Number(url.searchParams.get("page") ?? 1) || 1);
+  const pageSize = Math.max(
+    10,
+    Math.min(100, Number(url.searchParams.get("pageSize") ?? 25) || 25),
+  );
+  const { clauses, args } = outreachWhere(url);
+  const where = `WHERE ${clauses.join(" AND ")}`;
+
+  const [rows, count, ringkas] = await Promise.all([
+    client.execute({
+      sql: `SELECT o.id,o.batch_id,o.prospect_id,o.template_id,o.template_name,
+              o.recipient,o.subject,o.status,o.scheduled_for,o.sent_at,
+              o.failure_reason,o.created_at,
+              p.full_name AS prospect_name, p.company_name,
+              e.attempt_count, e.next_attempt_at,
+              CASE WHEN o.body_html IS NULL THEN 0 ELSE 1 END AS has_body
+            FROM cms_prospect_outreach o
+            JOIN cms_prospects p ON p.id=o.prospect_id
+            LEFT JOIN email_outbox e ON e.id=o.outbox_id
+            ${where}
+            ORDER BY o.created_at DESC, o.scheduled_for DESC
+            LIMIT ? OFFSET ?`,
+      args: [...args, pageSize, (page - 1) * pageSize],
+    }),
+    client.execute({
+      sql: `SELECT COUNT(*) AS total FROM cms_prospect_outreach o
+            JOIN cms_prospects p ON p.id=o.prospect_id ${where}`,
+      args,
+    }),
+    client.execute({
+      sql: `SELECT o.status, COUNT(*) AS jumlah FROM cms_prospect_outreach o
+            JOIN cms_prospects p ON p.id=o.prospect_id ${where}
+            GROUP BY o.status`,
+      args,
+    }),
+  ]);
+
+  return ok(
+    {
+      items: rows.rows.map((row) => mapOutreachLog(row as Record<string, unknown>)),
+      page,
+      pageSize,
+      total: Number(count.rows[0]?.total ?? 0),
+      summary: ringkasStatus(ringkas.rows as unknown as Record<string, unknown>[]),
+    },
+    200,
+    { "Cache-Control": "no-store" },
+  );
+}
+
+/**
+ * Daftar batch: satu baris per penekanan tombol Kirim.
+ *
+ * SUM(CASE WHEN ...) dan bukan COUNT(*) FILTER — FILTER hanya ada di
+ * PostgreSQL, sedangkan pengembangan dan tes berjalan di libsql.
+ */
+async function listOutreachBatches(request: Request) {
+  const { client } = await getDatabase();
+  const url = new URL(request.url);
+  const limit = Math.max(1, Math.min(100, Number(url.searchParams.get("limit") ?? 30) || 30));
+  const hasil = await client.execute({
+    sql: `SELECT o.batch_id,
+            MIN(o.template_name) AS template_name,
+            MIN(o.created_at) AS created_at,
+            MIN(o.scheduled_for) AS first_scheduled_for,
+            MAX(o.scheduled_for) AS last_scheduled_for,
+            MAX(o.sent_at) AS last_sent_at,
+            COUNT(*) AS total,
+            SUM(CASE WHEN o.status='Sent' THEN 1 ELSE 0 END) AS sent,
+            SUM(CASE WHEN o.status='Failed' THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN o.status='Queued' THEN 1 ELSE 0 END) AS queued,
+            SUM(CASE WHEN o.status='Skipped' THEN 1 ELSE 0 END) AS skipped
+          FROM cms_prospect_outreach o
+          WHERE o.batch_id IS NOT NULL
+          GROUP BY o.batch_id
+          ORDER BY MIN(o.created_at) DESC
+          LIMIT ?`,
+    args: [limit],
+  });
+  return ok(
+    {
+      items: hasil.rows.map((row) => {
+        const r = row as unknown as Record<string, unknown>;
+        const total = Number(r.total ?? 0);
+        const sent = Number(r.sent ?? 0);
+        const failed = Number(r.failed ?? 0);
+        const queued = Number(r.queued ?? 0);
+        return {
+          batchId: String(r.batch_id),
+          templateName: text(r.template_name),
+          createdAt: String(r.created_at),
+          firstScheduledFor: String(r.first_scheduled_for),
+          lastScheduledFor: String(r.last_scheduled_for),
+          lastSentAt: r.last_sent_at ? String(r.last_sent_at) : null,
+          total,
+          sent,
+          failed,
+          queued,
+          skipped: Number(r.skipped ?? 0),
+          // Dihitung di server supaya dua layar tidak menjawab berbeda untuk
+          // pertanyaan yang sama.
+          selesai: queued === 0,
+        };
+      }),
+    },
+    200,
+    { "Cache-Control": "no-store" },
+  );
+}
+
 // ── Pengiriman ───────────────────────────────────────────────────────
 
 async function sendOutreach(request: Request, user: AuthUser) {
@@ -656,6 +873,10 @@ async function sendOutreach(request: Request, user: AuthUser) {
   }
 
   const mulai = Date.now();
+  // Satu penekanan tombol Kirim = satu batch. Tanpa penanda ini laporannya
+  // cuma daftar datar, dan pertanyaan yang sebenarnya orang punya — "kiriman
+  // tadi pagi ke 21 orang itu sampai semua tidak?" — tidak bisa dijawab.
+  const batchId = randomUUID();
   const antre: { prospectId: string; outreachId: string; status: string; scheduledFor: string }[] = [];
   for (const [urutan, p] of penerima.entries()) {
     // Pesan ke-N dijadwalkan N x jeda ke depan. Mailcow yang membawa surat ini
@@ -685,8 +906,8 @@ async function sendOutreach(request: Request, user: AuthUser) {
     await client.execute({
       sql: `INSERT INTO cms_prospect_outreach
         (id,prospect_id,template_id,template_name,recipient,subject,body_html,status,
-         scheduled_for,failure_reason,outbox_id,created_by,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         batch_id,scheduled_for,failure_reason,outbox_id,created_by,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       args: [
         outreachId,
         p.id,
@@ -696,6 +917,7 @@ async function sendOutreach(request: Request, user: AuthUser) {
         subject,
         html,
         status,
+        batchId,
         jadwal,
         kirim.error ?? null,
         kirim.id,
@@ -719,12 +941,14 @@ async function sendOutreach(request: Request, user: AuthUser) {
 
   await writeAuditLog(client, request, user, "prospect_outreach_send", "prospect", undefined, {
     templateId,
+    batchId,
     dikirim: antre.length,
     dilewati: dilewati.length,
     spacingSeconds: spacing,
   });
 
   return ok({
+    batchId,
     queued: antre.length,
     skipped: dilewati,
     spacingSeconds: spacing,
@@ -863,8 +1087,13 @@ export async function dispatchProspectApi(request: Request, path: string[]) {
     if (request.method === "GET") return listProspects(request);
     if (request.method === "POST") return createProspect(request, user);
   }
-  if (action === "outreach" && request.method === "POST") {
-    return sendOutreach(request, user);
+  if (action === "outreach") {
+    if (request.method === "POST") return sendOutreach(request, user);
+    if (request.method === "GET") {
+      return path[2] === "batches"
+        ? listOutreachBatches(request)
+        : listOutreachLog(request);
+    }
   }
   if (action === "import" && request.method === "POST") {
     return importProspects(request, user);

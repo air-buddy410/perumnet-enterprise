@@ -1291,8 +1291,16 @@ CREATE TABLE IF NOT EXISTS cms_prospect_outreach (
   recipient TEXT NOT NULL,
   subject TEXT NOT NULL,
   body_html TEXT,
+  -- 'Queued' berarti MASIH DIPROSES: menunggu jadwalnya, atau gagal tapi
+  -- masih punya sisa percobaan. Baru jadi 'Failed' setelah percobaannya habis.
+  -- Sengaja tidak ada status 'Sending' tersendiri: nilai yang hanya hidup
+  -- beberapa detik tidak menjelaskan apa pun kepada yang membaca laporan.
   status TEXT NOT NULL DEFAULT 'Queued'
     CHECK (status IN ('Queued', 'Sent', 'Failed', 'Skipped')),
+  -- Satu penekanan tombol "Kirim" = satu batch. Tanpa ini laporannya cuma
+  -- daftar datar, dan pertanyaan yang sebenarnya orang punya — "kiriman tadi
+  -- pagi ke 21 orang itu sampai semua tidak?" — tidak bisa dijawab.
+  batch_id TEXT,
   scheduled_for TEXT NOT NULL,
   sent_at TEXT,
   failure_reason TEXT,
@@ -1304,6 +1312,10 @@ CREATE INDEX IF NOT EXISTS cms_prospect_outreach_prospect_idx
   ON cms_prospect_outreach(prospect_id, created_at);
 CREATE INDEX IF NOT EXISTS cms_prospect_outreach_outbox_idx
   ON cms_prospect_outreach(outbox_id);
+CREATE INDEX IF NOT EXISTS cms_prospect_outreach_batch_idx
+  ON cms_prospect_outreach(batch_id, created_at);
+CREATE INDEX IF NOT EXISTS cms_prospect_outreach_status_idx
+  ON cms_prospect_outreach(status, created_at);
 `;
 
 const now = "2026-07-18T06:00:00.000Z";
@@ -3097,6 +3109,7 @@ async function ensurePortfolioGalleryLimit(client: DatabaseClient) {
  */
 async function ensureProspectLetterFormat(client: DatabaseClient) {
   await ensureColumn(client, "email_outbox", "reply_to", "TEXT");
+  await ensureColumn(client, "cms_prospect_outreach", "batch_id", "TEXT");
   const columns: Array<[string, string]> = [
     ["body_format", "TEXT NOT NULL DEFAULT 'text'"],
     ["sender_signoff", "TEXT NOT NULL DEFAULT ''"],
