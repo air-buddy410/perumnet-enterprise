@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import {
   AlertCircle,
   ArchiveX,
+  BarChart3,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -38,7 +39,7 @@ import {
 import { api, ApiClientError } from "../api-client";
 import styles from "./prospects.module.css";
 
-type WorkspaceTab = "list" | "add" | "import" | "outreach" | "templates";
+type WorkspaceTab = "list" | "add" | "import" | "outreach" | "reports" | "templates";
 
 type Staff = { id: string; name: string; role: string };
 
@@ -142,6 +143,69 @@ type OutreachResult = {
   items: Array<{ prospectId: string; outreachId: string; status: string; scheduledFor: string }>;
 };
 
+type OutreachStatus = "Queued" | "Sent" | "Failed" | "Skipped";
+
+type OutreachSummary = {
+  Queued: number;
+  Sent: number;
+  Failed: number;
+  Skipped: number;
+  total: number;
+};
+
+type OutreachBatch = {
+  batchId: string;
+  templateName: string;
+  createdAt: string;
+  firstScheduledFor: string;
+  lastScheduledFor: string;
+  lastSentAt: string | null;
+  total: number;
+  sent: number;
+  failed: number;
+  queued: number;
+  skipped: number;
+  selesai: boolean;
+};
+
+type OutreachLog = {
+  id: string;
+  batchId: string | null;
+  prospectId: string;
+  prospectName: string;
+  companyName: string;
+  templateId: string | null;
+  templateName: string;
+  recipient: string;
+  subject: string;
+  status: OutreachStatus;
+  scheduledFor: string;
+  sentAt: string | null;
+  failureReason: string;
+  createdAt: string;
+  attempts: number | null;
+  nextAttemptAt: string | null;
+  hasBody: boolean;
+};
+
+const OUTREACH_REPORT_BATCH_LIMIT = 30;
+const OUTREACH_REPORT_PAGE_SIZE = 25;
+const OUTREACH_REPORT_POLL_MS = 20_000;
+const outreachStatuses: OutreachStatus[] = ["Queued", "Sent", "Failed", "Skipped"];
+const outreachStatusLabels: Record<OutreachStatus, string> = {
+  Queued: "Masih diproses",
+  Sent: "Terkirim",
+  Failed: "Gagal",
+  Skipped: "Dilewati",
+};
+const emptyOutreachSummary: OutreachSummary = {
+  Queued: 0,
+  Sent: 0,
+  Failed: 0,
+  Skipped: 0,
+  total: 0,
+};
+
 type ManualForm = {
   fullName: string;
   email: string;
@@ -165,6 +229,7 @@ const tabs: Array<{ id: WorkspaceTab; label: string; icon: typeof Search }> = [
   { id: "add", label: "Tambah kontak", icon: UserRoundPlus },
   { id: "import", label: "Impor XLSX", icon: FileSpreadsheet },
   { id: "outreach", label: "Komposer email", icon: MailPlus },
+  { id: "reports", label: "Laporan kirim", icon: BarChart3 },
   { id: "templates", label: "Template surat", icon: FileText },
 ];
 
@@ -237,6 +302,12 @@ function formatDate(value: string | null, withTime = false) {
   }).format(date).replace(":", ".");
 }
 
+function reportDateBound(value: string, endOfDay = false) {
+  if (!value) return "";
+  const date = new Date(`${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}+08:00`);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
 function formatDuration(seconds: number) {
   if (seconds <= 0) return "langsung";
   if (seconds < 60) return `${seconds} detik`;
@@ -286,6 +357,24 @@ function reasonLabel(reason: string) {
     NO_EMAIL: "tidak memiliki alamat email",
     NOT_FOUND: "prospek tidak ditemukan",
   }[reason] ?? reason;
+}
+
+function outreachStatusClass(status: string) {
+  return {
+    Queued: styles.reportStatusQueued,
+    Sent: styles.reportStatusSent,
+    Failed: styles.reportStatusFailed,
+    Skipped: styles.reportStatusSkipped,
+  }[status] ?? styles.reportStatusUnknown;
+}
+
+function outreachStatClass(status: OutreachStatus) {
+  return {
+    Queued: styles.reportStatQueued,
+    Sent: styles.reportStatSent,
+    Failed: styles.reportStatFailed,
+    Skipped: styles.reportStatSkipped,
+  }[status];
 }
 
 function editFormFrom(prospect: Prospect): EditForm {
@@ -387,6 +476,21 @@ export function ProspectsEditor() {
   const [outreachResult, setOutreachResult] = useState<OutreachResult | null>(null);
   const [outreachSkipped, setOutreachSkipped] = useState<SkippedRecipient[]>([]);
 
+  const [reportBatches, setReportBatches] = useState<OutreachBatch[]>([]);
+  const [reportBatchesLoading, setReportBatchesLoading] = useState(false);
+  const [reportBatchId, setReportBatchId] = useState("");
+  const [reportItems, setReportItems] = useState<OutreachLog[]>([]);
+  const [reportSummary, setReportSummary] = useState<OutreachSummary>(emptyOutreachSummary);
+  const [reportTotal, setReportTotal] = useState(0);
+  const [reportPage, setReportPage] = useState(1);
+  const [reportQuery, setReportQuery] = useState("");
+  const [reportSearchInput, setReportSearchInput] = useState("");
+  const [reportStatus, setReportStatus] = useState<OutreachStatus | "">("");
+  const [reportFrom, setReportFrom] = useState("");
+  const [reportTo, setReportTo] = useState("");
+  const [reportDetailsLoading, setReportDetailsLoading] = useState(false);
+  const reportDetailRequestRef = useRef(0);
+
   const filterParams = useMemo(() => {
     const params = new URLSearchParams({ page: String(page), pageSize: "25" });
     if (query) params.set("q", query);
@@ -451,6 +555,82 @@ export function ProspectsEditor() {
     const timer = window.setTimeout(() => void loadTemplates(), 0);
     return () => window.clearTimeout(timer);
   }, [loadTemplates, tab]);
+
+  const loadReportBatches = useCallback(async (silent = false) => {
+    if (!silent) setReportBatchesLoading(true);
+    try {
+      const data = await api<{ items: OutreachBatch[] }>(`/api/cms/prospects/outreach/batches?limit=${OUTREACH_REPORT_BATCH_LIMIT}`);
+      setReportBatches(data.items);
+    } catch (error) {
+      if (!silent) showNotice(errorMessage(error, "Laporan kirim gagal dimuat."), "error");
+    } finally {
+      if (!silent) setReportBatchesLoading(false);
+    }
+  }, [showNotice]);
+
+  const loadReportDetails = useCallback(async (batchId: string, silent = false) => {
+    const requestId = ++reportDetailRequestRef.current;
+    if (!batchId) {
+      setReportItems([]);
+      setReportSummary({ ...emptyOutreachSummary });
+      setReportTotal(0);
+      setReportDetailsLoading(false);
+      return;
+    }
+    if (!silent) setReportDetailsLoading(true);
+    const params = new URLSearchParams({
+      batchId,
+      page: String(reportPage),
+      pageSize: String(OUTREACH_REPORT_PAGE_SIZE),
+    });
+    if (reportQuery) params.set("q", reportQuery);
+    if (reportStatus) params.set("status", reportStatus);
+    const from = reportDateBound(reportFrom);
+    const to = reportDateBound(reportTo, true);
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    try {
+      const data = await api<{
+        items: OutreachLog[];
+        page: number;
+        pageSize: number;
+        total: number;
+        summary: OutreachSummary;
+      }>(`/api/cms/prospects/outreach?${params.toString()}`);
+      if (requestId !== reportDetailRequestRef.current) return;
+      setReportItems(data.items);
+      setReportPage(data.page);
+      setReportTotal(data.total);
+      setReportSummary(data.summary);
+    } catch (error) {
+      if (requestId === reportDetailRequestRef.current && !silent) {
+        showNotice(errorMessage(error, "Detail laporan kirim gagal dimuat."), "error");
+      }
+    } finally {
+      if (requestId === reportDetailRequestRef.current && !silent) setReportDetailsLoading(false);
+    }
+  }, [reportFrom, reportPage, reportQuery, reportStatus, reportTo, showNotice]);
+
+  useEffect(() => {
+    if (tab !== "reports") return;
+    let active = true;
+    const refresh = (initial = false) => {
+      if (!active || document.visibilityState !== "visible") return;
+      void loadReportBatches(!initial);
+      if (reportBatchId) void loadReportDetails(reportBatchId, !initial);
+    };
+    refresh(true);
+    const timer = window.setInterval(() => refresh(), OUTREACH_REPORT_POLL_MS);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [loadReportBatches, loadReportDetails, reportBatchId, tab]);
 
   useEffect(() => {
     if (!notice) return;
@@ -725,6 +905,24 @@ export function ProspectsEditor() {
     setOutreachSkipped([]);
   }
 
+  function selectReportBatch(id: string) {
+    setReportBatchId(id);
+    setReportPage(1);
+    setReportQuery("");
+    setReportSearchInput("");
+    setReportStatus("");
+    setReportFrom("");
+    setReportTo("");
+    setReportItems([]);
+    setReportSummary({ ...emptyOutreachSummary });
+    setReportTotal(0);
+  }
+
+  function refreshReports() {
+    void loadReportBatches();
+    if (reportBatchId) void loadReportDetails(reportBatchId);
+  }
+
   async function saveTemplate(event: FormEvent) {
     event.preventDefault();
     setTemplateBusy(true);
@@ -812,6 +1010,8 @@ export function ProspectsEditor() {
   const effectiveTemplatePreviewProspectId = templatePreviewProspectId && items.some((item) => item.id === templatePreviewProspectId)
     ? templatePreviewProspectId
     : items.find((item) => item.emailable)?.id ?? "";
+  const selectedReportBatch = reportBatches.find((item) => item.batchId === reportBatchId) ?? null;
+  const reportPageCount = Math.max(1, Math.ceil(reportTotal / OUTREACH_REPORT_PAGE_SIZE));
 
   return <div className={styles.root}>
     <div className={styles.sectionTitle}>
@@ -862,6 +1062,7 @@ export function ProspectsEditor() {
     {tab === "add" ? <ManualProspectForm form={manualForm} setForm={setManualForm} staff={staff} busy={manualBusy} duplicateId={manualDuplicateId} onDuplicate={() => { if (manualDuplicateId) void openProspect(manualDuplicateId); setTab("list"); }} onSubmit={createProspect} onCancel={() => setTab("list")} /> : null}
     {tab === "import" ? <ImportPanel file={importFile} source={importSource} setFile={setImportFile} setSource={setImportSource} result={importResult} busy={importBusy} onRun={importWorkbook} /> : null}
     {tab === "outreach" ? <OutreachPanel templates={templates} templatesLoading={templatesLoading} selectedIds={selectedIds} selectedItems={selectedItems} selectedEligibleItems={selectedEligibleItems} templateId={templateId} setTemplateId={changeOutreachTemplate} spacingSeconds={spacingSeconds} setSpacingSeconds={setSpacingSeconds} previewProspectId={effectivePreviewProspectId} setPreviewProspectId={setPreviewProspectId} preview={outreachPreview} previewBusy={outreachPreviewBusy} onPreview={() => void previewOutreach()} onSend={() => void sendOutreach()} busy={outreachBusy} result={outreachResult} skipped={outreachSkipped} /> : null}
+    {tab === "reports" ? <OutreachReportPanel batches={reportBatches} batchesLoading={reportBatchesLoading} selectedBatch={selectedReportBatch} selectedBatchId={reportBatchId} onSelectBatch={selectReportBatch} onRefresh={refreshReports} items={reportItems} summary={reportSummary} total={reportTotal} page={reportPage} pageCount={reportPageCount} detailsLoading={reportDetailsLoading} searchInput={reportSearchInput} setSearchInput={setReportSearchInput} status={reportStatus} setStatus={(value) => { setReportStatus(value); setReportPage(1); }} from={reportFrom} setFrom={(value) => { setReportFrom(value); setReportPage(1); }} to={reportTo} setTo={(value) => { setReportTo(value); setReportPage(1); }} onSearch={() => { setReportPage(1); setReportQuery(reportSearchInput.trim()); }} onPageChange={setReportPage} /> : null}
     {tab === "templates" ? <TemplateManager templates={templates} loading={templatesLoading} selectedId={templateId} form={templateForm} setForm={updateTemplateForm} subjectRef={subjectRef} bodyRef={bodyRef} previewProspectId={effectiveTemplatePreviewProspectId} setPreviewProspectId={setTemplatePreviewProspectId} previewProspects={items} preview={templatePreview} previewBusy={templatePreviewBusy} onSelect={selectTemplate} onNew={createNewTemplate} onUseStarter={applyStarterTemplate} onInsert={insertPlaceholder} onPreview={() => void previewSelectedTemplate()} onSubmit={saveTemplate} onDelete={() => void deleteTemplate()} busy={templateBusy} dirty={templateDirty} /> : null}
 
     {notice ? null : null}
@@ -1059,6 +1260,119 @@ function OutreachPanel({
       </div>
     </div>
     <aside className={styles.previewCard}><div className={styles.panelHeader}><div><span>PRATINJAU WAJIB</span><h3>Contoh penerima</h3></div></div><div className={styles.formBody}><Field label="Tampilkan preview sebagai"><select value={previewProspectId} onChange={(event) => setPreviewProspectId(event.target.value)}><option value="">Pilih penerima</option>{selectedEligibleItems.map((item) => <option key={item.id} value={item.id}>{item.fullName} · {item.email}</option>)}</select></Field>{preview ? <PreviewFrame preview={preview} title="Pratinjau email prospek" /> : <div className={styles.previewPlaceholder}><Eye size={28} /><strong>Belum ada pratinjau</strong><span>Pilih penerima lalu klik Buat pratinjau.</span></div>}{result ? <div className={styles.sendResult}><strong>{result.queued} email masuk antrean.</strong><span>Jeda: {result.spacingSeconds} detik.</span></div> : null}{skipped.length ? <div className={styles.skippedBox}><strong>Kontak dilewati</strong>{skipped.map((item, index) => <div key={`${item.prospectId}-${index}`}><span>{selectedItems.find((prospect) => prospect.id === item.prospectId)?.fullName ?? item.prospectId}</span><small>{reasonLabel(item.reason)}</small></div>)}</div> : null}</div></aside>
+  </section>;
+}
+
+function OutreachReportPanel({
+  batches,
+  batchesLoading,
+  selectedBatch,
+  selectedBatchId,
+  onSelectBatch,
+  onRefresh,
+  items,
+  summary,
+  total,
+  page,
+  pageCount,
+  detailsLoading,
+  searchInput,
+  setSearchInput,
+  status,
+  setStatus,
+  from,
+  setFrom,
+  to,
+  setTo,
+  onSearch,
+  onPageChange,
+}: {
+  batches: OutreachBatch[];
+  batchesLoading: boolean;
+  selectedBatch: OutreachBatch | null;
+  selectedBatchId: string;
+  onSelectBatch: (id: string) => void;
+  onRefresh: () => void;
+  items: OutreachLog[];
+  summary: OutreachSummary;
+  total: number;
+  page: number;
+  pageCount: number;
+  detailsLoading: boolean;
+  searchInput: string;
+  setSearchInput: (value: string) => void;
+  status: OutreachStatus | "";
+  setStatus: (value: OutreachStatus | "") => void;
+  from: string;
+  setFrom: (value: string) => void;
+  to: string;
+  setTo: (value: string) => void;
+  onSearch: () => void;
+  onPageChange: (value: number) => void;
+}) {
+  const summaryCards = outreachStatuses.map((key) => ({
+    key,
+    label: outreachStatusLabels[key],
+    value: summary[key],
+  }));
+
+  return <section className={styles.reportLayout}>
+    <aside className={styles.reportBatches}>
+      <div className={styles.panelHeader}>
+        <div>
+          <span>HISTORY OUTREACH</span>
+          <h3>Laporan pengiriman</h3>
+          <p>Satu baris batch untuk setiap penekanan tombol kirim.</p>
+        </div>
+        <button type="button" className={styles.refreshButton} onClick={onRefresh} aria-label="Muat ulang laporan kirim"><RefreshCw size={16} /></button>
+      </div>
+      {batchesLoading ? <div className={styles.empty}><LoaderCircle className={styles.spin} size={22} /><span>Memuat batch pengiriman...</span></div> : batches.length ? <div className={styles.reportBatchList}>
+        {batches.map((batch) => <button type="button" key={batch.batchId} className={selectedBatchId === batch.batchId ? styles.reportBatchActive : styles.reportBatch} onClick={() => onSelectBatch(batch.batchId)} aria-pressed={selectedBatchId === batch.batchId}>
+          <div className={styles.reportBatchTop}><strong>{batch.templateName || "Surat langsung"}</strong><span className={`${styles.reportBatchStatus} ${outreachStatusClass(batch.selesai ? "Sent" : "Queued")}`}>{batch.selesai ? "Selesai" : "Masih diproses"}</span></div>
+          <small>Dibuat {formatDate(batch.createdAt, true)} · {batch.total} penerima</small>
+          <div className={styles.reportBatchCounts}><span>{batch.sent} terkirim</span><span>{batch.queued} diproses</span><span>{batch.failed} gagal</span><span>{batch.skipped} dilewati</span></div>
+          <small>Jadwal terakhir {formatDate(batch.lastScheduledFor, true)}</small>
+        </button>)}
+      </div> : <div className={styles.empty}><BarChart3 size={28} /><strong>Belum ada laporan kirim.</strong><span>Batch baru akan muncul setelah email diantrekan.</span></div>}
+    </aside>
+
+    <section className={styles.reportDetail}>
+      {!selectedBatch ? <div className={styles.detailPlaceholder}><BarChart3 size={30} /><strong>Pilih satu batch</strong><span>Ringkasan dan status setiap penerima akan muncul di sini.</span></div> : <>
+        <div className={styles.panelHeader}>
+          <div>
+            <span>BATCH TERPILIH</span>
+            <h3>{selectedBatch.templateName || "Surat langsung"}</h3>
+            <p>Dibuat {formatDate(selectedBatch.createdAt, true)} · jadwal terakhir {formatDate(selectedBatch.lastScheduledFor, true)}</p>
+          </div>
+          <span className={`${styles.reportBatchStatus} ${outreachStatusClass(selectedBatch.selesai ? "Sent" : "Queued")}`}>{selectedBatch.selesai ? "Selesai" : "Masih diproses"}</span>
+        </div>
+        <div className={styles.reportMeta}>
+          <div><span>JADWAL PERTAMA</span><strong>{formatDate(selectedBatch.firstScheduledFor, true)}</strong></div>
+          <div><span>JADWAL TERAKHIR</span><strong>{formatDate(selectedBatch.lastScheduledFor, true)}</strong></div>
+          <div><span>TERAKHIR TERKIRIM</span><strong>{formatDate(selectedBatch.lastSentAt, true)}</strong></div>
+          <div><span>TOTAL PENERIMA</span><strong>{selectedBatch.total}</strong></div>
+        </div>
+        <div className={styles.reportStatGrid}>{summaryCards.map((card) => <div key={card.key} className={`${styles.reportStat} ${outreachStatClass(card.key)}`}><strong>{card.value}</strong><span>{card.label}</span></div>)}</div>
+        <form className={styles.reportFilters} onSubmit={(event) => { event.preventDefault(); onSearch(); }}>
+          <div className={styles.reportSearch}><Search size={16} /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Cari penerima, nama, perusahaan..." aria-label="Cari laporan kirim" /><button type="submit">Cari</button></div>
+          <select value={status} onChange={(event) => setStatus(event.target.value as OutreachStatus | "")} aria-label="Filter status pengiriman"><option value="">Semua status</option>{outreachStatuses.map((value) => <option key={value} value={value}>{outreachStatusLabels[value]}</option>)}</select>
+          <label><span>Dari</span><input type="date" value={from} onChange={(event) => setFrom(event.target.value)} aria-label="Tanggal mulai laporan" /></label>
+          <label><span>Sampai</span><input type="date" value={to} onChange={(event) => setTo(event.target.value)} aria-label="Tanggal akhir laporan" /></label>
+          <button type="button" className={styles.secondary} onClick={onRefresh}><RefreshCw size={15} /> Segarkan</button>
+        </form>
+        {detailsLoading ? <div className={styles.empty}><LoaderCircle className={styles.spin} size={22} /><span>Memuat status penerima...</span></div> : items.length ? <>
+          <div className={styles.tableScroll}><table className={`${styles.table} ${styles.reportTable}`}><thead><tr><th>Kontak</th><th>Status</th><th>Dijadwalkan</th><th>Terkirim</th><th>Percobaan</th><th>Alasan</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}>
+            <td><div className={styles.contactCell}><strong>{item.prospectName}</strong><small>{item.companyName || "Tanpa perusahaan"}</small><small>{item.recipient || "Tanpa email"}</small><small>{item.subject}</small>{!item.hasBody ? <small className={styles.reportMuted}>Isi surat sudah dipangkas</small> : null}</div></td>
+            <td><span className={`${styles.status} ${outreachStatusClass(item.status)}`}>{outreachStatusLabels[item.status] ?? item.status}</span></td>
+            <td><span className={styles.reportDateCell}>{formatDate(item.scheduledFor, true)}</span></td>
+            <td><span className={styles.reportDateCell}>{formatDate(item.sentAt, true)}</span></td>
+            <td><div className={styles.reportAttempt}><strong>{item.attempts === null ? "—" : item.attempts}</strong><small>{item.nextAttemptAt ? `Berikutnya ${formatDate(item.nextAttemptAt, true)}` : "Jadwal ulang —"}</small></div></td>
+            <td>{item.failureReason ? <span className={styles.reportFailure}>{item.failureReason}</span> : <span className={styles.reportMuted}>—</span>}</td>
+          </tr>)}</tbody></table></div>
+          <div className={styles.pagination}><span>{total} catatan · halaman {page} dari {pageCount}</span><div><button type="button" disabled={page <= 1} onClick={() => onPageChange(page - 1)}><ChevronLeft size={15} /> Sebelumnya</button><button type="button" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>Berikutnya <ChevronRight size={15} /></button></div></div>
+        </> : <div className={styles.empty}><Search size={28} /><strong>Tidak ada penerima pada filter ini.</strong><span>Ubah pencarian, status, atau rentang tanggal.</span></div>}
+      </>}
+    </section>
   </section>;
 }
 
