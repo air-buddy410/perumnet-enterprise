@@ -84,7 +84,7 @@ const operationsNavigation: NavigationItem[] = [
 
 const administrationNavigation: NavigationItem[] = [
   { id: "catalog", labelKey: "catalog", module: "boq", icon: LibraryBig, roles: ["Admin", "Finance"] },
-  { id: "prospects", labelKey: "prospects", module: "users", icon: UsersRound, roles: ["Admin"] },
+  { id: "prospects", labelKey: "prospects", module: "prospects", icon: UsersRound },
   { id: "users", labelKey: "users", module: "users", icon: ShieldCheck },
 ];
 
@@ -502,7 +502,7 @@ export function EnterpriseApp() {
               }
             />
           )}
-          {currentView === "prospects" && user.role === "Admin" && <ProspectsEditor />}
+          {currentView === "prospects" && canUse("prospects") && <ProspectsEditor canManage={canManage("prospects")} />}
           {currentView === "users" && canUse("users") && <UsersView notify={notify} language={language} currentUserId={user.id} canManage={user.role === "Admin"} />}
           {currentView === "profile" && <ProfileView language={language} user={user} notify={notify} onUserChange={setUser} />}
           {currentView === "settings" && canUse("settings") && <SettingsView language={language} notify={notify} isAdmin={user.role === "Admin"} onLanguageChange={(next) => { setLanguage(next); window.localStorage.setItem("perumnet-language", next); setUser((current) => current ? { ...current, preferredLanguage: next } : current); }} />}

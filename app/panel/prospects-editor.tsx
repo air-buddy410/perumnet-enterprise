@@ -19,6 +19,7 @@ import {
   Save,
   Search,
   Send,
+  ShieldCheck,
   Trash2,
   UserRoundPlus,
   X,
@@ -31,9 +32,12 @@ import {
   prospectPlaceholders,
   prospectSegmentLabels,
   prospectSegments,
+  prospectOutreachStatusLabels,
+  prospectOutreachStatuses,
   prospectStatusLabels,
   prospectStatuses,
   type ProspectSegment,
+  type ProspectOutreachStatus,
   type ProspectStatus,
 } from "../../shared/prospects";
 import { api, ApiClientError } from "../api-client";
@@ -143,8 +147,6 @@ type OutreachResult = {
   items: Array<{ prospectId: string; outreachId: string; status: string; scheduledFor: string }>;
 };
 
-type OutreachStatus = "Queued" | "Sent" | "Failed" | "Skipped";
-
 type OutreachSummary = {
   Queued: number;
   Sent: number;
@@ -178,7 +180,7 @@ type OutreachLog = {
   templateName: string;
   recipient: string;
   subject: string;
-  status: OutreachStatus;
+  status: ProspectOutreachStatus;
   scheduledFor: string;
   sentAt: string | null;
   failureReason: string;
@@ -191,13 +193,6 @@ type OutreachLog = {
 const OUTREACH_REPORT_BATCH_LIMIT = 30;
 const OUTREACH_REPORT_PAGE_SIZE = 25;
 const OUTREACH_REPORT_POLL_MS = 20_000;
-const outreachStatuses: OutreachStatus[] = ["Queued", "Sent", "Failed", "Skipped"];
-const outreachStatusLabels: Record<OutreachStatus, string> = {
-  Queued: "Masih diproses",
-  Sent: "Terkirim",
-  Failed: "Gagal",
-  Skipped: "Dilewati",
-};
 const emptyOutreachSummary: OutreachSummary = {
   Queued: 0,
   Sent: 0,
@@ -368,7 +363,7 @@ function outreachStatusClass(status: string) {
   }[status] ?? styles.reportStatusUnknown;
 }
 
-function outreachStatClass(status: OutreachStatus) {
+function outreachStatClass(status: ProspectOutreachStatus) {
   return {
     Queued: styles.reportStatQueued,
     Sent: styles.reportStatSent,
@@ -423,7 +418,7 @@ function PreviewFrame({ preview, title }: { preview: Preview; title: string }) {
   </div>;
 }
 
-export function ProspectsEditor() {
+export function ProspectsEditor({ canManage }: { canManage: boolean }) {
   const [tab, setTab] = useState<WorkspaceTab>("list");
   const [items, setItems] = useState<Prospect[]>([]);
   const [staff, setStaff] = useState<Staff[]>([]);
@@ -485,7 +480,7 @@ export function ProspectsEditor() {
   const [reportPage, setReportPage] = useState(1);
   const [reportQuery, setReportQuery] = useState("");
   const [reportSearchInput, setReportSearchInput] = useState("");
-  const [reportStatus, setReportStatus] = useState<OutreachStatus | "">("");
+  const [reportStatus, setReportStatus] = useState<ProspectOutreachStatus | "">("");
   const [reportFrom, setReportFrom] = useState("");
   const [reportTo, setReportTo] = useState("");
   const [reportDetailsLoading, setReportDetailsLoading] = useState(false);
@@ -674,7 +669,7 @@ export function ProspectsEditor() {
 
   async function saveProspect(event: FormEvent) {
     event.preventDefault();
-    if (!selected || !editForm) return;
+    if (!canManage || !selected || !editForm) return;
     setSaving(true);
     try {
       const payload: Record<string, unknown> = {
@@ -708,7 +703,7 @@ export function ProspectsEditor() {
   }
 
   async function markOptOut() {
-    if (!selected || selected.optOutAt) return;
+    if (!canManage || !selected || selected.optOutAt) return;
     if (!window.confirm("Tandai prospek ini sebagai tidak boleh dihubungi? Tindakan ini bersifat permanen.")) return;
     setSaving(true);
     try {
@@ -729,7 +724,7 @@ export function ProspectsEditor() {
   }
 
   async function deleteProspect() {
-    if (!selected || !window.confirm(`Hapus prospek ${selected.fullName}? Data akan diarsipkan dari daftar.`)) return;
+    if (!canManage || !selected || !window.confirm(`Hapus prospek ${selected.fullName}? Data akan diarsipkan dari daftar.`)) return;
     setSaving(true);
     try {
       await api(`/api/cms/prospects/${selected.id}`, { method: "DELETE" });
@@ -747,6 +742,7 @@ export function ProspectsEditor() {
 
   async function createProspect(event: FormEvent) {
     event.preventDefault();
+    if (!canManage) return;
     setManualBusy(true);
     setManualDuplicateId(null);
     try {
@@ -784,6 +780,7 @@ export function ProspectsEditor() {
   }
 
   async function importWorkbook(dryRun: boolean) {
+    if (!canManage) return;
     if (!importFile) {
       showNotice("Pilih berkas XLSX terlebih dahulu.", "error");
       return;
@@ -843,6 +840,7 @@ export function ProspectsEditor() {
   }
 
   async function sendOutreach() {
+    if (!canManage) return;
     const spacing = Number(spacingSeconds);
     if (!templateId || !outreachPreview) {
       showNotice("Buat pratinjau template sebelum mengantrekan email.", "error");
@@ -925,6 +923,7 @@ export function ProspectsEditor() {
 
   async function saveTemplate(event: FormEvent) {
     event.preventDefault();
+    if (!canManage) return;
     setTemplateBusy(true);
     try {
       const payload = {
@@ -956,7 +955,7 @@ export function ProspectsEditor() {
   }
 
   async function deleteTemplate() {
-    if (!templateId || !window.confirm("Hapus template ini? Riwayat surat yang sudah ada tetap disimpan.")) return;
+    if (!canManage || !templateId || !window.confirm("Hapus template ini? Riwayat surat yang sudah ada tetap disimpan.")) return;
     setTemplateBusy(true);
     try {
       await api(`/api/cms/prospect-templates/${templateId}`, { method: "DELETE" });
@@ -1016,11 +1015,16 @@ export function ProspectsEditor() {
   return <div className={styles.root}>
     <div className={styles.sectionTitle}>
       <div><span>CALON KLIEN</span><h2>Bangun relasi sebelum jadi proyek.</h2><p>Catat asal kontak, hormati opt-out, dan antrekan penawaran dengan jeda yang aman untuk mail server.</p></div>
-      <button type="button" className={styles.primary} onClick={() => setTab("add")}><Plus size={17} /> Tambah prospek</button>
+      <button type="button" className={styles.primary} disabled={!canManage} title={!canManage ? "Izin kelola diperlukan untuk menambah prospek." : undefined} onClick={() => setTab("add")}><Plus size={17} /> Tambah prospek</button>
     </div>
 
+    {!canManage ? <div className={`${styles.notice} ${styles.noticeSuccess}`} role="status"><span><ShieldCheck size={17} /></span><p>Akun ini memiliki izin lihat saja. Daftar, laporan, dan pratinjau tersedia; perubahan data, impor, template, dan pengiriman dinonaktifkan.</p></div> : null}
+
     <div className={styles.tabs} role="tablist" aria-label="Pengelolaan calon klien">
-      {tabs.map(({ id, label, icon: Icon }) => <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? styles.tabActive : styles.tab} onClick={() => setTab(id)}><Icon size={16} /> {label}</button>)}
+      {tabs.map(({ id, label, icon: Icon }) => {
+        const writeOnlyTab = id === "add" || id === "import";
+        return <button key={id} type="button" role="tab" aria-selected={tab === id} aria-disabled={!canManage && writeOnlyTab} disabled={!canManage && writeOnlyTab} className={tab === id ? styles.tabActive : styles.tab} onClick={() => setTab(id)}><Icon size={16} /> {label}</button>;
+      })}
     </div>
 
     {notice ? <div className={`${styles.notice} ${noticeKind === "error" ? styles.noticeError : styles.noticeSuccess}`} role="status"><span>{noticeKind === "error" ? <AlertCircle size={17} /> : <Check size={17} />}</span><p>{notice}</p><button type="button" aria-label="Tutup pemberitahuan" onClick={() => setNotice("")}><X size={15} /></button></div> : null}
@@ -1055,21 +1059,22 @@ export function ProspectsEditor() {
           </tr>)}</tbody></table></div> : <div className={styles.empty}><ArchiveX size={29} /><strong>Tidak ada prospek pada filter ini.</strong><span>Ubah filter atau tambahkan kontak baru.</span></div>}
           <div className={styles.pagination}><span>Halaman {page} dari {pageCount}</span><div><button type="button" disabled={page <= 1} onClick={() => setPage((current) => current - 1)}><ChevronLeft size={15} /> Sebelumnya</button><button type="button" disabled={page >= pageCount} onClick={() => setPage((current) => current + 1)}>Berikutnya <ChevronRight size={15} /></button></div></div>
         </div>
-        <ProspectDetailPanel selected={selected} editForm={editForm} setEditForm={setEditForm} staff={staff} loading={detailLoading} saving={saving} optOutReason={optOutReason} setOptOutReason={setOptOutReason} onSave={saveProspect} onOptOut={() => void markOptOut()} onDelete={() => void deleteProspect()} onClose={() => { setSelected(null); setEditForm(null); }} />
+        <ProspectDetailPanel canManage={canManage} selected={selected} editForm={editForm} setEditForm={setEditForm} staff={staff} loading={detailLoading} saving={saving} optOutReason={optOutReason} setOptOutReason={setOptOutReason} onSave={saveProspect} onOptOut={() => void markOptOut()} onDelete={() => void deleteProspect()} onClose={() => { setSelected(null); setEditForm(null); }} />
       </section>
     </> : null}
 
-    {tab === "add" ? <ManualProspectForm form={manualForm} setForm={setManualForm} staff={staff} busy={manualBusy} duplicateId={manualDuplicateId} onDuplicate={() => { if (manualDuplicateId) void openProspect(manualDuplicateId); setTab("list"); }} onSubmit={createProspect} onCancel={() => setTab("list")} /> : null}
-    {tab === "import" ? <ImportPanel file={importFile} source={importSource} setFile={setImportFile} setSource={setImportSource} result={importResult} busy={importBusy} onRun={importWorkbook} /> : null}
-    {tab === "outreach" ? <OutreachPanel templates={templates} templatesLoading={templatesLoading} selectedIds={selectedIds} selectedItems={selectedItems} selectedEligibleItems={selectedEligibleItems} templateId={templateId} setTemplateId={changeOutreachTemplate} spacingSeconds={spacingSeconds} setSpacingSeconds={setSpacingSeconds} previewProspectId={effectivePreviewProspectId} setPreviewProspectId={setPreviewProspectId} preview={outreachPreview} previewBusy={outreachPreviewBusy} onPreview={() => void previewOutreach()} onSend={() => void sendOutreach()} busy={outreachBusy} result={outreachResult} skipped={outreachSkipped} /> : null}
+    {tab === "add" ? <ManualProspectForm canManage={canManage} form={manualForm} setForm={setManualForm} staff={staff} busy={manualBusy} duplicateId={manualDuplicateId} onDuplicate={() => { if (manualDuplicateId) void openProspect(manualDuplicateId); setTab("list"); }} onSubmit={createProspect} onCancel={() => setTab("list")} /> : null}
+    {tab === "import" ? <ImportPanel canManage={canManage} file={importFile} source={importSource} setFile={setImportFile} setSource={setImportSource} result={importResult} busy={importBusy} onRun={importWorkbook} /> : null}
+    {tab === "outreach" ? <OutreachPanel canManage={canManage} templates={templates} templatesLoading={templatesLoading} selectedIds={selectedIds} selectedItems={selectedItems} selectedEligibleItems={selectedEligibleItems} templateId={templateId} setTemplateId={changeOutreachTemplate} spacingSeconds={spacingSeconds} setSpacingSeconds={setSpacingSeconds} previewProspectId={effectivePreviewProspectId} setPreviewProspectId={setPreviewProspectId} preview={outreachPreview} previewBusy={outreachPreviewBusy} onPreview={() => void previewOutreach()} onSend={() => void sendOutreach()} busy={outreachBusy} result={outreachResult} skipped={outreachSkipped} /> : null}
     {tab === "reports" ? <OutreachReportPanel batches={reportBatches} batchesLoading={reportBatchesLoading} selectedBatch={selectedReportBatch} selectedBatchId={reportBatchId} onSelectBatch={selectReportBatch} onRefresh={refreshReports} items={reportItems} summary={reportSummary} total={reportTotal} page={reportPage} pageCount={reportPageCount} detailsLoading={reportDetailsLoading} searchInput={reportSearchInput} setSearchInput={setReportSearchInput} status={reportStatus} setStatus={(value) => { setReportStatus(value); setReportPage(1); }} from={reportFrom} setFrom={(value) => { setReportFrom(value); setReportPage(1); }} to={reportTo} setTo={(value) => { setReportTo(value); setReportPage(1); }} onSearch={() => { setReportPage(1); setReportQuery(reportSearchInput.trim()); }} onPageChange={setReportPage} /> : null}
-    {tab === "templates" ? <TemplateManager templates={templates} loading={templatesLoading} selectedId={templateId} form={templateForm} setForm={updateTemplateForm} subjectRef={subjectRef} bodyRef={bodyRef} previewProspectId={effectiveTemplatePreviewProspectId} setPreviewProspectId={setTemplatePreviewProspectId} previewProspects={items} preview={templatePreview} previewBusy={templatePreviewBusy} onSelect={selectTemplate} onNew={createNewTemplate} onUseStarter={applyStarterTemplate} onInsert={insertPlaceholder} onPreview={() => void previewSelectedTemplate()} onSubmit={saveTemplate} onDelete={() => void deleteTemplate()} busy={templateBusy} dirty={templateDirty} /> : null}
+    {tab === "templates" ? <TemplateManager canManage={canManage} templates={templates} loading={templatesLoading} selectedId={templateId} form={templateForm} setForm={updateTemplateForm} subjectRef={subjectRef} bodyRef={bodyRef} previewProspectId={effectiveTemplatePreviewProspectId} setPreviewProspectId={setTemplatePreviewProspectId} previewProspects={items} preview={templatePreview} previewBusy={templatePreviewBusy} onSelect={selectTemplate} onNew={createNewTemplate} onUseStarter={applyStarterTemplate} onInsert={insertPlaceholder} onPreview={() => void previewSelectedTemplate()} onSubmit={saveTemplate} onDelete={() => void deleteTemplate()} busy={templateBusy} dirty={templateDirty} /> : null}
 
     {notice ? null : null}
   </div>;
 }
 
 function ProspectDetailPanel({
+  canManage,
   selected,
   editForm,
   setEditForm,
@@ -1083,6 +1088,7 @@ function ProspectDetailPanel({
   onDelete,
   onClose,
 }: {
+  canManage: boolean;
   selected: ProspectDetail | null;
   editForm: EditForm | null;
   setEditForm: (value: EditForm) => void;
@@ -1103,7 +1109,7 @@ function ProspectDetailPanel({
     <div className={styles.detailTop}><div><span>DETAIL PROSPEK</span><h3>{selected.fullName}</h3><p>{selected.companyName || "Tanpa perusahaan"}</p></div><button type="button" className={styles.iconButton} onClick={onClose} aria-label="Tutup detail"><X size={17} /></button></div>
     <div className={styles.detailBadges}><span className={`${styles.status} ${statusClass(selected.status)}`}>{prospectStatusLabels[selected.status]?.id ?? selected.status}</span><span className={`${styles.delivery} ${selected.emailable ? styles.deliveryReady : styles.deliveryBlocked}`}>{selected.emailable ? "Bisa dikirimi" : selected.optOutAt ? "Opt-out" : "Tanpa email"}</span></div>
     <form className={styles.detailForm} onSubmit={onSave}>
-      <div className={styles.formGrid}>
+      <fieldset disabled={!canManage} className={styles.formFieldset}><div className={styles.formGrid}>
         <Field label="Nama lengkap" required><input value={editForm.fullName} onChange={(event) => update("fullName", event.target.value)} required /></Field>
         <Field label="Email" required><input type="email" value={editForm.email} onChange={(event) => update("email", event.target.value)} required /></Field>
         <Field label="Perusahaan"><input value={editForm.companyName} onChange={(event) => update("companyName", event.target.value)} /></Field>
@@ -1117,16 +1123,17 @@ function ProspectDetailPanel({
         <Field label="Minat layanan"><input value={editForm.serviceInterest} onChange={(event) => update("serviceInterest", event.target.value)} /></Field>
         <Field label="Dari mana kontak ini didapat?" required hint="Sumber wajib untuk pertanggungjawaban kontak."><input value={editForm.source} onChange={(event) => update("source", event.target.value)} required /></Field>
         <Field label="Catatan" hint="Catatan internal, tidak dikirim ke kontak."><textarea rows={3} value={editForm.notes} onChange={(event) => update("notes", event.target.value)} /></Field>
-      </div>
-      <div className={styles.detailActions}><button type="submit" className={styles.primary} disabled={saving}><Save size={15} /> {saving ? "Menyimpan..." : "Simpan perubahan"}</button></div>
+      </div></fieldset>
+      <div className={styles.detailActions}><button type="submit" className={styles.primary} disabled={saving || !canManage} title={!canManage ? "Izin kelola diperlukan untuk menyimpan perubahan." : undefined}><Save size={15} /> {saving ? "Menyimpan..." : "Simpan perubahan"}</button></div>
     </form>
-    <div className={styles.optOutBox}>{selected.optOutAt ? <><strong>Opt-out aktif</strong><span>{selected.optOutReason || "Kontak meminta berhenti dihubungi."}</span><small>{formatDate(selected.optOutAt, true)}</small></> : <><strong>Jangan hubungi lagi?</strong><span>Server akan menolak outreach setelah status ini dicatat.</span><input value={optOutReason} onChange={(event) => setOptOutReason(event.target.value)} placeholder="Alasan (opsional)" /><button type="button" className={styles.danger} disabled={saving} onClick={onOptOut}><ArchiveX size={15} /> Tandai tidak boleh dihubungi</button></>}</div>
+    <div className={styles.optOutBox}>{selected.optOutAt ? <><strong>Opt-out aktif</strong><span>{selected.optOutReason || "Kontak meminta berhenti dihubungi."}</span><small>{formatDate(selected.optOutAt, true)}</small></> : <><strong>Jangan hubungi lagi?</strong><span>Server akan menolak outreach setelah status ini dicatat.</span><input value={optOutReason} onChange={(event) => setOptOutReason(event.target.value)} placeholder="Alasan (opsional)" disabled={!canManage} /><button type="button" className={styles.danger} disabled={saving || !canManage} title={!canManage ? "Izin kelola diperlukan untuk mengubah opt-out." : undefined} onClick={onOptOut}><ArchiveX size={15} /> Tandai tidak boleh dihubungi</button></>}</div>
     <div className={styles.history}><div className={styles.historyHeading}><span>RIWAYAT OUTREACH</span><small>{selected.outreach.length} catatan</small></div>{selected.outreach.length ? selected.outreach.map((entry) => <div className={styles.historyItem} key={entry.id}><span className={styles.historyDot} /><div><strong>{entry.templateName}</strong><p>{entry.subject}</p><small>{entry.recipient} · {entry.status} · {formatDate(entry.scheduledFor, true)}</small>{entry.failureReason ? <em>{entry.failureReason}</em> : null}</div></div>) : <p className={styles.muted}>Belum ada surat yang diantrekan.</p>}</div>
-    <button type="button" className={styles.deleteLink} onClick={onDelete} disabled={saving}><Trash2 size={15} /> Hapus prospek</button>
+    <button type="button" className={styles.deleteLink} onClick={onDelete} disabled={saving || !canManage} title={!canManage ? "Izin kelola diperlukan untuk menghapus prospek." : undefined}><Trash2 size={15} /> Hapus prospek</button>
   </aside>;
 }
 
 function ManualProspectForm({
+  canManage,
   form,
   setForm,
   staff,
@@ -1136,6 +1143,7 @@ function ManualProspectForm({
   onSubmit,
   onCancel,
 }: {
+  canManage: boolean;
   form: ManualForm;
   setForm: (value: ManualForm) => void;
   staff: Staff[];
@@ -1150,7 +1158,7 @@ function ManualProspectForm({
     <div className={styles.panelHeader}><div><span>PROSPEK BARU</span><h3>Tambahkan kontak secara manual</h3><p>Email wajib untuk jalur manual. Kontak tanpa email tetap bisa dicatat melalui impor XLSX.</p></div><button type="button" className={styles.secondary} onClick={onCancel}><X size={15} /> Batal</button></div>
     {duplicateId ? <div className={styles.duplicateBox}><AlertCircle size={17} /><div><strong>Email sudah terdaftar.</strong><span>Gunakan prospek yang sudah ada agar riwayat dan opt-out tetap menyatu.</span></div><button type="button" className={styles.secondary} onClick={onDuplicate}>Buka prospek yang sudah ada</button></div> : null}
     <form className={styles.formBody} onSubmit={onSubmit}>
-      <div className={styles.formGrid}>
+      <fieldset disabled={!canManage} className={styles.formFieldset}><div className={styles.formGrid}>
         <Field label="Nama lengkap" required><input value={form.fullName} onChange={(event) => update("fullName", event.target.value)} required minLength={2} /></Field>
         <Field label="Email" required><input type="email" value={form.email} onChange={(event) => update("email", event.target.value)} required /></Field>
         <Field label="Perusahaan"><input value={form.companyName} onChange={(event) => update("companyName", event.target.value)} /></Field>
@@ -1164,13 +1172,14 @@ function ManualProspectForm({
         <Field label="Minat layanan"><input value={form.serviceInterest} onChange={(event) => update("serviceInterest", event.target.value)} /></Field>
         <Field label="Dari mana kontak ini didapat?" required hint="Contoh: kartu nama pameran properti, telepon masuk, rujukan klien."><input value={form.source} onChange={(event) => update("source", event.target.value)} required minLength={2} /></Field>
         <Field label="Catatan internal"><textarea rows={5} value={form.notes} onChange={(event) => update("notes", event.target.value)} /></Field>
-      </div>
-      <div className={styles.formFooter}><span><b>*</b> wajib diisi</span><button type="submit" className={styles.primary} disabled={busy}>{busy ? <LoaderCircle className={styles.spin} size={16} /> : <UserRoundPlus size={16} />} {busy ? "Menyimpan..." : "Simpan prospek"}</button></div>
+      </div></fieldset>
+      <div className={styles.formFooter}><span><b>*</b> wajib diisi</span><button type="submit" className={styles.primary} disabled={busy || !canManage} title={!canManage ? "Izin kelola diperlukan untuk menambah prospek." : undefined}>{busy ? <LoaderCircle className={styles.spin} size={16} /> : <UserRoundPlus size={16} />} {busy ? "Menyimpan..." : "Simpan prospek"}</button></div>
     </form>
   </section>;
 }
 
 function ImportPanel({
+  canManage,
   file,
   source,
   setFile,
@@ -1179,6 +1188,7 @@ function ImportPanel({
   busy,
   onRun,
 }: {
+  canManage: boolean;
   file: File | null;
   source: string;
   setFile: (value: File | null) => void;
@@ -1191,22 +1201,23 @@ function ImportPanel({
     <div className={styles.formPanel}>
       <div className={styles.panelHeader}><div><span>IMPOR KONTAK</span><h3>Uji workbook sebelum menyimpan</h3><p>Kolom dibaca dari judulnya, seluruh lembar diproses, dan isu per baris tetap ditampilkan.</p></div></div>
       <div className={styles.formBody}>
-        <div className={styles.formField}><span>Berkas workbook <b aria-hidden="true">*</b></span><small>XLSX maksimal 5 MB. Dry-run adalah langkah pertama.</small><label className={styles.filePicker}><input aria-label="Pilih berkas workbook" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><FileSpreadsheet size={22} /><span><strong>{file?.name ?? "Pilih berkas .xlsx"}</strong><small>{file ? `${Math.ceil(file.size / 1024)} KB` : "Workbook multi-sheet kontak prospek"}</small></span><b>Pilih</b></label></div>
-        <Field label="Dari mana kontak ini didapat?" required hint="Catatan ini ditempel ke semua baris hasil impor."><input value={source} onChange={(event) => setSource(event.target.value)} placeholder="Contoh: berkas Data Clients Enterprise.xlsx" minLength={2} /></Field>
+        <div className={styles.formField}><span>Berkas workbook <b aria-hidden="true">*</b></span><small>XLSX maksimal 5 MB. Dry-run adalah langkah pertama.</small><label className={styles.filePicker}><input aria-label="Pilih berkas workbook" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={!canManage} onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><FileSpreadsheet size={22} /><span><strong>{file?.name ?? "Pilih berkas .xlsx"}</strong><small>{file ? `${Math.ceil(file.size / 1024)} KB` : "Workbook multi-sheet kontak prospek"}</small></span><b>Pilih</b></label></div>
+        <Field label="Dari mana kontak ini didapat?" required hint="Catatan ini ditempel ke semua baris hasil impor."><input value={source} onChange={(event) => setSource(event.target.value)} placeholder="Contoh: berkas Data Clients Enterprise.xlsx" minLength={2} disabled={!canManage} /></Field>
         <div className={styles.importSteps}><div><span>1</span><div><strong>Dry-run</strong><small>Baca jumlah baris, sheet, dan isu tanpa menyimpan.</small></div></div><div><span>2</span><div><strong>Simpan hasil impor</strong><small>Aktif setelah hasil dry-run sudah diperiksa.</small></div></div></div>
-        <div className={styles.formFooter}><span>{file ? "Berkas siap dianalisis." : "Pilih berkas untuk mulai."}</span><button type="button" className={styles.primary} disabled={busy || !file} onClick={() => onRun(true)}>{busy ? <LoaderCircle className={styles.spin} size={16} /> : <Search size={16} />} Analisis dry-run</button></div>
+        <div className={styles.formFooter}><span>{file ? "Berkas siap dianalisis." : "Pilih berkas untuk mulai."}</span><button type="button" className={styles.primary} disabled={busy || !canManage || !file} title={!canManage ? "Izin kelola diperlukan untuk mengimpor prospek." : undefined} onClick={() => onRun(true)}>{busy ? <LoaderCircle className={styles.spin} size={16} /> : <Search size={16} />} Analisis dry-run</button></div>
       </div>
     </div>
-    <ImportResultCard result={result} busy={busy} onSave={() => onRun(false)} />
+    <ImportResultCard canManage={canManage} result={result} busy={busy} onSave={() => onRun(false)} />
   </section>;
 }
 
-function ImportResultCard({ result, busy, onSave }: { result: ImportResult | null; busy: boolean; onSave: () => void }) {
+function ImportResultCard({ canManage, result, busy, onSave }: { canManage: boolean; result: ImportResult | null; busy: boolean; onSave: () => void }) {
   if (!result) return <aside className={styles.resultPlaceholder}><FileSpreadsheet size={30} /><strong>Hasil impor akan muncul di sini</strong><span>Jangan melewati dry-run: periksa sheet dan isu per baris sebelum menyimpan.</span></aside>;
-  return <aside className={styles.importResult}><div className={styles.panelHeader}><div><span>{result.dryRun ? "HASIL DRY-RUN" : "IMPOR SELESAI"}</span><h3>{result.dryRun ? "Periksa sebelum menyimpan" : "Ringkasan penyimpanan"}</h3></div>{result.dryRun ? <button type="button" className={styles.primary} disabled={busy} onClick={onSave}><Save size={15} /> Simpan hasil impor</button> : <Check className={styles.resultCheck} size={21} />}</div><div className={styles.statGrid}><div><strong>{result.sheets.length}</strong><span>sheet terbaca</span></div><div><strong>{result.terbaca}</strong><span>kontak terbaca</span></div><div><strong>{result.disimpan}</strong><span>{result.dryRun ? "akan disimpan" : "disimpan"}</span></div><div><strong>{result.dilewati}</strong><span>dilewati</span></div></div><div className={styles.sheetList}><span>Sheet</span><div>{result.sheets.length ? result.sheets.map((sheet) => <b key={sheet}>{sheet}</b>) : <small>Tidak ada sheet berisi data.</small>}</div></div><div className={styles.issueSection}><div><span>ISU PER BARIS</span><strong>{result.issues.length ? `${result.issues.length} isu perlu diperiksa` : "Tidak ada isu"}</strong></div>{result.issues.length ? <div className={styles.issueList}>{result.issues.map((issue, index) => <div key={`${issue.sheet}-${issue.row}-${issue.code}-${index}`}><span>{issue.sheet} · baris {issue.row}</span><strong>{issue.code}</strong><p>{issue.detail}</p></div>)}</div> : <p className={styles.muted}>Semua baris yang terbaca siap diproses.</p>}</div></aside>;
+  return <aside className={styles.importResult}><div className={styles.panelHeader}><div><span>{result.dryRun ? "HASIL DRY-RUN" : "IMPOR SELESAI"}</span><h3>{result.dryRun ? "Periksa sebelum menyimpan" : "Ringkasan penyimpanan"}</h3></div>{result.dryRun ? <button type="button" className={styles.primary} disabled={busy || !canManage} title={!canManage ? "Izin kelola diperlukan untuk menyimpan hasil impor." : undefined} onClick={onSave}><Save size={15} /> Simpan hasil impor</button> : <Check className={styles.resultCheck} size={21} />}</div><div className={styles.statGrid}><div><strong>{result.sheets.length}</strong><span>sheet terbaca</span></div><div><strong>{result.terbaca}</strong><span>kontak terbaca</span></div><div><strong>{result.disimpan}</strong><span>{result.dryRun ? "akan disimpan" : "disimpan"}</span></div><div><strong>{result.dilewati}</strong><span>dilewati</span></div></div><div className={styles.sheetList}><span>Sheet</span><div>{result.sheets.length ? result.sheets.map((sheet) => <b key={sheet}>{sheet}</b>) : <small>Tidak ada sheet berisi data.</small>}</div></div><div className={styles.issueSection}><div><span>ISU PER BARIS</span><strong>{result.issues.length ? `${result.issues.length} isu perlu diperiksa` : "Tidak ada isu"}</strong></div>{result.issues.length ? <div className={styles.issueList}>{result.issues.map((issue, index) => <div key={`${issue.sheet}-${issue.row}-${issue.code}-${index}`}><span>{issue.sheet} · baris {issue.row}</span><strong>{issue.code}</strong><p>{issue.detail}</p></div>)}</div> : <p className={styles.muted}>Semua baris yang terbaca siap diproses.</p>}</div></aside>;
 }
 
 function OutreachPanel({
+  canManage,
   templates,
   templatesLoading,
   selectedIds,
@@ -1226,6 +1237,7 @@ function OutreachPanel({
   result,
   skipped,
 }: {
+  canManage: boolean;
   templates: ProspectTemplate[];
   templatesLoading: boolean;
   selectedIds: string[];
@@ -1256,7 +1268,7 @@ function OutreachPanel({
         <Field label="Jeda antar pesan (detik)" required hint={`Bawaan ${PROSPECT_DEFAULT_SPACING_SECONDS} detik · maksimal ${PROSPECT_MAX_SPACING_SECONDS} detik.`}><input type="number" min={0} max={PROSPECT_MAX_SPACING_SECONDS} step={1} value={spacingSeconds} onChange={(event) => setSpacingSeconds(event.target.value)} /></Field>
         <div className={styles.estimate}><span>Perkiraan batch selesai</span><strong>{selectedIds.length ? formatDuration(estimate) : "—"}</strong><small>Dihitung sampai pesan terakhir berdasarkan jumlah penerima yang dipilih.</small></div>
         <div className={styles.formFooter}><span>{preview ? "Pratinjau sudah dibuat." : "Buat pratinjau untuk melanjutkan."}</span><button type="button" className={styles.primary} disabled={previewBusy || !templateId || !previewProspectId || !selectedIds.length} onClick={onPreview}>{previewBusy ? <LoaderCircle className={styles.spin} size={16} /> : <Eye size={16} />} Buat pratinjau</button></div>
-        <button type="button" className={styles.sendButton} disabled={busy || !preview || !selectedIds.length || selectedIds.length > PROSPECT_MAX_RECIPIENTS_PER_BATCH} onClick={onSend}>{busy ? <LoaderCircle className={styles.spin} size={16} /> : <Send size={16} />} {busy ? "Mengantrekan..." : `Antrekan ${selectedIds.length || ""} email`}</button>
+        <button type="button" className={styles.sendButton} disabled={busy || !canManage || !preview || !selectedIds.length || selectedIds.length > PROSPECT_MAX_RECIPIENTS_PER_BATCH} title={!canManage ? "Izin kelola diperlukan untuk mengantrekan email." : undefined} onClick={onSend}>{busy ? <LoaderCircle className={styles.spin} size={16} /> : <Send size={16} />} {busy ? "Mengantrekan..." : `Antrekan ${selectedIds.length || ""} email`}</button>
       </div>
     </div>
     <aside className={styles.previewCard}><div className={styles.panelHeader}><div><span>PRATINJAU WAJIB</span><h3>Contoh penerima</h3></div></div><div className={styles.formBody}><Field label="Tampilkan preview sebagai"><select value={previewProspectId} onChange={(event) => setPreviewProspectId(event.target.value)}><option value="">Pilih penerima</option>{selectedEligibleItems.map((item) => <option key={item.id} value={item.id}>{item.fullName} · {item.email}</option>)}</select></Field>{preview ? <PreviewFrame preview={preview} title="Pratinjau email prospek" /> : <div className={styles.previewPlaceholder}><Eye size={28} /><strong>Belum ada pratinjau</strong><span>Pilih penerima lalu klik Buat pratinjau.</span></div>}{result ? <div className={styles.sendResult}><strong>{result.queued} email masuk antrean.</strong><span>Jeda: {result.spacingSeconds} detik.</span></div> : null}{skipped.length ? <div className={styles.skippedBox}><strong>Kontak dilewati</strong>{skipped.map((item, index) => <div key={`${item.prospectId}-${index}`}><span>{selectedItems.find((prospect) => prospect.id === item.prospectId)?.fullName ?? item.prospectId}</span><small>{reasonLabel(item.reason)}</small></div>)}</div> : null}</div></aside>
@@ -1301,8 +1313,8 @@ function OutreachReportPanel({
   detailsLoading: boolean;
   searchInput: string;
   setSearchInput: (value: string) => void;
-  status: OutreachStatus | "";
-  setStatus: (value: OutreachStatus | "") => void;
+  status: ProspectOutreachStatus | "";
+  setStatus: (value: ProspectOutreachStatus | "") => void;
   from: string;
   setFrom: (value: string) => void;
   to: string;
@@ -1310,9 +1322,9 @@ function OutreachReportPanel({
   onSearch: () => void;
   onPageChange: (value: number) => void;
 }) {
-  const summaryCards = outreachStatuses.map((key) => ({
+  const summaryCards = prospectOutreachStatuses.map((key) => ({
     key,
-    label: outreachStatusLabels[key],
+    label: prospectOutreachStatusLabels[key].id,
     value: summary[key],
   }));
 
@@ -1355,7 +1367,7 @@ function OutreachReportPanel({
         <div className={styles.reportStatGrid}>{summaryCards.map((card) => <div key={card.key} className={`${styles.reportStat} ${outreachStatClass(card.key)}`}><strong>{card.value}</strong><span>{card.label}</span></div>)}</div>
         <form className={styles.reportFilters} onSubmit={(event) => { event.preventDefault(); onSearch(); }}>
           <div className={styles.reportSearch}><Search size={16} /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Cari penerima, nama, perusahaan..." aria-label="Cari laporan kirim" /><button type="submit">Cari</button></div>
-          <select value={status} onChange={(event) => setStatus(event.target.value as OutreachStatus | "")} aria-label="Filter status pengiriman"><option value="">Semua status</option>{outreachStatuses.map((value) => <option key={value} value={value}>{outreachStatusLabels[value]}</option>)}</select>
+          <select value={status} onChange={(event) => setStatus(event.target.value as ProspectOutreachStatus | "")} aria-label="Filter status pengiriman"><option value="">Semua status</option>{prospectOutreachStatuses.map((value) => <option key={value} value={value}>{prospectOutreachStatusLabels[value].id}</option>)}</select>
           <label><span>Dari</span><input type="date" value={from} onChange={(event) => setFrom(event.target.value)} aria-label="Tanggal mulai laporan" /></label>
           <label><span>Sampai</span><input type="date" value={to} onChange={(event) => setTo(event.target.value)} aria-label="Tanggal akhir laporan" /></label>
           <button type="button" className={styles.secondary} onClick={onRefresh}><RefreshCw size={15} /> Segarkan</button>
@@ -1363,7 +1375,7 @@ function OutreachReportPanel({
         {detailsLoading ? <div className={styles.empty}><LoaderCircle className={styles.spin} size={22} /><span>Memuat status penerima...</span></div> : items.length ? <>
           <div className={styles.tableScroll}><table className={`${styles.table} ${styles.reportTable}`}><thead><tr><th>Kontak</th><th>Status</th><th>Dijadwalkan</th><th>Terkirim</th><th>Percobaan</th><th>Alasan</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}>
             <td><div className={styles.contactCell}><strong>{item.prospectName}</strong><small>{item.companyName || "Tanpa perusahaan"}</small><small>{item.recipient || "Tanpa email"}</small><small>{item.subject}</small>{!item.hasBody ? <small className={styles.reportMuted}>Isi surat sudah dipangkas</small> : null}</div></td>
-            <td><span className={`${styles.status} ${outreachStatusClass(item.status)}`}>{outreachStatusLabels[item.status] ?? item.status}</span></td>
+            <td><span className={`${styles.status} ${outreachStatusClass(item.status)}`}>{prospectOutreachStatusLabels[item.status]?.id ?? item.status}</span></td>
             <td><span className={styles.reportDateCell}>{formatDate(item.scheduledFor, true)}</span></td>
             <td><span className={styles.reportDateCell}>{formatDate(item.sentAt, true)}</span></td>
             <td><div className={styles.reportAttempt}><strong>{item.attempts === null ? "—" : item.attempts}</strong><small>{item.nextAttemptAt ? `Berikutnya ${formatDate(item.nextAttemptAt, true)}` : "Jadwal ulang —"}</small></div></td>
@@ -1377,6 +1389,7 @@ function OutreachReportPanel({
 }
 
 function TemplateManager({
+  canManage,
   templates,
   loading,
   selectedId,
@@ -1399,6 +1412,7 @@ function TemplateManager({
   busy,
   dirty,
 }: {
+  canManage: boolean;
   templates: ProspectTemplate[];
   loading: boolean;
   selectedId: string;
@@ -1422,8 +1436,8 @@ function TemplateManager({
   dirty: boolean;
 }) {
   return <section className={styles.templateLayout}>
-    <div className={styles.templateList}><div className={styles.panelHeader}><div><span>LIBRARY</span><h3>Template surat</h3></div><button type="button" className={styles.secondary} onClick={onNew}><Plus size={15} /> Baru</button></div>{loading ? <div className={styles.empty}><LoaderCircle className={styles.spin} size={20} /></div> : templates.length ? <div className={styles.templateItems}>{templates.map((template) => <button type="button" key={template.id} className={selectedId === template.id ? styles.templateItemActive : styles.templateItem} onClick={() => onSelect(template.id)}><span className={styles.templateIcon}><FileText size={17} /></span><span><strong>{template.name}</strong><small>{template.language.toUpperCase()} · diperbarui {formatDate(template.updatedAt)}</small></span><ChevronRight size={15} /></button>)}</div> : <div className={styles.empty}><FileText size={25} /><strong>Belum ada template.</strong><span>Buat template pertama untuk dipakai di komposer.</span></div>}</div>
-    <div className={styles.templateEditor}><div className={styles.panelHeader}><div><span>{selectedId ? "EDIT TEMPLATE" : "TEMPLATE BARU"}</span><h3>{selectedId ? "Tinjau isi surat" : "Buat template outreach"}</h3><p>Gunakan tombol placeholder agar nilai prospek diisi server dengan aman.</p></div><div className={styles.headerActions}>{selectedId ? <button type="button" className={styles.deleteButton} onClick={onDelete} disabled={busy}><Trash2 size={15} /> Hapus</button> : null}<button type="button" className={styles.secondary} onClick={onUseStarter} disabled={busy}><FileText size={15} /> Pakai contoh</button><button type="submit" form="template-form" className={styles.primary} disabled={busy}>{busy ? <LoaderCircle className={styles.spin} size={16} /> : <Save size={16} />} Simpan</button></div></div><form id="template-form" className={styles.formBody} onSubmit={onSubmit}><div className={styles.formGrid}><Field label="Nama template" required><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required minLength={2} placeholder="Penawaran konektivitas B2B" /></Field><Field label="Bahasa"><select value={form.language} onChange={(event) => setForm({ ...form, language: event.target.value as "id" | "en" })}><option value="id">Indonesia</option><option value="en">English</option></select></Field><Field label="Subjek" required hint="Placeholder bisa disisipkan dari tombol di bawah."><input ref={subjectRef} value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} required minLength={2} /></Field><Field label="Isi surat" required wide hint="Baris kosong memisahkan paragraf; kop, logo, dan tanda tangan ditambahkan otomatis."><textarea ref={bodyRef} rows={13} value={form.bodyHtml} onChange={(event) => setForm({ ...form, bodyHtml: event.target.value })} required minLength={10} /></Field><div className={styles.formSectionHeading}><strong>Tanda tangan pengirim</strong><span>Isi sesuai orang yang akan menerima balasan. Jika kosong, server memakai kontak perusahaan.</span></div><Field label="Salam penutup"><input value={form.senderSignoff} onChange={(event) => setForm({ ...form, senderSignoff: event.target.value })} placeholder="Best Regards," /></Field><Field label="Nama pengirim"><input value={form.senderName} onChange={(event) => setForm({ ...form, senderName: event.target.value })} placeholder="Nama Anda" /></Field><Field label="Email pengirim"><input type="email" value={form.senderEmail} onChange={(event) => setForm({ ...form, senderEmail: event.target.value })} placeholder="nama@perumnet.id" /></Field><Field label="Telepon pengirim"><input value={form.senderPhone} onChange={(event) => setForm({ ...form, senderPhone: event.target.value })} placeholder="Nomor telepon (opsional)" /></Field></div><PlaceholderButtons onInsert={(placeholder) => onInsert("bodyHtml", placeholder)} /><div className={styles.helperBlock}><strong>Sisipkan ke subjek</strong><div className={styles.placeholderRow}>{prospectPlaceholders.map((placeholder) => <button type="button" key={`subject-${placeholder}`} className={styles.placeholderButton} onClick={() => onInsert("subject", placeholder)}><code>{`{{${placeholder}}}`}</code><span>{prospectPlaceholderHints[placeholder].id}</span></button>)}</div></div></form><div className={styles.templatePreviewSection}><div className={styles.previewSectionHeader}><div><span>PREVIEW TEMPLATE</span><strong>Uji ke kontak nyata dari daftar prospek</strong></div><div className={styles.previewControls}><select value={previewProspectId} onChange={(event) => setPreviewProspectId(event.target.value)}><option value="">Pilih prospek</option>{previewProspects.filter((item) => item.emailable || item.id === previewProspectId).map((item) => <option key={item.id} value={item.id}>{item.fullName} · {item.email || "tanpa email"}</option>)}</select><button type="button" className={styles.secondary} disabled={previewBusy || dirty || !selectedId || !previewProspectId} onClick={onPreview}>{previewBusy ? <LoaderCircle className={styles.spin} size={15} /> : <Eye size={15} />} Preview</button></div></div>{preview ? <PreviewFrame preview={preview} title="Pratinjau template surat" /> : <small className={styles.muted}>{dirty ? "Simpan perubahan template terlebih dahulu, lalu jalankan preview." : "Pilih prospek lalu jalankan preview."}</small>}</div></div>
+    <div className={styles.templateList}><div className={styles.panelHeader}><div><span>LIBRARY</span><h3>Template surat</h3></div><button type="button" className={styles.secondary} onClick={onNew} disabled={!canManage} title={!canManage ? "Izin kelola diperlukan untuk membuat template." : undefined}><Plus size={15} /> Baru</button></div>{loading ? <div className={styles.empty}><LoaderCircle className={styles.spin} size={20} /></div> : templates.length ? <div className={styles.templateItems}>{templates.map((template) => <button type="button" key={template.id} className={selectedId === template.id ? styles.templateItemActive : styles.templateItem} onClick={() => onSelect(template.id)}><span className={styles.templateIcon}><FileText size={17} /></span><span><strong>{template.name}</strong><small>{template.language.toUpperCase()} · diperbarui {formatDate(template.updatedAt)}</small></span><ChevronRight size={15} /></button>)}</div> : <div className={styles.empty}><FileText size={25} /><strong>Belum ada template.</strong><span>Buat template pertama untuk dipakai di komposer.</span></div>}</div>
+    <div className={styles.templateEditor}><div className={styles.panelHeader}><div><span>{selectedId ? "EDIT TEMPLATE" : "TEMPLATE BARU"}</span><h3>{selectedId ? "Tinjau isi surat" : "Buat template outreach"}</h3><p>Gunakan tombol placeholder agar nilai prospek diisi server dengan aman.</p></div><div className={styles.headerActions}>{selectedId ? <button type="button" className={styles.deleteButton} onClick={onDelete} disabled={busy || !canManage} title={!canManage ? "Izin kelola diperlukan untuk menghapus template." : undefined}><Trash2 size={15} /> Hapus</button> : null}<button type="button" className={styles.secondary} onClick={onUseStarter} disabled={busy || !canManage}><FileText size={15} /> Pakai contoh</button><button type="submit" form="template-form" className={styles.primary} disabled={busy || !canManage} title={!canManage ? "Izin kelola diperlukan untuk menyimpan template." : undefined}>{busy ? <LoaderCircle className={styles.spin} size={16} /> : <Save size={16} />} Simpan</button></div></div><form id="template-form" className={styles.formBody} onSubmit={onSubmit}><fieldset disabled={!canManage} className={styles.formFieldset}><div className={styles.formGrid}><Field label="Nama template" required><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required minLength={2} placeholder="Penawaran konektivitas B2B" /></Field><Field label="Bahasa"><select value={form.language} onChange={(event) => setForm({ ...form, language: event.target.value as "id" | "en" })}><option value="id">Indonesia</option><option value="en">English</option></select></Field><Field label="Subjek" required hint="Placeholder bisa disisipkan dari tombol di bawah."><input ref={subjectRef} value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} required minLength={2} /></Field><Field label="Isi surat" required wide hint="Baris kosong memisahkan paragraf; kop, logo, dan tanda tangan ditambahkan otomatis."><textarea ref={bodyRef} rows={13} value={form.bodyHtml} onChange={(event) => setForm({ ...form, bodyHtml: event.target.value })} required minLength={10} /></Field><div className={styles.formSectionHeading}><strong>Tanda tangan pengirim</strong><span>Isi sesuai orang yang akan menerima balasan. Jika kosong, server memakai kontak perusahaan.</span></div><Field label="Salam penutup"><input value={form.senderSignoff} onChange={(event) => setForm({ ...form, senderSignoff: event.target.value })} placeholder="Best Regards," /></Field><Field label="Nama pengirim"><input value={form.senderName} onChange={(event) => setForm({ ...form, senderName: event.target.value })} placeholder="Nama Anda" /></Field><Field label="Email pengirim"><input type="email" value={form.senderEmail} onChange={(event) => setForm({ ...form, senderEmail: event.target.value })} placeholder="nama@perumnet.id" /></Field><Field label="Telepon pengirim"><input value={form.senderPhone} onChange={(event) => setForm({ ...form, senderPhone: event.target.value })} placeholder="Nomor telepon (opsional)" /></Field></div><PlaceholderButtons onInsert={(placeholder) => onInsert("bodyHtml", placeholder)} /><div className={styles.helperBlock}><strong>Sisipkan ke subjek</strong><div className={styles.placeholderRow}>{prospectPlaceholders.map((placeholder) => <button type="button" key={`subject-${placeholder}`} className={styles.placeholderButton} onClick={() => onInsert("subject", placeholder)}><code>{`{{${placeholder}}}`}</code><span>{prospectPlaceholderHints[placeholder].id}</span></button>)}</div></div></fieldset></form><div className={styles.templatePreviewSection}><div className={styles.previewSectionHeader}><div><span>PREVIEW TEMPLATE</span><strong>Uji ke kontak nyata dari daftar prospek</strong></div><div className={styles.previewControls}><select value={previewProspectId} onChange={(event) => setPreviewProspectId(event.target.value)}><option value="">Pilih prospek</option>{previewProspects.filter((item) => item.emailable || item.id === previewProspectId).map((item) => <option key={item.id} value={item.id}>{item.fullName} · {item.email || "tanpa email"}</option>)}</select><button type="button" className={styles.secondary} disabled={previewBusy || dirty || !selectedId || !previewProspectId} onClick={onPreview}>{previewBusy ? <LoaderCircle className={styles.spin} size={15} /> : <Eye size={15} />} Preview</button></div></div>{preview ? <PreviewFrame preview={preview} title="Pratinjau template surat" /> : <small className={styles.muted}>{dirty ? "Simpan perubahan template terlebih dahulu, lalu jalankan preview." : "Pilih prospek lalu jalankan preview."}</small>}</div></div>
   </section>;
 }
 

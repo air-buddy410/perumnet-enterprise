@@ -717,6 +717,20 @@ h3 {
   font-weight: 600;
 }
 
+.password-policy-error {
+  display: grid;
+  gap: 5px;
+}
+
+.password-policy-error ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.password-policy-error li + li {
+  margin-top: 3px;
+}
+
 .search-field {
   display: flex;
   align-items: center;
