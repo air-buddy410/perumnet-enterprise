@@ -645,7 +645,36 @@ saat memeriksa ulang, bukan saat menulis T-16.
 Tanpa (a), tombol Kirim punya daftar template yang kosong dan tidak ada cara
 mengisinya dari mana pun.
 
-#### a. Pengelola template surat dokumen — BELUM PERNAH DIMINTA
+**Diperiksa ulang 2026-08-20 malam — (b) dan (c) ternyata sudah dikerjakan.**
+Yang tersisa hanya (a). Hasil pemeriksaan, bukan ingatan:
+
+| | Keadaan | Bukti |
+|---|---|---|
+| Backend (a) | ada | `server/api/document-email-router.ts`, tabel `document_email_templates` di `server/db/initialize.ts:1395` |
+| Backend (b) | ada | kolom `client_email` + `client_contact_name`, ditambahkan lewat `ensureColumn` (`server/db/initialize.ts:3302`) |
+| Backend (c) | ada | SPK/PO `procurement-router.ts:2164`, quotation `commercial-scope-router.ts:879`, invoice `router.ts:3485` |
+| Tes | 291/291 lulus | `npm test`, 20 Agustus |
+| Isi database | **0 template**, 5 proyek, **0 punya email klien** | dibaca dari `perumnet.local.db` |
+
+- **(b) sudah jadi** — `project-view.tsx` punya isian email + PIC klien dan
+  mem-PATCH keduanya. Tidak ada yang perlu dikerjakan lagi.
+- **(c) sudah jadi** — `document-email-dialog.tsx` terpasang di `billing-view`,
+  `project-view`, dan `procurement-v2-view`, lengkap dengan riwayat kirim dan
+  keadaan kosong.
+- **(a) belum ada, dan itu yang menahan semuanya.** Dialognya sudah benar
+  menampilkan "Buat template dokumen terlebih dahulu" — tapi memang belum ada
+  layar untuk membuatnya, dan database masih kosong. Sampai (a) jadi, tombol
+  Kirim tidak bisa dipakai siapa pun.
+
+Satu koreksi kecil untuk (c): `document-email-dialog.tsx:475` membaca
+`defaults?.starter`, padahal endpoint template dokumen **tidak pernah
+mengirim** `starter` — hanya endpoint template prospek yang punya itu
+(`prospect-router.ts:434`). `defaults` di sini isinya persis empat field:
+`senderSignoff`, `senderName`, `senderEmail`, `senderPhone`. Cabang itu mati,
+tidak pernah jalan. Tidak merusak apa pun karena teks cadangannya sudah benar,
+jadi cukup dibuang saat lewat sana — bukan pekerjaan tersendiri.
+
+#### a. Pengelola template surat dokumen — SATU-SATUNYA YANG TERSISA
 
 Endpoint-nya sudah ada dan berpola sama persis dengan template prospek:
 
@@ -681,7 +710,7 @@ Bentuk barisnya sama dengan template prospek, **plus** `documentKind`
 **Belum ada satu pun template di database.** Sampai layar ini ada dan seseorang
 mengisinya, tombol Kirim tidak punya apa pun untuk dipilih.
 
-#### b. Alamat email klien di form proyek — BELUM PERNAH DIMINTA
+#### b. Alamat email klien di form proyek — ✅ SUDAH JADI, tidak perlu dikerjakan
 
 `projects` sekarang punya dua kolom baru, dan keduanya sudah ikut di
 `GET`/`POST`/`PATCH /api/projects`:
@@ -696,7 +725,7 @@ mengisinya, tombol Kirim tidak punya apa pun untuk dipilih.
 - **Setiap proyek lama tidak punya alamat**, jadi keadaan kosong itu normal —
   jangan ditampilkan sebagai galat atau data rusak.
 
-#### c. Kirim dari Quotation dan Invoice
+#### c. Kirim dari Quotation dan Invoice — ✅ SUDAH JADI
 
 Sama polanya dengan T-16, hanya rutenya berbeda:
 
