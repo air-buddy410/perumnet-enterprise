@@ -28,6 +28,8 @@ export interface Project {
   code: string;
   name: string;
   client: string;
+  clientEmail?: string;
+  clientContactName?: string;
   location: string;
   status: ProjectStatus;
   progress: number;

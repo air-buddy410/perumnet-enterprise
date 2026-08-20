@@ -1,0 +1,514 @@
+.dialogCard {
+  width: min(100%, 980px);
+  max-height: min(92vh, 900px);
+}
+
+.dialogSubhead {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.dialogBody {
+  display: grid;
+  gap: 15px;
+}
+
+.recipientCard,
+.infoNotice,
+.errorNotice,
+.successNotice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 10px;
+  padding: 11px 13px;
+}
+
+.recipientCard {
+  border: 1px solid #d8e9e5;
+  background: #f7fbfa;
+}
+
+.recipientIcon,
+.historyIcon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--teal-dark);
+  background: #e2f4f1;
+}
+
+.recipientIcon {
+  width: 35px;
+  height: 35px;
+}
+
+.recipientCard > div:nth-child(2) {
+  min-width: 0;
+  display: grid;
+  flex: 1;
+  gap: 2px;
+}
+
+.recipientCard span,
+.recipientCard small,
+.infoNotice span,
+.errorNotice span,
+.successNotice span {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.recipientCard strong,
+.errorNotice strong,
+.successNotice strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.infoNotice {
+  color: var(--teal-dark);
+  background: var(--teal-pale);
+}
+
+.infoNotice svg {
+  flex: 0 0 auto;
+}
+
+.errorNotice {
+  align-items: flex-start;
+  color: #9a5c20;
+  background: #fff7e8;
+}
+
+.errorNotice > svg,
+.successNotice > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.errorNotice > div,
+.successNotice > div {
+  min-width: 0;
+  display: grid;
+  flex: 1;
+  gap: 2px;
+}
+
+.noticeWithAction {
+  align-items: center;
+}
+
+.successNotice {
+  color: #19724a;
+  background: #ebf9f0;
+}
+
+.dialogGrid {
+  display: grid;
+  grid-template-columns: minmax(235px, .7fr) minmax(0, 1.3fr);
+  gap: 15px;
+  align-items: start;
+}
+
+.templatePane,
+.composePane,
+.historySection {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 14px;
+  background: #fff;
+}
+
+.templatePane,
+.composePane {
+  display: grid;
+  gap: 12px;
+}
+
+.sectionHeading,
+.previewToolbar,
+.dialogFooter,
+.attachmentEstimate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sectionHeading h3 {
+  margin: 3px 0 0;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.templateSelect {
+  display: grid;
+  gap: 5px;
+}
+
+.templateSelect > span,
+.previewMeta span,
+.attachmentEstimate span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+
+.templateSelect select {
+  width: 100%;
+}
+
+.templateSummary {
+  display: grid;
+  gap: 5px;
+  border-left: 3px solid var(--teal);
+  padding: 8px 10px;
+  background: #f7fbfa;
+}
+
+.templateSummary strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.templateSummary span,
+.templateSummary small,
+.templateGuard {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.templateGuard {
+  border-radius: 6px;
+  padding: 7px 8px;
+  color: var(--teal-dark);
+  background: var(--teal-pale);
+}
+
+.loadingState,
+.emptyState,
+.previewEmpty,
+.emptyHistory {
+  display: grid;
+  place-items: center;
+  gap: 7px;
+  min-height: 105px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.emptyState strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.filePicker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 60px;
+  border: 1px dashed #9fcfc9;
+  border-radius: 9px;
+  padding: 10px 12px;
+  color: var(--teal-dark);
+  background: #f6fbfa;
+  cursor: pointer;
+}
+
+.filePicker:hover {
+  border-color: var(--teal);
+  background: #eef9f7;
+}
+
+.filePicker > span {
+  display: grid;
+  gap: 3px;
+}
+
+.filePicker strong {
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.filePicker small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.filePicker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.fileList,
+.historyList {
+  display: grid;
+  gap: 6px;
+}
+
+.fileList > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 8px;
+}
+
+.fileList > div > span,
+.generatedAttachments span,
+.historyAttachments span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fileList strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileList small,
+.generatedAttachments small {
+  color: var(--muted);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.fieldError {
+  margin: 0;
+  color: #a04035;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.attachmentEstimate {
+  border-radius: 7px;
+  padding: 7px 9px;
+  background: var(--surface-soft);
+}
+
+.attachmentEstimate strong {
+  color: var(--ink);
+  font-size: 9px;
+}
+
+.previewToolbar {
+  border-top: 1px solid var(--line);
+  padding-top: 11px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.previewBox {
+  display: grid;
+  gap: 9px;
+}
+
+.previewMeta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, .8fr);
+  gap: 8px;
+}
+
+.previewMeta > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border-radius: 7px;
+  padding: 7px 8px;
+  background: var(--surface-soft);
+}
+
+.previewMeta strong,
+.previewMeta small {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.previewMeta small {
+  color: var(--muted);
+}
+
+.previewFrame {
+  width: 100%;
+  height: 390px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.generatedAttachments {
+  display: grid;
+  gap: 5px;
+  border-radius: 7px;
+  padding: 8px 9px;
+  background: #f7fbfa;
+}
+
+.generatedAttachments > strong {
+  color: var(--teal-dark);
+  font-size: 9px;
+}
+
+.generatedAttachments span,
+.historyAttachments span {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.generatedAttachments span small {
+  margin-left: auto;
+}
+
+.historySection {
+  display: grid;
+  gap: 11px;
+}
+
+.historyList article {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 9px;
+  border-top: 1px solid var(--line);
+  padding-top: 9px;
+}
+
+.historyList article:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.historyIcon {
+  width: 28px;
+  height: 28px;
+}
+
+.historyMain {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.historyMain strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyMain span,
+.historyMain small,
+.historyMain p {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.historyMain p {
+  margin: 1px 0 0;
+  color: #a04035;
+}
+
+.historyAttachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 9px;
+  margin-top: 2px;
+}
+
+.dialogFooter {
+  align-items: flex-end;
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.dialogFooter > span {
+  max-width: 470px;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.dialogFooter > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+@media (max-width: 760px) {
+  .dialogGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .previewFrame {
+    height: 330px;
+  }
+}
+
+@media (max-width: 520px) {
+  .dialogCard {
+    max-height: 94vh;
+    padding: 15px;
+  }
+
+  .recipientCard,
+  .noticeWithAction,
+  .dialogFooter {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .recipientCard > .button,
+  .noticeWithAction > .button,
+  .dialogFooter > div,
+  .dialogFooter > div > button {
+    width: 100%;
+  }
+
+  .dialogFooter > div {
+    justify-content: stretch;
+  }
+
+  .previewMeta {
+    grid-template-columns: 1fr;
+  }
+
+  .historyList article {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .historyList article > .status-badge {
+    grid-column: 2;
+    justify-self: start;
+  }
+}

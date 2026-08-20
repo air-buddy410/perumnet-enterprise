@@ -24,6 +24,7 @@ import { type AppLanguage, localizedDate, localizedLabel } from "../i18n";
 import { appPath } from "../paths";
 import { DocumentTaxEditor } from "./document-tax-editor";
 import { CommercialPackageSwitcher } from "./commercial-package-switcher";
+import { DocumentEmailDialog, type DocumentEmailTarget } from "./document-email-dialog";
 import { DocumentPreviewModal } from "./document-preview-modal";
 
 interface BillingViewProps {
@@ -34,6 +35,7 @@ interface BillingViewProps {
   canManagePayments: boolean;
   canManageTaxes: boolean;
   canManageValidity: boolean;
+  onOpenProject?: () => void;
 }
 
 type BillingTab = "quotation" | "invoice";
@@ -151,6 +153,7 @@ export function BillingView({
   canManagePayments,
   canManageTaxes,
   canManageValidity,
+  onOpenProject,
 }: BillingViewProps) {
   const id = language === "id";
   const [activeTab, setActiveTab] = useState<BillingTab>("quotation");
@@ -195,6 +198,7 @@ export function BillingView({
   const [paymentFile, setPaymentFile] = useState<File | null>(null);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [preview, setPreview] = useState<{ url: string; title: string; filename: string } | null>(null);
+  const [emailTarget, setEmailTarget] = useState<DocumentEmailTarget | null>(null);
 
   const selectPackage = useCallback((nextPackageId: string, nextPackages: CommercialPackage[]) => {
     void nextPackages;
@@ -458,6 +462,21 @@ export function BillingView({
     } catch (error) {
       notify(messageOf(error, language));
     }
+  }
+
+  function openClientEmail(kind: "quotation" | "invoice", documentId: string, documentNumber: string) {
+    if (!project) {
+      notify(id ? "Konteks proyek belum selesai dimuat." : "The project context has not finished loading.");
+      return;
+    }
+    setEmailTarget({
+      kind,
+      id: documentId,
+      number: documentNumber,
+      projectName: project.name,
+      recipientName: project.clientContactName?.trim() || project.client,
+      recipientEmail: project.clientEmail,
+    });
   }
 
   async function downloadInvoice(invoice: Invoice) {
@@ -824,6 +843,16 @@ export function BillingView({
                   <Send size={16} /> {quotationDispatched ? (id ? "Sudah dikirim" : "Sent") : (id ? "Tandai sudah dikirim" : "Mark as sent")}
                 </button>
               )}
+              {quotation?.id && !quotationSettled && (
+                <button className="button secondary full-width" type="button" disabled={quotationExpired} onClick={() => openClientEmail("quotation", quotation.id ?? "", quotation.number ?? "Quotation")}>
+                  <Mail size={16} /> {quotation.status === "Sent" ? (id ? "Kirim ulang email" : "Resend email") : (id ? "Kirim email ke klien" : "Email quotation to client")}
+                </button>
+              )}
+              {quotation?.id && (
+                <button className="button subtle full-width" type="button" onClick={() => openClientEmail("quotation", quotation.id ?? "", quotation.number ?? "Quotation")}>
+                  <Mail size={15} /> {id ? "Riwayat email" : "Email history"}
+                </button>
+              )}
             </section>
             <section className="panel">
               <details className="quotation-history">
@@ -878,6 +907,7 @@ export function BillingView({
                   <div className="invoice-actions">
                     <button className="icon-button" type="button" aria-label={`${id ? "Pratinjau" : "Preview"} ${invoice.number}`} onClick={() => setPreview({ url: `/api/invoices/${invoice.id}/pdf`, title: invoice.number, filename: `${invoice.number.replaceAll("/", "-")}.pdf` })}><Eye size={15} /></button>
                     <button className="button subtle small" type="button" onClick={() => downloadInvoice(invoice)}><Download size={15} /> PDF</button>
+                    <button className="button subtle small" type="button" onClick={() => openClientEmail("invoice", invoice.id, invoice.number)}><Mail size={15} /> {id ? "Email" : "Email"}</button>
                     {!(invoice.payments?.length) && <DocumentTaxEditor language={language} notify={notify} documentType="Invoice" documentId={invoice.id} canManage={canManageTaxes} onSaved={async () => {
                       const updated = await api<Invoice>(`/api/invoices/${invoice.id}`);
                       setInvoices((current) => current.map((item) => item.id === updated.id ? updated : item));
@@ -964,6 +994,16 @@ export function BillingView({
         filename={preview?.filename ?? "document.pdf"}
         onClose={() => setPreview(null)}
       />
+
+      {emailTarget && <DocumentEmailDialog
+        target={emailTarget}
+        language={language}
+        canManage={canManage}
+        canViewHistory
+        onClose={() => setEmailTarget(null)}
+        onOpenRecipient={onOpenProject ? () => { setEmailTarget(null); onOpenProject(); } : undefined}
+        onSent={async () => { setReloadKey((key) => key + 1); }}
+      />}
 
       {showQuotationForm && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowQuotationForm(false)}>

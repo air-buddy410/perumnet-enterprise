@@ -108,6 +108,17 @@ export function ProjectView({
   const [accessUsers, setAccessUsers] = useState<ProjectAccessUser[]>([]);
   const [procurementSummary, setProcurementSummary] = useState<ProcurementSummary | null>(null);
   const [serverToday, setServerToday] = useState("");
+  const [clientContactName, setClientContactName] = useState(project?.clientContactName ?? "");
+  const [clientEmail, setClientEmail] = useState(project?.clientEmail ?? "");
+  const [clientContactSaving, setClientContactSaving] = useState(false);
+
+  useEffect(() => {
+    const update = window.setTimeout(() => {
+      setClientContactName(project?.clientContactName ?? "");
+      setClientEmail(project?.clientEmail ?? "");
+    }, 0);
+    return () => window.clearTimeout(update);
+  }, [project?.clientContactName, project?.clientEmail, project?.id]);
 
   const refreshTasks = useCallback(async () => {
     try {
@@ -270,6 +281,27 @@ export function ProjectView({
     }
   }
 
+  async function saveClientContact(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setClientContactSaving(true);
+    try {
+      const updated = await api<Project>(`/api/projects/${projectId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          clientContactName: clientContactName.trim(),
+          clientEmail: clientEmail.trim(),
+        }),
+      });
+      setClientContactName(updated.clientContactName ?? "");
+      setClientEmail(updated.clientEmail ?? "");
+      notify(id ? "Kontak klien berhasil disimpan." : "Client contact saved.");
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setClientContactSaving(false);
+    }
+  }
+
   return (
     <div className="page-stack" data-testid="project-view">
       <section className="project-hero">
@@ -314,6 +346,42 @@ export function ProjectView({
             </button>
           )}
         </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <span className="eyebrow">{id ? "KONTAK KLIEN" : "CLIENT CONTACT"}</span>
+            <h2>{id ? "Penerima quotation & invoice" : "Quotation & invoice recipient"}</h2>
+            <p className="panel-description">
+              {id
+                ? "Email ini menjadi penerima resmi saat admin mengirim quotation atau invoice dari Billing."
+                : "This email becomes the official recipient when an admin sends a quotation or invoice from Billing."}
+            </p>
+          </div>
+        </div>
+        {canManage ? (
+          <form className="form-grid" onSubmit={saveClientContact}>
+            <label className="field">
+              <span>{id ? "Nama kontak" : "Contact name"}</span>
+              <input value={clientContactName} maxLength={160} onChange={(event) => setClientContactName(event.target.value)} placeholder={project?.client ?? (id ? "Nama klien" : "Client name")} />
+            </label>
+            <label className="field">
+              <span>{id ? "Email klien" : "Client email"}</span>
+              <input type="email" value={clientEmail} onChange={(event) => setClientEmail(event.target.value)} placeholder="client@example.com" />
+            </label>
+            <p className="form-hint full">{id ? "Boleh dikosongkan untuk menghapus alamat. Validasi format dan aturan penerima tetap dilakukan server." : "Leave it blank to remove the address. The server still validates the format and recipient rules."}</p>
+            <div className="modal-actions full">
+              <button className="button primary" type="submit" disabled={clientContactSaving || !project}>{clientContactSaving ? (id ? "Menyimpan..." : "Saving...") : (id ? "Simpan kontak" : "Save contact")}</button>
+            </div>
+          </form>
+        ) : (
+          <div className="document-recipient">
+            <span>{id ? "Penerima tersimpan" : "Saved recipient"}</span>
+            <strong>{clientContactName || project?.client || "—"}</strong>
+            <small>{clientEmail || (id ? "Email belum diisi" : "Email not configured")}</small>
+          </div>
+        )}
       </section>
 
       {canManageAccess && (

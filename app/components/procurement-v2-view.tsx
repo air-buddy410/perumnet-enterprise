@@ -15,6 +15,7 @@ import {
   FileText,
   Filter,
   LibraryBig,
+  Mail,
   PackageCheck,
   Pencil,
   Plus,
@@ -40,6 +41,7 @@ import {
 import { type AppLanguage, BOQ_ROLES, localizedLabel } from "../i18n";
 import { DocumentTaxEditor } from "./document-tax-editor";
 import { CatalogPicker } from "./catalog-picker";
+import { DocumentEmailDialog } from "./document-email-dialog";
 import { DocumentPreviewModal } from "./document-preview-modal";
 
 interface ProcurementViewProps {
@@ -84,6 +86,13 @@ const COMPLETABLE_WORKFLOW_STATUSES = [
   "Dikerjakan",
   "Diterima Sebagian",
   "Diterima",
+];
+const EMAIL_HISTORY_WORKFLOW_STATUSES = [
+  "Dikirim",
+  "Dikerjakan",
+  "Diterima Sebagian",
+  "Diterima",
+  "Selesai",
 ];
 
 function termStatusTone(status: string) {
@@ -211,6 +220,7 @@ export function ProcurementViewV2({
   const [receiptNumber, setReceiptNumber] = useState("");
   const [busy, setBusy] = useState("");
   const [preview, setPreview] = useState<{ url: string; title: string; filename: string } | null>(null);
+  const [emailOrder, setEmailOrder] = useState<ProcurementOrder | null>(null);
   const [reasonPrompt, setReasonPrompt] = useState<ReasonPrompt | null>(null);
   const [reasonText, setReasonText] = useState("");
 
@@ -1017,7 +1027,8 @@ export function ProcurementViewV2({
                   {canManage && order.workflowStatus === "Draft" && !order.legacy && <button className="button subtle small" type="button" onClick={() => openOrderEdit(order)}><Pencil size={14} /> {id ? "Edit" : "Edit"}</button>}
                   {["Admin", "Finance"].includes(userRole) && !order.legacy && order.approvalStatus === "Pending" && <button className="button primary small" type="button" onClick={() => orderAction(order, "approve")}><CheckCircle2 size={14} /> {id ? "Setujui" : "Approve"}</button>}
                   {["Admin", "Finance"].includes(userRole) && !order.legacy && order.approvalStatus === "Pending" && <button className="button danger small" type="button" onClick={() => orderAction(order, "reject")}><X size={14} /> {id ? "Tolak" : "Reject"}</button>}
-                  {canManage && !order.legacy && order.approvalStatus === "Approved" && order.workflowStatus === "Disetujui" && <button className="button secondary small" type="button" onClick={() => orderAction(order, "send")}><Send size={14} /> {id ? "Kirim" : "Send"}</button>}
+                  {canManage && !order.legacy && order.approvalStatus === "Approved" && order.workflowStatus === "Disetujui" && <button className="button primary small" type="button" onClick={() => setEmailOrder(order)}><Mail size={14} /> {id ? "Kirim ke vendor" : "Send to vendor"}</button>}
+                  {canManage && !order.legacy && order.approvalStatus === "Approved" && EMAIL_HISTORY_WORKFLOW_STATUSES.includes(order.workflowStatus) && <button className="button subtle small" type="button" onClick={() => setEmailOrder(order)}><Mail size={14} /> {id ? "Riwayat email" : "Email history"}</button>}
                   {["Admin", "Project Manager", "Engineer"].includes(userRole) && !order.legacy && order.approvalStatus === "Approved" && ["Dikirim", "Dikerjakan", "Diterima Sebagian"].includes(order.workflowStatus) && <button className="button secondary small" type="button" onClick={() => { setVerificationOrder(order); if (order.documentType === "SPK") { const term = order.terms.find((item) => item.type !== "DP"); setVerificationTermId(term?.id ?? ""); setVerificationAmount(term?.plannedAmount ?? 0); setVerificationProgress(100); } }}><PackageCheck size={14} /> {order.documentType === "PO" ? (id ? "Terima barang" : "Receive") : (id ? "Verifikasi" : "Verify")}</button>}
                   {canManagePayments && !order.legacy && order.approvalStatus === "Approved" && PAYABLE_WORKFLOW_STATUSES.includes(order.workflowStatus) && order.availableToPay > 0 && <button className="button secondary small" type="button" onClick={() => openPayment(order)}><CircleDollarSign size={14} /> {id ? "Bayar" : "Pay"}</button>}
                   {canManage && !order.legacy && order.approvalStatus === "Approved" && COMPLETABLE_WORKFLOW_STATUSES.includes(order.workflowStatus) && <button className="button subtle small" type="button" onClick={() => orderAction(order, "complete")}><BadgeCheck size={14} /> {id ? "Selesaikan" : "Complete"}</button>}
@@ -1198,6 +1209,22 @@ export function ProcurementViewV2({
           </section>
         </div>
       )}
+
+      {emailOrder && <DocumentEmailDialog
+        target={{
+          kind: "spk",
+          id: emailOrder.id,
+          number: emailOrder.number,
+          projectName: emailOrder.project,
+          recipientName: vendors.find((vendor) => vendor.id === emailOrder.vendorId)?.name ?? emailOrder.vendor,
+          recipientEmail: vendors.find((vendor) => vendor.id === emailOrder.vendorId)?.email ?? "",
+        }}
+        language={language}
+        canManage={canManage}
+        onClose={() => setEmailOrder(null)}
+        onOpenRecipient={() => { setEmailOrder(null); setTab("vendors"); }}
+        onSent={load}
+      />}
 
       <DocumentPreviewModal
         open={Boolean(preview)}
