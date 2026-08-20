@@ -111,6 +111,14 @@ CREATE TABLE IF NOT EXISTS email_outbox (
   provider TEXT,
   provider_id TEXT,
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  -- Berapa lampiran yang SEHARUSNYA menempel pada baris ini.
+  --
+  -- Bukan hiasan: penulisan baris outbox dan baris lampirannya bisa terputus
+  -- di tengah. Tanpa angka ini, yang tersisa adalah email yang terkirim rapi
+  -- ke vendor sebagai surat pengantar TANPA SPK-nya — dan tidak ada satu pun
+  -- yang menandakan ada yang hilang. Dengan angka ini, pengirim menolak dan
+  -- barisnya masuk jalur gagal yang bisa dibaca.
+  attachment_count INTEGER NOT NULL DEFAULT 0 CHECK (attachment_count >= 0),
   next_attempt_at TEXT NOT NULL,
   locked_at TEXT,
   last_error TEXT,
@@ -155,6 +163,10 @@ CREATE TABLE IF NOT EXISTS email_attachments (
   -- untuk membedakan keduanya, dan dipakai pemeriksaan batas: batas jumlah
   -- hanya berlaku untuk lampiran tambahan.
   generated INTEGER NOT NULL DEFAULT 0,
+  -- Urutan lampiran seperti yang dipilih pengirim. Tanpa ini urutannya
+  -- ditentukan database, dan dokumen resmi bisa muncul di bawah company
+  -- profile — kecil, tapi terlihat asal-asalan oleh yang menerimanya.
+  sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 
@@ -3152,6 +3164,16 @@ async function ensurePortfolioGalleryLimit(client: DatabaseClient) {
  */
 async function ensureProspectLetterFormat(client: DatabaseClient) {
   await ensureColumn(client, "email_outbox", "reply_to", "TEXT");
+  await ensureColumn(
+    client,
+    "email_outbox",
+    "attachment_count",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
+  // Tidak ada indeks atas kolom ini, dan memang tidak perlu — tidak ada kueri
+  // yang mencari baris BERDASARKAN jumlah lampirannya. Ditulis di sini supaya
+  // yang berikutnya tidak menambahkannya "sekalian" ke schemaSql: indeks atas
+  // kolom baru di sana mematikan demo dan produksi 4 menit pada 20 Agustus.
   // Tabelnya dibuat schemaSql, jadi indeksnya aman di sana juga — tetapi
   // ditaruh di sini supaya seragam dengan aturan kolom baru, dan supaya tidak
   // ada yang perlu menimbang ulang tiap kali.

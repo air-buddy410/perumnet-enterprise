@@ -12,7 +12,8 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 import { after, before, test } from "node:test";
 import { createClient } from "@libsql/client";
@@ -89,7 +90,7 @@ function mulaiSmtpPalsu(port) {
             // langkah; LOGIN butuh dua tantangan base64 dan salah satunya
             // mudah terlewat, yang berakhir jadi timeout 15 detik — terbaca
             // seperti server menolak, padahal servernya yang salah jawab.
-            socket.write("250-uji.local\r\n250-SIZE 10485760\r\n250 AUTH PLAIN\r\n");
+            socket.write("250-uji.local\r\n250-SIZE 26214400\r\n250 AUTH PLAIN\r\n");
           } else if (perintah.startsWith("AUTH PLAIN")) {
             balas("235 2.7.0 Authentication successful");
           } else if (perintah.startsWith("MAIL FROM")) {
@@ -394,3 +395,161 @@ test("bukan Admin tidak bisa membaca laporan pengiriman", async () => {
   assert.equal(response.status, 401);
 });
 
+
+// ── Lampiran benar-benar keluar di kawat ─────────────────────────────
+//
+// Baris database yang berkata "1 lampiran" tidak membuktikan apa pun. Yang
+// diuji di sini isi pesan SMTP-nya: apakah benar ada bagian multipart berisi
+// PDF, dengan nama berkas yang benar.
+//
+// Barisnya ditulis langsung ke database karena belum ada endpoint yang
+// mengirim lampiran — itu Fase 2. Yang sedang diuji jalur pengirimnya, dan
+// bentuk barisnya sama persis dengan yang akan ditulis endpoint itu nanti.
+
+const PDF_UJI = Buffer.from(
+  "%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n",
+  "utf8",
+);
+
+test("lampiran ikut terkirim, lalu berkasnya dibersihkan", async () => {
+  tolakSemua = false;
+  const prospek = await tambahProspek();
+  const sebelumnya = diterimaSmtp.length;
+
+  const outboxId = randomUUID();
+  const lampiranId = `lampiran-${randomUUID()}`;
+  mkdirSync(uploadDirectory, { recursive: true });
+  const jalurBerkas = `${uploadDirectory}/${lampiranId}`;
+  writeFileSync(jalurBerkas, PDF_UJI);
+
+  const sekarang = new Date(Date.now() - 60_000).toISOString();
+  const client = db();
+  await client.execute({
+    sql: `INSERT INTO email_outbox
+      (id,event_type,sender_profile,recipient,subject,body_html,status,provider,
+       attempt_count,attachment_count,next_attempt_at,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,'Pending','smtp',0,1,?,?,?)`,
+    args: [
+      outboxId,
+      "document_email",
+      "operational",
+      prospek.data.email,
+      "Surat dengan lampiran",
+      "<p>Terlampir dokumennya.</p>",
+      sekarang,
+      sekarang,
+      sekarang,
+    ],
+  });
+  await client.execute({
+    sql: `INSERT INTO email_attachments
+      (id,outbox_id,filename,mime_type,byte_size,sha256,storage_url,
+       content_base64,generated,sort_order,created_at)
+      VALUES (?,?,?,?,?,?,?,NULL,1,0,?)`,
+    args: [
+      lampiranId,
+      outboxId,
+      "SPK-UJI-001.pdf",
+      "application/pdf",
+      PDF_UJI.byteLength,
+      "sha-uji",
+      `local://${lampiranId}`,
+      sekarang,
+    ],
+  });
+  client.close();
+
+  await jalankanWorker();
+
+  assert.ok(diterimaSmtp.length > sebelumnya, "server SMTP tidak menerima apa pun");
+  const pesan = diterimaSmtp[diterimaSmtp.length - 1].pesan;
+
+  // Isi pesannya, bukan status barisnya.
+  assert.match(pesan, /Content-Type: multipart\/mixed/i, "pesannya bukan multipart");
+  assert.match(pesan, /filename="?SPK-UJI-001\.pdf"?/i, "nama berkas tidak ada di pesan");
+  assert.match(pesan, /Content-Type: application\/pdf/i, "tipe lampiran salah");
+  // Isinya benar-benar PDF-nya, bukan sekadar header yang menjanjikannya.
+  assert.ok(
+    pesan.replace(/\r?\n/g, "").includes(PDF_UJI.toString("base64").slice(0, 40)),
+    "isi PDF tidak ada di badan pesan",
+  );
+
+  const periksa = db();
+  const barisOutbox = await periksa.execute({
+    sql: "SELECT status FROM email_outbox WHERE id=?",
+    args: [outboxId],
+  });
+  const sisaLampiran = await periksa.execute({
+    sql: "SELECT COUNT(*) AS jumlah FROM email_attachments WHERE outbox_id=?",
+    args: [outboxId],
+  });
+  periksa.close();
+
+  assert.equal(String(barisOutbox.rows[0].status), "Sent");
+  // Setelah final, penunjuk DAN berkasnya ikut dibuang. Kalau salah satu
+  // tertinggal, PDF menumpuk di disk tanpa ada yang membacanya lagi.
+  assert.equal(Number(sisaLampiran.rows[0].jumlah), 0, "penunjuk lampiran tertinggal");
+  assert.ok(!existsSync(jalurBerkas), "berkas lampiran tertinggal di disk");
+});
+
+test("lampiran yang tidak lengkap membatalkan pengiriman, bukan mengirim setengah", async () => {
+  tolakSemua = false;
+  const prospek = await tambahProspek();
+  const sebelumnya = diterimaSmtp.length;
+
+  // attachment_count berkata 2, tapi hanya satu baris yang ada — persis yang
+  // tertinggal kalau penulisannya terputus di tengah.
+  const outboxId = randomUUID();
+  const sekarang = new Date(Date.now() - 60_000).toISOString();
+  const client = db();
+  await client.execute({
+    sql: `INSERT INTO email_outbox
+      (id,event_type,sender_profile,recipient,subject,body_html,status,provider,
+       attempt_count,attachment_count,next_attempt_at,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,'Pending','smtp',0,2,?,?,?)`,
+    args: [
+      outboxId,
+      "document_email",
+      "operational",
+      prospek.data.email,
+      "Surat yang lampirannya kurang",
+      "<p>Terlampir dua dokumen.</p>",
+      sekarang,
+      sekarang,
+      sekarang,
+    ],
+  });
+  await client.execute({
+    sql: `INSERT INTO email_attachments
+      (id,outbox_id,filename,mime_type,byte_size,sha256,storage_url,
+       content_base64,generated,sort_order,created_at)
+      VALUES (?,?,?,?,?,?,NULL,?,1,0,?)`,
+    args: [
+      `lampiran-${randomUUID()}`,
+      outboxId,
+      "SATU-SAJA.pdf",
+      "application/pdf",
+      PDF_UJI.byteLength,
+      "sha-uji",
+      PDF_UJI.toString("base64"),
+      sekarang,
+    ],
+  });
+  client.close();
+
+  await jalankanWorker();
+
+  // Tidak dikirim sama sekali. Surat pengantar yang sampai ke vendor TANPA
+  // dokumennya adalah kegagalan terburuk yang bisa dibuat fitur ini, dan
+  // satu-satunya yang tidak menimbulkan galat apa pun kalau dibiarkan.
+  assert.equal(diterimaSmtp.length, sebelumnya, "surat tetap terkirim tanpa lampirannya");
+
+  const periksa = db();
+  const baris = await periksa.execute({
+    sql: "SELECT status,last_error FROM email_outbox WHERE id=?",
+    args: [outboxId],
+  });
+  periksa.close();
+  assert.equal(String(baris.rows[0].status), "Failed");
+  assert.match(String(baris.rows[0].last_error ?? ""), /lampiran tidak lengkap/i);
+});

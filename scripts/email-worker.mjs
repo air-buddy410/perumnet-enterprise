@@ -26,7 +26,21 @@ async function dispatch() {
       {
         method: "POST",
         headers: { Authorization: `Bearer ${secret}` },
-        signal: AbortSignal.timeout(25_000),
+        // 25 detik dulu cukup, waktu tiap surat hanya HTML. Dengan lampiran
+        // tidak: satu putaran mengambil 25 baris, dan tiap baris kini bisa
+        // membawa berkas hingga 10 MB yang harus dibaca dari disk lalu
+        // dikodekan.
+        //
+        // Kehabisan waktu di sini bukan sekadar tertunda. Abort-nya mematikan
+        // permintaan HTTP-nya, sementara penanganannya JALAN TERUS di server;
+        // barisnya tertinggal berstatus Processing, baru diambil ulang 10
+        // menit kemudian, dan saat diambil ulang DIHITUNG SATU PERCOBAAN.
+        // Lima kali begitu dan suratnya gagal permanen — bukan karena
+        // suratnya, tapi karena penghitung waktunya.
+        //
+        // Menaikkannya aman: loop di bawah berurutan (await dispatch, lalu
+        // await sleep), jadi tidak ada putaran yang bisa saling menyusul.
+        signal: AbortSignal.timeout(120_000),
       },
     );
     if (!response.ok) {
