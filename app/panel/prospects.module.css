@@ -230,6 +230,52 @@
 .skippedBox > div { display: flex; justify-content: space-between; gap: 8px; color: #6e5b5b; font-size: 10px; }
 .skippedBox small { color: #a64b4b; text-align: right; }
 
+.reportLayout { display: grid; grid-template-columns: minmax(300px, .72fr) minmax(0, 1.28fr); gap: 18px; align-items: start; }
+.reportBatches, .reportDetail { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.reportBatches .panelHeader, .reportDetail > .panelHeader { align-items: flex-start; }
+.reportBatchList { max-height: 690px; padding: 8px; display: grid; gap: 6px; overflow: auto; }
+.reportBatch, .reportBatchActive { width: 100%; padding: 11px; display: grid; gap: 7px; border: 1px solid transparent; border-radius: 8px; color: var(--ink); background: transparent; text-align: left; cursor: pointer; }
+.reportBatch:hover, .reportBatchActive { border-color: #c9e7e2; background: #eff9f7; }
+.reportBatchTop { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.reportBatchTop strong { min-width: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.reportBatch small { color: var(--muted); font-size: 9px; line-height: 1.4; }
+.reportBatchCounts { display: flex; flex-wrap: wrap; gap: 5px 8px; color: #52656b; font-size: 9px; font-weight: 700; }
+.reportBatchStatus { width: max-content; padding: 4px 7px; border-radius: 999px; font-size: 9px; font-weight: 800; white-space: nowrap; }
+.reportStatusQueued, .reportStatQueued { color: #08756f; background: #dff6f3; }
+.reportStatusSent, .reportStatSent { color: #24734b; background: #e4f5ea; }
+.reportStatusFailed, .reportStatFailed { color: #9b4a4a; background: #fbe8e8; }
+.reportStatusSkipped, .reportStatSkipped { color: #657277; background: #edf2f1; }
+.reportStatusUnknown { color: #52656b; background: #edf2f1; }
+.reportMeta { padding: 17px 20px 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.reportMeta > div { min-width: 0; padding: 10px; border-radius: 7px; background: #f6faf9; }
+.reportMeta span, .reportMeta strong { display: block; }
+.reportMeta span { color: var(--muted); font-size: 8px; font-weight: 800; letter-spacing: .07em; }
+.reportMeta strong { margin-top: 4px; overflow-wrap: anywhere; color: var(--ink); font-size: 10px; line-height: 1.35; }
+.reportStatGrid { padding: 17px 20px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.reportStat { min-width: 0; padding: 11px; border-radius: 7px; }
+.reportStat strong, .reportStat span { display: block; }
+.reportStat strong { color: var(--ink); font-family: "Plus Jakarta Sans", sans-serif; font-size: 20px; }
+.reportStat span { margin-top: 3px; color: #52656b; font-size: 9px; line-height: 1.35; }
+.reportFilters { padding: 0 20px 17px; display: grid; grid-template-columns: minmax(0, 1.35fr) 145px 130px 130px auto; align-items: end; gap: 7px; }
+.reportSearch { min-width: 0; height: 36px; padding-left: 9px; display: flex; align-items: center; gap: 6px; border: 1px solid #d5e1de; border-radius: 7px; color: var(--muted); }
+.reportSearch:focus-within { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(4,169,159,.09); }
+.reportSearch input { width: 100%; min-width: 0; height: 34px; border: 0; outline: none; color: var(--ink); background: transparent; font-size: 11px; }
+.reportSearch button { height: 30px; margin-right: 3px; padding: 0 8px; border: 0; border-radius: 5px; color: #fff; background: var(--teal-dark); font-size: 10px; font-weight: 800; cursor: pointer; }
+.reportFilters > select, .reportFilters > label input { width: 100%; height: 36px; border: 1px solid #d5e1de; border-radius: 7px; outline: none; color: var(--ink); background: #fff; font-size: 11px; }
+.reportFilters > select { padding: 0 8px; }
+.reportFilters > label { min-width: 0; display: grid; gap: 3px; }
+.reportFilters > label span { color: var(--muted); font-size: 8px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.reportFilters > label input { padding: 0 7px; }
+.reportFilters > select:focus, .reportFilters > label input:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(4,169,159,.09); }
+.reportFilters > .secondary { min-height: 36px; white-space: nowrap; }
+.reportTable { min-width: 900px; }
+.reportDateCell { display: block; min-width: 104px; color: #52656b; font-size: 10px; line-height: 1.4; white-space: nowrap; }
+.reportAttempt { min-width: 80px; display: grid; gap: 3px; }
+.reportAttempt strong { color: var(--ink); font-size: 12px; }
+.reportAttempt small { color: var(--muted); font-size: 9px; line-height: 1.35; }
+.reportFailure { display: block; min-width: 130px; max-width: 230px; overflow-wrap: anywhere; color: #9b4a4a; font-size: 10px; line-height: 1.45; }
+.reportMuted { color: var(--muted); font-size: 9px; line-height: 1.4; }
+
 .templateLayout { display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 18px; align-items: start; }
 .templateList { min-width: 0; }
 .templateList .panelHeader, .templateEditor .panelHeader { align-items: flex-start; }
@@ -263,7 +309,8 @@
 @media (max-width: 1180px) {
   .listLayout { grid-template-columns: minmax(0, 1fr); }
   .detail { position: static; }
-  .importLayout, .outreachLayout { grid-template-columns: 1fr; }
+  .importLayout, .outreachLayout, .reportLayout { grid-template-columns: 1fr; }
+  .reportBatchList { max-height: 360px; }
 }
 
 @media (max-width: 780px) {
@@ -291,6 +338,10 @@
   .duplicateBox { grid-template-columns: 20px minmax(0, 1fr); }
   .duplicateBox .secondary { grid-column: 1 / -1; width: 100%; }
   .statGrid { grid-template-columns: repeat(2, 1fr); }
+  .reportMeta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .reportFilters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .reportSearch { grid-column: 1 / -1; }
+  .reportFilters > .secondary { width: 100%; }
   .previewMeta { grid-template-columns: 1fr; }
   .templateLayout { grid-template-columns: 1fr; }
   .templateItems { max-height: 260px; }
@@ -312,6 +363,10 @@
   .formBody { padding: 16px; }
   .templatePreviewSection { margin-left: 16px; margin-right: 16px; }
   .previewFrame { height: 500px; }
+  .reportStatGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .reportFilters { grid-template-columns: 1fr; }
+  .reportSearch { grid-column: auto; }
+  .reportBatches .refreshButton { align-self: stretch; }
   .filePicker { grid-template-columns: 30px minmax(0, 1fr); }
   .filePicker > b { grid-column: 2; justify-self: start; }
   .pagination { align-items: flex-start; flex-direction: column; }
