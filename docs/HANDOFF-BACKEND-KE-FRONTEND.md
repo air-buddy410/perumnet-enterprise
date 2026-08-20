@@ -369,6 +369,75 @@ GET /api/auth/password-policy
 Semua string dwibahasa tersedia lewat `shared/password-policy.ts`
 (`describePasswordPolicy`, `passwordProblems`) kalau perlu merender sendiri.
 
+### T-15. Pusat Bantuan memuat Calon Klien
+
+- **Layar:** `app/components/help-view.tsx`.
+- **Kenapa ini ada:** isi Pusat Bantuan di layar **terpisah** dari isi PDF
+  manual. PDF-nya (`server/api/sop-pdf-content.ts`) sudah saya perbarui dengan
+  bab Calon Klien dan lima pesan kesalahan baru; layar ini belum. Orang yang
+  membuka Pusat Bantuan sekarang tidak menemukan fitur yang sudah dipakainya
+  setiap hari.
+
+**Yang perlu ditambah — semuanya dua kali, `…Id` dan `…En`:**
+
+1. **`workflowsId` / `workflowsEn`** — satu entri baru `key: "prospects"`,
+   ditaruh setelah `catalog-ai` dan sebelum `access` (mengikuti urutan menu).
+   Bentuknya sama dengan entri lain: `title`, `summary`, `who`, `where`,
+   `prepare`, `steps[]`, `after`.
+
+2. **`messagesId` / `messagesEn`** — lima pesan baru:
+
+   | Pesan | Artinya | Tindakan |
+   |---|---|---|
+   | Alamat email itu sudah terdaftar pada prospek lain | satu alamat hanya untuk satu prospek | jawabannya membawa `prospectId`; buka yang lama dan periksa |
+   | Peran Anda tidak memiliki akses ke Calon Klien | modulnya belum dinyalakan | minta Admin menyetelnya di Pengguna & Akses |
+   | Anda hanya bisa melihat calon klien | izinnya baru Lihat | menyimpan, mengimpor, dan mengirim perlu Kelola |
+   | Kata sandi baru harus … | belum memenuhi syarat gabungan aplikasi + mailserver | pesannya menyebut SEMUA syarat yang kurang sekaligus |
+   | Mailserver sedang tidak bisa dihubungi | sambungan gagal, tidak ada yang berubah | coba lagi; ini BUKAN kata sandi salah |
+
+3. **`glossaryId` / `glossaryEn`** — kalau menurut Anda perlu: *prospek*
+   (berbeda dari *lead*), *batch*, *opt-out*.
+
+4. **Dua kalimat lama yang kini keliru** — daftar menu Administrasi pada entri
+   `key: "start"`:
+
+   - baris ~81 (`Id`): *"Administrasi berisi Database Item serta Pengguna &
+     Akses."* → sekarang juga **Calon Klien**.
+   - baris ~321 (`En`): *"Administration holds Item Database and Users &
+     Access."* → idem.
+
+5. **Langkah kata sandi pada entri `key: "access"`** — sekarang berbunyi
+   seolah tidak ada syarat. Sesuaikan dengan T-14b: syaratnya ditampilkan di
+   form, gabungan aturan aplikasi dan mailserver, **yang lebih ketat menang**,
+   dan **jangan menulis angkanya** di teks bantuan karena bisa berubah tanpa
+   deploy.
+
+**Isi yang harus tersampaikan pada entri baru** (silakan susun ulang kalimatnya
+— ini poinnya, bukan naskah yang harus disalin):
+
+- Calon Klien berbeda dari Lead. Lead datang dari formulir situs dan mencentang
+  kotak privasi; prospek dikumpulkan tim sendiri dan **tidak pernah meminta
+  dihubungi**. Karena itu catatan sumber wajib, dan opt-out selalu tersedia.
+- Impor XLSX: kolom dikenali dari **judulnya**, bukan urutannya; **nama lembar
+  menentukan segmen**; jalankan **uji kering dulu** — baris bermasalah
+  dilaporkan lengkap dengan nomor barisnya, bukan dibuang diam-diam.
+- Template ditulis sebagai **teks biasa**. Kop berlogo, tanda tangan, alamat
+  kantor, dan catatan cara berhenti ditambahkan server.
+- Tanda tangan menentukan **ke mana balasan mendarat**. Isi dengan kontak orang
+  yang mengirim, bukan alamat umum.
+- **Pratinjau dulu.** Yang tampil persis surat yang diterima calon klien.
+- Jeda 60 detik per surat itu **disengaja**: 40 penerima ≈ 40 menit, bukan
+  macet. Mailserver yang sama membawa invoice dan tautan pemulihan kata sandi.
+- Empat status di Laporan kirim, dan yang paling mudah disalahpahami:
+  **"Masih diproses" bukan kegagalan** — mengirim ulang karenanya membuat surat
+  yang sama sampai dua kali.
+- **Surat yang sudah diantre tidak bisa ditarik kembali.**
+
+**Kalau ragu soal kalimatnya**, tiru saja dari PDF: bab `chapterProspects` di
+`server/api/sop-pdf-content.ts` sudah dwibahasa dan sudah melewati review.
+Berkas itu `server-only`, jadi **tidak bisa diimpor** ke layar — salin
+teksnya, jangan mencoba mengimpornya.
+
 ### Selesai
 
 - **T-1** — `auth-screen.tsx` dan `panel-app.tsx` membedakan 503
