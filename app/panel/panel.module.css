@@ -305,6 +305,7 @@
 .loginForm > button { height:49px; display:flex; align-items:center; justify-content:center; gap:10px; border:0; border-radius:7px; color:#fff; background:var(--teal); font-weight:800; cursor:pointer; }
 .loginForm > button:disabled { opacity:.6; }
 .loginForm .loginFormSwitch { width:max-content; height:auto; margin:-5px 0 16px auto; padding:0; color:var(--teal-dark); background:transparent; font-size:12px; }
+.loginRecoveryNote { margin:-5px 0 16px; color:#718085; font-size:12px; line-height:1.45; }
 .loginForm .loginBack { width:max-content; height:auto; margin:0 0 28px; padding:0; justify-content:flex-start; color:#64767b; background:transparent; font-size:12px; }
 .loginModeIcon { margin-bottom:14px; padding:10px; box-sizing:content-box; border-radius:10px; color:var(--teal-dark); background:#e9f8f5; }
 .loginSuccess { padding:18px; display:grid; gap:7px; border:1px solid #cce8e4; border-radius:9px; color:#52676d; background:#effaf8; font-size:13px; line-height:1.55; }

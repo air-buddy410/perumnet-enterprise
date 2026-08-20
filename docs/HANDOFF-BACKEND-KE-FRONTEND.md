@@ -139,6 +139,10 @@ Papan permintaan Opus → Luna (`WORKFLOW-TIM.md` §5). Backend-nya sudah jalan
 di demo; yang tersisa murni tampilan. Tandai ✅ dan pindahkan ke §Selesai
 kalau sudah dikerjakan.
 
+**T-6…T-10 punya kontrak tersendiri di `docs/PROSPEK-CALON-KLIEN.md`** —
+seluruh endpoint, kode galat, aturan render template, dan perilaku impor ada di
+sana. Yang di bawah ini ringkasannya.
+
 ### ✅ T-1. Layar login menangani 503 — SELESAI 2026-08-18
 
 - **Layar:** form login (admin & panel).
@@ -152,40 +156,20 @@ kalau sudah dikerjakan.
   pesannya sudah ditulis untuk dibaca pengguna; yang menentukan apa yang
   terlihat tinggal layar ini.
 
-### T-3. Layar login: sembunyikan "Lupa kata sandi?" saat mode mailserver
+### ✅ T-6–T-10 — SELESAI 2026-08-19
 
-- **Layar:** `app/components/auth-screen.tsx:251` dan
-  `app/panel/panel-app.tsx:396`.
-- **Butuh:** saat mode mailserver menyala, tautan itu menuju alur yang kini
-  dijawab **409 `PASSWORD_RESET_UNAVAILABLE`**. Sembunyikan tautannya, dan
-  ganti dengan satu kalimat yang menyebut kata sandi email direset lewat
-  webmail atau IT. Kalau tautannya tetap ditampilkan, tampilkan `message` dari
-  409 apa adanya — jangan sebagai kegagalan yang bisa dicoba lagi.
-- **Datanya dari mana:** `GET /api/auth/mode` — lihat kontrak di §Siap dipakai.
-- **Kenapa tidak bisa diakali di sisi backend:** servernya sudah menolak; yang
-  tersisa tautan yang menjanjikan sesuatu yang tidak akan terjadi.
+Implementasi layar `/admin` sudah selesai. Rincian hasil kerja dipindahkan ke
+bagian **Selesai** di bawah; kontrak lengkap tetap berada di
+`docs/PROSPEK-CALON-KLIEN.md`.
 
-### T-4. Kolom login menerima username
+### ✅ T-11. Template surat: kotak teks biasa — SELESAI 2026-08-20
 
-- **Layar:** form masuk (admin & panel).
-- **Butuh:** label kolomnya masih berbunyi "Email". Backend kini menerima
-  username tanpa `@` pada field yang sama. Ubah labelnya jadi menyebut
-  keduanya, dan lepas `type="email"` kalau masih dipasang — atribut itu
-  membuat peramban menolak `budi` sebelum permintaan terkirim.
-- **Kenapa tidak bisa diakali di sisi backend:** penolakannya terjadi di
-  peramban, sebelum ada permintaan yang sampai ke server.
+Implementasi pada tab **Template surat** sudah selesai di
+`app/panel/prospects-editor.tsx`: form teks biasa, defaults server, tombol
+**Pakai contoh**, empat bidang tanda tangan, `bodyFormat: "text"`, dan preview
+surat utuh dari server tanpa menambahkan logo atau footer di sisi layar.
 
-### T-5. Judul form ganti kata sandi untuk akun darurat
-
-- **Layar:** `app/components/settings-view.tsx:256`.
-- **Butuh:** judulnya berbunyi "Keamanan password email — dipakai untuk webmail
-  dan aplikasi PerumNet lain" untuk **semua orang**. Untuk akun darurat
-  (`allowLocalLogin: true` dari `GET /api/auth/mode`), yang berganti justru
-  kata sandi **lokal** aplikasi ini, bukan mailbox — jadi kalimat itu tidak
-  benar untuknya. Satu akun saja, tapi itu akun yang kata sandinya paling
-  penting dipahami dengan benar.
-- **Kenapa tidak bisa diakali di sisi backend:** backend sudah membedakan
-  jalurnya dan sudah membocorkan statusnya lewat endpoint di atas.
+Kontrak backend lengkap tetap berada di `docs/PROSPEK-CALON-KLIEN.md`.
 
 ### Selesai
 
@@ -197,3 +181,38 @@ kalau sudah dikerjakan.
   backend untuk empat kode error MailCow. Form/copy dan error kredensial
   diverifikasi melalui browser; submit sukses MailCow tidak dijalankan karena
   memerlukan perubahan password nyata.
+- **T-3** — `auth-screen.tsx` dan `panel-app.tsx` membaca `GET /api/auth/mode`,
+  menyembunyikan pemulihan password saat mode mailserver, dan menampilkan
+  arahan reset lewat webmail atau IT. Diverifikasi pada mode `MAILSERVER` dan
+  `LOCAL`.
+- **T-4** — form login admin dan panel menyebut email maupun username,
+  memakai input teks tanpa validasi browser email, serta mempertahankan body
+  login `{ email, password, remember }`. Username `budi` diverifikasi pada
+  desktop dan mobile.
+- **T-5** — `settings-view.tsx` membaca `allowLocalLogin` dari
+  `GET /api/auth/mode` dan membedakan seluruh copy keamanan password aplikasi
+  untuk akun darurat dari copy password email. Diverifikasi pada desktop dan
+  viewport 375 px.
+- **T-6** — `ProspectsEditor` di `/admin` memakai daftar server, filter
+  paginasi, tab segmen dari `shared/prospects.ts`, source yang terlihat, dan
+  checkbox yang mengikuti `emailable` dari server.
+- **T-7** — form tambah manual mengirim `POST /api/cms/prospects`, mewajibkan
+  source, serta menyediakan tombol buka prospek lama dari
+  `EMAIL_ALREADY_LISTED.details.prospectId`. Detail juga mendukung PATCH,
+  opt-out satu arah, riwayat outreach, dan soft delete.
+- **T-8** — impor XLSX multipart memakai dry-run sebagai langkah pertama dan
+  menampilkan sheet, jumlah, serta setiap isu dengan nama sheet dan nomor baris
+  sebelum tombol simpan diaktifkan.
+- **T-9** — komposer mengirim batch ke endpoint outreach, menampilkan jeda
+  bawaan/maksimal dan estimasi selesai, mewajibkan preview server, serta
+  menampilkan `skipped[]` per prospek.
+- **T-10** — pengelola template menyediakan CRUD, tombol placeholder dari
+  `prospectPlaceholders`/`prospectPlaceholderHints`, dan preview server dalam
+  frame terisolasi; tidak menambahkan lampiran PDF fiktif.
+- **T-11** — editor template memakai isi surat teks biasa, defaults server,
+  tombol **Pakai contoh**, tanda tangan per orang, dan `bodyFormat: "text"`;
+  preview menampilkan dokumen surat utuh dari server dalam frame tinggi tanpa
+  menambahkan logo, tanda tangan, atau catatan kaki dari UI.
+
+  QA terakhir: lint, typecheck, build, dan 231 test lulus; smoke Playwright
+  mock kontrak pada `/admin` lulus di 1440×900 dan 375×812 tanpa error console.

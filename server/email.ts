@@ -34,7 +34,7 @@ interface EmailDeliveryResult {
 
 type EmailLanguage = "id" | "en";
 
-function applicationUrl(path: string) {
+export function applicationUrl(path: string) {
   const appUrl = process.env.APP_URL ?? "http://localhost:3000";
   const configuredBasePath = process.env.NEXT_PUBLIC_BASE_PATH?.trim() ?? "";
   const basePath =

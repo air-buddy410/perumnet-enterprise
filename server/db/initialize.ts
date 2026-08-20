@@ -1247,7 +1247,21 @@ CREATE TABLE IF NOT EXISTS cms_prospect_templates (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   subject TEXT NOT NULL,
+  -- Namanya tetap body_html karena kolomnya sudah terpasang di demo, tapi
+  -- isinya mengikuti body_format: 'text' (bawaan) berarti teks biasa yang
+  -- diketik admin, dan server yang menjadikannya HTML lengkap dengan kop,
+  -- tanda tangan, serta catatan kaki. Lihat server/prospect-letter.ts.
   body_html TEXT NOT NULL,
+  body_format TEXT NOT NULL DEFAULT 'text'
+    CHECK (body_format IN ('text', 'html')),
+  -- Tanda tangan menempel pada template, bukan diambil dari cms_site_settings.
+  -- Surat penawaran ditandatangani ORANG, dan balasannya harus sampai ke kotak
+  -- masuk orang itu; alamat umum perusahaan memindahkan balasan ke tempat yang
+  -- tidak menunggunya. Kosong = jatuh kembali ke kontak perusahaan.
+  sender_signoff TEXT NOT NULL DEFAULT '',
+  sender_name TEXT NOT NULL DEFAULT '',
+  sender_email TEXT NOT NULL DEFAULT '',
+  sender_phone TEXT NOT NULL DEFAULT '',
   language TEXT NOT NULL DEFAULT 'id' CHECK (language IN ('id', 'en')),
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
@@ -3070,6 +3084,25 @@ async function ensurePortfolioGalleryLimit(client: DatabaseClient) {
  *
  * INTEGER, bukan BOOLEAN: skema ini berjalan di SQLite/libSQL maupun Postgres.
  */
+/**
+ * Demo sudah menjalankan cms_prospect_templates sejak 3944a1d, jadi kolom
+ * body_format tidak bisa hanya hidup di schemaSql — blok itu tidak menyentuh
+ * tabel yang sudah ada. Bawaannya 'text': template lama (kalau ada) ikut
+ * dirender sebagai teks biasa, yang aman, bukan sebagai HTML yang dipercaya.
+ */
+async function ensureProspectLetterFormat(client: DatabaseClient) {
+  const columns: Array<[string, string]> = [
+    ["body_format", "TEXT NOT NULL DEFAULT 'text'"],
+    ["sender_signoff", "TEXT NOT NULL DEFAULT ''"],
+    ["sender_name", "TEXT NOT NULL DEFAULT ''"],
+    ["sender_email", "TEXT NOT NULL DEFAULT ''"],
+    ["sender_phone", "TEXT NOT NULL DEFAULT ''"],
+  ];
+  for (const [column, definition] of columns) {
+    await ensureColumn(client, "cms_prospect_templates", column, definition);
+  }
+}
+
 async function ensureMailserverAuthSchema(client: DatabaseClient) {
   await ensureColumn(
     client,
@@ -3096,6 +3129,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureDocumentCounters(client);
   await ensureAuthHardeningSchema(client);
   await ensureMailserverAuthSchema(client);
+  await ensureProspectLetterFormat(client);
   await ensureTaxAndEmailSchema(client);
   await ensureProjectExpenseSchema(client);
   await ensureItemCatalogSchema(client);

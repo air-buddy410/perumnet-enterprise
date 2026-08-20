@@ -121,3 +121,44 @@ export const PROSPECT_MAX_RECIPIENTS_PER_BATCH = 200;
 
 /** Panjang minimal catatan "dari mana kontak ini didapat". */
 export const PROSPECT_SOURCE_MIN_LENGTH = 2;
+
+// ── Bentuk isi surat ─────────────────────────────────────────────────
+//
+// Admin mengetik TEKS BIASA. Kop berlogo, tanda tangan, dan catatan kaki
+// ditempelkan server (lihat `server/prospect-letter.ts`), jadi tidak ada yang
+// perlu menulis HTML untuk mengirim surat yang rapi. Format `html` disediakan
+// untuk surat yang memang disusun sebagai markup, dan bukan bawaannya.
+
+export const prospectLetterFormats = ["text", "html"] as const;
+export type ProspectLetterFormat = (typeof prospectLetterFormats)[number];
+
+export const PROSPECT_DEFAULT_LETTER_FORMAT: ProspectLetterFormat = "text";
+
+/**
+ * Naskah perkenalan milik PerumNet Enterprise, supaya kotak template tidak
+ * pernah dibuka dalam keadaan kosong.
+ *
+ * Isinya dari tim, bukan karangan: ini surat yang memang dipakai. Yang diubah
+ * hanya salah ketik yang jelas (konstruksi, efisiensi, operasional, dijalankan)
+ * dan satu tanda kurung yang tidak pernah ditutup.
+ *
+ * TIDAK ADA tanda tangan di sini. Repositori ini publik, dan nama serta email
+ * pegawai tidak boleh masuk ke dalamnya. Tanda tangan diisi di aplikasi,
+ * bawaannya dari akun yang sedang masuk.
+ */
+export const PROSPECT_STARTER_TEMPLATE = {
+  name: "Perkenalan PerumNet Enterprise",
+  subject: "Perkenalan PerumNet Enterprise untuk {{perusahaan}}",
+  body: `Yth. Bapak/Ibu,
+{{nama}}
+
+Salam Hormat dari PerumNet Enterprise.
+Perkenankan kami memperkenalkan PerumNet Enterprise sebagai penyedia solusi infrastruktur teknologi jaringan dan sistem terintegrasi (jaringan WiFi, CCTV, smart home/building automation) di Bali yang dirancang untuk mendukung kebutuhan proyek di sektor arsitektur, konstruksi, developer, dan lainnya.
+
+Kami memahami bahwa perkembangan industri saat ini menuntut penerapan teknologi yang mampu meningkatkan konektivitas, keamanan, efisiensi operasional, serta kenyamanan pengguna. Maka dari itu, kami percaya bahwa solusi yang kami tawarkan dapat menjadi nilai tambah dalam mendukung pengembangan proyek yang sedang maupun yang akan dilaksanakan oleh perusahaan Bapak/Ibu.
+
+Untuk mengenal lebih jauh tentang PerumNet Enterprise, silakan cek portofolio kami di enterprise.perumnet.id, di mana terdapat beberapa proyek yang sudah kami jalankan, salah satunya Sandy House Project. Kami berharap dapat menjalin komunikasi lebih lanjut untuk mendiskusikan peluang kolaborasi yang dapat memberikan manfaat bagi kedua belah pihak.
+
+Terima kasih atas perhatian dan kerja samanya.`,
+  signoff: "Best Regards,",
+} as const;

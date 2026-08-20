@@ -9,6 +9,7 @@ export type ViewKey =
   | "validation"
   | "bast"
   | "finance"
+  | "prospects"
   | "users"
   | "profile"
   | "settings"

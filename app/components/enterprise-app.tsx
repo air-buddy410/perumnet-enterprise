@@ -21,6 +21,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  UsersRound,
   WalletCards,
   X,
 } from "lucide-react";
@@ -41,6 +42,7 @@ import { ProjectExpenseView } from "./project-expense-view";
 import { HelpView } from "./help-view";
 import { ProcurementViewV2 as ProcurementView } from "./procurement-v2-view";
 import { ProfileView } from "./profile-view";
+import { ProspectsEditor } from "../panel/prospects-editor";
 import { ProjectView } from "./project-view";
 import { SettingsView } from "./settings-view";
 import { StandaloneBoqView } from "./standalone-boq-view";
@@ -51,7 +53,7 @@ import { WorkspaceSwitcher } from "./workspace-switcher";
 
 interface NavigationItem {
   id: ViewKey;
-  labelKey: "dashboard" | "projects" | "expenses" | "boq" | "catalog" | "billing" | "procurement" | "validation" | "bast" | "finance" | "users";
+  labelKey: "dashboard" | "projects" | "expenses" | "boq" | "catalog" | "billing" | "procurement" | "validation" | "bast" | "finance" | "prospects" | "users";
   module: AccessModule;
   icon: typeof LayoutDashboard;
   badge?: string;
@@ -82,6 +84,7 @@ const operationsNavigation: NavigationItem[] = [
 
 const administrationNavigation: NavigationItem[] = [
   { id: "catalog", labelKey: "catalog", module: "boq", icon: LibraryBig, roles: ["Admin", "Finance"] },
+  { id: "prospects", labelKey: "prospects", module: "users", icon: UsersRound, roles: ["Admin"] },
   { id: "users", labelKey: "users", module: "users", icon: ShieldCheck },
 ];
 
@@ -98,6 +101,7 @@ function viewMeta(language: AppLanguage, view: ViewKey) {
     validation: { title: translate(language, "validation"), subtitle: id ? "Checklist wajib sebelum BAST" : "Required checklist before handover" },
     bast: { title: translate(language, "bast"), subtitle: id ? "Serah terima dan tanda tangan digital" : "Handover and digital signatures" },
     finance: { title: translate(language, "finance"), subtitle: id ? "Arus kas dan rekonsiliasi" : "Cash flow and reconciliation" },
+    prospects: { title: translate(language, "prospects"), subtitle: id ? "Kontak, outreach, dan penawaran" : "Contacts, outreach, and proposals" },
     users: { title: translate(language, "users"), subtitle: id ? "Akun tim dan otorisasi per modul" : "Team accounts and module permissions" },
     profile: { title: translate(language, "profile"), subtitle: id ? "Foto dan informasi pribadi" : "Photo and personal information" },
     settings: { title: translate(language, "settings"), subtitle: id ? "Bahasa, notifikasi, dan keamanan" : "Language, notifications, and security" },
@@ -498,6 +502,7 @@ export function EnterpriseApp() {
               }
             />
           )}
+          {currentView === "prospects" && user.role === "Admin" && <ProspectsEditor />}
           {currentView === "users" && canUse("users") && <UsersView notify={notify} language={language} currentUserId={user.id} canManage={user.role === "Admin"} />}
           {currentView === "profile" && <ProfileView language={language} user={user} notify={notify} onUserChange={setUser} />}
           {currentView === "settings" && canUse("settings") && <SettingsView language={language} notify={notify} isAdmin={user.role === "Admin"} onLanguageChange={(next) => { setLanguage(next); window.localStorage.setItem("perumnet-language", next); setUser((current) => current ? { ...current, preferredLanguage: next } : current); }} />}

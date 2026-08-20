@@ -49,6 +49,7 @@ import { ApiClientError } from "../api-client";
 import { MailLoginEditor } from "./mail-login-editor";
 
 type User = { id: string; name: string; email: string; role: string };
+type AuthProviderMode = "LOCAL" | "MAILSERVER";
 type Service = { id: string; slug: string; title: string; titleEn: string; summary: string; summaryEn: string; description: string; descriptionEn: string; features: string[]; featuresEn: string[]; icon: string; sortOrder: number; isPublished: boolean };
 type PortfolioGalleryImage = { id: string; url: string; sortOrder: number; isCover: boolean };
 type Portfolio = { id: string; title: string; titleEn: string; description: string; descriptionEn: string; imageUrl: string; location: string; locationEn: string; completedAt: string; sortOrder: number; isPublished: boolean; gallery: PortfolioGalleryImage[] };
@@ -321,6 +322,7 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
   const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
   const [mailserverUnavailable, setMailserverUnavailable] = useState(false);
+  const [authProviderMode, setAuthProviderMode] = useState<AuthProviderMode | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     const token = new URLSearchParams(window.location.search).get("resetToken");
@@ -331,6 +333,18 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
       }, 0);
       return () => window.clearTimeout(update);
     }
+  }, []);
+  useEffect(() => {
+    let active = true;
+    request<{ mode: AuthProviderMode }>("/api/auth/mode")
+      .then(({ mode: currentMode }) => {
+        if (!active || (currentMode !== "LOCAL" && currentMode !== "MAILSERVER")) return;
+        setAuthProviderMode(currentMode);
+      })
+      .catch(() => {
+        // Fail closed: do not offer a reset flow until the server mode is known.
+      });
+    return () => { active = false; };
   }, []);
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError(""); setMailserverUnavailable(false);
@@ -391,9 +405,13 @@ function LoginScreen({ onSuccess }: { onSuccess: () => Promise<void> }) {
       {mode === "login" && <form onSubmit={submit} className={styles.loginForm}>
         <div className={styles.portalLabel}><span /> Portal pengelolaan PerumNet</div>
         <span className={styles.formEyebrow}>AKSES ADMIN</span><h2>Selamat datang kembali.</h2><p>Masuk dengan akun Administrator PerumNet Enterprise.</p>
-        <label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@perumnet.id" required autoComplete="email" /></label>
+        <label>Email atau username<input type="text" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="admin@perumnet.id atau admin" required autoComplete="username" /></label>
         <label>Kata sandi<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Masukkan kata sandi" required minLength={8} autoComplete="current-password" /></label>
-        {!mailserverUnavailable && <button className={styles.loginFormSwitch} type="button" onClick={() => { setMode("forgot"); setError(""); }}>Lupa kata sandi?</button>}
+        {authProviderMode === "MAILSERVER" ? (
+          <p className={styles.loginRecoveryNote}>Reset password email lewat webmail atau hubungi IT.</p>
+        ) : authProviderMode === "LOCAL" && !mailserverUnavailable ? (
+          <button className={styles.loginFormSwitch} type="button" onClick={() => { setMode("forgot"); setError(""); }}>Lupa kata sandi?</button>
+        ) : null}
         {error && <div className={styles.formError} role="alert">{mailserverUnavailable && <strong>Mailserver tidak tersedia. </strong>}{error}</div>}
         <button type="submit" disabled={busy}>{busy ? <LoaderCircle className={styles.spin} size={19} /> : <>Masuk ke Panel <ArrowRight size={18} /></>}</button>
         <div className={styles.loginLegal}><Link href="/syarat-ketentuan">Syarat dan Ketentuan</Link><Link href="/kebijakan-privasi">Kebijakan Privasi</Link><Link href="/#faq">FAQ</Link></div>

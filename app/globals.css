@@ -1166,6 +1166,13 @@ h3 {
   gap: 14px;
 }
 
+.auth-recovery-note {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: right;
+}
+
 .checkbox-label {
   display: inline-flex;
   align-items: center;
