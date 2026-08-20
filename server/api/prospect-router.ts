@@ -28,7 +28,7 @@ import {
   renderSubjek,
   susunSurat,
   type Penandatangan,
-} from "../prospect-letter";
+} from "../letter";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
 
 /**

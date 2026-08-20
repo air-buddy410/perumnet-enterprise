@@ -26,3 +26,12 @@ export const emailDeliveryStatusLabels: Record<
   Failed: { id: "Gagal", en: "Failed" },
   Skipped: { id: "Tidak dikirim", en: "Not sent" },
 };
+
+// ── Bentuk isi surat ─────────────────────────────────────────────────
+//
+// Dipakai surat prospek MAUPUN surat pengantar dokumen. Ditaruh di sini, bukan
+// di salah satunya, supaya tidak terulang: daftar status sempat hidup dua kali
+// dan penyaringnya diam-diam berhenti bekerja.
+
+export const letterBodyFormats = ["text", "rich", "html"] as const;
+export type LetterBodyFormat = (typeof letterBodyFormats)[number];

@@ -260,12 +260,12 @@ async function simpanBerkasLampiran(attachments: PreparedAttachment[]) {
     // depan path traversal pada backend disk lokal (server/storage.ts).
     // Nama berkas dari pengguna tidak pernah ikut ke sini; ia hidup di kolom.
     const id = `lampiran-${randomUUID()}`;
-    const { storageUrl, contentBase64 } = await storeUploadedFile(
-      "email-attachments",
-      id,
-      a.mimeType,
-      a.content,
-    );
+    // Kalau arsip pengiriman sudah menyimpannya, jangan disimpan dua kali.
+    // Baris ini cukup menunjuk ke berkas yang sama dan menandai dirinya bukan
+    // pemilik.
+    const { storageUrl, contentBase64 } =
+      a.tersimpanDiArsip ??
+      (await storeUploadedFile("email-attachments", id, a.mimeType, a.content));
     baris.push({
       id,
       urutan,
@@ -276,6 +276,7 @@ async function simpanBerkasLampiran(attachments: PreparedAttachment[]) {
       storageUrl,
       contentBase64,
       generated: a.generated,
+      ownsBytes: !a.tersimpanDiArsip,
     });
   }
   return baris;
@@ -291,6 +292,7 @@ interface DatabaseStatementLike {
   storageUrl: string | null;
   contentBase64: string | null;
   generated: boolean;
+  ownsBytes: boolean;
 }
 
 /**
@@ -355,11 +357,14 @@ async function bacaLampiranOutbox(
  */
 async function buangLampiranOutbox(client: DatabaseClient, outboxId: string) {
   const hasil = await client.execute({
-    sql: "SELECT storage_url FROM email_attachments WHERE outbox_id=?",
+    sql: "SELECT storage_url,owns_bytes FROM email_attachments WHERE outbox_id=?",
     args: [outboxId],
   });
   if (!hasil.rows.length) return;
   for (const row of hasil.rows as unknown as Record<string, unknown>[]) {
+    // Hanya menghapus berkas yang MILIK baris ini. Yang dimiliki arsip
+    // pengiriman dibiarkan — arsipnya bertahan bertahun-tahun, outbox 180 hari.
+    if (Number(row.owns_bytes ?? 1) !== 1) continue;
     if (row.storage_url) await deleteStoredFile(String(row.storage_url));
   }
   await client.execute({
@@ -435,8 +440,8 @@ async function enqueueOutbox(
       await tx.execute({
         sql: `INSERT INTO email_attachments
           (id,outbox_id,filename,mime_type,byte_size,sha256,storage_url,
-           content_base64,generated,sort_order,created_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+           content_base64,generated,owns_bytes,sort_order,created_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
         args: [
           l.id,
           id,
@@ -447,6 +452,7 @@ async function enqueueOutbox(
           l.storageUrl,
           l.contentBase64,
           l.generated ? 1 : 0,
+          l.ownsBytes ? 1 : 0,
           l.urutan,
           timestamp,
         ],
@@ -538,6 +544,36 @@ async function syncProspectOutreach(
 ) {
   await client.execute({
     sql: `UPDATE cms_prospect_outreach
+      SET status=?, sent_at=?, failure_reason=?
+      WHERE outbox_id=?`,
+    args: [
+      status,
+      status === "Sent" ? timestamp : null,
+      failureReason ?? null,
+      outboxId,
+    ],
+  });
+}
+
+/**
+ * Menyalin nasib satu baris outbox ke riwayat pengiriman dokumen.
+ *
+ * Alasannya sama persis dengan `syncProspectOutreach`, dan itu bukan kebetulan:
+ * pruneEmailOutbox menghapus baris outbox setelah 180 hari, sedangkan "SPK mana
+ * yang sudah kita kirim ke vendor ini, dan sampai atau tidak" adalah pertanyaan
+ * yang muncul saat ada sengketa — bertahun-tahun kemudian.
+ *
+ * Diam kalau barisnya bukan milik pengiriman dokumen.
+ */
+async function syncDocumentDelivery(
+  client: DatabaseClient,
+  outboxId: string,
+  status: "Sent" | "Failed" | "Skipped",
+  timestamp: string,
+  failureReason?: string,
+) {
+  await client.execute({
+    sql: `UPDATE document_deliveries
       SET status=?, sent_at=?, failure_reason=?
       WHERE outbox_id=?`,
     args: [
@@ -747,6 +783,7 @@ async function deliverOutboxRow(
     });
     await buangLampiranOutbox(client, String(row.id));
     await syncProspectOutreach(client, String(row.id), "Sent", timestamp);
+    await syncDocumentDelivery(client, String(row.id), "Sent", timestamp);
     await recordDelivery(
       client,
       input,
@@ -784,6 +821,13 @@ async function deliverOutboxRow(
       // tetap 'Queued' di riwayat — menandainya gagal membuat orang mengejar
       // sesuatu yang sebentar lagi berhasil sendiri.
       await syncProspectOutreach(
+        client,
+        String(row.id),
+        "Failed",
+        timestamp,
+        message,
+      );
+      await syncDocumentDelivery(
         client,
         String(row.id),
         "Failed",
@@ -893,6 +937,7 @@ export async function dispatchEmailOutbox(
       // mencegah — dan ia hanya muncul saat kredensial pengirim hilang, yaitu
       // saat orang paling butuh laporannya benar.
       await syncProspectOutreach(client, String(row.id), "Skipped", lockedAt, reason);
+      await syncDocumentDelivery(client, String(row.id), "Skipped", lockedAt, reason);
       results.push({ id: String(row.id), status: "skipped", error: reason });
       continue;
     }

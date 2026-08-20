@@ -14,6 +14,7 @@ import {
 } from "@/shared/access";
 import { writeAuditLog } from "../audit";
 import { authProviderMode, verifyMailserverPassword } from "../mail-auth";
+import { dispatchDocumentEmailTemplateApi } from "./document-email-router";
 import { getPasswordPolicy, mailcowConfig, setMailboxPassword } from "../mailcow";
 import {
   APP_PASSWORD_MIN_LENGTH,
@@ -610,6 +611,7 @@ const resourceModules: Record<string, AccessModule> = {
   invoices: "billing",
   quotations: "billing",
   vendors: "procurement",
+  "document-email-templates": "procurement",
   "vendor-categories": "procurement",
   spks: "procurement",
   "procurement-orders": "procurement",
@@ -6722,6 +6724,9 @@ export async function dispatchApi(request: Request, path: string[]) {
     );
   }
   if (resource === "invoices") return handleInvoices(request, path, user);
+  if (resource === "document-email-templates") {
+    return dispatchDocumentEmailTemplateApi(request, path, user);
+  }
   if (resource === "vendors") return handleVendors(request, path, user);
   if (resource === "vendor-categories") {
     return handleVendorCategories(request, path, user);
