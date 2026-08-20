@@ -1023,6 +1023,15 @@ async function importProspects(request: Request, user: AuthUser) {
   // padahal yang sungguhan hanya 36 — persis jenis kejutan yang uji kering ada
   // untuk mencegahnya.
   const sudahDipakai = new Map<string, number>();
+  // Kontak TANPA email tidak punya kunci unik di database, jadi ia lolos dari
+  // seluruh pemeriksaan di atas. Akibatnya berkas yang sama diunggah dua kali
+  // menghasilkan salinan berlipat — dan berkas kontak memang sering diunggah
+  // ulang setelah diperbaiki. Kuncinya nama + perusahaan: dua baris yang sama
+  // persis pada keduanya adalah orang yang sama, bukan dua orang.
+  const tanpaEmailDipakai = new Map<string, number>();
+
+  const kunciTanpaEmail = (nama: string, perusahaan: string) =>
+    `${nama.trim().toLowerCase()}|${perusahaan.trim().toLowerCase()}`;
 
   for (const baris of kontak) {
     if (baris.email) {
@@ -1032,7 +1041,7 @@ async function importProspects(request: Request, user: AuthUser) {
         issues.push({
           sheet: baris.sheet,
           row: baris.row,
-          code: "EMAIL_TIDAK_SAH",
+          code: "EMAIL_GANDA",
           detail: `${baris.sheet} baris ${baris.row}: ${baris.email} sudah dipakai baris ${barisSebelumnya} di berkas yang sama. Baris dilewati — dua perusahaan berbagi satu alamat hampir selalu salah tempel.`,
         });
         dilewati += 1;
@@ -1049,13 +1058,46 @@ async function importProspects(request: Request, user: AuthUser) {
         issues.push({
           sheet: baris.sheet,
           row: baris.row,
-          code: "EMAIL_TIDAK_SAH",
+          code: "EMAIL_GANDA",
           detail: `${baris.sheet} baris ${baris.row}: ${baris.email} sudah dipakai prospek lain. Baris dilewati.`,
         });
         dilewati += 1;
         continue;
       }
       sudahDipakai.set(kunci, baris.row);
+    } else {
+      const kunci = kunciTanpaEmail(baris.fullName, baris.companyName);
+      const barisSebelumnya = tanpaEmailDipakai.get(kunci);
+      if (barisSebelumnya !== undefined) {
+        issues.push({
+          sheet: baris.sheet,
+          row: baris.row,
+          code: "KONTAK_GANDA",
+          detail: `${baris.sheet} baris ${baris.row}: ${baris.fullName} di ${baris.companyName || "perusahaan yang sama"} sudah ada di baris ${barisSebelumnya}. Baris dilewati — tanpa email, nama dan perusahaan yang sama persis adalah orang yang sama.`,
+        });
+        dilewati += 1;
+        continue;
+      }
+      const ada = await client.execute({
+        sql: `SELECT id FROM cms_prospects
+          WHERE (email IS NULL OR email='')
+            AND lower(trim(full_name))=lower(trim(?))
+            AND lower(trim(COALESCE(company_name,'')))=lower(trim(?))
+            AND deleted_at IS NULL
+          LIMIT 1`,
+        args: [baris.fullName, baris.companyName || ""],
+      });
+      if (ada.rows[0]) {
+        issues.push({
+          sheet: baris.sheet,
+          row: baris.row,
+          code: "KONTAK_GANDA",
+          detail: `${baris.sheet} baris ${baris.row}: ${baris.fullName} di ${baris.companyName || "perusahaan yang sama"} sudah terdaftar tanpa email. Baris dilewati.`,
+        });
+        dilewati += 1;
+        continue;
+      }
+      tanpaEmailDipakai.set(kunci, baris.row);
     }
     if (dryRun) {
       disimpan += 1;

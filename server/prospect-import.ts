@@ -20,7 +20,16 @@ import {
 export type ImportIssueCode =
   | "TANPA_NAMA"
   | "TANPA_EMAIL"
+  /** Alamat yang sama dipakai dua baris, atau sudah dipakai prospek lain. */
   | "EMAIL_GANDA"
+  /**
+   * Kontak TANPA email dengan nama dan perusahaan yang sama persis dengan
+   * baris lain, atau dengan prospek yang sudah ada. Tanpa email tidak ada
+   * kunci unik di database, jadi tanpa pemeriksaan ini berkas yang diunggah
+   * ulang menghasilkan salinan berlipat — dan berkas kontak memang sering
+   * diunggah ulang setelah diperbaiki.
+   */
+  | "KONTAK_GANDA"
   | "EMAIL_TIDAK_SAH";
 
 export interface ImportIssue {
