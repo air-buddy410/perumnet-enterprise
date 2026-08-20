@@ -263,6 +263,7 @@ test("placeholder yang dikenal diisi, yang tidak dikenal dibiarkan utuh", async 
       prospectIds: [prospek.data.id],
       subject: "Untuk {{perusahaan}}",
       bodyHtml: "<p>Halo {{nama}}, salam {{prusahaan}}</p>",
+      bodyFormat: "html",
     }),
   });
   assert.equal(kirim.status, 200);
@@ -289,6 +290,7 @@ test("nilai yang disisipkan di-escape, bukan dipercaya", async () => {
       prospectIds: [prospek.data.id],
       subject: "Halo",
       bodyHtml: "<p>{{nama}}</p>",
+      bodyFormat: "html",
     }),
   });
   assert.equal(kirim.status, 200);
@@ -560,4 +562,160 @@ test("dua baris beralamat sama dalam SATU berkas: kering dan sungguhan sepakat",
   const sungguhan = await unggah(await workbook(baris));
   assert.equal(sungguhan.data.disimpan, 1);
   assert.equal(sungguhan.data.dilewati, 1);
+});
+
+// ── Surat utuh: kop berlogo dan tanda tangan ─────────────────────────
+//
+// Sebelumnya isi template dikirim apa adanya. Admin harus menulis HTML sendiri,
+// dan yang sampai ke calon klien adalah potongan HTML telanjang: tanpa logo,
+// tanpa tanda tangan, tanpa cara berhenti dihubungi. Pratinjau menampilkan
+// potongan yang sama, jadi tidak ada satu pun layar yang memperlihatkan surat
+// utuh sebelum ia terkirim.
+
+async function buatTemplate(perubahan = {}) {
+  return await api("/api/cms/prospect-templates", {
+    method: "POST",
+    body: JSON.stringify({
+      name: `Template ${Math.random().toString(36).slice(2, 8)}`,
+      subject: "Perkenalan untuk {{perusahaan}}",
+      bodyHtml: "Yth. Bapak/Ibu,\n{{nama}}\n\nSalam hormat dari kami.",
+      ...perubahan,
+    }),
+  });
+}
+
+test("template baru bawaannya teks biasa, bukan HTML", async () => {
+  const t = await buatTemplate();
+  assert.equal(t.status, 201);
+  // Yang mengisi formulir ini bukan orang yang menulis HTML. Kalau bawaannya
+  // html, tanda kurung siku yang dia ketik jadi markup diam-diam.
+  assert.equal(t.data.bodyFormat, "text");
+});
+
+test("pratinjau memuat logo dan tanda tangan, bukan potongan telanjang", async () => {
+  const prospek = await tambahProspek({ fullName: "Budi", companyName: "PT Maju" });
+  const t = await buatTemplate({
+    senderName: "Suci",
+    senderSignoff: "Best Regards,",
+    senderEmail: "orang@contoh.test",
+    senderPhone: "+62 800-0000-0000",
+  });
+
+  const lihat = await api(`/api/cms/prospect-templates/${t.data.id}/preview`, {
+    method: "POST",
+    body: JSON.stringify({ prospectId: prospek.data.id }),
+  });
+  assert.equal(lihat.status, 200);
+  const surat = lihat.data.bodyHtml;
+
+  assert.match(surat, /perumnet-enterprise-logo\.png/, "logo tidak ada di pratinjau");
+  assert.match(surat, /Suci/, "nama penandatangan tidak ada");
+  assert.match(surat, /Best Regards,/, "salam penutup tidak ada");
+  assert.match(surat, /PerumNet Enterprise/, "nama perusahaan tidak ada");
+  assert.match(surat, /Karangasem/, "alamat perusahaan tidak ada");
+  // Cara berhenti dihubungi wajib ada: kontaknya tidak pernah meminta disurati.
+  assert.match(surat, /BERHENTI/);
+  assert.equal(lihat.data.subject, "Perkenalan untuk PT Maju");
+});
+
+test("yang dilihat di pratinjau adalah yang terkirim, huruf demi huruf", async () => {
+  const prospek = await tambahProspek({ fullName: "Wayan", companyName: "CV Bali" });
+  const t = await buatTemplate({ senderName: "Suci" });
+
+  const lihat = await api(`/api/cms/prospect-templates/${t.data.id}/preview`, {
+    method: "POST",
+    body: JSON.stringify({ prospectId: prospek.data.id }),
+  });
+  const kirim = await api("/api/cms/prospects/outreach", {
+    method: "POST",
+    body: JSON.stringify({ prospectIds: [prospek.data.id], templateId: t.data.id }),
+  });
+  assert.equal(kirim.status, 200);
+
+  const client = db();
+  const baris = await client.execute({
+    sql: "SELECT subject,body_html FROM cms_prospect_outreach WHERE prospect_id=? LIMIT 1",
+    args: [prospek.data.id],
+  });
+  client.close();
+
+  // Pratinjau dan pengiriman memanggil fungsi yang sama. Kalau suatu saat
+  // dipisah, perbedaannya baru ketahuan setelah surat sampai ke calon klien —
+  // dan saat itu tidak ada lagi yang bisa ditarik kembali.
+  assert.equal(String(baris.rows[0].body_html), lihat.data.bodyHtml);
+  assert.equal(String(baris.rows[0].subject), lihat.data.subject);
+});
+
+test("baris kosong jadi paragraf tanpa admin menulis satu tag pun", async () => {
+  const prospek = await tambahProspek();
+  const t = await buatTemplate({
+    bodyHtml: "Paragraf satu.\n\nParagraf dua.\n\nParagraf tiga.",
+  });
+  const lihat = await api(`/api/cms/prospect-templates/${t.data.id}/preview`, {
+    method: "POST",
+    body: JSON.stringify({ prospectId: prospek.data.id }),
+  });
+
+  const paragraf = lihat.data.bodyHtml.match(/<p style="margin:0 0 14px/g) ?? [];
+  assert.equal(paragraf.length, 3);
+  assert.match(lihat.data.bodyHtml, /Paragraf tiga\./);
+});
+
+test("tag yang diketik di kotak teks tetap terbaca sebagai teks", async () => {
+  const prospek = await tambahProspek();
+  const t = await buatTemplate({ bodyHtml: "Harga <b>khusus</b> untuk Anda." });
+  const lihat = await api(`/api/cms/prospect-templates/${t.data.id}/preview`, {
+    method: "POST",
+    body: JSON.stringify({ prospectId: prospek.data.id }),
+  });
+
+  // Kotaknya dijanjikan sebagai teks biasa. Kalau <b> diam-diam jadi tebal,
+  // maka <script> juga jadi skrip — janji yang sama, akibat yang jauh berbeda.
+  assert.match(lihat.data.bodyHtml, /&lt;b&gt;khusus&lt;\/b&gt;/);
+  assert.ok(!lihat.data.bodyHtml.includes("<b>khusus</b>"));
+});
+
+test("tanda tangan memakai kontak orang, bukan kontak umum perusahaan", async () => {
+  const prospek = await tambahProspek();
+  const t = await buatTemplate({
+    senderName: "Suci",
+    senderEmail: "orang@contoh.test",
+    senderPhone: "+62 800-0000-0000",
+  });
+  const lihat = await api(`/api/cms/prospect-templates/${t.data.id}/preview`, {
+    method: "POST",
+    body: JSON.stringify({ prospectId: prospek.data.id }),
+  });
+
+  assert.match(lihat.data.bodyHtml, /orang@contoh\.test/);
+  assert.match(lihat.data.bodyHtml, /\+62 800-0000-0000/);
+  // Balasan penawaran harus sampai ke orang yang mengirimnya. Alamat umum
+  // perusahaan memindahkan balasan ke kotak masuk yang tidak menunggunya.
+  assert.ok(!lihat.data.bodyHtml.includes("enterprise@perumnet.id"));
+});
+
+test("tanda tangan yang dikosongkan jatuh ke kontak perusahaan", async () => {
+  const prospek = await tambahProspek();
+  const t = await buatTemplate({ senderName: "Suci" });
+  const lihat = await api(`/api/cms/prospect-templates/${t.data.id}/preview`, {
+    method: "POST",
+    body: JSON.stringify({ prospectId: prospek.data.id }),
+  });
+
+  assert.match(lihat.data.bodyHtml, /enterprise@perumnet\.id/);
+});
+
+test("daftar template membawa naskah awal dan tanda tangan dari akun yang masuk", async () => {
+  const daftar = await api("/api/cms/prospect-templates");
+  assert.equal(daftar.status, 200);
+  const bawaan = daftar.data.defaults;
+
+  // Kotak template tidak pernah dibuka kosong.
+  assert.ok(bawaan.starter.bodyHtml.includes("PerumNet Enterprise"));
+  assert.match(bawaan.starter.bodyHtml, /\{\{nama\}\}/);
+  assert.equal(bawaan.starter.bodyFormat, "text");
+  // Nama dan email pegawai datang dari sesi, bukan dari kode: repositori ini
+  // publik dan tidak boleh memuat daftar pegawai.
+  assert.equal(bawaan.senderEmail, ADMIN);
+  assert.ok(bawaan.senderName.length > 0);
 });

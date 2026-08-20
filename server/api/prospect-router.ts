@@ -11,11 +11,21 @@ import {
   PROSPECT_MAX_RECIPIENTS_PER_BATCH,
   PROSPECT_MAX_SPACING_SECONDS,
   PROSPECT_SOURCE_MIN_LENGTH,
-  prospectPlaceholderPattern,
+  PROSPECT_DEFAULT_LETTER_FORMAT,
+  PROSPECT_STARTER_TEMPLATE,
+  prospectLetterFormats,
   prospectSegments,
   prospectStatuses,
+  type ProspectLetterFormat,
 } from "../../shared/prospects";
 import { bacaWorkbookProspek } from "../prospect-import";
+import {
+  muatIdentitas,
+  renderIsiSurat,
+  renderSubjek,
+  susunSurat,
+  type Penandatangan,
+} from "../prospect-letter";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
 
 function admin(request: Request) {
@@ -62,6 +72,14 @@ const templateSchema = z.object({
   name: z.string().trim().min(2).max(180),
   subject: z.string().trim().min(2).max(300),
   bodyHtml: z.string().trim().min(10).max(100_000),
+  // Bawaannya teks biasa. Admin mengetik kalimat, server yang menyusun
+  // suratnya — kop, tanda tangan, dan catatan kaki tidak pernah jadi tanggung
+  // jawab orang yang mengisi formulir.
+  bodyFormat: z.enum(prospectLetterFormats).default("text"),
+  senderSignoff: z.string().trim().max(80).default(""),
+  senderName: z.string().trim().max(120).default(""),
+  senderEmail: z.union([z.string().trim().email().max(254), z.literal("")]).default(""),
+  senderPhone: z.string().trim().max(40).default(""),
   language: z.enum(["id", "en"]).default("id"),
 });
 
@@ -74,6 +92,8 @@ const sendSchema = z
     templateId: z.string().uuid().optional(),
     subject: z.string().trim().min(2).max(300).optional(),
     bodyHtml: z.string().trim().min(10).max(100_000).optional(),
+    bodyFormat: z.enum(prospectLetterFormats).default("text"),
+    language: z.enum(["id", "en"]).default("id"),
     spacingSeconds: z
       .number()
       .int()
@@ -92,21 +112,6 @@ function now() {
 
 function text(value: unknown) {
   return value === null || value === undefined ? "" : String(value);
-}
-
-/**
- * Nilai yang disisipkan ke template di-escape, bukan dipercaya. Nama dan nama
- * perusahaan bisa berasal dari berkas Excel yang diserahkan pihak lain —
- * sebuah sel berisi `<script>` yang lolos ke badan surat adalah injeksi yang
- * dikirim ke kotak surat orang lain atas nama kita.
- */
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 function mapProspect(row: Record<string, unknown>) {
@@ -373,18 +378,45 @@ function mapTemplate(row: Record<string, unknown>) {
     name: String(row.name),
     subject: String(row.subject),
     bodyHtml: String(row.body_html),
+    bodyFormat: String(row.body_format ?? "text"),
+    senderSignoff: String(row.sender_signoff ?? ""),
+    senderName: String(row.sender_name ?? ""),
+    senderEmail: String(row.sender_email ?? ""),
+    senderPhone: String(row.sender_phone ?? ""),
     language: String(row.language),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
 }
 
-async function listTemplates() {
+async function listTemplates(user: AuthUser) {
   const { client } = await getDatabase();
   const hasil = await client.execute(
     "SELECT * FROM cms_prospect_templates WHERE deleted_at IS NULL ORDER BY name",
   );
-  return ok({ items: hasil.rows.map(mapTemplate) }, 200, { "Cache-Control": "no-store" });
+  return ok(
+    {
+      items: hasil.rows.map(mapTemplate),
+      // Bekal untuk layar: naskah awal supaya kotak template tidak pernah
+      // kosong, dan tanda tangan yang sudah terisi dari akun yang sedang masuk.
+      // Nama dan email pegawai datang dari sesi, bukan dari kode — repositori
+      // ini publik.
+      defaults: {
+        starter: {
+          name: PROSPECT_STARTER_TEMPLATE.name,
+          subject: PROSPECT_STARTER_TEMPLATE.subject,
+          bodyHtml: PROSPECT_STARTER_TEMPLATE.body,
+          bodyFormat: PROSPECT_DEFAULT_LETTER_FORMAT,
+        },
+        senderSignoff: PROSPECT_STARTER_TEMPLATE.signoff,
+        senderName: user.name,
+        senderEmail: user.email,
+        senderPhone: "",
+      },
+    },
+    200,
+    { "Cache-Control": "no-store" },
+  );
 }
 
 async function loadTemplate(client: DatabaseClient, id: string) {
@@ -404,9 +436,25 @@ async function createTemplate(request: Request, user: AuthUser) {
   const timestamp = now();
   await client.execute({
     sql: `INSERT INTO cms_prospect_templates
-      (id,name,subject,body_html,language,created_by,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?)`,
-    args: [id, input.name, input.subject, input.bodyHtml, input.language, user.id, timestamp, timestamp],
+      (id,name,subject,body_html,body_format,
+       sender_signoff,sender_name,sender_email,sender_phone,
+       language,created_by,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    args: [
+      id,
+      input.name,
+      input.subject,
+      input.bodyHtml,
+      input.bodyFormat,
+      input.senderSignoff,
+      input.senderName,
+      input.senderEmail,
+      input.senderPhone,
+      input.language,
+      user.id,
+      timestamp,
+      timestamp,
+    ],
   });
   await writeAuditLog(client, request, user, "prospect_template_create", "prospect_template", id);
   return created(mapTemplate(await loadTemplate(client, id)));
@@ -420,6 +468,11 @@ async function patchTemplate(request: Request, id: string, user: AuthUser) {
     name: "name",
     subject: "subject",
     bodyHtml: "body_html",
+    bodyFormat: "body_format",
+    senderSignoff: "sender_signoff",
+    senderName: "sender_name",
+    senderEmail: "sender_email",
+    senderPhone: "sender_phone",
     language: "language",
   };
   const sets: string[] = [];
@@ -460,17 +513,61 @@ async function deleteTemplate(request: Request, id: string, user: AuthUser) {
  * ke ratusan orang tanpa ada yang menyadarinya; yang tertinggal utuh terlihat
  * pada pratinjau pertama.
  */
-function renderTemplate(sumber: string, prospect: ReturnType<typeof mapProspect>) {
-  const nilai: Record<string, string> = {
+function nilaiPlaceholder(prospect: ReturnType<typeof mapProspect>) {
+  return {
     nama: prospect.fullName,
     perusahaan: prospect.companyName,
     jabatan: prospect.jobTitle,
     kota: prospect.location,
     segmen: prospect.segment ?? "",
+  } satisfies Record<string, string>;
+}
+
+/**
+ * Satu surat utuh, siap kirim: subjek + HTML lengkap dengan kop berlogo dan
+ * tanda tangan. Pratinjau dan pengiriman sama-sama lewat sini, jadi yang
+ * dilihat admin adalah yang diterima calon klien — bukan dua render yang
+ * kebetulan mirip.
+ */
+interface SumberSurat {
+  subject: string;
+  body: string;
+  format: ProspectLetterFormat;
+  language: "id" | "en";
+  penandatangan: Penandatangan;
+}
+
+function sumberDariTemplate(row: Record<string, unknown>): SumberSurat {
+  return {
+    subject: String(row.subject),
+    body: String(row.body_html),
+    format: String(row.body_format ?? "text") === "html" ? "html" : "text",
+    language: String(row.language) === "en" ? "en" : "id",
+    penandatangan: {
+      signoff: String(row.sender_signoff ?? ""),
+      name: String(row.sender_name ?? ""),
+      email: String(row.sender_email ?? ""),
+      phone: String(row.sender_phone ?? ""),
+    },
   };
-  return sumber.replace(prospectPlaceholderPattern, (utuh, kunci: string) =>
-    kunci in nilai ? escapeHtml(nilai[kunci]) : utuh,
-  );
+}
+
+async function susunUntukProspek(
+  client: DatabaseClient,
+  prospect: ReturnType<typeof mapProspect>,
+  sumber: SumberSurat,
+) {
+  const nilai = nilaiPlaceholder(prospect);
+  const identitas = await muatIdentitas(client, sumber.language);
+  return {
+    subject: renderSubjek(sumber.subject, nilai),
+    html: susunSurat({
+      isiHtml: renderIsiSurat(sumber.body, sumber.format, nilai),
+      identitas,
+      language: sumber.language,
+      penandatangan: sumber.penandatangan,
+    }),
+  };
 }
 
 async function previewTemplate(request: Request, id: string) {
@@ -480,9 +577,14 @@ async function previewTemplate(request: Request, id: string) {
   const { client } = await getDatabase();
   const template = await loadTemplate(client, id);
   const prospect = await loadProspect(client, input.prospectId);
+  const surat = await susunUntukProspek(
+    client,
+    prospect,
+    sumberDariTemplate(template as unknown as Record<string, unknown>),
+  );
   return ok({
-    subject: renderTemplate(String(template.subject), prospect),
-    bodyHtml: renderTemplate(String(template.body_html), prospect),
+    subject: surat.subject,
+    bodyHtml: surat.html,
     recipient: prospect.email,
   });
 }
@@ -495,14 +597,26 @@ async function sendOutreach(request: Request, user: AuthUser) {
 
   let templateId: string | null = null;
   let templateName = "Surat langsung";
-  let subjectSumber = input.subject ?? "";
-  let bodySumber = input.bodyHtml ?? "";
+  let sumber: SumberSurat = {
+    subject: input.subject ?? "",
+    body: input.bodyHtml ?? "",
+    format: input.bodyFormat,
+    language: input.language,
+    // Surat langsung ditandatangani orang yang menekan tombol kirim. Tanpa ini
+    // suratnya berakhir tanpa nama, dan balasannya tidak jelas ditujukan
+    // kepada siapa.
+    penandatangan: {
+      signoff: "",
+      name: user.name,
+      email: user.email,
+      phone: "",
+    },
+  };
   if (input.templateId) {
     const template = await loadTemplate(client, input.templateId);
     templateId = String(template.id);
     templateName = String(template.name);
-    subjectSumber = String(template.subject);
-    bodySumber = String(template.body_html);
+    sumber = sumberDariTemplate(template as unknown as Record<string, unknown>);
   }
 
   const spacing = input.spacingSeconds ?? PROSPECT_DEFAULT_SPACING_SECONDS;
@@ -547,8 +661,9 @@ async function sendOutreach(request: Request, user: AuthUser) {
     // juga membawa invoice dan tautan reset kata sandi; puluhan email yang
     // tiba sekaligus membahayakan keduanya.
     const jadwal = new Date(mulai + urutan * spacing * 1_000).toISOString();
-    const subject = renderTemplate(subjectSumber, p);
-    const html = renderTemplate(bodySumber, p);
+    // Jalur yang sama dengan pratinjau. Kalau keduanya dirender terpisah,
+    // perbedaannya baru ketahuan setelah surat sampai ke calon klien.
+    const { subject, html } = await susunUntukProspek(client, p, sumber);
     const kirim = await sendEmailDelivery(client, {
       recipient: p.email,
       eventType: "prospect_outreach",
@@ -762,7 +877,7 @@ export async function dispatchProspectTemplateApi(request: Request, path: string
   const id = path[1];
 
   if (!id) {
-    if (request.method === "GET") return listTemplates();
+    if (request.method === "GET") return listTemplates(user);
     if (request.method === "POST") return createTemplate(request, user);
   }
   if (id && path[2] === "preview" && request.method === "POST") {

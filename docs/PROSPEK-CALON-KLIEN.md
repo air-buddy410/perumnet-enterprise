@@ -97,6 +97,49 @@ Dua aturan render yang disengaja:
   diam-diam jadi string kosong akan terkirim ke ratusan orang tanpa ada yang
   menyadarinya; yang tertinggal utuh terlihat pada pratinjau pertama.
 
+### Bentuk surat — kop, tanda tangan, catatan kaki
+
+Sampai 20 Agustus isi template dikirim apa adanya: admin harus menulis HTML
+sendiri, dan yang sampai ke calon klien adalah potongan HTML telanjang tanpa
+logo dan tanpa tanda tangan. Pratinjau menampilkan potongan yang sama, jadi
+tidak ada satu pun layar yang memperlihatkan surat utuh sebelum ia terkirim.
+
+Sekarang **admin mengetik teks biasa**, dan `server/prospect-letter.ts`
+menyusun suratnya:
+
+| Bagian | Dari mana |
+|---|---|
+| Kop berlogo | `/perumnet-enterprise-logo.png` lewat `APP_URL` |
+| Isi | template, teks biasa; baris kosong = paragraf baru |
+| Salam penutup + nama | `senderSignoff`, `senderName` pada template |
+| Telepon / email | `senderPhone`, `senderEmail`; kosong = kontak perusahaan |
+| Nama & alamat perusahaan | `cms_site_settings` — sumber yang sama dengan footer situs |
+| Catatan cara berhenti | ditempel selalu; kontaknya tidak pernah meminta disurati |
+
+`bodyFormat` menentukan cara isi dibaca:
+
+- **`"text"` (bawaan)** — seluruh tag di-escape lalu dipecah jadi paragraf.
+  `<b>` sampai ke penerima sebagai tulisan `<b>`, bukan huruf tebal. Escaping
+  dilakukan **sebelum** placeholder diisi, supaya `{{` dan `}}` selamat
+  sementara nilai yang disisipkan tetap lewat escape-nya sendiri.
+- **`"html"`** — isi dipercaya sebagai markup. Hanya untuk surat yang memang
+  disusun sebagai HTML.
+
+**Pratinjau dan pengiriman memanggil fungsi yang sama.** `POST
+/api/cms/prospect-templates/:id/preview` memulangkan dokumen HTML lengkap —
+persis yang disimpan ke `cms_prospect_outreach.body_html` saat dikirim. Ada tes
+yang membandingkan keduanya huruf demi huruf; kalau suatu saat jalurnya
+dipisah, perbedaannya baru ketahuan setelah surat sampai ke calon klien.
+
+`GET /api/cms/prospect-templates` juga memulangkan `defaults`: naskah awal
+(`starter`) supaya kotak template tidak pernah terbuka kosong, dan tanda tangan
+yang sudah terisi dari akun yang sedang masuk. **Nama dan email pegawai tidak
+ada di dalam kode** — repositori ini publik; keduanya datang dari sesi.
+
+Logo dimuat dari URL publik, bukan data URI: Gmail membuang gambar data URI.
+Konsekuensinya logo baru muncul setelah penerima mengizinkan gambar, jadi
+`alt`-nya ditulis penuh supaya nama merek tetap terbaca saat gambar diblokir.
+
 ### Riwayat surat
 
 `cms_prospect_outreach` menyimpan surat yang benar-benar dikirim, menempel
@@ -225,7 +268,8 @@ yang tidak punya endpoint.
 
 - **Lampiran PDF.** Surat berisi teks dan tautan. Diputuskan 19 Agustus untuk
   menyusul, bukan ditunda tanpa batas.
-- **Layar `/admin`.** Backend siap; layarnya wilayah Luna. Tugasnya ditulis di
-  `HANDOFF-BACKEND-KE-FRONTEND.md`.
+- **Layar `/admin`.** Sudah tersedia di `app/components/enterprise-app.tsx`
+  melalui `app/panel/prospects-editor.tsx`; backend tetap menjadi penegak
+  akses dan seluruh aturan domain.
 - **Retensi otomatis.** Prospek tidak dianonimkan sendiri seperti lead dari
   formulir publik. Diputuskan 19 Agustus: cukup catatan sumber + opt-out.
