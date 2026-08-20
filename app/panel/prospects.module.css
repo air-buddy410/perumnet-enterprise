@@ -304,6 +304,18 @@
 .placeholderButton:hover { border-color: var(--teal); background: #eaf8f6; }
 .placeholderButton code { color: var(--teal-dark); font-size: 10px; }
 .placeholderButton span { color: var(--muted); font-size: 9px; font-weight: 600; }
+.richTextEditor { display: grid; gap: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+.richTextToolbar { min-height: 45px; padding: 6px 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; border-bottom: 1px solid #e5eeec; background: #f7fbfa; }
+.richTextButton { width: 31px; height: 31px; display: grid; place-items: center; border: 1px solid #d6e5e2; border-radius: 6px; color: var(--teal-dark); background: #fff; cursor: pointer; }
+.richTextButton:hover:not(:disabled), .richTextButton:focus-visible { border-color: var(--teal); background: #e8f6f4; outline: none; }
+.richTextButton:disabled { cursor: not-allowed; opacity: .5; }
+.richTextDivider { width: 1px; height: 24px; margin: 0 3px; background: #dbe8e5; }
+.richTextSurface { width: 100%; min-height: 260px; padding: 15px 16px; resize: vertical; color: var(--ink); background: #fff; outline: none; border: 0; border-radius: 0; font-family: Arial, sans-serif; font-size: 14px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.richTextSurface:focus { box-shadow: inset 0 0 0 2px rgba(31, 143, 135, .16); }
+.richTextSurface:disabled { color: #6d7d7a; background: #f7faf9; cursor: not-allowed; }
+.richTextHelp, .richTextModeWarning { display: block; padding: 8px 12px; color: var(--muted); background: #fbfdfd; font-size: 10px; line-height: 1.45; }
+.richTextModeWarning { color: #8a5c22; background: #fff8e9; }
+.richTextHelp code { padding: 1px 3px; border-radius: 3px; color: var(--teal-dark); background: #eaf7f5; font-size: 10px; }
 .templatePreviewSection { margin: 0 21px 21px; padding-top: 18px; display: grid; gap: 12px; border-top: 1px solid #edf2f1; }
 .previewSectionHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .previewSectionHeader > div:first-child { display: grid; gap: 4px; }
@@ -353,6 +365,7 @@
   .previewMeta { grid-template-columns: 1fr; }
   .templateLayout { grid-template-columns: 1fr; }
   .templateItems { max-height: 260px; }
+  .richTextToolbar { align-items: stretch; }
   .previewSectionHeader { align-items: stretch; flex-direction: column; }
   .previewControls { align-items: stretch; flex-direction: column; }
   .previewControls select, .previewControls .secondary { width: 100%; }

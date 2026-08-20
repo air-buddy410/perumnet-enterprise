@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Sparkles,
   TriangleAlert,
+  UsersRound,
   WalletCards,
   X,
 } from "lucide-react";
@@ -78,7 +79,7 @@ const workflowsId: WorkflowGuide[] = [
       "Angka uang — Nilai proyek berjalan dan Piutang diterima — berada di bagian paling bawah Dashboard, di bawah daftar Proyek terbaru; gulir ke bawah untuk membacanya. Nilai proyek berjalan menjumlahkan kontrak berstatus On progress saja, sedangkan Piutang diterima mengikuti porsi setiap proyek yang sudah tertutup pembayaran terkonfirmasi. Keduanya mengikuti pemilih proyek yang sama seperti seluruh isi Dashboard.",
       "Bila proyek dijual dalam beberapa lingkup, pilih juga Paket komersial di bagian atas BoQ Generator, Quotation & Invoice, Validasi Perangkat, dan BAST Digital. Setiap paket punya BoQ, penawaran, invoice, dan BAST sendiri.",
       "Paket baru langsung berstatus Aktif, dan hanya paket Aktif yang menerima dokumen baru: BoQ, penawaran, invoice, validasi, BAST, dan Addendum. Tombol status di sebelah pemilih paket mengubahnya. Bila pekerjaan paket sudah tuntas, ubah menjadi Selesai; bila paket batal dijual, ubah menjadi Batal. Paket Selesai masih bisa diaktifkan kembali bila ada pekerjaan susulan, sedangkan Batal bersifat final.",
-      "Menu sidebar dibagi tiga: Utama berisi Dashboard, Manajemen Proyek, BoQ Generator, dan Quotation & Invoice; Operasional berisi Belanja Proyek, Procurement & Vendor, Validasi Perangkat, BAST Digital, dan Pembukuan; Administrasi berisi Database Item serta Pengguna & Akses.",
+      "Menu sidebar dibagi tiga: Utama berisi Dashboard, Manajemen Proyek, BoQ Generator, dan Quotation & Invoice; Operasional berisi Belanja Proyek, Procurement & Vendor, Validasi Perangkat, BAST Digital, dan Pembukuan; Administrasi berisi Database Item, Calon Klien, serta Pengguna & Akses.",
     ],
     after: "Pilihan proyek dan paket diingat aplikasi, jadi Anda tidak perlu memilih ulang setiap berpindah menu. Dokumen pada paket Selesai maupun Batal tetap dapat dibaca, diunduh, dan dicetak seperti biasa; yang ditolak hanyalah dokumen baru. Paket yang sudah memiliki dokumen tidak dapat dihapus — mengubah statusnya menjadi Batal adalah cara mempensiunkannya. Menghapus proyek juga hanya mungkin selama proyek itu belum menyentuh uang sama sekali: begitu ada pembayaran, penyelesaian belanja, setoran pajak, atau transaksi Pembukuan, proyek tidak dapat dihapus dan harus ditutup atau diarsipkan dengan status Selesai.",
   },
@@ -279,6 +280,26 @@ const workflowsId: WorkflowGuide[] = [
     after: "Item baru masuk Database Item. Harga 1 dan Harga 2 selalu dihitung aplikasi dari harga pokok dan margin, tidak pernah oleh AI. Batasnya 20 analisis per orang per hari dan paling banyak dua analisis berjalan bersamaan. Draft yang berumur lebih dari tujuh hari perlu alasan sebelum disetujui.",
   },
   {
+    key: "prospects",
+    icon: UsersRound,
+    title: "Mengelola Calon Klien dan surat penawaran",
+    summary: "Mengumpulkan kontak yang belum meminta dihubungi, menyiapkan surat, dan membaca hasil pengirimannya.",
+    who: "Admin dan Finance secara bawaan. Admin dapat memberikan akses lewat Pengguna & Akses; Lihat cukup untuk membaca, sedangkan Kelola diperlukan untuk menyimpan, mengimpor, dan mengirim.",
+    where: "Menu Calon Klien: Daftar prospek, Tambah prospek, Impor XLSX, Susun email, Template surat, dan Laporan kirim.",
+    prepare: "Catatan sumber untuk setiap kontak, satu template surat yang tersimpan, dan mailserver yang sudah dikonfigurasi bila akan mengirim.",
+    steps: [
+      "Calon Klien berbeda dari Lead. Lead datang dari formulir situs setelah orang mencentang kotak privasi; prospek dikumpulkan tim sendiri dan tidak pernah meminta dihubungi. Karena itu catatan sumber wajib dan opt-out untuk berhenti dihubungi selalu tersedia.",
+      "Tambahkan kontak satu per satu atau impor XLSX. Kolom dicocokkan dari judulnya, bukan urutannya, dan nama lembar menentukan segmen. Jalankan uji kering lebih dulu; setiap baris bermasalah dilaporkan lengkap dengan nama lembar dan nomor baris, bukan dibuang diam-diam.",
+      "Tulis template sebagai teks biasa. Kop berlogo, tanda tangan, alamat kantor, dan catatan cara berhenti dihubungi ditambahkan aplikasi; Anda tidak perlu menulis HTML.",
+      "Isi tanda tangan dengan nama dan kontak orang yang mengirim, bukan alamat umum perusahaan. Tanda tangan menentukan ke mana balasan calon klien mendarat.",
+      "Jalankan pratinjau ke satu kontak sebelum mengirim. Yang tampil adalah surat yang persis sama dengan yang akan diterima calon klien.",
+      "Pilih penerima yang boleh dihubungi lalu kirim. Jeda 60 detik per surat disengaja: 40 penerima membutuhkan sekitar 40 menit, bukan berarti aplikasi macet. Mailserver yang sama juga membawa invoice dan tautan pemulihan kata sandi.",
+      "Buka Laporan kirim untuk membaca empat status per penerima. Masih diproses bukan kegagalan; mengirim ulang karena status itu dapat membuat surat yang sama sampai dua kali.",
+      "Surat yang sudah masuk antrean tidak bisa ditarik kembali. Jika seseorang meminta berhenti, tandai opt-out agar pengiriman berikutnya ditolak server.",
+    ],
+    after: "Riwayat pengiriman tetap menempel pada kontak. Periksa pratinjau dan status setiap penerima sebelum mengambil tindakan lanjutan; jangan menganggap batch selesai hanya dari jumlah baris.",
+  },
+  {
     key: "access",
     icon: ShieldCheck,
     title: "Mengatur akun, hak akses, dan bahasa",
@@ -293,7 +314,7 @@ const workflowsId: WorkflowGuide[] = [
       "Untuk Project Manager dan Engineer, tentukan proyek mana saja yang boleh dibuka pada bagian Akses Proyek. Admin dan Finance selalu melihat semua proyek.",
       "Setiap orang membuka Profil Saya untuk mengganti foto (JPG, PNG, atau WebP maksimal 3 MB), nama, kontak, dan jabatan.",
       "Mengganti alamat email sendiri tidak langsung berlaku. Akun tetap memakai alamat lama sampai tautan konfirmasi yang dikirim ke alamat baru dibuka, tautan itu berlaku 60 menit, dan alamat lama menerima pemberitahuan bahwa ada permintaan penggantian. Aturan ini berlaku untuk semua peran, Admin sekalipun.",
-      "Buka Pengaturan untuk memilih Bahasa Indonesia atau English, mengatur notifikasi email, dan mengganti kata sandi. Mengganti kata sandi sendiri langsung mengakhiri sesi Anda di seluruh perangkat lain; hanya perangkat yang sedang Anda pakai tetap masuk.",
+      "Buka Pengaturan untuk memilih Bahasa Indonesia atau English, mengatur notifikasi email, dan mengganti kata sandi. Mengganti kata sandi sendiri memerlukan kata sandi lama. Syarat kata sandi baru ditampilkan di form dan merupakan gabungan aturan aplikasi dan mailserver; yang lebih ketat selalu berlaku. Jangan menghafal angka karena aturannya dapat berubah, baca syarat yang tertulis di form. Mengganti kata sandi sendiri juga langsung mengakhiri sesi Anda di seluruh perangkat lain; hanya perangkat yang sedang Anda pakai tetap masuk.",
     ],
     after: "Perubahan hak akses langsung berlaku. Bila akses proyek dicabut, proyek itu hilang dari dashboard orang tersebut. Pilihan bahasa tersimpan pada akun dan dipakai lagi saat login berikutnya. Percobaan masuk yang gagal berulang kali hanya ditahan beberapa menit; tidak ada akun yang terkunci permanen.",
   },
@@ -318,7 +339,7 @@ const workflowsEn: WorkflowGuide[] = [
       "The money — Active project value and Receivables collected — sits at the very bottom of the Dashboard, under the Recent projects list; scroll down to read it. Active project value adds up only the contracts that are In progress, while Receivables collected follows the share of each project that confirmed payments already cover. Both follow the same project picker as the rest of the Dashboard.",
       "If a project is sold as several separate scopes, also choose a Commercial package at the top of BoQ Generator, Quotations & Invoices, Device Validation, and Digital Handover. Each package has its own BoQ, quotation, invoices, and handover certificate.",
       "A new package starts as Active, and only an Active package takes new documents: a BoQ, a quotation, an invoice, a validation, a handover certificate, or an addendum. The status button beside the package picker changes it. When a package's work is finished set it to Completed; when a package is called off set it to Void. A Completed package can be reactivated if late work arrives, while Void is final.",
-      "The sidebar has three groups. Main holds Dashboard, Project Management, BoQ Generator, and Quotations & Invoices. Operations holds Project Expenses, Procurement & Vendors, Device Validation, Digital Handover, and Finance. Administration holds Item Database and Users & Access.",
+      "The sidebar has three groups. Main holds Dashboard, Project Management, BoQ Generator, and Quotations & Invoices. Operations holds Project Expenses, Procurement & Vendors, Device Validation, Digital Handover, and Finance. Administration holds Item Database, Prospects, and Users & Access.",
     ],
     after: "The app remembers your project and package, so you do not have to pick them again each time you switch menus. Documents on a Completed or Void package stay readable, downloadable, and printable as before; only new documents are refused. A package that already carries documents cannot be deleted — setting it to Void is how it is retired. A project, too, can only be deleted while it has never touched money: once a payment, an expense settlement, a tax settlement, or a Finance transaction exists, deletion is refused and the project must be closed or archived with the status Completed instead.",
   },
@@ -519,6 +540,26 @@ const workflowsEn: WorkflowGuide[] = [
     after: "The new item appears in the Item Database. Price 1 and Price 2 are always calculated by the app from cost and margin, never by the AI. The limits are 20 analyses per person per day and at most two running at the same time. A draft older than seven days needs a written reason before it can be approved.",
   },
   {
+    key: "prospects",
+    icon: UsersRound,
+    title: "Managing prospects and outreach letters",
+    summary: "Gathering contacts who did not ask to be contacted, preparing letters, and reading delivery results.",
+    who: "Admin and Finance by default. An Admin can grant access through Users & Access; View is enough to read, while Manage is required to save, import, and send.",
+    where: "The Prospects menu: prospect list, add prospect, import XLSX, compose email, letter templates, and delivery report.",
+    prepare: "A source note for every contact, one saved letter template, and a configured mail server when sending is needed.",
+    steps: [
+      "Prospects are different from Leads. Leads arrive from the website form after someone checks the privacy box; prospects are gathered by the team and never asked to be contacted. That is why a source note is required and an opt-out is always available.",
+      "Add contacts one at a time or import XLSX. Columns are matched by their headings rather than their order, and the worksheet name decides the segment. Run a dry run first; every problematic row is reported with its sheet name and row number instead of being silently dropped.",
+      "Write the letter template as plain text. The application adds the logo letterhead, signature, office address, and instructions for stopping contact; you do not need to write HTML.",
+      "Fill in the signature with the sender's name and contact details, not a general company address. The signature decides where the prospect's reply lands.",
+      "Run a preview against one contact before sending. What you see is exactly the letter the prospect will receive.",
+      "Choose recipients who may be contacted and send. The 60-second delay per letter is intentional: 40 recipients take about 40 minutes, which is not a stalled application. The same mail server also carries invoices and password-recovery links.",
+      "Open the delivery report to read the four statuses for each recipient. In progress is not a failure; resending because of that status can deliver the same letter twice.",
+      "A letter already in the queue cannot be recalled. If someone asks to stop, mark the opt-out so the server refuses future delivery.",
+    ],
+    after: "Delivery history stays attached to the contact. Check the preview and each recipient's status before acting; do not infer that a batch is complete by counting rows.",
+  },
+  {
     key: "access",
     icon: ShieldCheck,
     title: "Managing accounts, access, and language",
@@ -533,7 +574,7 @@ const workflowsEn: WorkflowGuide[] = [
       "For Project Managers and Engineers, choose which projects they may open in the Project Access section. Admin and Finance always see every project.",
       "Each person opens My Profile to update their photo (JPG, PNG, or WebP up to 3 MB), name, contact details, and job title.",
       "Changing your own email address does not take effect immediately. The account keeps its old address until the confirmation link sent to the new address is opened, that link is valid for 60 minutes, and the old address is notified that a change was requested. This holds for every role, an Admin included.",
-      "Open Settings to choose Indonesian or English, set email notifications, and change your password. Changing your own password immediately ends your sessions on every other device; only the device you are using stays signed in.",
+      "Open Settings to choose Indonesian or English, set email notifications, and change your password. Changing your own password requires the current password. The new-password requirements are shown on the form and combine the application and mail-server rules; the stricter requirement always applies. Do not memorise a number because the rules can change; read what the form says. Changing your own password also immediately ends your sessions on every other device; only the device you are using stays signed in.",
     ],
     after: "Permission changes take effect immediately. If project access is revoked, that project disappears from the person's dashboard. The language choice is saved on the account and reused at the next sign-in. Repeated failed sign-in attempts are only held off for a few minutes; no account is ever locked permanently.",
   },
@@ -804,6 +845,36 @@ const messagesId: MessageGuide[] = [
     meaning: "Sebuah alat atau integrasi lama masih memanggil jalur penandaan Lunas versi lawas, yang menandai invoice lunas tanpa referensi dan tanpa bukti pembayaran yang sesungguhnya.",
     action: "Catat pembayarannya lewat histori pembayaran pada invoice, yang meminta nominal, tanggal, referensi, metode, dan bukti transfer. Pembatalannya juga ada di sana dan otomatis mencatat pembalik kasnya.",
   },
+  {
+    key: "prospect-email-duplicate",
+    message: "Alamat email itu sudah terdaftar pada prospek lain.",
+    meaning: "Satu alamat email hanya boleh menempel pada satu calon klien. Dua perusahaan yang berbagi satu alamat hampir selalu berarti salah tempel.",
+    action: "Aplikasi menunjukkan prospek lama yang memakai alamat itu; buka dan periksa. Bila memang orang yang berbeda, pakai alamat masing-masing. Pada impor, baris seperti ini dilewati dan dilaporkan lengkap dengan nomor barisnya.",
+  },
+  {
+    key: "prospect-access",
+    message: "Peran Anda tidak memiliki akses ke Calon Klien.",
+    meaning: "Modul Calon Klien belum dinyalakan untuk akun Anda.",
+    action: "Minta Admin membuka Pengguna & Akses, mencari nama Anda, dan menyetel modul Calon Klien ke Lihat atau Kelola. Pesan serupa yang menyebut Anda hanya bisa melihat berarti izinnya baru Lihat, sedangkan menyimpan, mengimpor, dan mengirim memerlukan Kelola.",
+  },
+  {
+    key: "prospect-view-only",
+    message: "Anda hanya bisa melihat calon klien.",
+    meaning: "Izin modul Anda baru Lihat; Anda dapat membaca daftar, laporan, dan pratinjau, tetapi tidak dapat mengubahnya.",
+    action: "Minta Admin membuka Pengguna & Akses dan mengubah izin Calon Klien menjadi Kelola. Menyimpan, mengimpor, dan mengirim memerlukan Kelola.",
+  },
+  {
+    key: "password-too-weak",
+    message: "Kata sandi baru harus minimal sekian karakter, mengandung angka, dan seterusnya.",
+    meaning: "Kata sandi baru belum memenuhi syarat yang berlaku. Syarat itu gabungan aturan aplikasi dan aturan mailserver, dan yang berlaku selalu yang lebih ketat.",
+    action: "Pesannya menyebut seluruh syarat yang belum terpenuhi sekaligus, bukan satu per satu. Perbaiki semuanya lalu ulangi. Syarat yang sama juga tertulis di dekat kolom kata sandi baru sebelum Anda mengetik.",
+  },
+  {
+    key: "mailserver-unreachable",
+    message: "Mailserver sedang tidak bisa dihubungi, jadi kata sandi belum diganti.",
+    meaning: "Sambungan ke mailserver gagal. Kata sandi lama Anda masih berlaku dan tidak ada yang berubah.",
+    action: "Coba lagi beberapa saat kemudian. Bila berulang, laporkan ke administrator sistem — pesan ini berbeda dari kata sandi salah, dan tidak perlu mereset apa pun.",
+  },
 ];
 
 const messagesEn: MessageGuide[] = [
@@ -1071,6 +1142,36 @@ const messagesEn: MessageGuide[] = [
     meaning: "An old tool or integration is still calling the legacy mark-as-paid route, which marked an invoice paid with no reference and no real payment evidence.",
     action: "Record the payment through the invoice payment history, which asks for the amount, date, reference, method, and transfer proof. Its void action lives there too and posts the reversing cash entry automatically.",
   },
+  {
+    key: "prospect-email-duplicate",
+    message: "That email address is already listed on another prospect.",
+    meaning: "One email address may belong to only one prospect. Two companies sharing an address is almost always a copy-paste mistake.",
+    action: "The application points to the existing prospect using that address; open it and check. If they really are different people, use their own addresses. During an import such rows are skipped and reported with their row number.",
+  },
+  {
+    key: "prospect-access",
+    message: "Your role does not have access to Prospects.",
+    meaning: "The Prospects module has not been enabled for your account.",
+    action: "Ask an Admin to open Users & Access, find your name, and set the Prospects module to View or Manage. A similar message saying you can only view means the permission is still View, while saving, importing, and sending require Manage.",
+  },
+  {
+    key: "prospect-view-only",
+    message: "You can only view prospects.",
+    meaning: "Your module permission is View; you can read the list, report, and previews, but cannot change them.",
+    action: "Ask an Admin to open Users & Access and change your Prospects permission to Manage. Saving, importing, and sending require Manage.",
+  },
+  {
+    key: "password-too-weak",
+    message: "The new password must be at least so many characters, contain a digit, and so on.",
+    meaning: "The new password does not meet the requirements in force. Those combine the application's own rule and the mail server's, and the stricter one always applies.",
+    action: "The message lists every unmet requirement at once rather than one at a time. Fix them all and try again. The same requirements are also written next to the new-password field before you start typing.",
+  },
+  {
+    key: "mailserver-unreachable",
+    message: "The mail server cannot be reached, so the password has not been changed.",
+    meaning: "The connection to the mail server failed. Your old password still works and nothing changed.",
+    action: "Try again shortly. If it keeps happening, report it to the system administrator — this message is not the same as a wrong password, and nothing needs resetting.",
+  },
 ];
 
 const glossaryId: GlossaryEntry[] = [
@@ -1093,6 +1194,9 @@ const glossaryId: GlossaryEntry[] = [
   { term: "Rekonsiliasi", meaning: "Mencocokkan catatan di aplikasi dengan mutasi rekening bank supaya satu kejadian kas hanya tercatat sekali." },
   { term: "Void", meaning: "Pembatalan yang tidak menghapus data, melainkan membuat catatan pembalik agar jejaknya tetap lengkap." },
   { term: "Laba aman dibagikan", meaning: "Laba kas setelah dikurangi komitmen vendor yang belum dibayar, utang pajak, dan utang reimbursement." },
+  { term: "Prospek", meaning: "Kontak yang dikumpulkan tim sendiri, berbeda dari Lead yang datang dari formulir situs. Setiap prospek memerlukan catatan sumber dan selalu dapat diberi tanda opt-out." },
+  { term: "Batch", meaning: "Satu kelompok pengiriman yang dibuat oleh satu penekanan tombol Kirim dan dapat dibuka untuk melihat status tiap penerima." },
+  { term: "Opt-out", meaning: "Permintaan untuk berhenti dihubungi. Tanda ini membuat server menolak pengiriman berikutnya dan tidak dapat dibatalkan dari layar." },
 ];
 
 const glossaryEn: GlossaryEntry[] = [
@@ -1115,6 +1219,9 @@ const glossaryEn: GlossaryEntry[] = [
   { term: "Reconciliation", meaning: "Matching the app's records against the bank statement so that one cash event is recorded only once." },
   { term: "Void", meaning: "A cancellation that does not delete data but posts a reversing entry, so the trail stays complete." },
   { term: "Safe distributable profit", meaning: "Cash profit after deducting unpaid vendor commitments, tax payables, and reimbursement payables." },
+  { term: "Prospect", meaning: "A contact gathered by the team, unlike a Lead that arrives through the website form. Every prospect needs a source note and can always be marked opted out." },
+  { term: "Batch", meaning: "One group of deliveries created by a single press of Send, which can be opened to see each recipient's status." },
+  { term: "Opt-out", meaning: "A request to stop being contacted. The mark makes the server refuse future deliveries and cannot be undone from the screen." },
 ];
 
 const content = {

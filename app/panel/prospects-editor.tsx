@@ -41,6 +41,7 @@ import {
   type ProspectStatus,
 } from "../../shared/prospects";
 import { api, ApiClientError } from "../api-client";
+import { RichTextEditor, type RichTextEditorHandle } from "./rich-text-editor";
 import styles from "./prospects.module.css";
 
 type WorkspaceTab = "list" | "add" | "import" | "outreach" | "reports" | "templates";
@@ -92,7 +93,7 @@ type ProspectTemplate = {
   name: string;
   subject: string;
   bodyHtml: string;
-  bodyFormat: "text" | "html";
+  bodyFormat: "text" | "rich" | "html";
   senderSignoff: string;
   senderName: string;
   senderEmail: string;
@@ -107,7 +108,7 @@ type ProspectTemplateDefaults = {
     name: string;
     subject: string;
     bodyHtml: string;
-    bodyFormat: "text" | "html";
+    bodyFormat: "text" | "rich" | "html";
   };
   senderSignoff: string;
   senderName: string;
@@ -119,7 +120,7 @@ type TemplateForm = {
   name: string;
   subject: string;
   bodyHtml: string;
-  bodyFormat: "text";
+  bodyFormat: "text" | "rich" | "html";
   senderSignoff: string;
   senderName: string;
   senderEmail: string;
@@ -261,7 +262,7 @@ function templateFormFromDefaults(defaults: ProspectTemplateDefaults | null): Te
     name: defaults?.starter.name || initialTemplateForm.name,
     subject: defaults?.starter.subject || initialTemplateForm.subject,
     bodyHtml: defaults?.starter.bodyHtml || initialTemplateForm.bodyHtml,
-    bodyFormat: "text",
+    bodyFormat: defaults?.starter.bodyFormat ?? "text",
     senderSignoff: defaults?.senderSignoff || initialTemplateForm.senderSignoff,
     senderName: defaults?.senderName || initialTemplateForm.senderName,
     senderEmail: defaults?.senderEmail || initialTemplateForm.senderEmail,
@@ -275,7 +276,7 @@ function templateFormFromTemplate(template: ProspectTemplate): TemplateForm {
     name: template.name,
     subject: template.subject,
     bodyHtml: template.bodyHtml,
-    bodyFormat: "text",
+    bodyFormat: template.bodyFormat,
     senderSignoff: template.senderSignoff ?? "",
     senderName: template.senderName ?? "",
     senderEmail: template.senderEmail ?? "",
@@ -461,7 +462,7 @@ export function ProspectsEditor({ canManage }: { canManage: boolean }) {
   const [templatePreviewBusy, setTemplatePreviewBusy] = useState(false);
   const templatesInitializedRef = useRef(false);
   const subjectRef = useRef<HTMLInputElement>(null);
-  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const bodyEditorRef = useRef<RichTextEditorHandle>(null);
 
   const [spacingSeconds, setSpacingSeconds] = useState(String(PROSPECT_DEFAULT_SPACING_SECONDS));
   const [previewProspectId, setPreviewProspectId] = useState("");
@@ -930,7 +931,7 @@ export function ProspectsEditor({ canManage }: { canManage: boolean }) {
         name: templateForm.name.trim(),
         subject: templateForm.subject.trim(),
         bodyHtml: templateForm.bodyHtml.trim(),
-        bodyFormat: "text" as const,
+        bodyFormat: templateForm.bodyFormat,
         senderSignoff: templateForm.senderSignoff.trim(),
         senderName: templateForm.senderName.trim(),
         senderEmail: templateForm.senderEmail.trim(),
@@ -973,7 +974,11 @@ export function ProspectsEditor({ canManage }: { canManage: boolean }) {
 
   function insertPlaceholder(field: "subject" | "bodyHtml", placeholder: string) {
     const token = `{{${placeholder}}}`;
-    const input = field === "subject" ? subjectRef.current : bodyRef.current;
+    if (field === "bodyHtml") {
+      bodyEditorRef.current?.insertPlaceholder(token);
+      return;
+    }
+    const input = subjectRef.current;
     const current = templateForm[field];
     const start = input?.selectionStart ?? current.length;
     const end = input?.selectionEnd ?? current.length;
@@ -1067,7 +1072,7 @@ export function ProspectsEditor({ canManage }: { canManage: boolean }) {
     {tab === "import" ? <ImportPanel canManage={canManage} file={importFile} source={importSource} setFile={setImportFile} setSource={setImportSource} result={importResult} busy={importBusy} onRun={importWorkbook} /> : null}
     {tab === "outreach" ? <OutreachPanel canManage={canManage} templates={templates} templatesLoading={templatesLoading} selectedIds={selectedIds} selectedItems={selectedItems} selectedEligibleItems={selectedEligibleItems} templateId={templateId} setTemplateId={changeOutreachTemplate} spacingSeconds={spacingSeconds} setSpacingSeconds={setSpacingSeconds} previewProspectId={effectivePreviewProspectId} setPreviewProspectId={setPreviewProspectId} preview={outreachPreview} previewBusy={outreachPreviewBusy} onPreview={() => void previewOutreach()} onSend={() => void sendOutreach()} busy={outreachBusy} result={outreachResult} skipped={outreachSkipped} /> : null}
     {tab === "reports" ? <OutreachReportPanel batches={reportBatches} batchesLoading={reportBatchesLoading} selectedBatch={selectedReportBatch} selectedBatchId={reportBatchId} onSelectBatch={selectReportBatch} onRefresh={refreshReports} items={reportItems} summary={reportSummary} total={reportTotal} page={reportPage} pageCount={reportPageCount} detailsLoading={reportDetailsLoading} searchInput={reportSearchInput} setSearchInput={setReportSearchInput} status={reportStatus} setStatus={(value) => { setReportStatus(value); setReportPage(1); }} from={reportFrom} setFrom={(value) => { setReportFrom(value); setReportPage(1); }} to={reportTo} setTo={(value) => { setReportTo(value); setReportPage(1); }} onSearch={() => { setReportPage(1); setReportQuery(reportSearchInput.trim()); }} onPageChange={setReportPage} /> : null}
-    {tab === "templates" ? <TemplateManager canManage={canManage} templates={templates} loading={templatesLoading} selectedId={templateId} form={templateForm} setForm={updateTemplateForm} subjectRef={subjectRef} bodyRef={bodyRef} previewProspectId={effectiveTemplatePreviewProspectId} setPreviewProspectId={setTemplatePreviewProspectId} previewProspects={items} preview={templatePreview} previewBusy={templatePreviewBusy} onSelect={selectTemplate} onNew={createNewTemplate} onUseStarter={applyStarterTemplate} onInsert={insertPlaceholder} onPreview={() => void previewSelectedTemplate()} onSubmit={saveTemplate} onDelete={() => void deleteTemplate()} busy={templateBusy} dirty={templateDirty} /> : null}
+    {tab === "templates" ? <TemplateManager canManage={canManage} templates={templates} loading={templatesLoading} selectedId={templateId} form={templateForm} setForm={updateTemplateForm} subjectRef={subjectRef} bodyEditorRef={bodyEditorRef} previewProspectId={effectiveTemplatePreviewProspectId} setPreviewProspectId={setTemplatePreviewProspectId} previewProspects={items} preview={templatePreview} previewBusy={templatePreviewBusy} onSelect={selectTemplate} onNew={createNewTemplate} onUseStarter={applyStarterTemplate} onInsert={insertPlaceholder} onPreview={() => void previewSelectedTemplate()} onSubmit={saveTemplate} onDelete={() => void deleteTemplate()} busy={templateBusy} dirty={templateDirty} /> : null}
 
     {notice ? null : null}
   </div>;
@@ -1396,7 +1401,7 @@ function TemplateManager({
   form,
   setForm,
   subjectRef,
-  bodyRef,
+  bodyEditorRef,
   previewProspectId,
   setPreviewProspectId,
   previewProspects,
@@ -1419,7 +1424,7 @@ function TemplateManager({
   form: TemplateForm;
   setForm: (value: TemplateForm) => void;
   subjectRef: React.RefObject<HTMLInputElement | null>;
-  bodyRef: React.RefObject<HTMLTextAreaElement | null>;
+  bodyEditorRef: React.RefObject<RichTextEditorHandle | null>;
   previewProspectId: string;
   setPreviewProspectId: (value: string) => void;
   previewProspects: Prospect[];
@@ -1437,7 +1442,7 @@ function TemplateManager({
 }) {
   return <section className={styles.templateLayout}>
     <div className={styles.templateList}><div className={styles.panelHeader}><div><span>LIBRARY</span><h3>Template surat</h3></div><button type="button" className={styles.secondary} onClick={onNew} disabled={!canManage} title={!canManage ? "Izin kelola diperlukan untuk membuat template." : undefined}><Plus size={15} /> Baru</button></div>{loading ? <div className={styles.empty}><LoaderCircle className={styles.spin} size={20} /></div> : templates.length ? <div className={styles.templateItems}>{templates.map((template) => <button type="button" key={template.id} className={selectedId === template.id ? styles.templateItemActive : styles.templateItem} onClick={() => onSelect(template.id)}><span className={styles.templateIcon}><FileText size={17} /></span><span><strong>{template.name}</strong><small>{template.language.toUpperCase()} · diperbarui {formatDate(template.updatedAt)}</small></span><ChevronRight size={15} /></button>)}</div> : <div className={styles.empty}><FileText size={25} /><strong>Belum ada template.</strong><span>Buat template pertama untuk dipakai di komposer.</span></div>}</div>
-    <div className={styles.templateEditor}><div className={styles.panelHeader}><div><span>{selectedId ? "EDIT TEMPLATE" : "TEMPLATE BARU"}</span><h3>{selectedId ? "Tinjau isi surat" : "Buat template outreach"}</h3><p>Gunakan tombol placeholder agar nilai prospek diisi server dengan aman.</p></div><div className={styles.headerActions}>{selectedId ? <button type="button" className={styles.deleteButton} onClick={onDelete} disabled={busy || !canManage} title={!canManage ? "Izin kelola diperlukan untuk menghapus template." : undefined}><Trash2 size={15} /> Hapus</button> : null}<button type="button" className={styles.secondary} onClick={onUseStarter} disabled={busy || !canManage}><FileText size={15} /> Pakai contoh</button><button type="submit" form="template-form" className={styles.primary} disabled={busy || !canManage} title={!canManage ? "Izin kelola diperlukan untuk menyimpan template." : undefined}>{busy ? <LoaderCircle className={styles.spin} size={16} /> : <Save size={16} />} Simpan</button></div></div><form id="template-form" className={styles.formBody} onSubmit={onSubmit}><fieldset disabled={!canManage} className={styles.formFieldset}><div className={styles.formGrid}><Field label="Nama template" required><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required minLength={2} placeholder="Penawaran konektivitas B2B" /></Field><Field label="Bahasa"><select value={form.language} onChange={(event) => setForm({ ...form, language: event.target.value as "id" | "en" })}><option value="id">Indonesia</option><option value="en">English</option></select></Field><Field label="Subjek" required hint="Placeholder bisa disisipkan dari tombol di bawah."><input ref={subjectRef} value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} required minLength={2} /></Field><Field label="Isi surat" required wide hint="Baris kosong memisahkan paragraf; kop, logo, dan tanda tangan ditambahkan otomatis."><textarea ref={bodyRef} rows={13} value={form.bodyHtml} onChange={(event) => setForm({ ...form, bodyHtml: event.target.value })} required minLength={10} /></Field><div className={styles.formSectionHeading}><strong>Tanda tangan pengirim</strong><span>Isi sesuai orang yang akan menerima balasan. Jika kosong, server memakai kontak perusahaan.</span></div><Field label="Salam penutup"><input value={form.senderSignoff} onChange={(event) => setForm({ ...form, senderSignoff: event.target.value })} placeholder="Best Regards," /></Field><Field label="Nama pengirim"><input value={form.senderName} onChange={(event) => setForm({ ...form, senderName: event.target.value })} placeholder="Nama Anda" /></Field><Field label="Email pengirim"><input type="email" value={form.senderEmail} onChange={(event) => setForm({ ...form, senderEmail: event.target.value })} placeholder="nama@perumnet.id" /></Field><Field label="Telepon pengirim"><input value={form.senderPhone} onChange={(event) => setForm({ ...form, senderPhone: event.target.value })} placeholder="Nomor telepon (opsional)" /></Field></div><PlaceholderButtons onInsert={(placeholder) => onInsert("bodyHtml", placeholder)} /><div className={styles.helperBlock}><strong>Sisipkan ke subjek</strong><div className={styles.placeholderRow}>{prospectPlaceholders.map((placeholder) => <button type="button" key={`subject-${placeholder}`} className={styles.placeholderButton} onClick={() => onInsert("subject", placeholder)}><code>{`{{${placeholder}}}`}</code><span>{prospectPlaceholderHints[placeholder].id}</span></button>)}</div></div></fieldset></form><div className={styles.templatePreviewSection}><div className={styles.previewSectionHeader}><div><span>PREVIEW TEMPLATE</span><strong>Uji ke kontak nyata dari daftar prospek</strong></div><div className={styles.previewControls}><select value={previewProspectId} onChange={(event) => setPreviewProspectId(event.target.value)}><option value="">Pilih prospek</option>{previewProspects.filter((item) => item.emailable || item.id === previewProspectId).map((item) => <option key={item.id} value={item.id}>{item.fullName} · {item.email || "tanpa email"}</option>)}</select><button type="button" className={styles.secondary} disabled={previewBusy || dirty || !selectedId || !previewProspectId} onClick={onPreview}>{previewBusy ? <LoaderCircle className={styles.spin} size={15} /> : <Eye size={15} />} Preview</button></div></div>{preview ? <PreviewFrame preview={preview} title="Pratinjau template surat" /> : <small className={styles.muted}>{dirty ? "Simpan perubahan template terlebih dahulu, lalu jalankan preview." : "Pilih prospek lalu jalankan preview."}</small>}</div></div>
+    <div className={styles.templateEditor}><div className={styles.panelHeader}><div><span>{selectedId ? "EDIT TEMPLATE" : "TEMPLATE BARU"}</span><h3>{selectedId ? "Tinjau isi surat" : "Buat template outreach"}</h3><p>Gunakan tombol placeholder agar nilai prospek diisi server dengan aman.</p></div><div className={styles.headerActions}>{selectedId ? <button type="button" className={styles.deleteButton} onClick={onDelete} disabled={busy || !canManage} title={!canManage ? "Izin kelola diperlukan untuk menghapus template." : undefined}><Trash2 size={15} /> Hapus</button> : null}<button type="button" className={styles.secondary} onClick={onUseStarter} disabled={busy || !canManage}><FileText size={15} /> Pakai contoh</button><button type="submit" form="template-form" className={styles.primary} disabled={busy || !canManage} title={!canManage ? "Izin kelola diperlukan untuk menyimpan template." : undefined}>{busy ? <LoaderCircle className={styles.spin} size={16} /> : <Save size={16} />} Simpan</button></div></div><form id="template-form" className={styles.formBody} onSubmit={onSubmit}><fieldset disabled={!canManage} className={styles.formFieldset}><div className={styles.formGrid}><Field label="Nama template" required><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required minLength={2} placeholder="Penawaran konektivitas B2B" /></Field><Field label="Bahasa"><select value={form.language} onChange={(event) => setForm({ ...form, language: event.target.value as "id" | "en" })}><option value="id">Indonesia</option><option value="en">English</option></select></Field><Field label="Subjek" required hint="Placeholder bisa disisipkan dari tombol di bawah."><input ref={subjectRef} value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} required minLength={2} /></Field><Field label="Isi surat" required wide hint="Gunakan toolbar tebal, miring, daftar berpoin, daftar bernomor, dan tautan. Isi rich-text disimpan sebagai marker aman; placeholder tetap disisipkan dari tombol di bawah."><RichTextEditor ref={bodyEditorRef} value={form.bodyHtml} format={form.bodyFormat} disabled={!canManage} onChange={(bodyHtml, bodyFormat) => setForm({ ...form, bodyHtml, bodyFormat })} /></Field><div className={styles.formSectionHeading}><strong>Tanda tangan pengirim</strong><span>Isi sesuai orang yang akan menerima balasan. Jika kosong, server memakai kontak perusahaan.</span></div><Field label="Salam penutup"><input value={form.senderSignoff} onChange={(event) => setForm({ ...form, senderSignoff: event.target.value })} placeholder="Best Regards," /></Field><Field label="Nama pengirim"><input value={form.senderName} onChange={(event) => setForm({ ...form, senderName: event.target.value })} placeholder="Nama Anda" /></Field><Field label="Email pengirim"><input type="email" value={form.senderEmail} onChange={(event) => setForm({ ...form, senderEmail: event.target.value })} placeholder="nama@perumnet.id" /></Field><Field label="Telepon pengirim"><input value={form.senderPhone} onChange={(event) => setForm({ ...form, senderPhone: event.target.value })} placeholder="Nomor telepon (opsional)" /></Field></div><PlaceholderButtons onInsert={(placeholder) => onInsert("bodyHtml", placeholder)} /><div className={styles.helperBlock}><strong>Sisipkan ke subjek</strong><div className={styles.placeholderRow}>{prospectPlaceholders.map((placeholder) => <button type="button" key={`subject-${placeholder}`} className={styles.placeholderButton} onClick={() => onInsert("subject", placeholder)}><code>{`{{${placeholder}}}`}</code><span>{prospectPlaceholderHints[placeholder].id}</span></button>)}</div></div></fieldset></form><div className={styles.templatePreviewSection}><div className={styles.previewSectionHeader}><div><span>PREVIEW TEMPLATE</span><strong>Uji ke kontak nyata dari daftar prospek</strong></div><div className={styles.previewControls}><select value={previewProspectId} onChange={(event) => setPreviewProspectId(event.target.value)}><option value="">Pilih prospek</option>{previewProspects.filter((item) => item.emailable || item.id === previewProspectId).map((item) => <option key={item.id} value={item.id}>{item.fullName} · {item.email || "tanpa email"}</option>)}</select><button type="button" className={styles.secondary} disabled={previewBusy || dirty || !selectedId || !previewProspectId} onClick={onPreview}>{previewBusy ? <LoaderCircle className={styles.spin} size={15} /> : <Eye size={15} />} Preview</button></div></div>{preview ? <PreviewFrame preview={preview} title="Pratinjau template surat" /> : <small className={styles.muted}>{dirty ? "Simpan perubahan template terlebih dahulu, lalu jalankan preview." : "Pilih prospek lalu jalankan preview."}</small>}</div></div>
   </section>;
 }
 
