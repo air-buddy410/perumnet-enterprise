@@ -14,7 +14,16 @@ import {
 } from "@/shared/access";
 import { writeAuditLog } from "../audit";
 import { authProviderMode, verifyMailserverPassword } from "../mail-auth";
-import { mailcowConfig, setMailboxPassword } from "../mailcow";
+import { getPasswordPolicy, mailcowConfig, setMailboxPassword } from "../mailcow";
+import {
+  APP_PASSWORD_MIN_LENGTH,
+  APP_PASSWORD_POLICY,
+  PASSWORD_MAX_LENGTH,
+  describePasswordPolicy,
+  mergePasswordPolicy,
+  passwordProblems,
+  type PasswordPolicy,
+} from "../../shared/password-policy";
 import {
   calculateInvoiceAllocation,
   calculateQuotationCommercialTotals,
@@ -573,6 +582,27 @@ function mutationRoles(resource: string): UserRole[] {
 // the individual router happens to do. `project-expenses` and `tax` were both
 // missing, which is how an Engineer reached the project-expense export and the
 // per-document tax position with no module check at all.
+/**
+ * Syarat kata sandi yang berlaku SEKARANG, gabungan aturan aplikasi dan
+ * mailcow — selalu yang lebih ketat.
+ *
+ * Mailcow tak terjawab bukan alasan untuk membatalkan: lantai aplikasi (10
+ * karakter) lebih tinggi daripada bawaan mailcow (6), jadi jatuh ke aturan
+ * sendiri tidak melonggarkan apa pun dibanding keadaan sebelum fungsi ini ada.
+ * Yang hilang hanyalah syarat tambahan yang mungkin dipasang operator, dan itu
+ * tetap akan ditolak mailcow saat penyetelan — persis seperti sebelumnya.
+ */
+async function resolvePasswordPolicy(): Promise<PasswordPolicy> {
+  if (authProviderMode() !== "MAILSERVER") return { ...APP_PASSWORD_POLICY };
+  const cfg = mailcowConfig();
+  if (!cfg) return { ...APP_PASSWORD_POLICY };
+  try {
+    return mergePasswordPolicy(await getPasswordPolicy(cfg));
+  } catch {
+    return { ...APP_PASSWORD_POLICY };
+  }
+}
+
 const resourceModules: Record<string, AccessModule> = {
   projects: "projects",
   boq: "boq",
@@ -877,6 +907,19 @@ async function handleAuth(request: Request, path: string[]) {
       mode: authProviderMode(),
       allowLocalLogin: Number(baris.rows[0]?.allow_local_login ?? 0) === 1,
     });
+  }
+
+  // Syarat kata sandi, supaya form bisa MENAMPILKANNYA sebelum orang mengetik
+  // — bukan menghukum sesudahnya. Tidak ada rahasia di dalamnya: ini aturan
+  // yang memang harus diketahui orang yang mengisi form, dan sudah terpampang
+  // di antarmuka mailcow sendiri.
+  if (request.method === "GET" && action === "password-policy") {
+    const policy = await resolvePasswordPolicy();
+    return ok(
+      { policy, description: describePasswordPolicy(policy) },
+      200,
+      { "Cache-Control": "no-store" },
+    );
   }
 
   if (request.method === "POST" && action === "login") {
@@ -6272,9 +6315,26 @@ async function handleProfile(request: Request, path: string[], user: AuthUser) {
 
   if (action === "password" && request.method === "PATCH") {
     const input = z.object({
-      currentPassword: z.string().min(8).max(128),
-      newPassword: z.string().min(10).max(128),
+      currentPassword: z.string().min(8).max(PASSWORD_MAX_LENGTH),
+      // Lantai aplikasi. Syarat mailcow diperiksa terpisah di bawah, karena ia
+      // hanya bisa dibaca lewat jaringan dan bisa berubah tanpa deploy.
+      newPassword: z.string().min(APP_PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
     }).parse(await jsonBody(request));
+
+    // Syarat mailcow diperiksa SEBELUM apa pun dikirim ke mailserver. Kalau
+    // ditunda sampai penyetelan, penolakannya datang setelah kata sandi lama
+    // terlanjur diverifikasi — dan pesannya datang dari mailcow, yang tidak
+    // menyebut syarat mana yang kurang.
+    const policy = await resolvePasswordPolicy();
+    const kurang = passwordProblems(input.newPassword, policy);
+    if (kurang.length) {
+      throw new ApiError(
+        400,
+        "PASSWORD_TOO_WEAK",
+        `Kata sandi baru harus ${kurang.join(", ")}.`,
+        { policy, unmet: kurang },
+      );
+    }
     const row = await ensureExists(
       "SELECT password_hash,email,allow_local_login FROM users WHERE id=?",
       [user.id],

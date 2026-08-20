@@ -966,3 +966,105 @@ test("the operations manual's role matrix matches shared/access.ts cell for cell
 
   assert.deepEqual(documented, expected);
 });
+
+// ── Calon Klien: modul, bukan peran ──────────────────────────────────
+//
+// Penjaganya dulu `requireUser(request, ["Admin"])`. Akibatnya modul ini tidak
+// bisa diberikan kepada siapa pun tanpa mengubah kode — padahal Finance-lah
+// yang menyusun dan mengirim penawaran. Sekarang aksesnya lewat modul
+// `prospects`, dan Admin bisa memberi atau mencabutnya per orang.
+
+test("Finance sampai ke Calon Klien, Engineer dan Project Manager tidak", async () => {
+  const matriks = [];
+  for (const [kunci, akun] of Object.entries(ROLE_ACCOUNTS)) {
+    await login(akun.email, akun.password);
+    matriks.push([kunci, await statusOf("/api/cms/prospects")]);
+  }
+  assert.deepEqual(matriks, [
+    ["manager", 403],
+    ["engineer", 403],
+    // Diberikan atas permintaan pemilik: Finance yang mengerjakan penawaran.
+    ["finance", 200],
+  ]);
+});
+
+test("penolakannya menyebut nama modulnya, bukan sekadar 'tidak boleh'", async () => {
+  await login(ROLE_ACCOUNTS.engineer.email, ROLE_ACCOUNTS.engineer.password);
+  const gagal = await errorOf("/api/cms/prospects");
+  assert.equal(gagal.status, 403);
+  assert.match(gagal.message, /Calon Klien/);
+});
+
+test("Admin bisa menyalakan Calon Klien untuk Engineer secara manual", async () => {
+  const engineer = context.users.engineer;
+  await loginAsAdmin();
+  await json(`/api/users/${engineer.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      permissions: { ...engineer.permissions, prospects: "view" },
+    }),
+  });
+
+  const akun = ROLE_ACCOUNTS.engineer;
+  const sesi = await login(akun.email, akun.password);
+  assert.equal(sesi.user.permissions.prospects, "view");
+  assert.equal(await statusOf("/api/cms/prospects"), 200);
+
+  // "view" MELIHAT, tidak mengirim. Surat yang terkirim tidak bisa ditarik
+  // kembali, jadi ia tidak boleh berada di level yang sama dengan membaca.
+  const kirim = await request("/api/cms/prospects/outreach", {
+    method: "POST",
+    body: JSON.stringify({ prospectIds: ["00000000-0000-4000-8000-000000000000"] }),
+  });
+  assert.equal(kirim.status, 403);
+
+  await loginAsAdmin();
+  await json(`/api/users/${engineer.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      permissions: { ...engineer.permissions, prospects: "none" },
+    }),
+  });
+  await login(akun.email, akun.password);
+  assert.equal(await statusOf("/api/cms/prospects"), 403, "pencabutan harus menggigit");
+});
+
+test("Admin bisa mencabut Calon Klien dari Finance tanpa menyentuh Pembukuan", async () => {
+  const finance = context.users.finance;
+  await loginAsAdmin();
+  await json(`/api/users/${finance.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      permissions: { ...finance.permissions, prospects: "none" },
+    }),
+  });
+
+  const akun = ROLE_ACCOUNTS.finance;
+  const sesi = await login(akun.email, akun.password);
+  assert.equal(sesi.user.permissions.prospects, "none");
+  assert.equal(await statusOf("/api/cms/prospects"), 403);
+  assert.equal(sesi.user.permissions.finance, "manage", "Pembukuan tidak boleh ikut tercabut");
+  assert.equal(await statusOf("/api/transactions"), 200);
+
+  await loginAsAdmin();
+  await json(`/api/users/${finance.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      permissions: { ...finance.permissions, prospects: "manage" },
+    }),
+  });
+});
+
+test("izin yang disimpan sebelum modul ini ada tidak diam-diam mencabut apa pun", async () => {
+  const engineer = context.users.engineer;
+  // Persis bentuk yang tersimpan sebelum 'prospects' ada: kuncinya tidak ada
+  // sama sekali. Yang benar adalah jatuh ke bawaan peran (none untuk Engineer),
+  // bukan menghapus modul lain yang sudah dia punya.
+  await storeLegacyPermissions(engineer.id, legacyPermissions({ projects: "manage" }));
+
+  const akun = ROLE_ACCOUNTS.engineer;
+  const sesi = await login(akun.email, akun.password);
+  assert.equal(sesi.user.permissions.prospects, "none");
+  assert.equal(sesi.user.permissions.projects, "manage", "modul lama harus utuh");
+  assert.equal(await statusOf("/api/cms/prospects"), 403);
+});

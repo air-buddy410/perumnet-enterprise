@@ -8,6 +8,7 @@ export const accessModules = [
   "bast",
   "finance",
   "margin",
+  "prospects",
   "users",
   "settings",
 ] as const;
@@ -27,6 +28,7 @@ export const moduleLabels: Record<AccessModule, { id: string; en: string }> = {
   bast: { id: "BAST Digital", en: "Digital Handover" },
   finance: { id: "Pembukuan", en: "Finance" },
   margin: { id: "Laba & Bagi Hasil", en: "Profit & Profit Sharing" },
+  prospects: { id: "Calon Klien", en: "Prospects" },
   users: { id: "Pengguna & Akses", en: "Users & Access" },
   settings: { id: "Pengaturan", en: "Settings" },
 };
@@ -42,6 +44,7 @@ const roleDefaults: Record<EnterpriseRole, AccessPermissions> = {
     bast: "manage",
     finance: "manage",
     margin: "manage",
+    prospects: "manage",
     users: "manage",
     settings: "manage",
   },
@@ -55,6 +58,7 @@ const roleDefaults: Record<EnterpriseRole, AccessPermissions> = {
     bast: "manage",
     finance: "view",
     margin: "none",
+    prospects: "none",
     users: "none",
     settings: "view",
   },
@@ -68,6 +72,7 @@ const roleDefaults: Record<EnterpriseRole, AccessPermissions> = {
     bast: "manage",
     finance: "none",
     margin: "none",
+    prospects: "none",
     users: "none",
     settings: "view",
   },
@@ -81,6 +86,9 @@ const roleDefaults: Record<EnterpriseRole, AccessPermissions> = {
     bast: "view",
     finance: "manage",
     margin: "manage",
+    // Diberikan atas permintaan pemilik 2026-08-20. Finance yang menyusun dan
+    // mengirim penawaran, jadi modul ini memang pekerjaannya — bukan kelonggaran.
+    prospects: "manage",
     users: "none",
     settings: "view",
   },
@@ -99,6 +107,13 @@ const roleDefaults: Record<EnterpriseRole, AccessPermissions> = {
 // default ("manage") and gain a menu somebody took away on purpose. So the
 // missing key is derived from the strongest of the two modules it used to ride
 // on, which reproduces the old answer exactly for every stored combination.
+//
+// `prospects` is also NOT derived, for the same reason and with the same
+// intent: it is a brand new surface, not a slice carved out of something people
+// already reached. Falling back to the role default hands it to Admin and
+// Finance — who do the outreach — and to nobody else. An Admin can grant it per
+// person from Users & Access; the module appears there automatically because
+// that grid is generated from `accessModules`.
 //
 // `margin` is deliberately NOT derived. Splitting margin out of `finance: view`
 // is the point of the change: a Project Manager keeps the cash ledger and loses

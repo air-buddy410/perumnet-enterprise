@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { writeAuditLog } from "../audit";
 import { requireUser, type AuthUser } from "../auth";
+import { canAccess } from "../../shared/access";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { sendEmailDelivery } from "../email";
 import {
@@ -30,8 +31,34 @@ import {
 } from "../prospect-letter";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
 
-function admin(request: Request) {
-  return requireUser(request, ["Admin"]);
+/**
+ * Penjaga modul, bukan penjaga peran.
+ *
+ * Dulu di sini `requireUser(request, ["Admin"])`. Akibatnya modul ini tidak
+ * bisa diberikan kepada siapa pun tanpa mengubah kode — padahal Finance-lah
+ * yang menyusun dan mengirim penawaran. Sekarang aksesnya lewat modul
+ * `prospects`, yang muncul sendiri di layar Pengguna & Akses karena grid di
+ * sana dibuat dari `accessModules`.
+ *
+ * "view" cukup untuk MELIHAT. Menyimpan, mengimpor, dan terutama MENGIRIM
+ * menuntut "manage": surat yang terkirim tidak bisa ditarik kembali, jadi ia
+ * tidak boleh berada di level yang sama dengan membaca daftar.
+ */
+async function penjaga(
+  request: Request,
+  level: "view" | "manage" = "view",
+): Promise<AuthUser> {
+  const user = await requireUser(request);
+  if (!canAccess(user.permissions, "prospects", level)) {
+    throw new ApiError(
+      403,
+      "FORBIDDEN",
+      level === "manage"
+        ? "Anda hanya bisa melihat calon klien, tidak mengubah atau mengirim."
+        : "Peran Anda tidak memiliki akses ke Calon Klien.",
+    );
+  }
+  return user;
 }
 
 const statusSchema = z.enum(prospectStatuses);
@@ -1081,7 +1108,10 @@ async function importProspects(request: Request, user: AuthUser) {
 // ── Penyalur ─────────────────────────────────────────────────────────
 
 export async function dispatchProspectApi(request: Request, path: string[]) {
-  const user = await admin(request);
+  // Membaca cukup "view"; apa pun yang mengubah data atau mengirim surat
+  // menuntut "manage". Levelnya ditentukan SEBELUM rute dipilih supaya tidak
+  // ada cabang yang lolos tanpa pemeriksaan.
+  const user = await penjaga(request, request.method === "GET" ? "view" : "manage");
   const action = path[1];
 
   if (!action) {
@@ -1108,7 +1138,12 @@ export async function dispatchProspectApi(request: Request, path: string[]) {
 }
 
 export async function dispatchProspectTemplateApi(request: Request, path: string[]) {
-  const user = await admin(request);
+  // Pratinjau hanya merender, tidak menyimpan apa pun — cukup "view".
+  const pratinjau = path[2] === "preview";
+  const user = await penjaga(
+    request,
+    request.method === "GET" || pratinjau ? "view" : "manage",
+  );
   const id = path[1];
 
   if (!id) {

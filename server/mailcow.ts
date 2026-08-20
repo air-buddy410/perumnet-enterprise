@@ -5,6 +5,8 @@
 // pengelolaan mailbox — itu tugas CRM, dan API key yang bisa membuat/menghapus
 // mailbox tidak perlu ada di dua tempat.
 
+import type { MailcowPasswordPolicy } from "../shared/password-policy";
+
 const TIMEOUT_MS = 15_000;
 
 export class MailcowError extends Error {}
@@ -101,6 +103,32 @@ async function call(
   // klasik: tanpa pemeriksaan ini, "gagal" terlihat seperti "berhasil".
   assertNoApiError(body, path);
   return body;
+}
+
+/**
+ * Membaca kebijakan kata sandi yang BERLAKU di mailcow saat ini.
+ *
+ * Dibaca, bukan disalin sebagai angka mati di kode: kebijakannya bisa diubah
+ * kapan saja dari antarmuka mailcow tanpa ada yang menyentuh repositori ini.
+ * Kalau aplikasi memakai salinan yang basi, penolakan datang terlambat — kata
+ * sandi lama sudah diverifikasi, orangnya sudah mengetik dua kali, lalu yang
+ * muncul galat mailcow yang tidak menyebut syarat mana yang kurang.
+ *
+ * Melempar MailcowError kalau tidak terjawab; pemanggil yang memutuskan apakah
+ * itu cukup untuk membatalkan atau cukup jatuh ke aturan aplikasi sendiri.
+ */
+export async function getPasswordPolicy(
+  cfg: { baseUrl: string; apiKey: string },
+  fetcher: Fetcher = fetch,
+): Promise<MailcowPasswordPolicy> {
+  const body = await call(cfg, "/get/passwordpolicy", { method: "GET" }, fetcher);
+  // mailcow memulangkan objek dengan nilai berupa string ("6", "0").
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new MailcowError(
+      "Jawaban /get/passwordpolicy bukan objek. Versi mailcow mungkin berbeda.",
+    );
+  }
+  return body as MailcowPasswordPolicy;
 }
 
 /**
