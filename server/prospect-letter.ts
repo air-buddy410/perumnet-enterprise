@@ -195,6 +195,22 @@ function barisKontak(
   return bagian.join(" &nbsp;|&nbsp; ");
 }
 
+/**
+ * Alamat penerima balasan untuk satu surat: nama penanda tangan + emailnya.
+ *
+ * Kosong berarti pakai bawaan EMAIL_REPLY_TO — bukan menebak-nebak alamat.
+ *
+ * CR dan LF dibuang dari nama, dan tanda kutip ikut dibuang: keduanya masuk ke
+ * header email mentah, dan baris baru di sana berarti header tambahan yang
+ * ditulis orang luar.
+ */
+export function alamatBalasan(penandatangan: Penandatangan) {
+  const email = penandatangan.email.trim();
+  if (!email) return undefined;
+  const nama = penandatangan.name.replace(/[\r\n"<>]/g, "").trim();
+  return nama ? `"${nama}" <${email}>` : email;
+}
+
 export interface LetterInput {
   isiHtml: string;
   identitas: SenderIdentity;
