@@ -7,7 +7,12 @@ import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { asNumber } from "../format";
-import { syncProjectCommercialValue } from "./commercial-scope-router";
+import {
+  assertBoqTotalCoversInvoices,
+  ensureBoq,
+  resetProjectValidation,
+  syncCommercialValues,
+} from "./commercial-sync";
 import {
   ApiError,
   created,
@@ -292,6 +297,19 @@ export async function handleStandaloneBoqs(
   }
 
   if (request.method === "POST" && boqId && action === "attach") {
+    // Menempelkan BoQ mandiri MENGGANTI isi scope Original proyek tujuan.
+    // Itu tindakan yang sama dengan PUT /api/boq, jadi ia harus memakai
+    // pengaman yang sama pula — dulu tidak, dan akibatnya berat:
+    //
+    //   - `DELETE FROM boq_items WHERE boq_id=?` menyapu SELURUH scope proyek,
+    //     Addendum sekalipun, bukan hanya scope yang hendak diganti.
+    //   - item disisipkan ulang TANPA `scope_id`, sehingga tidak menjadi milik
+    //     scope mana pun: layar BoQ membacanya sebagai kosong, dan
+    //     syncProjectCommercialValue menghitung nilai quotation menjadi 0.
+    //   - tidak ada penjaga ACCEPTED_SCOPE_LOCKED maupun pemeriksaan invoice.
+    //
+    // Direproduksi: proyek dengan quotation Accepted senilai 9.000.000 menjadi
+    // 0, dan BoQ-nya hilang dari layar, sementara endpoint menjawab 200.
     const input = attachSchema.parse(await jsonBody(request));
     const project = await client.execute({
       sql: "SELECT id FROM projects WHERE id=? LIMIT 1",
@@ -312,51 +330,55 @@ export async function handleStandaloneBoqs(
         "Proyek tujuan sudah memiliki BoQ. Aktifkan opsi ganti untuk melanjutkan.",
       );
     }
-    const projectBoqId = existing.rows[0]
-      ? String(existing.rows[0].id)
-      : randomUUID();
+
+    const ensured = await ensureBoq(client, input.projectId);
+    const scope = await client.execute({
+      sql: "SELECT id,status FROM boq_scopes WHERE id=? LIMIT 1",
+      args: [ensured.scopeId],
+    });
+    if (String(scope.rows[0]?.status) === "Accepted") {
+      throw new ApiError(
+        409,
+        "ACCEPTED_SCOPE_LOCKED",
+        "BoQ Original proyek tujuan sudah diterima klien dan tidak dapat diganti. Tambahkan pekerjaan lewat Addendum.",
+      );
+    }
+    const proposedTotal = source.items.reduce(
+      (sum, item) => sum + asNumber(item.quantity) * asNumber(item.sellingPrice),
+      0,
+    );
+    await assertBoqTotalCoversInvoices(
+      client,
+      input.projectId,
+      proposedTotal,
+      ensured.packageId,
+    );
+
     const timestamp = new Date().toISOString();
     await client.batch(
       [
-        ...(existing.rows.length
-          ? [
-              {
-                sql: "DELETE FROM boq_items WHERE boq_id=?",
-                args: [projectBoqId],
-              },
-              {
-                sql: "UPDATE boqs SET status=?,notes=?,updated_at=? WHERE id=?",
-                args: [source.status, source.notes || null, timestamp, projectBoqId],
-              },
-            ]
-          : [
-              {
-                sql: `
-                  INSERT INTO boqs
-                    (id,project_id,status,notes,created_at,updated_at)
-                  VALUES (?,?,?,?,?,?)
-                `,
-                args: [
-                  projectBoqId,
-                  input.projectId,
-                  source.status,
-                  source.notes || null,
-                  timestamp,
-                  timestamp,
-                ],
-              },
-            ]),
+        {
+          sql: "UPDATE boqs SET status=?,notes=?,updated_at=? WHERE id=?",
+          args: [source.status, source.notes || null, timestamp, ensured.boqId],
+        },
+        // Hanya scope yang diganti. Addendum di proyek yang sama tidak ikut
+        // tersapu.
+        {
+          sql: "DELETE FROM boq_items WHERE scope_id=?",
+          args: [ensured.scopeId],
+        },
         ...source.items.map((item, index) => ({
           sql: `
             INSERT INTO boq_items
-              (id,boq_id,category,description,quantity,unit,cost_price,selling_price,
+              (id,boq_id,scope_id,category,description,quantity,unit,cost_price,selling_price,
                catalog_item_id,catalog_price_tier,catalog_revision,manual_price_override,
                price_override_reason,sort_order,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           `,
           args: [
             randomUUID(),
-            projectBoqId,
+            ensured.boqId,
+            ensured.scopeId,
             item.category,
             item.description,
             item.quantity,
@@ -376,7 +398,12 @@ export async function handleStandaloneBoqs(
       ],
       "write",
     );
-    await syncProjectCommercialValue(client, input.projectId);
+    // syncCommercialValues, bukan syncProjectCommercialValue: yang pertama juga
+    // MENYEGARKAN grand_total, diskon, pajak, dan pembulatan setiap quotation
+    // Draft. Yang kedua hanya menulis ulang `total`, sehingga angka turunannya
+    // tertinggal menggambarkan dokumen yang sudah tidak ada.
+    await syncCommercialValues(client, input.projectId, { request, user });
+    await resetProjectValidation(client, input.projectId, ensured.packageId);
     await writeAuditLog(
       client,
       request,
@@ -384,9 +411,9 @@ export async function handleStandaloneBoqs(
       "attach",
       "standalone_boq",
       boqId,
-      { projectId: input.projectId, replace: input.replace },
+      { projectId: input.projectId, replace: input.replace, itemCount: source.items.length },
     );
-    return ok({ projectId: input.projectId, boqId: projectBoqId });
+    return ok({ projectId: input.projectId, boqId: ensured.boqId });
   }
 
   if (request.method === "DELETE" && boqId && !action) {

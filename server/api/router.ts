@@ -115,6 +115,7 @@ import {
 } from "./commercial-package-router";
 import {
   assertBoqTotalCoversInvoices,
+  ensureBoq,
   resetProjectValidation,
   syncCommercialValues,
 } from "./commercial-sync";
@@ -2025,49 +2026,6 @@ async function getBoq(projectId: string, requestedPackageId?: string | null) {
     },
   };
 }
-
-async function ensureBoq(projectId: string, requestedPackageId?: string | null) {
-  const { client } = await getDatabase();
-  const packageId = await resolveCommercialPackageId(client, projectId, requestedPackageId);
-  const existing = await client.execute({
-    sql: "SELECT id FROM boqs WHERE project_id = ? LIMIT 1",
-    args: [projectId],
-  });
-  const id = existing.rows[0] ? String(existing.rows[0].id) : randomUUID();
-  const timestamp = now();
-  if (!existing.rows[0]) {
-    await client.execute({
-      sql: "INSERT INTO boqs (id,project_id,status,notes,created_at,updated_at) VALUES (?,?,?,?,?,?)",
-      args: [id, projectId, "Draft", "", timestamp, timestamp],
-    });
-  }
-  const scope = await client.execute({
-    sql: `SELECT id FROM boq_scopes WHERE boq_id=? AND package_id=?
-      AND kind='Original' AND parent_scope_id IS NULL ORDER BY sequence LIMIT 1`,
-    args: [id, packageId],
-  });
-  let scopeId = scope.rows[0] ? String(scope.rows[0].id) : "";
-  if (!scope.rows[0]) {
-    const sequence = await client.execute({
-      sql: "SELECT COALESCE(MAX(sequence),-1)+1 AS sequence FROM boq_scopes WHERE boq_id=?",
-      args: [id],
-    });
-    const packageResult = await client.execute({
-      sql: "SELECT title FROM project_commercial_packages WHERE id=? LIMIT 1",
-      args: [packageId],
-    });
-    scopeId = randomUUID();
-    await client.execute({
-      sql: `INSERT INTO boq_scopes
-        (id,boq_id,package_id,kind,sequence,title,status,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?)`,
-      args: [scopeId, id, packageId, "Original", asNumber(sequence.rows[0]?.sequence),
-        String(packageResult.rows[0]?.title ?? "Lingkup Utama"), "Draft", timestamp, timestamp],
-    });
-  }
-  return { boqId: id, scopeId, packageId };
-}
-
 async function handleBoq(request: Request, path: string[], user: AuthUser) {
   const { client } = await getDatabase();
   const searchParams = new URL(request.url).searchParams;
@@ -2204,7 +2162,7 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
       (sum, item) => sum + item.quantity * item.sellingPrice,
       0,
     );
-    const ensured = await ensureBoq(projectId, selectedPackageId);
+    const ensured = await ensureBoq(client, projectId, selectedPackageId);
     await assertBoqTotalCoversInvoices(
       client,
       projectId,
@@ -2258,7 +2216,7 @@ async function handleBoq(request: Request, path: string[], user: AuthUser) {
       user,
       boqItemSchema.parse(await jsonBody(request)),
     );
-    const ensured = await ensureBoq(projectId, selectedPackageId);
+    const ensured = await ensureBoq(client, projectId, selectedPackageId);
     const boqId = ensured.boqId;
     const originalScope = await ensureExists(
       "SELECT id,status FROM boq_scopes WHERE id=? LIMIT 1",
@@ -2669,7 +2627,7 @@ async function handleQuotations(request: Request, user: AuthUser) {
     if (!boq.items.length || boq.totals.selling <= 0) {
       throw new ApiError(409, "EMPTY_BOQ", "Tambahkan item BoQ pada paket ini terlebih dahulu.");
     }
-    const ensured = await ensureBoq(projectId, packageId);
+    const ensured = await ensureBoq(client, projectId, packageId);
     const scope = await ensureExists(
       "SELECT id,status FROM boq_scopes WHERE id=? LIMIT 1",
       [ensured.scopeId],
@@ -3232,8 +3190,17 @@ async function invoiceQuotationSource(
         WHERE q.id=? AND q.project_id=? LIMIT 1`
       : `SELECT q.*,cp.title AS package_title FROM quotations q
         LEFT JOIN project_commercial_packages cp ON cp.id=q.package_id
+        LEFT JOIN boq_scopes s ON s.id=q.scope_id
         WHERE q.project_id=? AND q.package_id=? AND q.status<>'Superseded'
         ORDER BY CASE q.status WHEN 'Accepted' THEN 0 WHEN 'Sent' THEN 1 ELSE 2 END,
+          -- Di antara yang statusnya sama, dahulukan scope Original: itu yang
+          -- ditampilkan layar Quotation, jadi pemanggil yang tidak menyebut
+          -- quotationId mendapat dokumen yang sama dengan yang dilihatnya.
+          -- Urutan status tetap didahulukan, supaya Addendum yang sudah
+          -- Accepted tetap terpilih ketika Original belum.
+          CASE WHEN q.scope_id IS NULL
+                    OR (s.kind='Original' AND s.parent_scope_id IS NULL)
+               THEN 0 ELSE 1 END,
           q.revision_no DESC,q.created_at DESC LIMIT 1`,
     args: input.quotationId
       ? [input.quotationId, input.projectId]

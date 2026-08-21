@@ -1533,3 +1533,164 @@ test("scenario F2: Hapus on the package quotation never deletes the addendum's",
     "quotation Original juga masih ada",
   );
 });
+
+// ---------------------------------------------------------------------------
+// Skenario G: menempelkan BoQ mandiri ke proyek.
+//
+// Penempelan MENGGANTI isi scope Original proyek tujuan — tindakan yang sama
+// dengan PUT /api/boq — tetapi dulu tidak memakai satu pun pengaman yang sama.
+// Direproduksi: proyek dengan quotation Accepted senilai 9.000.000 menjadi 0,
+// BoQ-nya hilang dari layar, dan endpointnya menjawab 200.
+
+async function buatBoqMandiri(judul, sellingPrice) {
+  return await json(
+    "/api/boq/standalone",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        title: judul,
+        status: "Draft",
+        items: [{
+          category: "Jasa",
+          description: "Pekerjaan dari BoQ mandiri",
+          quantity: 1,
+          unit: "paket",
+          costPrice: Math.round(sellingPrice / 2),
+          sellingPrice,
+        }],
+      }),
+    },
+    201,
+  );
+}
+
+test("scenario G1: attaching over an accepted BoQ is refused, and nothing is lost", async () => {
+  const project = await createProject("Proyek Tempel Atas Accepted");
+  await addBoqItem(project.id, 10_000_000, 1, "Pekerjaan utama");
+  await patchQuotation(project.id, {
+    discountEnabled: true,
+    discountType: "Nominal",
+    discountValue: 1_000_000,
+  });
+  await patchQuotation(project.id, { status: "Sent" });
+  const asli = await getQuotation(project.id);
+  await acceptQuotation(asli.id, "g1");
+
+  const sebelum = await getQuotation(project.id);
+  assert.equal(sebelum.total, 10_000_000);
+  assert.equal(sebelum.grandTotal, 9_000_000);
+
+  const mandiri = await buatBoqMandiri("BoQ Mandiri G1", 90_000);
+  const gagal = await request(`/api/boq/standalone/${mandiri.id}/attach`, {
+    method: "POST",
+    body: JSON.stringify({ projectId: project.id, replace: true }),
+  });
+  assert.equal(gagal.status, 409, "penempelan atas BoQ yang sudah diterima ditolak");
+  const isi = await gagal.json();
+  assert.equal(isi.error.code, "ACCEPTED_SCOPE_LOCKED");
+
+  // Yang paling penting: TIDAK ADA yang berubah. Sebelum perbaikan, endpoint
+  // menjawab 200 dan kontrak 9.000.000 ini jatuh ke nol.
+  const sesudah = await getQuotation(project.id);
+  assert.equal(sesudah.total, 10_000_000, "kontrak yang sudah diterima tetap utuh");
+  assert.equal(sesudah.grandTotal, 9_000_000);
+  const boq = await json(`/api/boq?projectId=${project.id}`);
+  assert.equal(boq.items.length, 1, "item BoQ tidak hilang dari layar");
+});
+
+test("scenario G2: a legitimate attach lands inside the scope and refreshes the money", async () => {
+  const project = await createProject("Proyek Tempel Wajar");
+  await addBoqItem(project.id, 4_000_000, 1, "Pekerjaan awal");
+
+  const mandiri = await buatBoqMandiri("BoQ Mandiri G2", 7_000_000);
+  await json(`/api/boq/standalone/${mandiri.id}/attach`, {
+    method: "POST",
+    body: JSON.stringify({ projectId: project.id, replace: true }),
+  });
+
+  // Item yang ditempel harus MENJADI MILIK scope Original, bukan menggantung
+  // tanpa scope. Kalau menggantung, layar BoQ membacanya kosong.
+  const boq = await json(`/api/boq?projectId=${project.id}`);
+  assert.equal(boq.items.length, 1, "item hasil tempel terbaca di layar BoQ");
+  assert.equal(boq.totals.selling, 7_000_000);
+
+  // Dan angka komersialnya ikut disegarkan, bukan hanya `total`.
+  const quotation = await getQuotation(project.id);
+  assert.equal(quotation.total, 7_000_000);
+  assert.equal(quotation.grandTotal, 7_000_000);
+});
+
+test("scenario G3: an addendum in the same project is not swept away by the attach", async () => {
+  const project = await createProject("Proyek Tempel Dengan Addendum");
+  await addBoqItem(project.id, 5_000_000, 1, "Pekerjaan utama");
+  const addendum = await json(
+    `/api/boq/scopes?projectId=${project.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Addendum G3",
+        items: [{
+          category: "Jasa",
+          description: "Pekerjaan tambahan",
+          quantity: 1,
+          unit: "paket",
+          costPrice: 300_000,
+          sellingPrice: 750_000,
+        }],
+      }),
+    },
+    201,
+  );
+
+  const mandiri = await buatBoqMandiri("BoQ Mandiri G3", 6_000_000);
+  await json(`/api/boq/standalone/${mandiri.id}/attach`, {
+    method: "POST",
+    body: JSON.stringify({ projectId: project.id, replace: true }),
+  });
+
+  // Penghapusan lama memakai `WHERE boq_id=?`, yang menyapu setiap scope di
+  // proyek — Addendum ikut kosong tanpa ada yang memintanya.
+  const scopes = await json(`/api/boq/scopes?projectId=${project.id}`);
+  const scopeAddendum = scopes.find((entry) => entry.id === addendum.id);
+  assert.ok(scopeAddendum, "scope Addendum masih ada");
+  assert.equal(scopeAddendum.items.length, 1, "item Addendum tidak ikut tersapu");
+  assert.equal(scopeAddendum.items[0].sellingPrice, 750_000);
+});
+
+test("scenario F3: the package list labels itself with the package quotation, not the addendum's", async () => {
+  const project = await createProject("Proyek Label Paket");
+  await addBoqItem(project.id, 12_000_000, 1, "Pekerjaan utama");
+  await patchQuotation(project.id, { status: "Sent" });
+  const asli = await getQuotation(project.id);
+  await acceptQuotation(asli.id, "f3");
+
+  const addendum = await json(
+    `/api/boq/scopes?projectId=${project.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Addendum F3",
+        items: [{
+          category: "Jasa",
+          description: "Pekerjaan tambahan",
+          quantity: 1,
+          unit: "paket",
+          costPrice: 100_000,
+          sellingPrice: 300_000,
+        }],
+      }),
+    },
+    201,
+  );
+
+  const packages = await json(`/api/projects/${project.id}/packages`);
+  const paket = packages[0];
+  assert.equal(paket.quotationId, asli.id, "paket dilabeli quotation Original");
+  assert.notEqual(paket.quotationId, addendum.quotation.id);
+  assert.equal(paket.quotationNumber, asli.number);
+  assert.equal(paket.quotationStatus, "Accepted");
+  // Keempat kolom itu harus menggambarkan SATU dokumen yang sama. Dulu masing-
+  // masing subkuerinya berdiri sendiri, jadi nomor, status, dan nilainya bisa
+  // datang dari baris yang berbeda.
+  assert.equal(paket.grandTotal, asli.grandTotal);
+});

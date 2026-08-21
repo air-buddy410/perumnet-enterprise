@@ -6,6 +6,7 @@ import type { AuthUser } from "../auth";
 import type { DatabaseClient } from "../db/client";
 import { asNumber } from "../format";
 import { snapshotQuotationItems } from "../quotation-snapshot";
+import { resolveCommercialPackageId } from "./commercial-package-router";
 import { ApiError } from "./errors";
 import { refreshQuotationCommercialSnapshot } from "./tax-router";
 
@@ -198,4 +199,60 @@ export async function syncCommercialValues(
     await refreshQuotationCommercialSnapshot(client, String(quotation.id));
   }
   return total;
+}
+
+/**
+ * Memastikan proyek punya BoQ dan scope Original untuk paketnya, lalu
+ * memulangkan ketiga id-nya.
+ *
+ * Dipindahkan ke berkas ini dari router.ts supaya penempelan BoQ mandiri
+ * memakai penyelesai yang SAMA. Sebelumnya penempelan menebak sendiri: ia
+ * menghapus `boq_items` per `boq_id` dan menyisipkan ulang TANPA `scope_id`,
+ * sehingga itemnya tidak menjadi milik scope mana pun — tak terbaca layar BoQ,
+ * tak terhitung nilai quotation, dan quotation yang sudah Accepted ikut jatuh
+ * ke nol.
+ */
+export async function ensureBoq(
+  client: DatabaseClient,
+  projectId: string,
+  requestedPackageId?: string | null,
+) {
+  const packageId = await resolveCommercialPackageId(client, projectId, requestedPackageId);
+  const existing = await client.execute({
+    sql: "SELECT id FROM boqs WHERE project_id = ? LIMIT 1",
+    args: [projectId],
+  });
+  const id = existing.rows[0] ? String(existing.rows[0].id) : randomUUID();
+  const timestamp = now();
+  if (!existing.rows[0]) {
+    await client.execute({
+      sql: "INSERT INTO boqs (id,project_id,status,notes,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+      args: [id, projectId, "Draft", "", timestamp, timestamp],
+    });
+  }
+  const scope = await client.execute({
+    sql: `SELECT id FROM boq_scopes WHERE boq_id=? AND package_id=?
+      AND kind='Original' AND parent_scope_id IS NULL ORDER BY sequence LIMIT 1`,
+    args: [id, packageId],
+  });
+  let scopeId = scope.rows[0] ? String(scope.rows[0].id) : "";
+  if (!scope.rows[0]) {
+    const sequence = await client.execute({
+      sql: "SELECT COALESCE(MAX(sequence),-1)+1 AS sequence FROM boq_scopes WHERE boq_id=?",
+      args: [id],
+    });
+    const packageResult = await client.execute({
+      sql: "SELECT title FROM project_commercial_packages WHERE id=? LIMIT 1",
+      args: [packageId],
+    });
+    scopeId = randomUUID();
+    await client.execute({
+      sql: `INSERT INTO boq_scopes
+        (id,boq_id,package_id,kind,sequence,title,status,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?)`,
+      args: [scopeId, id, packageId, "Original", asNumber(sequence.rows[0]?.sequence),
+        String(packageResult.rows[0]?.title ?? "Lingkup Utama"), "Draft", timestamp, timestamp],
+    });
+  }
+  return { boqId: id, scopeId, packageId };
 }

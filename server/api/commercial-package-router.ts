@@ -155,15 +155,22 @@ async function listPackages(client: DatabaseClient, projectId: string) {
       (SELECT COUNT(*) FROM invoices i WHERE i.package_id=cp.id) AS invoice_count,
       (SELECT COUNT(*) FROM project_validations v WHERE v.package_id=cp.id) AS validation_count,
       (SELECT COUNT(*) FROM basts b WHERE b.package_id=cp.id) AS bast_count,
-      (SELECT q.id FROM quotations q WHERE q.package_id=cp.id
-        AND q.status<>'Superseded' ORDER BY q.revision_no DESC,q.created_at DESC LIMIT 1) AS quotation_id,
-      (SELECT q.number FROM quotations q WHERE q.package_id=cp.id
-        AND q.status<>'Superseded' ORDER BY q.revision_no DESC,q.created_at DESC LIMIT 1) AS quotation_number,
-      (SELECT q.status FROM quotations q WHERE q.package_id=cp.id
-        AND q.status<>'Superseded' ORDER BY q.revision_no DESC,q.created_at DESC LIMIT 1) AS quotation_status,
-      (SELECT q.grand_total FROM quotations q WHERE q.package_id=cp.id
-        AND q.status<>'Superseded' ORDER BY q.revision_no DESC,q.created_at DESC LIMIT 1) AS grand_total
+      qmain.id AS quotation_id, qmain.number AS quotation_number,
+      qmain.status AS quotation_status, qmain.grand_total AS grand_total
       FROM project_commercial_packages cp
+      -- Keempat kolom di atas menggambarkan SATU dokumen, jadi keempatnya harus
+      -- diambil dari baris yang sama — dulu empat subkueri terpisah — dan
+      -- dokumen itu adalah quotation scope Original paket ini, sama dengan yang
+      -- ditampilkan layar Quotation. Tanpa penyematan scope, satu Addendum
+      -- membuat paket ini dilabeli nomor dan nilai Addendum.
+      LEFT JOIN quotations qmain ON qmain.id=(
+        SELECT q.id FROM quotations q
+        LEFT JOIN boq_scopes s ON s.id=q.scope_id
+        WHERE q.package_id=cp.id AND q.status<>'Superseded'
+          AND (q.scope_id IS NULL
+               OR (s.kind='Original' AND s.parent_scope_id IS NULL))
+        ORDER BY q.revision_no DESC,q.created_at DESC LIMIT 1
+      )
       WHERE cp.project_id=? ORDER BY cp.sort_order,cp.created_at`,
     args: [projectId],
   });
