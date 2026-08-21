@@ -8,7 +8,7 @@ Sumber aslinya: `../crm/docs/WORKFLOW-TIM.md`.
 
 ## 1. Pembagian peran
 
-| | **Luna** (OpenCode) | **Opus** (Claude Code) |
+| | **Luna** (Codex) | **Opus** (Claude Code) |
 |---|---|---|
 | Tanggung jawab | **FRONTEND** | **BACKEND · SERVER · DATABASE** |
 | Yang dikerjakan | Halaman & komponen, design system, tata letak, responsif, aksesibilitas, teks antarmuka, state di sisi klien | Skema database & migrasi, logika domain, API, autentikasi & hak akses, worker email, deploy |

@@ -1,6 +1,6 @@
 # Project Instructions — PerumNet Enterprise
 
-**Luna (OpenCode) = FRONTEND. Opus (Claude Code) = BACKEND, SERVER, DATABASE.**
+**Luna (Codex) = FRONTEND. Opus (Claude Code) = BACKEND, SERVER, DATABASE.**
 
 Aturan lengkap, batas wilayah, alur per fase, dan peta seluruh aplikasi
 PerumNet ada di **`docs/WORKFLOW-TIM.md`**. Baca itu sebelum mengubah apa pun.
