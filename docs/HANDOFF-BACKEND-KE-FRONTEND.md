@@ -9,17 +9,22 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ---
 
-## 🟢 Tidak ada pekerjaan layar yang tersisa — 21 Agustus 2026
+## 🔴 Yang sedang menunggumu — T-20, T-21, T-22 (22 Agustus 2026)
 
-**T-19 sudah kamu kerjakan** (`94b1e0d`): Pusat Bantuan kini memuat alur kerja
-kirim dokumen lewat email beserta enam pesan penolakannya, dalam kedua bahasa.
-Dua rujukan itu — Pusat Bantuan dan panduan PDF bab 9 — sekarang menjelaskan
-aturan yang sama dengan kata yang sama. Itu memang yang diminta.
+Audit logika bisnis /admin selesai di sisi backend (commit `audit /admin`):
+alur **deal → proyek** yang sebelumnya tidak ada sekarang ada, sebelas aturan
+uang diperbaiki, dan ada **bagan alur aplikasi** yang dirender server sebagai
+PNG. Tiga tugas layar lahir darinya — urutan prioritas:
 
-Kalau kelak ada aturan yang berubah di backend, keduanya harus ikut berubah
-bersama-sama. Panduan PDF punya tes yang menjaganya
-(`tests/document-content.test.mjs`); Pusat Bantuan belum, dan itu bukan
-keharusan.
+| | Tugas | Berkas |
+|---|---|---|
+| **T-20** | Sematkan bagan alur di Pusat Bantuan — satu `<img>` + daftar langkah dari data bersama | `app/components/help-view.tsx` |
+| **T-21** | Tombol **Jadikan proyek** di Calon Klien + lencana proyek + dropdown status mengikuti tabel transisi | `app/panel/prospects-editor.tsx` (atau komponen detail prospek) |
+| **T-22** | Pusat Bantuan & layar menyesuaikan aturan yang berubah (termin wajib, laba terkunci, jendela bank 14 hari, dll.) | `help-view.tsx`, `procurement-v2-view.tsx`, `profit-sharing-panel.tsx` |
+
+Perinciannya di bagian **T-20 / T-21 / T-22** di bawah. Panduan PDF-nya sudah
+saya tulis (edisi 2.1, bab 2 dibuka dengan bagan) — **ambil naskah dari sana**,
+jangan dikarang ulang, supaya dua rujukan memakai kata yang sama.
 
 ---
 
@@ -191,6 +196,9 @@ Perinciannya di bagian masing-masing di bawah.
 | **T-18b** | Alamat email klien di form proyek | ✅ selesai (`project-view.tsx`) |
 | **T-18c** | Kirim dari Quotation dan Invoice | ✅ selesai |
 | **T-19** | Pusat Bantuan memuat fitur kirim dokumen | ✅ selesai (`help-view.tsx`, `94b1e0d`) |
+| **T-20** | **Bagan alur di Pusat Bantuan** | **belum mulai** |
+| **T-21** | **Tombol Jadikan proyek di Calon Klien** | **belum mulai** |
+| **T-22** | **Layar & Pusat Bantuan menyesuaikan aturan hasil audit** | **belum mulai** |
 
 T-1 sampai T-18a sudah selesai; catatannya ada di §Selesai. Semua layar sudah
 ada di `main`, termasuk editor kaya T-17 yang sempat tertinggal belum
@@ -887,6 +895,86 @@ Kode galat tambahan di luar yang sudah disebut T-16:
 - **Unggah untuk dokumen resminya.** Sama seperti T-16 — hanya lampiran
   tambahan.
 - **Pilihan edisi dokumen.** Jalur email tidak menerimanya sama sekali.
+
+### T-20. Bagan alur aplikasi di Pusat Bantuan
+
+**Endpoint:** `GET /api/help/alur.png?language=id|en` — di balik sesi, memulangkan
+`image/png` 2800 px lebar (rasio ±1 : 1,32), `Cache-Control: private,
+max-age=3600`. Gambar yang persis sama sudah tercetak di panduan PDF bab 2.
+
+**Data bersama:** `shared/alur-aplikasi.ts` — `aluraplikasi` (5 fase, 22
+langkah, 4 keputusan), `semuaLangkah()`, dan tipe-tipenya. Setiap langkah punya
+`label[id,en]`, `peran[]`, `layar` (kunci `ViewKey` yang sama dengan
+`enterprise-app.tsx`), dan `syarat?[id,en]`.
+
+**Yang perlu dikerjakan di `help-view.tsx`:**
+
+1. Satu bagian baru di bagian atas (sebelum kartu alur kerja): `<img>` ke
+   endpoint di atas dengan `alt` dua bahasa, `loading="lazy"`, lebar penuh
+   panel, `max-width: 100%`. Gambar ini butuh sesi — `<img>` biasa sudah
+   membawa cookie karena origin sama; tidak perlu `fetch`.
+2. Di bawah gambar, daftar teks per fase dari `aluraplikasi` (judul fase →
+   langkah bernomor: label · peran · syarat). Ini yang membuat bagannya bisa
+   dicari oleh kotak pencarian yang sudah ada dan terbaca pembaca layar.
+3. Jangan menggambar ulang bagannya dengan CSS/SVG — satu sumber gambar.
+
+### T-21. Tombol "Jadikan proyek" di Calon Klien
+
+**Endpoint:** `POST /api/cms/prospects/:id/convert` → `201 { project, prospect }`.
+
+```json
+{ "name": "opsional, default nama perusahaan",
+  "status": "Draft" | "Aktif",          // default Draft
+  "managerId": "opsional",
+  "startDate": "YYYY-MM-DD, opsional",
+  "targetDate": "YYYY-MM-DD, opsional",
+  "location": "wajib HANYA bila prospek tidak punya lokasi" }
+```
+
+Yang dibawa otomatis: `companyName → client`, `fullName → clientContactName`,
+`email → clientEmail`, `location → location`. Prospek diset `Won`.
+
+**Kode galat yang wajib ditangani:**
+- `409 PROSPECT_ALREADY_CONVERTED` — `details.projectId`, `details.projectCode`:
+  tampilkan tautan ke proyeknya, jangan tombolnya.
+- `409 PROSPECT_NOT_CONVERTIBLE` — prospek Lost atau minta berhenti dihubungi.
+- `422 LOCATION_REQUIRED` — minta lokasi di dialog.
+- `403 FORBIDDEN` — pengguna tidak punya Kelola Proyek (Finance bawaan):
+  sembunyikan tombolnya lewat `canAccess(permissions, "projects", "manage")`.
+- `409 INVALID_PROSPECT_TRANSITION` (di PATCH status) — `details.from/to`.
+
+**Yang perlu dikerjakan:**
+1. Tombol **Jadikan proyek** di detail prospek, tampil bila
+   `!prospect.projectId && prospect.status !== "Lost" && !prospect.optOutAt`
+   dan pengguna punya izin proyek. Dialog: nama proyek (prefilled), status,
+   manajer (dari `staff` yang sudah ada di respons daftar), tanggal, lokasi
+   bila kosong. Sukses → navigasi ke proyek (`project.id`).
+2. Lencana **Proyek PN-…** pada baris daftar dan detail ketika `projectId`
+   terisi (`projectCode` sudah ada di respons daftar & detail).
+3. Dropdown status memakai `allowedProspectTransitions(status)` dari
+   `shared/prospects.ts` — pilihan di luar tabel tidak ditawarkan. Server tetap
+   menegakkannya.
+
+### T-22. Layar & Pusat Bantuan menyesuaikan aturan hasil audit
+
+Aturan yang berubah (semuanya sudah ditegakkan server dan ditulis di panduan
+PDF edisi 2.1 — ambil teksnya dari bab yang disebut):
+
+| Aturan | Bab PDF | Yang berubah di layar |
+|---|---|---|
+| Termin **wajib** dipilih saat bayar vendor (`422 TERM_REQUIRED`); bukti per termin (`409 PAYMENT_NOT_EARNED_FOR_TERM`, `details.payableForTerm`); kas harus > 0 (`422 CASH_AMOUNT_REQUIRED`) | Procurement | `procurement-v2-view.tsx`: dropdown termin `required`; tampilkan `payableForTerm` saat ditolak |
+| Laba: `409 NO_DISTRIBUTABLE_PROFIT` kini membawa `details.distributableProfit` & `details.lockedAmount`; ringkasan punya field baru `lockedAmount` | Membagi keuntungan | `profit-sharing-panel.tsx`: tampilkan "Sudah dikunci" (`lockedAmount`) terpisah dari `allocatedAmount` |
+| Bank: pencocokan manual menolak > 14 hari (`422 MATCH_DATE_TOO_FAR`, `details.distanceDays`) | Mencocokkan mutasi bank | tampilkan pesannya apa adanya |
+| Aturan pajak Withhold hanya Payable/Receivable (`422 TAX_RULE_TREATMENT_INVALID`) | Menutup pembukuan & pajak | form aturan pajak: batasi pilihan perlakuan saat efek = Withhold |
+| Status prospek mengikuti tabel transisi | Calon Klien | lihat T-21 |
+| Riwayat quotation memulangkan `scopeId` per baris | Penawaran | opsional: kelompokkan riwayat per scope (Original vs Addendum) |
+
+**Pusat Bantuan (`help-view.tsx`):** perbarui entri `procurement`, `profit`,
+`bank`, `tax`, `prospects`, `invoice-payment`, `installment`, `handover`, dan
+tambahkan sebelas pesan baru ke `messagesId`/`messagesEn` — semuanya sudah
+tertulis di `chapterMessages` pada `server/api/sop-pdf-content.ts` (sebelas
+baris terakhir). Jangan tulis ulang angkanya: jendela bank 14 hari, edisi 2.1.
+
 
 ### ✅ T-19. Pusat Bantuan memuat fitur kirim dokumen lewat email — SELESAI 21 Agustus 2026
 
