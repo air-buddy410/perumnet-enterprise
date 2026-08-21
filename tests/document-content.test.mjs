@@ -777,3 +777,35 @@ test("the English edition of the manual documents it in English too", async () =
   assert.match(manual.flat, /never depends on whether one SMTP handshake succeeded/);
   assert.doesNotMatch(manual.flat, /Mengirim dokumen resmi lewat email/);
 });
+
+// ------------------------------------------------------------------- (9) ---
+//
+// (9) Audit logika /admin, 21–22 Agustus 2026: alur yang berubah harus ada di
+// panduan yang diunduh pengguna, dalam kedua bahasa, beserta bagan alurnya.
+
+test("the manual carries the audited flows: deal conversion, per-term evidence, withholding on payment, profit cap, bank window, reversal dating", async () => {
+  await loginAsAdmin();
+  const manual = await pdfText("/api/help/sop.pdf?language=id");
+  assert.match(manual.flat, /Edisi 2\.1/);
+  assert.match(manual.flat, /Jadikan proyek: dari calon klien ke proyek/);
+  // Judul callout dicetak HURUF BESAR; yang dicocokkan kalimat isinya.
+  assert.match(manual.flat, /termin wajib dipilih saat mencatat pembayaran vendor/);
+  assert.match(manual.flat, /menjadi kewajiban sebesar yang benar-benar dipotong/);
+  assert.match(manual.flat, /tidak boleh melebihi laba aman dibagikan SAAT INI/);
+  assert.match(manual.flat, /memakai jendela yang sama: 14 hari/);
+  assert.match(manual.flat, /baris pembalik memakai tanggal pembayaran asal/);
+  assert.match(manual.flat, /tetap Aktif walau BAST-nya final/);
+  assert.match(manual.flat, /Bagan alur pemakaian aplikasi/, "keterangan bagan tercetak di bab alur");
+  // Daftar isi mengikuti jumlah bab yang sebenarnya.
+  assert.match(manual.flat, /Bab 3 sampai 16/);
+});
+
+test("the English edition carries the same audited flows", async () => {
+  await loginAsAdmin("en");
+  const manual = await pdfText("/api/help/sop.pdf?language=en");
+  assert.match(manual.flat, /Edition 2\.1/);
+  assert.match(manual.flat, /Convert to project: from prospect to project/);
+  assert.match(manual.flat, /Since 21 August 2026 withholding taxes/);
+  assert.match(manual.flat, /all use the same window: 14 days/);
+  assert.match(manual.flat, /Chapters 3 to 16/);
+});

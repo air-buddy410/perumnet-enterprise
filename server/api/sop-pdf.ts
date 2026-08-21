@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { jsPDF } from "jspdf";
 import type { AuthUser } from "../auth";
+import { renderAlurPng, type GambarAlur } from "./alur-png";
 import { ApiError } from "./errors";
 import type { Bilingual, Block, CalcRow, Chapter, MetaRow } from "./sop-pdf-content";
 import { guideChapters } from "./sop-pdf-content";
@@ -12,7 +13,7 @@ type Language = "id" | "en";
 
 // Bumped whenever the manual's structure or coverage changes, so a printed copy
 // can be compared against the edition currently shipping.
-const GUIDE_EDITION = "2.0";
+const GUIDE_EDITION = "2.1";
 
 // Colours reuse the existing PerumNet document palette so the guide sits next to
 // the quotation, invoice, and handover PDFs without looking foreign.
@@ -90,7 +91,11 @@ async function logoData() {
  * discarded purely to learn the chapter pages, on an endpoint with no cache and
  * no rate limit.
  */
-function buildGuide(language: Language, logo: string | undefined): jsPDF {
+function buildGuide(
+  language: Language,
+  logo: string | undefined,
+  images: { alur?: GambarAlur } = {},
+): jsPDF {
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
   const width = doc.internal.pageSize.getWidth();
   const height = doc.internal.pageSize.getHeight();
@@ -339,8 +344,8 @@ function buildGuide(language: Language, logo: string | undefined): jsPDF {
     y += 8;
     paragraph(
       en
-        ? "Chapters 1 and 2 explain who may do what and how the whole chain fits together. Chapters 3 to 15 are the day-to-day workflows, in the order the work actually happens. Chapters 16 to 19 are reference material."
-        : "Bab 1 dan 2 menjelaskan siapa boleh mengerjakan apa dan bagaimana seluruh rantai kerja tersusun. Bab 3 sampai 15 adalah alur kerja sehari-hari, disusun mengikuti urutan pekerjaan sesungguhnya. Bab 16 sampai 19 adalah bahan rujukan.",
+        ? "Chapters 1 and 2 explain who may do what and how the whole chain fits together — chapter 2 opens with the flow chart. Chapters 3 to 16 are the day-to-day workflows, in the order the work actually happens. Chapters 17 to 21 are reference material."
+        : "Bab 1 dan 2 menjelaskan siapa boleh mengerjakan apa dan bagaimana seluruh rantai kerja tersusun — bab 2 dibuka dengan bagan alurnya. Bab 3 sampai 16 adalah alur kerja sehari-hari, disusun mengikuti urutan pekerjaan sesungguhnya. Bab 17 sampai 21 adalah bahan rujukan.",
       { size: SMALL_SIZE, lh: SMALL_LH, colour: MUTED, gap: 5 },
     );
 
@@ -816,6 +821,32 @@ function buildGuide(language: Language, logo: string | undefined): jsPDF {
       case "flow":
         flowBlock(block.steps);
         break;
+      case "image": {
+        // Gambar disiapkan sebelum tata letak (renderSopPdf). Kalau rasterisasi
+        // gagal, bab tetap tercetak tanpa gambar — rantai teks di bawahnya
+        // sudah menceritakan alur yang sama.
+        const gambar = images[block.source];
+        if (!gambar || !gambar.width || !gambar.height) break;
+        const maksTinggi = bottom - MARGIN - 36;
+        let lebar = content;
+        let tinggi = (gambar.height / gambar.width) * lebar;
+        if (tinggi > maksTinggi) {
+          tinggi = maksTinggi;
+          lebar = (gambar.width / gambar.height) * tinggi;
+        }
+        ensure(tinggi + 12);
+        doc.addImage(
+          new Uint8Array(gambar.png),
+          "PNG",
+          MARGIN + (content - lebar) / 2,
+          y,
+          lebar,
+          tinggi,
+        );
+        y += tinggi + 3;
+        paragraph(pick(language, block.caption), { size: 7.6, lh: 3.6, gap: 5 });
+        break;
+      }
       case "calc":
         calcBlock(block.title, block.rows);
         break;
@@ -845,8 +876,11 @@ export async function renderSopPdf(request: Request, user: AuthUser) {
   const language: Language =
     requested === "id" || requested === "en" ? requested : user.preferredLanguage;
   const logo = await logoData();
+  // Bagan alur yang sama dengan /api/help/alur.png. Kegagalan rasterisasi
+  // tidak boleh menggagalkan seluruh panduan.
+  const alur = await renderAlurPng(language).catch(() => undefined);
 
-  const doc = buildGuide(language, logo);
+  const doc = buildGuide(language, logo, { alur });
 
   const filename =
     language === "en"

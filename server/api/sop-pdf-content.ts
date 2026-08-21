@@ -38,6 +38,9 @@ export type Block =
       rows: Bilingual[][];
     }
   | { kind: "flow"; steps: Bilingual[] }
+  // Gambar yang disiapkan server sebelum tata letak (lihat renderSopPdf):
+  // bagan alur aplikasi yang sama persis dengan yang tampil di Pusat Bantuan.
+  | { kind: "image"; source: "alur"; caption: Bilingual }
   | { kind: "calc"; title: Bilingual; rows: CalcRow[] }
   | { kind: "terms"; rows: MetaRow[] }
   | {
@@ -293,6 +296,14 @@ export const chapterFlow: Chapter = {
       text: [
         "Semua pekerjaan komersial mengikuti satu rantai yang sama. Setiap tahap mengunci tahap sebelumnya, sehingga angka pada dokumen tidak pernah berubah diam-diam di belakang dokumen yang sudah disepakati.",
         "All commercial work follows the same chain. Each stage locks the one before it, so the figures on a document never change quietly behind an agreement that has already been made.",
+      ],
+    },
+    {
+      kind: "image",
+      source: "alur",
+      caption: [
+        "Bagan alur pemakaian aplikasi, dari calon klien sampai laba dan pajak. Gambar yang sama tampil di Pusat Bantuan; sumbernya satu (shared/alur-aplikasi.ts), jadi keduanya tidak bisa berbeda.",
+        "The application flow chart, from prospect to profit and tax. The same picture appears in the Help Center; both come from one source (shared/alur-aplikasi.ts), so they cannot diverge.",
       ],
     },
     {
@@ -648,6 +659,14 @@ export const chapterQuotation: Chapter = {
         ],
       ],
     },
+    {
+      kind: "bullets",
+      items: [
+        ["Nilai proyek adalah jumlah per paket: kontrak yang diterima klien untuk paket yang sudah punya kontrak, dan BoQ untuk paket yang belum. Dulu paket yang masih Draft lenyap dari nilai proyek begitu paket lain diterima.", "The project value is a per-package sum: the accepted contract for packages that have one, the BoQ for those that do not. A Draft package used to vanish from the project value as soon as another package was accepted."],
+        ["Revisi lama (Superseded) menyimpan angka historisnya; perubahan BoQ berikutnya tidak menimpanya lagi, jadi riwayat revisi memang riwayat.", "Old (Superseded) revisions keep their historic figures; later BoQ changes no longer overwrite them, so the revision history really is history."],
+        ["Diskon nominal yang dibawa ke revisi dipotong ke subtotal yang baru; tidak ada lagi diskon tersimpan yang lebih besar dari pekerjaannya.", "A nominal discount carried into a revision is clipped to the new subtotal; no stored discount is ever larger than the job."],
+      ],
+    },
   ],
 };
 
@@ -744,6 +763,14 @@ export const chapterInstallment: Chapter = {
         ],
       ],
     },
+    {
+      kind: "note",
+      title: ["Invoice Nominal dibatasi per paket", "Nominal invoices are capped per package"],
+      text: [
+        "Invoice bernominal bebas (tanpa persentase) tidak boleh membuat total invoice sebuah PAKET melampaui kontrak paket itu. Sejak 21 Agustus 2026 batasnya dihitung per paket; dulu dihitung se-proyek, sehingga invoice paket B bisa ditolak karena jatah paket A sudah habis.",
+        "Free-amount invoices (without a percentage) may not push a PACKAGE's invoice total past that package's contract. Since 21 August 2026 the cap is computed per package; it used to be computed project-wide, so a package B invoice could be refused because package A's headroom was used up.",
+      ],
+    },
   ],
 };
 
@@ -834,6 +861,14 @@ export const chapterInvoicePayment: Chapter = {
           "Mencoba void pembayaran yang sudah dicocokkan dengan mutasi bank. Lepaskan dulu pencocokannya di Pembukuan, baru lakukan void.",
           "Trying to void a payment that is already matched to a bank statement entry. Unmatch it in Finance first, then void.",
         ],
+      ],
+    },
+    {
+      kind: "note",
+      title: ["Pembatalan bertanggal tanggal bayar asal", "A void is dated on the original payment date"],
+      text: [
+        "Membatalkan pembayaran berarti catatannya keliru — bukan uangnya dikembalikan. Sejak 21 Agustus 2026 baris pembalik memakai tanggal pembayaran asal, jadi laporan bulanan bulan itu kembali benar. Dulu pembalik bertanggal hari pembatalan: total kas memang kembali nol, tetapi dua bulan sekaligus salah. Aturan yang sama berlaku untuk pembatalan pembayaran vendor, belanja, uang muka, bagi laba, dan setoran pajak.",
+        "Voiding a payment means the record was wrong — not that the money was refunded. Since 21 August 2026 the reversing entry carries the original payment date, so that month's report is right again. The reversal used to be dated on the day of the void: total cash did return to zero, but two months were wrong at once. The same rule applies to voided vendor payments, expenses, advances, profit shares, and tax settlements.",
       ],
     },
   ],
@@ -1046,6 +1081,22 @@ export const chapterProcurement: Chapter = {
           "Membatalkan dokumen padahal masih ada pembayaran aktif. Void seluruh pembayarannya lebih dulu, dan lepaskan rekonsiliasi bank bila pembayaran itu sudah dicocokkan.",
           "Voiding a document while active payments remain. Void every payment first, and unmatch the bank reconciliation if the payment was already matched.",
         ],
+      ],
+    },
+    {
+      kind: "note",
+      title: ["Setiap pembayaran menempel pada satu termin", "Every payment belongs to one term"],
+      text: [
+        "Sejak 21 Agustus 2026 termin wajib dipilih saat mencatat pembayaran vendor. Tanpa termin, status termin tidak pernah bergerak dan dokumen bisa terbaca Lunas dengan semua termin masih Pending. Bukti juga diperiksa PER TERMIN untuk SPK: uang muka boleh dibayar sebesar rencananya, termin lain hanya sebesar verifikasi termin itu sendiri — bukan jumlah verifikasi termin lain.",
+        "Since 21 August 2026 a term must be chosen when recording a vendor payment. Without one, term statuses never move and a document can read Paid with every term still Pending. Evidence is also checked PER TERM on a work order: the advance may be paid up to its plan, any other term only up to its own verification — not the sum of other terms' evidence.",
+      ],
+    },
+    {
+      kind: "bullets",
+      items: [
+        ["Status termin dihitung dari pembayaran gross terhadap nilai termin yang sudah termasuk pajak. Termin 1.000.000 dengan PPN 11% baru Paid setelah 1.110.000 gross masuk, bukan 1.000.000.", "Term status compares gross payments against the term value including tax. A 1,000,000 term with 11% VAT is Paid only once 1,110,000 gross has arrived, not 1,000,000."],
+        ["Pembayaran yang seluruhnya pajak potong (kas nol) ditolak dengan jelas. Tarif potongan yang ada tidak pernah memakan seluruh pembayaran, jadi itu hampir pasti salah ketik.", "A payment that is entirely withholding tax (zero cash) is refused plainly. No withholding rate in use ever consumes a whole payment, so that is almost certainly a typo."],
+        ["Menyunting harga SPK atau PO yang masih Draft ikut menghitung ulang pajaknya. Angka yang dikunci saat disetujui adalah angka harga terakhir, bukan harga saat pajak pertama dipilih.", "Editing the price of a Draft work order or PO recalculates its taxes. The figure locked at approval is the latest price, not the price when the tax was first chosen."],
       ],
     },
   ],
@@ -1329,6 +1380,14 @@ export const chapterHandover: Chapter = {
         ],
       ],
     },
+    {
+      kind: "note",
+      title: ["BAST hanya menutup proyek yang punya kontrak", "A certificate only closes a project that has a contract"],
+      text: [
+        "Proyek menjadi Selesai ketika setiap paket yang punya quotation diterima klien sudah punya BAST final. Proyek yang belum punya satu pun quotation diterima tetap Aktif walau BAST-nya final — dulu BAST pertama langsung menutupnya tanpa kontrak. Finalisasi sekarang menang-atau-kalah utuh: status Final, PDF, cap digital, dan penutupan proyek ditulis bersama.",
+        "A project becomes Selesai when every package with a client-accepted quotation carries a final certificate. A project with no accepted quotation at all stays active even after a final certificate — the first certificate used to close it without any contract. Finalisation is now all-or-nothing: the Final status, the PDF, the digital seal, and the project closeout are written together.",
+      ],
+    },
   ],
 };
 
@@ -1541,6 +1600,21 @@ export const chapterBank: Chapter = {
         ],
       ],
     },
+    {
+      kind: "note",
+      title: ["Jendela pencocokan 14 hari, satu angka untuk semua", "A 14-day matching window, one figure everywhere"],
+      text: [
+        "Sejak 21 Agustus 2026 pencocokan otomatis saat impor, daftar kandidat, dan pencocokan manual memakai jendela yang sama: 14 hari dari tanggal mutasi. Dulu otomatis memakai 3 hari (terlalu sempit untuk kliring akhir pekan), kandidat 14 hari, dan pencocokan manual tanpa batas sama sekali.",
+        "Since 21 August 2026 automatic matching on import, the candidate list, and manual matching all use the same window: 14 days from the statement date. Automatic matching used to allow 3 days (too narrow for weekend clearing), candidates 14, and manual matching no limit at all.",
+      ],
+    },
+    {
+      kind: "bullets",
+      items: [
+        ["Bila beberapa transaksi sama arah, nominal, dan tanggalnya, yang dibayar lewat rekening yang sedang diimpor yang dicocokkan. Kalau masih lebih dari satu, tidak ada yang dicocokkan otomatis — lebih baik menunggu tangan manusia daripada salah pasang.", "When several transactions share direction, amount, and date, the one paid through the account being imported is matched. If more than one remains, nothing is matched automatically — better to wait for a human than to pair the wrong one."],
+        ["Mutasi yang tidak cocok tetap tercatat tetapi tidak dihitung sebagai kas; Buku Kas dan laba aman dibagikan tidak pernah menghitung uang yang sama dua kali.", "An unmatched line stays recorded but never counts as cash; the Cash Ledger and distributable profit never count the same money twice."],
+      ],
+    },
   ],
 };
 
@@ -1641,6 +1715,22 @@ export const chapterTax: Chapter = {
         ],
       ],
     },
+    {
+      kind: "note",
+      title: ["Kewajiban PPh lahir saat dipotong, bukan saat disetujui", "Withholding obligations arise when withheld, not at approval"],
+      text: [
+        "Sejak 21 Agustus 2026 pajak potong (PPh 23 dan sejenisnya) menjadi kewajiban sebesar yang benar-benar dipotong pada setiap pembayaran — bertambah saat pembayaran dicatat, berkurang saat pembayaran dibatalkan. Dulu seluruh snapshot dicatat sebagai utang begitu dokumen disetujui, sehingga SPK yang baru dibayar separuh sudah mengurangi laba aman dibagikan sebesar PPh penuh.",
+        "Since 21 August 2026 withholding taxes (Art. 23 and the like) become an obligation for the amount actually withheld on each payment — growing as payments are recorded, shrinking when one is voided. The full snapshot used to be booked as payable the moment a document was approved, so a work order only half paid already reduced distributable profit by the whole withholding.",
+      ],
+    },
+    {
+      kind: "bullets",
+      items: [
+        ["Arah kewajiban pajak potong mengikuti siapa yang memotong: kita memotong vendor → utang (Payable); klien memotong kita → piutang (Receivable). Aturan potong hanya boleh dibukukan sebagai Payable atau Receivable — pilihan lain ditolak.", "The direction of a withholding obligation follows who withholds: we withhold from a vendor → payable; the client withholds from us → receivable. A withholding rule may only be booked as Payable or Receivable — other treatments are refused."],
+        ["Mematikan saklar pajak tidak menghitung ulang dokumen yang sudah terkunci. Quotation, invoice, dan SPK yang sudah memuat pajak tetap memuatnya; yang berubah hanya dokumen baru.", "Switching tax off never recalculates locked documents. Quotations, invoices, and work orders that already carry tax keep it; only new documents change."],
+        ["Quotation yang sudah Sent tidak bisa ditambahi pajak. Ubah BoQ-nya supaya lahir revisi Draft, lalu pilih aturannya di revisi itu.", "A quotation already Sent cannot gain tax. Change its BoQ so a Draft revision is born, then choose the rules on that revision."],
+      ],
+    },
   ],
 };
 
@@ -1715,6 +1805,22 @@ export const chapterProfit: Chapter = {
           "Mencatat bonus atau fee sebagai pembagian keuntungan. Bonus dan fee adalah biaya proyek; catat lewat Belanja Proyek pada kategori biaya yang tepat.",
           "Recording a bonus or a fee as a profit share. Bonuses and fees are project costs; record them through Project Expenses under the right expense category.",
         ],
+      ],
+    },
+    {
+      kind: "note",
+      title: ["Total yang dikunci tidak boleh melampaui laba aman saat ini", "The locked total may never exceed today's safe profit"],
+      text: [
+        "Persentase dibatasi 100%, tetapi rupiahnya dikunci satu per satu pada waktu yang berbeda. Sejak 21 Agustus 2026 menyetujui sebuah alokasi juga memeriksa: nominal yang sudah dikunci untuk alokasi lain ditambah nominal ini tidak boleh melebihi laba aman dibagikan SAAT INI. Kalau laba turun setelah alokasi pertama dikunci, alokasi berikutnya ditolak sampai labanya kembali.",
+        "Percentages are capped at 100%, but the rupiah amounts lock one at a time at different moments. Since 21 August 2026 approving an allocation also checks that the amounts already locked for other allocations plus this one never exceed TODAY's distributable profit. If profit dropped after the first allocation locked, the next one is refused until it recovers.",
+      ],
+    },
+    {
+      kind: "bullets",
+      items: [
+        ["Laba ditahan kini memakai satu rumus di panel bagi laba dan di laporan keuangan: laba aman dibagikan dikurangi yang dialokasikan. Dulu laporan mengabaikan pajak terpulihkan dan utang pajak, jadi dua layar menunjukkan dua angka.", "Retained profit now uses one formula on the profit-sharing panel and in the finance report: distributable profit minus what is allocated. The report used to ignore recoverable and payable tax, so two screens showed two figures."],
+        ["Ringkasan membedakan yang sudah dikunci (Approved dan Paid) dari alokasi Draft yang masih bergerak mengikuti kas.", "The summary separates what is locked (Approved and Paid) from Draft allocations that still move with cash."],
+        ["Pembatalan bagi laba hanya terhalang bila pembayarannya sudah dicocokkan dengan mutasi bank — sama dengan pembatalan lain di aplikasi ini.", "Voiding a profit share is only blocked when its payout is matched to a bank line — the same rule as every other void in this application."],
       ],
     },
   ],
@@ -1942,6 +2048,47 @@ export const chapterProspects: Chapter = {
           "Menguji dengan data pelanggan sungguhan di lingkungan demo. Bila lingkungan itu diizinkan mengirim, surat uji benar-benar sampai ke mereka.",
           "Testing with real customer data in the demo environment. If that environment is allowed to send, the test letters really do reach them.",
         ],
+      ],
+    },
+    {
+      kind: "heading",
+      text: ["Jadikan proyek: dari calon klien ke proyek", "Convert to project: from prospect to project"],
+    },
+    {
+      kind: "para",
+      text: [
+        "Sejak 21 Agustus 2026 status Won bukan lagi sekadar label. Tombol Jadikan proyek membuat proyek langsung dari prospek: nama perusahaan menjadi klien, nama kontak menjadi PIC klien, alamat email menjadi email klien (alamat tujuan quotation dan invoice nanti), dan lokasi ikut dibawa. Yang perlu diisi hanya yang tidak dimiliki prospek — nama proyek bila berbeda, manajer, dan tanggal.",
+        "Since 21 August 2026 the Won status is no longer just a label. The Convert to project button creates the project straight from the prospect: the company name becomes the client, the contact name the client PIC, the email address the client email (where quotations and invoices will later be sent), and the location carries over. Only what the prospect lacks has to be typed — the project name if it differs, the manager, and the dates.",
+      ],
+    },
+    {
+      kind: "bullets",
+      items: [
+        ["Satu prospek paling banyak satu proyek. Menekan tombol itu dua kali tidak membuat kembaran; aplikasi menyebutkan kode proyek yang sudah ada.", "One prospect makes at most one project. Pressing the button twice never creates a twin; the application names the project that already exists."],
+        ["Prospek Lost atau yang minta berhenti dihubungi tidak dapat dijadikan proyek. Buka kembali ke New lebih dulu bila memang mereka menghubungi lagi.", "A Lost prospect, or one who asked not to be contacted, cannot be converted. Reopen it to New first if they really did get back in touch."],
+        ["Butuh dua izin sekaligus: Kelola Calon Klien dan Kelola Proyek. Finance yang hanya boleh melihat proyek tidak bisa menekannya.", "Two permissions are needed at once: Manage Prospects and Manage Projects. A Finance user who may only view projects cannot press it."],
+        ["Daftar dan detail prospek menampilkan kode proyek yang lahir darinya, jadi pertanyaan \"proyek ini dari sumber mana\" akhirnya punya jawaban.", "The prospect list and detail show the code of the project born from it, so \"where did this project come from\" finally has an answer."],
+      ],
+    },
+    {
+      kind: "table",
+      widths: [44, 134],
+      head: [["Dari status", "From status"], ["Boleh pindah ke", "May move to"]],
+      rows: [
+        [["New", "New"], ["Contacted, Qualified, Lost", "Contacted, Qualified, Lost"]],
+        [["Contacted", "Contacted"], ["Qualified, Proposal, Lost", "Qualified, Proposal, Lost"]],
+        [["Qualified", "Qualified"], ["Proposal, Lost", "Proposal, Lost"]],
+        [["Proposal", "Proposal"], ["Won, Lost, atau mundur ke Qualified", "Won, Lost, or back to Qualified"]],
+        [["Won", "Won"], ["Tidak ke mana-mana — sudah jadi klien", "Nowhere — already a client"]],
+        [["Lost", "Lost"], ["New (dibuka kembali)", "New (reopened)"]],
+      ],
+    },
+    {
+      kind: "note",
+      title: ["Lompatan status ditolak", "Status jumps are refused"],
+      text: [
+        "Dulu status bisa diubah ke apa pun, termasuk Lost langsung ke Won. Sekarang perpindahan mengikuti tabel di atas; yang di luar tabel dijawab Status prospek tidak bisa berpindah dari … ke ….",
+        "Status used to be changeable to anything, including Lost straight to Won. Moves now follow the table above; anything outside it is answered with the message that the status cannot move from … to ….",
       ],
     },
   ],
@@ -2619,6 +2766,61 @@ export const chapterMessages: Chapter = {
           message: ["Seluruh lampiran berjumlah sekian MB, melebihi batas 10 MB per email.", "The message states the total attachment size and that it exceeds the 10 MB limit per email."],
           meaning: ["Batas 10 MB menghitung dokumen resminya sekaligus, bukan hanya berkas yang Anda tambahkan. Batas itu bukan angka sembarangan: banyak gateway email perusahaan membuang lampiran di atasnya tanpa memberi tahu siapa pun, sehingga surat tampak Terkirim padahal lampirannya dicopot di tengah jalan.", "The 10 MB limit counts the official document too, not only the files you added. The figure is not arbitrary: many corporate email gateways silently drop attachments above it, so a letter looks Sent while its attachment was stripped along the way."],
           action: ["Kurangi atau perkecil lampiran tambahan. Pesan sejenis menyebut satu berkas melebihi 10 MB, atau maksimal lima lampiran tambahan per email. Untuk berkas besar, kirim tautan unduhan di isi suratnya.", "Remove or shrink the extra attachments. Related messages name a single file above 10 MB, or the maximum of five extra attachments per email. For large files, put a download link in the body of the letter instead."],
+        },
+        {
+          message: ["Status prospek tidak bisa berpindah dari … ke ….", "The prospect status cannot move from … to …."],
+          meaning: ["Perpindahan status mengikuti tabel di bab Calon Klien. Yang di luar tabel — Lost langsung ke Won, atau mundur dua langkah — ditolak.", "Status moves follow the table in the Prospects chapter. Anything outside it — Lost straight to Won, or two steps back — is refused."],
+          action: ["Pindah selangkah demi selangkah. Prospek Lost dibuka kembali ke New lebih dulu; Won hanya dicapai dari Proposal atau lewat Jadikan proyek.", "Move one step at a time. Reopen a Lost prospect to New first; Won is reached only from Proposal or through Convert to project."],
+        },
+        {
+          message: ["Prospek ini sudah menjadi proyek PN-….", "This prospect has already become project PN-…."],
+          meaning: ["Satu prospek paling banyak satu proyek, dan pesannya menyebut kode proyek yang sudah ada.", "One prospect makes at most one project, and the message names the project that already exists."],
+          action: ["Buka proyek yang disebut. Kalau memang ada pekerjaan kedua untuk klien yang sama, buat proyek baru dari Manajemen Proyek atau paket komersial baru di proyek itu.", "Open the named project. If there genuinely is a second job for the same client, create a new project from Project Management or a new commercial package inside that project."],
+        },
+        {
+          message: ["Prospek berstatus Lost tidak dapat dijadikan proyek. / Prospek ini minta berhenti dihubungi.", "A Lost prospect cannot be converted. / This prospect asked not to be contacted."],
+          meaning: ["Menjadikan klien tanpa membuka kembali statusnya berarti melewati catatan penolakannya.", "Making them a client without reopening the status would skip over the record of their refusal."],
+          action: ["Bila mereka menghubungi lagi, ubah statusnya ke New, lalu lanjutkan seperti biasa. Prospek yang minta berhenti dihubungi tidak dapat dijadikan proyek lewat tombol ini.", "If they got back in touch, set the status to New and continue as usual. A prospect who asked not to be contacted cannot be converted through this button."],
+        },
+        {
+          message: ["Pilih termin yang dibayar.", "Choose the term being paid."],
+          meaning: ["Setiap pembayaran vendor menempel pada satu termin; tanpa itu status termin tidak pernah bergerak.", "Every vendor payment belongs to one term; without it the term statuses never move."],
+          action: ["Pilih termin pada dialog pembayaran — DP, progres, atau pelunasan — lalu ulangi.", "Pick the term in the payment dialog — advance, progress, or final — then try again."],
+        },
+        {
+          message: ["Termin … baru berhak dibayar sekian (sudah dibayar sekian). Verifikasi progres termin ini lebih dulu.", "Term … is only payable up to so much (so much already paid). Verify this term's progress first."],
+          meaning: ["Bukti diperiksa per termin. Termin yang belum diverifikasi tidak bisa dibayar berkat bukti termin lain. Angkanya sudah termasuk pajak.", "Evidence is checked per term. An unverified term cannot be paid on the strength of another term's evidence. The figures include tax."],
+          action: ["Catat verifikasi untuk termin itu, atau bayar termin yang memang sudah berhak.", "Record a verification for that term, or pay the term that is actually due."],
+        },
+        {
+          message: ["Kas yang dibayarkan harus lebih dari nol.", "The cash paid must be more than zero."],
+          meaning: ["Pembayaran yang seluruhnya pajak potong tidak dapat dicatat; tarif potongan yang ada tidak pernah memakan seluruh pembayaran.", "A payment that is entirely withholding cannot be recorded; no withholding rate in use consumes a whole payment."],
+          action: ["Periksa nominal gross, kas, dan potongannya — hampir pasti tertukar.", "Check the gross, cash, and withholding figures — they are almost certainly swapped."],
+        },
+        {
+          message: ["Pajak potong hanya boleh dibukukan sebagai Payable atau Receivable.", "A withholding tax may only be booked as Payable or Receivable."],
+          meaning: ["Pajak yang dipotong adalah uang yang tertahan: utang kita ke negara (vendor) atau piutang kita (klien). Dibukukan sebagai biaya atau terpulihkan, uang itu hilang dari semua daftar kewajiban.", "Withheld tax is money held back: our payable to the state (vendor) or our receivable (client). Booked as an expense or as recoverable, that money vanishes from every obligation list."],
+          action: ["Ubah perlakuan akuntansi aturan itu ke Payable (kita memotong) atau Receivable (klien memotong).", "Change the rule's accounting treatment to Payable (we withhold) or Receivable (the client withholds)."],
+        },
+        {
+          message: ["Laba aman dibagikan saat ini sekian, sedangkan yang sudah dikunci untuk alokasi lain sekian. Alokasi ini tidak lagi tertampung.", "Today's distributable profit is so much, while so much is already locked for other allocations. This allocation no longer fits."],
+          meaning: ["Nominal yang sudah disetujui sebelumnya ditambah alokasi ini melampaui laba aman dibagikan saat ini — biasanya karena ada belanja atau komitmen baru setelah alokasi pertama dikunci.", "Amounts approved earlier plus this allocation exceed today's distributable profit — usually because a new expense or commitment landed after the first allocation locked."],
+          action: ["Tunggu kas masuk berikutnya, kecilkan persentasenya, atau batalkan alokasi yang sudah disetujui bila memang keliru.", "Wait for the next cash in, lower the percentage, or void an approved allocation if it was wrong."],
+        },
+        {
+          message: ["Tanggal transaksi berselisih sekian hari dari mutasi; batasnya 14 hari.", "The transaction date is so many days from the statement line; the limit is 14 days."],
+          meaning: ["Pencocokan manual memakai jendela yang sama dengan pencocokan otomatis. Mutasi dan transaksi yang terpaut berminggu-minggu hampir pasti bukan pasangan.", "Manual matching uses the same window as automatic matching. A statement line and a transaction weeks apart are almost certainly not a pair."],
+          action: ["Cari transaksi yang tanggalnya dekat. Kalau memang tidak ada, biarkan mutasinya Imported — ia tidak dihitung kas — dan periksa apakah pembayarannya memang belum dicatat.", "Look for a transaction with a nearby date. If there is none, leave the line Imported — it does not count as cash — and check whether the payment was ever recorded."],
+        },
+        {
+          message: ["Siklus serah terima harus bilangan bulat antara 1 dan 100.", "The handover cycle must be a whole number between 1 and 100."],
+          meaning: ["Alamat layar validasi memuat siklus yang bukan angka.", "The validation screen address carries a cycle that is not a number."],
+          action: ["Buka kembali Validasi Perangkat dari menu dan pilih siklusnya di layar.", "Reopen Device Validation from the menu and choose the cycle on screen."],
+        },
+        {
+          message: ["Total Invoice melebihi nilai Quotation. Sisa yang dapat ditagihkan adalah ….", "The invoice total exceeds the quotation value. The remaining billable amount is …."],
+          meaning: ["Batas ini dihitung per PAKET: jumlah invoice paket ini tidak boleh melampaui kontrak paket ini. Invoice paket lain tidak ikut dihitung.", "This cap is computed per PACKAGE: this package's invoices may not exceed this package's contract. Other packages' invoices are not counted."],
+          action: ["Tagihkan sisa yang disebutkan, atau periksa apakah Anda sedang berada di paket yang benar.", "Bill the remaining amount named, or check that you are on the right package."],
         },
       ],
     },

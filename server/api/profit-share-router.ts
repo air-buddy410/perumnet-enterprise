@@ -9,6 +9,7 @@ import {
   countsAsCashCondition,
   grossExpenseSum,
   grossIncomeSum,
+  tanggalReversal,
 } from "../cash-ledger";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { asNumber } from "../format";
@@ -70,7 +71,7 @@ async function requireProject(client: DatabaseClient, projectId: string) {
 const OPERATING_SCOPE =
   "transactions.source NOT IN ('Profit Share','Profit Share Reversal')";
 
-async function operatingProfit(client: DatabaseClient, projectId: string) {
+export async function operatingProfit(client: DatabaseClient, projectId: string) {
   const result = await client.execute({
     // Distributions and their reversals are the output of this calculation, so
     // they never feed back into it. Every other void books a reversal that nets
@@ -244,7 +245,13 @@ async function summary(client: DatabaseClient, projectId: string) {
     mapShare(row as Record<string, unknown>, profit.distributableProfit),
   );
   const active = allocations.filter((item) => item.status !== "Void");
+  // allocatedAmount mencampur pratinjau Draft (ikut bergerak bersama kas) dan
+  // nominal yang sudah dikunci — berguna sebagai perencanaan. lockedAmount
+  // hanya yang sudah tidak bisa bergerak lagi (Approved + Paid).
   const allocatedAmount = active.reduce((total, item) => total + item.amount, 0);
+  const lockedAmount = active
+    .filter((item) => item.status === "Approved" || item.status === "Paid")
+    .reduce((total, item) => total + item.amount, 0);
   const paidAmount = active
     .filter((item) => item.status === "Paid")
     .reduce((total, item) => total + item.amount, 0);
@@ -261,6 +268,7 @@ async function summary(client: DatabaseClient, projectId: string) {
       0,
     ),
     allocatedAmount,
+    lockedAmount,
     paidAmount,
     retainedProfit: profit.distributableProfit - allocatedAmount,
     allocations,
@@ -443,6 +451,27 @@ export async function handleProfitShares(
         "Nominal pembagian terlalu kecil untuk dicatat dalam rupiah.",
       );
     }
+    // Persentasenya dibatasi 100%, tetapi RUPIAH-nya dikunci satu per satu
+    // terhadap laba yang berbeda-beda waktunya. Dua alokasi 50% yang disetujui
+    // di dua waktu — yang kedua setelah laba turun — menghasilkan dua nominal
+    // terkunci yang jumlahnya melampaui laba aman mana pun, dan `pay` tidak
+    // pernah memeriksa ulang. Yang dijaga: Σ nominal yang sudah dikunci
+    // (Approved + Paid) ditambah yang akan dikunci tidak boleh melampaui laba
+    // aman SAAT INI.
+    const locked = await client.execute({
+      sql: `SELECT COALESCE(SUM(amount),0) AS total FROM project_profit_shares
+        WHERE project_id=? AND status IN ('Approved','Paid') AND id<>?`,
+      args: [current.project_id, shareId],
+    });
+    const lockedAmount = asNumber(locked.rows[0]?.total);
+    if (lockedAmount + amount > profit.distributableProfit) {
+      throw new ApiError(
+        409,
+        "NO_DISTRIBUTABLE_PROFIT",
+        `Laba aman dibagikan saat ini ${profit.distributableProfit.toLocaleString("id-ID")}, sedangkan yang sudah dikunci untuk alokasi lain ${lockedAmount.toLocaleString("id-ID")}. Alokasi ini tidak lagi tertampung.`,
+        { distributableProfit: profit.distributableProfit, lockedAmount, amount },
+      );
+    }
     const timestamp = new Date().toISOString();
     await client.execute({
       sql: `
@@ -530,8 +559,11 @@ export async function handleProfitShares(
       );
     }
     if (current.transaction_id) {
+      // Sama dengan void lain di aplikasi ini: yang mengunci hanya mutasi yang
+      // sudah DICOCOKKAN. Baris bank yang Excluded justru berarti "ini bukan
+      // bukti kas baru", dan dulu tetap memblokir pembatalan selamanya.
       const linkedBankEntry = await client.execute({
-        sql: "SELECT id FROM bank_statement_entries WHERE transaction_id=? LIMIT 1",
+        sql: "SELECT id FROM bank_statement_entries WHERE transaction_id=? AND reconciliation_status='Matched' LIMIT 1",
         args: [current.transaction_id],
       });
       if (linkedBankEntry.rows.length) {
@@ -561,7 +593,7 @@ export async function handleProfitShares(
                 args: [
                   reversalId,
                   current.project_id,
-                  timestamp.slice(0, 10),
+                  tanggalReversal(String(current.paid_date), timestamp),
                   `Pembatalan pembagian keuntungan - ${String(current.recipient_name)}`,
                   current.amount,
                   `${shareId}:void`,

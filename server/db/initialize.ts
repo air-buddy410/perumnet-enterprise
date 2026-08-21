@@ -3301,6 +3301,17 @@ async function ensureProspectLetterFormat(client: DatabaseClient) {
   await ensureColumn(client, "cms_prospect_outreach", "batch_id", "TEXT");
   await ensureColumn(client, "projects", "client_email", "TEXT");
   await ensureColumn(client, "projects", "client_contact_name", "TEXT");
+  // Tautan ke calon klien asalnya. Sampai 21 Agustus 2026 tidak ada apa pun
+  // yang menghubungkan prospek "Won" dengan proyek yang lahir darinya, jadi
+  // tidak ada yang bisa menjawab "proyek ini datang dari sumber mana".
+  // Sengaja TANPA REFERENCES: tabel cms_prospects dibuat belakangan di berkas
+  // ini, dan prospek yang dihapus lunak tetap harus bisa dirujuk.
+  await ensureColumn(client, "projects", "prospect_id", "TEXT");
+  // Unik parsial: satu prospek paling banyak satu proyek, ditegakkan database
+  // — bukan hanya pemeriksaan aplikasi yang bisa kalah balapan.
+  await client.execute(
+    "CREATE UNIQUE INDEX IF NOT EXISTS projects_prospect_unique ON projects(prospect_id) WHERE prospect_id IS NOT NULL",
+  );
   // TIDAK ada indeks atas keduanya, dan memang tidak perlu: tidak ada satu pun
   // kueri yang mencari proyek BERDASARKAN alamat kliennya. Ditulis di sini
   // supaya yang berikutnya tidak menambahkannya "sekalian" ke schemaSql —

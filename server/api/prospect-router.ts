@@ -6,8 +6,12 @@ import { writeAuditLog } from "../audit";
 import { requireUser, type AuthUser } from "../auth";
 import { canAccess } from "../../shared/access";
 import { getDatabase, type DatabaseClient } from "../db/client";
-import { sendEmailDelivery } from "../email";
+import { notifyProjectStakeholders, sendEmailDelivery } from "../email";
+import { insertProjectRecord } from "./project-create";
 import {
+  canTransitionProspect,
+  prospectIsClosedLost,
+  type ProspectStatus,
   PROSPECT_DEFAULT_SPACING_SECONDS,
   PROSPECT_MAX_RECIPIENTS_PER_BATCH,
   PROSPECT_MAX_SPACING_SECONDS,
@@ -165,6 +169,10 @@ function mapProspect(row: Record<string, unknown>) {
     optOutAt,
     optOutReason: text(row.opt_out_reason),
     lastOutreachAt: row.last_outreach_at ? String(row.last_outreach_at) : null,
+    // Proyek yang lahir dari prospek ini lewat "Jadikan proyek"; null kalau
+    // belum. Satu prospek paling banyak satu proyek (indeks unik parsial).
+    projectId: row.project_id ? String(row.project_id) : null,
+    projectCode: row.project_code ? String(row.project_code) : null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     // Dihitung di server supaya layar tidak menghitung ulang dan berbeda
@@ -236,8 +244,10 @@ async function listProspects(request: Request) {
   const where = `WHERE ${clauses.join(" AND ")}`;
   const [rows, count, staff] = await Promise.all([
     client.execute({
-      sql: `SELECT p.*,u.name AS assigned_name FROM cms_prospects p
-        LEFT JOIN users u ON u.id=p.assigned_to ${where}
+      sql: `SELECT p.*,u.name AS assigned_name,pr.id AS project_id,pr.code AS project_code
+        FROM cms_prospects p
+        LEFT JOIN users u ON u.id=p.assigned_to
+        LEFT JOIN projects pr ON pr.prospect_id=p.id ${where}
         ORDER BY p.created_at DESC LIMIT ? OFFSET ?`,
       args: [...args, pageSize, (page - 1) * pageSize],
     }),
@@ -301,8 +311,10 @@ async function createProspect(request: Request, user: AuthUser) {
 
 async function loadProspect(client: DatabaseClient, id: string) {
   const hasil = await client.execute({
-    sql: `SELECT p.*,u.name AS assigned_name FROM cms_prospects p
+    sql: `SELECT p.*,u.name AS assigned_name,pr.id AS project_id,pr.code AS project_code
+      FROM cms_prospects p
       LEFT JOIN users u ON u.id=p.assigned_to
+      LEFT JOIN projects pr ON pr.prospect_id=p.id
       WHERE p.id=? AND p.deleted_at IS NULL LIMIT 1`,
     args: [id],
   });
@@ -362,8 +374,21 @@ const kolomKontak: Record<string, string> = {
 async function patchProspect(request: Request, id: string, user: AuthUser) {
   const input = patchProspectSchema.parse(await jsonBody(request));
   const { client } = await getDatabase();
-  await loadProspect(client, id);
+  const sekarang = await loadProspect(client, id);
   if (input.email) await assertEmailFree(client, input.email, id);
+  // Status mengikuti tabel transisi di shared/prospects.ts — bukan enum bebas.
+  // Dulu Lost → Won sah dalam satu PATCH, dan tidak ada yang tahu.
+  if (
+    input.status !== undefined &&
+    !canTransitionProspect(sekarang.status as ProspectStatus, input.status)
+  ) {
+    throw new ApiError(
+      409,
+      "INVALID_PROSPECT_TRANSITION",
+      `Status prospek tidak bisa berpindah dari ${sekarang.status} ke ${input.status}.`,
+      { from: sekarang.status, to: input.status },
+    );
+  }
 
   const sets: string[] = [];
   const args: unknown[] = [];
@@ -386,6 +411,137 @@ async function patchProspect(request: Request, id: string, user: AuthUser) {
   });
   await writeAuditLog(client, request, user, "prospect_update", "prospect", id);
   return ok(await loadProspect(client, id));
+}
+
+const convertSchema = z.object({
+  name: z.string().trim().min(3).max(160).optional(),
+  status: z.enum(["Draft", "Aktif"]).default("Draft"),
+  managerId: z.string().trim().min(1).max(100).optional(),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  targetDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  location: z.string().trim().min(2).max(160).optional(),
+});
+
+/**
+ * "Jadikan proyek": satu-satunya jembatan dari calon klien ke proyek.
+ *
+ * Yang dibawa dari prospek: perusahaan → klien, nama kontak → PIC klien, email
+ * → email klien (itu alamat tujuan quotation/invoice nanti), lokasi → lokasi.
+ * Yang harus diisi pemanggil hanya yang memang tidak dimiliki prospek.
+ *
+ * Satu prospek paling banyak satu proyek; percobaan kedua memulangkan kode
+ * proyek yang sudah ada, bukan membuat kembarannya. Prospek Lost atau yang
+ * minta berhenti dihubungi tidak bisa dikonversi — menjadikannya klien tanpa
+ * membuka kembali statusnya berarti melewati catatan penolakannya.
+ */
+async function convertProspect(request: Request, id: string, user: AuthUser) {
+  if (!canAccess(user.permissions, "projects", "manage")) {
+    throw new ApiError(
+      403,
+      "FORBIDDEN",
+      "Peran Anda tidak dapat membuat proyek, jadi tidak dapat menjadikan prospek proyek.",
+    );
+  }
+  const input = convertSchema.parse(await jsonBody(request));
+  const { client } = await getDatabase();
+  const prospek = await loadProspect(client, id);
+  if (prospek.projectId) {
+    throw new ApiError(
+      409,
+      "PROSPECT_ALREADY_CONVERTED",
+      `Prospek ini sudah menjadi proyek ${prospek.projectCode}.`,
+      { projectId: prospek.projectId, projectCode: prospek.projectCode },
+    );
+  }
+  if (prospectIsClosedLost(prospek.status as ProspectStatus) || prospek.optOutAt) {
+    throw new ApiError(
+      409,
+      "PROSPECT_NOT_CONVERTIBLE",
+      prospek.optOutAt
+        ? "Prospek ini minta berhenti dihubungi dan tidak dapat dijadikan proyek."
+        : "Prospek berstatus Lost tidak dapat dijadikan proyek. Buka kembali ke New lebih dulu.",
+      { status: prospek.status },
+    );
+  }
+  const location = input.location ?? prospek.location;
+  if (!location) {
+    throw new ApiError(
+      422,
+      "LOCATION_REQUIRED",
+      "Prospek ini belum punya lokasi. Isi lokasi proyeknya.",
+    );
+  }
+  if (input.startDate && input.targetDate && input.targetDate < input.startDate) {
+    throw new ApiError(
+      422,
+      "INVALID_DATE_RANGE",
+      "Tanggal selesai tidak boleh lebih awal dari tanggal mulai.",
+    );
+  }
+  if (input.managerId) {
+    const manajer = await client.execute({
+      sql: "SELECT id FROM users WHERE id=? AND status='Aktif' LIMIT 1",
+      args: [input.managerId],
+    });
+    if (!manajer.rows.length) {
+      throw new ApiError(404, "NOT_FOUND", "Project Manager aktif tidak ditemukan.");
+    }
+  }
+
+  const klien = prospek.companyName || prospek.fullName;
+  const nama = input.name ?? klien;
+  const proyek = await client.transaction(async (tx) => {
+    const dibuat = await insertProjectRecord(tx, {
+      name: nama,
+      client: klien,
+      clientEmail: prospek.email,
+      clientContactName: prospek.fullName,
+      location,
+      status: input.status,
+      startDate: input.startDate ?? null,
+      targetDate: input.targetDate ?? null,
+      value: 0,
+      managerId: input.managerId ?? user.id,
+      createdBy: user.id,
+      prospectId: id,
+    });
+    await tx.execute({
+      sql: "UPDATE cms_prospects SET status='Won',updated_at=? WHERE id=?",
+      args: [now(), id],
+    });
+    return dibuat;
+  });
+  await writeAuditLog(client, request, user, "prospect_convert", "prospect", id, {
+    projectId: proyek.id,
+    projectCode: proyek.code,
+  });
+  await writeAuditLog(client, request, user, "create", "project", proyek.id, {
+    name: nama,
+    client: klien,
+    prospectId: id,
+  });
+  await notifyProjectStakeholders(client, {
+    projectId: proyek.id,
+    eventType: "project_created",
+    subject: `Proyek baru: ${nama}`,
+    message: `proyek ${nama} untuk ${klien} dibuat dari calon klien dan tersedia sesuai akses Anda.`,
+    subjectEn: `New project: ${nama}`,
+    messageEn: `project ${nama} for ${klien} was created from a prospect and is available according to your access.`,
+  });
+  return created({
+    project: {
+      id: proyek.id,
+      code: proyek.code,
+      name: nama,
+      client: klien,
+      clientEmail: prospek.email,
+      clientContactName: prospek.fullName,
+      location,
+      status: input.status,
+      prospectId: id,
+    },
+    prospect: await loadProspect(client, id),
+  });
 }
 
 async function deleteProspect(request: Request, id: string, user: AuthUser) {
@@ -1178,6 +1334,15 @@ export async function dispatchProspectApi(request: Request, path: string[]) {
   }
   if (action === "import" && request.method === "POST") {
     return importProspects(request, user);
+  }
+  if (action && path[2] === "convert") {
+    if (request.method !== "POST") {
+      throw new ApiError(405, "METHOD_NOT_ALLOWED", "Jadikan proyek memakai POST.");
+    }
+    return convertProspect(request, action, user);
+  }
+  if (action && path[2]) {
+    throw new ApiError(404, "NOT_FOUND", "Endpoint prospek tidak ditemukan.");
   }
   if (action) {
     if (request.method === "GET") return getProspect(action);

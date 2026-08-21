@@ -8,7 +8,13 @@ import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { claimSequence } from "../db/counters";
 import { notifyProjectStakeholders } from "../email";
-import { documentTaxSummary, lockDocumentTaxes } from "../tax";
+import { tanggalReversal } from "../cash-ledger";
+import {
+  calculateTaxAmount,
+  documentTaxSummary,
+  lockDocumentTaxes,
+  refreshWithholdingObligations,
+} from "../tax";
 import { prepareUploadedAttachment, type PreparedAttachment } from "../attachments";
 import { kirimDokumen, susunKiriman } from "../document-delivery";
 import { ApiError, created, jsonBody, noContent, ok, partialPatchSchema } from "./errors";
@@ -238,31 +244,81 @@ function paymentState(contract: number, paid: number) {
  * term, so posting and voiding a payment both settle it, and it can never drift
  * away from `spk_payments`.
  */
-async function refreshTermStatuses(client: DatabaseClient, orderId: string) {
-  await client.execute({
-    sql: `UPDATE spk_payment_terms SET status=CASE
-        WHEN COALESCE((SELECT SUM(CASE WHEN p.gross_amount>0
-            THEN p.gross_amount ELSE p.amount END)
-          FROM spk_payments p
-          WHERE p.term_id=spk_payment_terms.id AND p.status='Posted'),0) <= 0
-          THEN 'Pending'
-        WHEN COALESCE((SELECT SUM(CASE WHEN p.gross_amount>0
-            THEN p.gross_amount ELSE p.amount END)
-          FROM spk_payments p
-          WHERE p.term_id=spk_payment_terms.id AND p.status='Posted'),0)
-          >= spk_payment_terms.planned_amount THEN 'Paid'
-        ELSE 'Partial' END,
-      updated_at=?
-      WHERE spk_id=?`,
-    args: [now(), orderId],
+/**
+ * Status termin dihitung dari pembayaran GROSS terhadap nilai termin yang sudah
+ * di-gross-up pajak — bukan terhadap `planned_amount` mentah.
+ *
+ * `planned_amount` adalah porsi dari `cost`, nilai PRA-pajak (termRows menjaga
+ * Σ termin = cost). Sementara `orderReleaseSummary` melepas pembayaran dalam
+ * gross (`× grossFactor`). Dulu keduanya dibandingkan langsung: dengan PPN 11%
+ * termin 1.000.000 sudah "Paid" begitu 1.000.000 gross masuk, padahal yang
+ * terutang 1.110.000. Selisihnya persis tarif pajak, dan tidak ada yang
+ * menyadarinya karena status berubah "benar" di layar.
+ *
+ * Dihitung di JavaScript, bukan SQL, supaya pembulatannya sama persis dengan
+ * yang dipakai penjaga per termin di payOrder — dua pembulat yang berbeda
+ * adalah dua jawaban yang berbeda untuk satu pertanyaan.
+ */
+function nilaiTerminGross(plannedAmount: number, grossFactor: number) {
+  return Math.round(plannedAmount * grossFactor);
+}
+
+async function refreshTermStatuses(
+  client: DatabaseClient,
+  orderId: string,
+  grossFactor: number,
+) {
+  const terms = await client.execute({
+    sql: `SELECT t.id,t.planned_amount,
+      COALESCE((SELECT SUM(CASE WHEN p.gross_amount>0 THEN p.gross_amount ELSE p.amount END)
+        FROM spk_payments p WHERE p.term_id=t.id AND p.status='Posted'),0) AS paid
+      FROM spk_payment_terms t WHERE t.spk_id=?`,
+    args: [orderId],
   });
+  const timestamp = now();
+  for (const term of terms.rows) {
+    const paid = numberValue(term.paid);
+    const due = nilaiTerminGross(numberValue(term.planned_amount), grossFactor);
+    const status = paid <= 0 ? "Pending" : paid >= due ? "Paid" : "Partial";
+    await client.execute({
+      sql: "UPDATE spk_payment_terms SET status=?,updated_at=? WHERE id=?",
+      args: [status, timestamp, term.id],
+    });
+  }
+}
+
+/**
+ * Menyegarkan baris pajak SPK/PO yang belum terkunci setelah `cost` berubah.
+ *
+ * Quotation punya `refreshQuotationCommercialSnapshot` untuk ini; procurement
+ * tidak punya. Akibatnya menyunting harga Draft SPK meninggalkan `amount`
+ * pajak di base LAMA, dan `approveOrder` mengunci angka basi itu menjadi
+ * kewajiban pajak.
+ */
+async function refreshOrderTaxes(
+  client: DatabaseClient,
+  documentType: "SPK" | "PO",
+  orderId: string,
+  cost: number,
+) {
+  const rows = await client.execute({
+    sql: `SELECT id,rate_bps FROM document_taxes
+      WHERE document_type=? AND document_id=? AND locked=0`,
+    args: [documentType, orderId],
+  });
+  const timestamp = now();
+  for (const row of rows.rows) {
+    await client.execute({
+      sql: "UPDATE document_taxes SET taxable_base=?,amount=?,updated_at=? WHERE id=?",
+      args: [cost, calculateTaxAmount(cost, numberValue(row.rate_bps)), timestamp, row.id],
+    });
+  }
 }
 
 async function updateOrderPaymentCompatibility(
   client: DatabaseClient,
   orderId: string,
 ) {
-  await refreshTermStatuses(client, orderId);
   const totals = await client.execute({
     sql: `SELECT s.cost,
       s.document_type,
@@ -272,13 +328,15 @@ async function updateOrderPaymentCompatibility(
     args: [orderId],
   });
   if (!totals.rows[0]) return;
+  const baseCost = numberValue(totals.rows[0].cost);
   const tax = await documentTaxSummary(
     client,
     String(totals.rows[0].document_type) === "PO" ? "PO" : "SPK",
     orderId,
-    numberValue(totals.rows[0].cost),
+    baseCost,
   );
   const cost = tax.grossTotal;
+  await refreshTermStatuses(client, orderId, baseCost > 0 ? cost / baseCost : 1);
   const paid = numberValue(totals.rows[0].paid);
   await client.execute({
     sql: "UPDATE spks SET payment_status=?,paid_date=?,updated_at=? WHERE id=?",
@@ -1127,6 +1185,12 @@ async function updateDraftOrder(
       ],
       "write",
     );
+    await refreshOrderTaxes(
+      tx,
+      String(current.documentType) === "PO" ? "PO" : "SPK",
+      orderId,
+      cost,
+    );
   });
   await writeAuditLog(client, request, user, "update", "procurement_order", orderId, {
     ...input,
@@ -1889,6 +1953,27 @@ async function payOrder(
   const cashAmount = input.cashAmount ?? input.amount ?? 0;
   const grossAmount =
     input.grossAmount ?? cashAmount + input.withholdingAmount;
+  // `spk_payments.amount` ber-CHECK (> 0). Pembayaran yang 100% dipotong
+  // pajak dulu lolos sampai ke database dan mati sebagai 500 mentah. Tarif
+  // potongan yang ada (2–4%) tidak pernah memakan seluruh pembayaran, jadi ini
+  // hampir pasti salah ketik — tolak dengan alasan yang bisa dibaca.
+  if (cashAmount <= 0) {
+    throw new ApiError(
+      422,
+      "CASH_AMOUNT_REQUIRED",
+      "Kas yang dibayarkan harus lebih dari nol. Pembayaran yang seluruhnya pajak potong tidak dapat dicatat.",
+    );
+  }
+  // Tanpa termin, pembayaran tidak pernah menggerakkan status termin mana pun
+  // (refreshTermStatuses menyaring per term_id): dokumen bisa "Dibayar" dengan
+  // semua termin "Pending". Setiap dokumen punya ≥1 termin, jadi wajib memilih.
+  if (!input.termId) {
+    throw new ApiError(
+      422,
+      "TERM_REQUIRED",
+      "Pilih termin yang dibayar. Setiap pembayaran vendor menempel pada satu termin.",
+    );
+  }
   if (input.paymentMethod === "Transfer Bank" && !input.bankAccountId) {
     throw new ApiError(
       422,
@@ -1947,6 +2032,40 @@ async function payOrder(
         "Pajak potong pembayaran melebihi snapshot pajak dokumen.",
       );
     }
+    // Bukti PER TERMIN, bukan hanya agregat. Penjaga di atas menjumlahkan
+    // seluruh verifikasi: termin A yang belum diverifikasi bisa dibayar
+    // berkat bukti termin B, lalu refreshTermStatuses menandai A "Paid" dan B
+    // tetap "Pending" — tidak ada yang mendeteksinya. Untuk SPK: DP berhak
+    // sebesar rencananya, termin lain sebesar verifikasinya sendiri, keduanya
+    // di-gross-up pajak. PO tetap agregat: penerimaan barang tidak per termin.
+    if (current.documentType === "SPK") {
+      const term = current.terms.find((candidate) => candidate.id === input.termId);
+      if (term) {
+        const grossFactor = current.cost > 0 ? current.grossTotal / current.cost : 1;
+        const earned = await tx.execute({
+          sql: `SELECT
+            COALESCE((SELECT SUM(verified_amount) FROM spk_verifications
+              WHERE spk_id=? AND term_id=?),0) AS verified,
+            COALESCE((SELECT SUM(CASE WHEN gross_amount>0 THEN gross_amount ELSE amount END)
+              FROM spk_payments WHERE term_id=? AND status='Posted'),0) AS paid`,
+          args: [orderId, term.id, term.id],
+        });
+        const earnedBase =
+          term.type === "DP"
+            ? term.plannedAmount
+            : Math.min(term.plannedAmount, numberValue(earned.rows[0]?.verified));
+        const payableForTerm = nilaiTerminGross(earnedBase, grossFactor);
+        const paidForTerm = numberValue(earned.rows[0]?.paid);
+        if (paidForTerm + grossAmount > payableForTerm) {
+          throw new ApiError(
+            409,
+            "PAYMENT_NOT_EARNED_FOR_TERM",
+            `Termin ${term.label} baru berhak dibayar ${payableForTerm.toLocaleString("id-ID")} (sudah dibayar ${paidForTerm.toLocaleString("id-ID")}). Verifikasi progres termin ini lebih dulu.`,
+            { termId: term.id, payableForTerm, paidForTerm },
+          );
+        }
+      }
+    }
     if (transactionId) {
       await tx.execute({
         sql: `INSERT INTO transactions
@@ -1999,8 +2118,16 @@ async function payOrder(
         timestamp,
       ],
     });
+    // Di DALAM transaksi: status termin, status bayar dokumen, dan kewajiban
+    // PPh yang mengikuti potongan ikut menang-atau-kalah bersama pembayarannya.
+    await updateOrderPaymentCompatibility(tx, orderId);
+    await refreshWithholdingObligations(
+      tx,
+      current.documentType === "PO" ? "PO" : "SPK",
+      orderId,
+      input.paidDate,
+    );
   });
-  await updateOrderPaymentCompatibility(client, orderId);
   await writeAuditLog(client, request, user, "pay", "procurement_order", orderId, {
     paymentId,
     ...input,
@@ -2073,7 +2200,7 @@ async function voidPayment(
         args: [
           randomUUID(),
           order.projectId,
-          timestamp.slice(0, 10),
+          tanggalReversal(String(payment.paid_date), timestamp),
           "Pemasukan",
           `Reversal pembayaran ${order.documentType} ${order.number}`,
           payment.amount,
@@ -2086,8 +2213,13 @@ async function voidPayment(
         ],
       });
     }
+    await updateOrderPaymentCompatibility(tx, orderId);
+    await refreshWithholdingObligations(
+      tx,
+      order.documentType === "PO" ? "PO" : "SPK",
+      orderId,
+    );
   });
-  await updateOrderPaymentCompatibility(client, orderId);
   await writeAuditLog(client, request, user, "void_payment", "procurement_order", orderId, {
     paymentId,
     reason: input.reason,
@@ -2223,7 +2355,18 @@ export async function handleProcurementOrders(
     if (order.workflowStatus !== "Draft" || order.payments.length > 0) {
       throw new ApiError(409, "ORDER_LOCKED", "Hanya draft tanpa pembayaran yang dapat dihapus.");
     }
-    await client.execute({ sql: "DELETE FROM spks WHERE id=?", args: [orderId] });
+    // `document_taxes.document_id` polimorfik tanpa FK: CASCADE tidak
+    // menjangkaunya, jadi baris pajaknya harus dibuang bersama dokumennya.
+    await client.batch(
+      [
+        {
+          sql: "DELETE FROM document_taxes WHERE document_type=? AND document_id=?",
+          args: [order.documentType === "PO" ? "PO" : "SPK", orderId],
+        },
+        { sql: "DELETE FROM spks WHERE id=?", args: [orderId] },
+      ],
+      "write",
+    );
     await writeAuditLog(client, request, user, "delete", "procurement_order", orderId);
     return noContent();
   }

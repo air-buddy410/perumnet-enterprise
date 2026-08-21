@@ -219,6 +219,11 @@ export async function handleCommercialPackages(
       args: [projectId],
     });
     if (!project.rows.length) throw new ApiError(404, "NOT_FOUND", "Proyek tidak ditemukan.");
+    // Paket baru selalu paket TAMBAHAN. Paket default lahir lambat (saat BoQ
+    // pertama dibaca), jadi tanpa baris ini paket yang dibuat pada proyek yang
+    // masih kosong justru menjadi paket default-nya — dan semua dokumen tanpa
+    // packageId mendarat di sana.
+    await ensureDefaultCommercialPackage(client, projectId, user.id);
     const existingCount = await client.execute({
       sql: "SELECT COUNT(*) AS count FROM project_commercial_packages WHERE project_id=?",
       args: [projectId],

@@ -252,6 +252,52 @@ function dateDistanceInDays(left: string, right: string) {
   return Math.abs(leftTime - rightTime) / 86_400_000;
 }
 
+/**
+ * Jendela tanggal pencocokan — SATU angka untuk pencocokan otomatis saat impor,
+ * daftar kandidat, dan pencocokan manual. Dulu tiga angka: ±3 hari untuk
+ * otomatis (terlalu sempit untuk kliring akhir pekan dan libur), ±14 untuk
+ * kandidat, dan TANPA batas untuk pencocokan manual.
+ */
+const BANK_MATCH_WINDOW_DAYS = 14;
+
+function rentangTanggal(isoDate: string, days: number) {
+  const base = new Date(`${isoDate.slice(0, 10)}T00:00:00.000Z`);
+  const geser = (n: number) =>
+    new Date(base.getTime() + n * 86_400_000).toISOString().slice(0, 10);
+  return { dari: geser(-days), sampai: geser(days) };
+}
+
+/**
+ * Di antara beberapa kandidat yang sama arah, nominal, dan tanggalnya, pilih
+ * yang tercatat dibayar lewat REKENING INI. Pembayaran klien, vendor, pajak,
+ * belanja, dan uang muka semuanya menyimpan `bank_account_id`; transaksi
+ * tidak — jadi dicari lewat tabel pembayarannya.
+ */
+async function kandidatDariRekening(
+  client: DatabaseClient,
+  accountId: string,
+  transactionIds: string[],
+) {
+  if (!transactionIds.length) return new Set<string>();
+  const tanda = transactionIds.map(() => "?").join(",");
+  const tabel = [
+    "invoice_payments",
+    "spk_payments",
+    "tax_settlements",
+    "project_expense_settlements",
+    "project_advances",
+  ];
+  const sql = tabel
+    .map(
+      (nama) =>
+        `SELECT transaction_id FROM ${nama} WHERE bank_account_id=? AND transaction_id IN (${tanda})`,
+    )
+    .join(" UNION ");
+  const args = tabel.flatMap(() => [accountId, ...transactionIds]);
+  const result = await client.execute({ sql, args });
+  return new Set(result.rows.map((row) => String(row.transaction_id)));
+}
+
 async function persistEntries(
   client: DatabaseClient,
   input: {
@@ -277,22 +323,37 @@ async function persistEntries(
       continue;
     }
 
+    // Jendela tanggal masuk ke SQL, tanpa LIMIT sebelum penyaringan. Dulu
+    // `LIMIT 50` diambil lebih dulu lalu disaring ±3 hari di JavaScript: pada
+    // rekening yang punya >50 transaksi bernominal sama, pasangan yang benar
+    // bisa terpotong dan yang tersisa — satu kandidat yang SALAH — dicocokkan
+    // diam-diam.
+    const jendela = rentangTanggal(entry.date, BANK_MATCH_WINDOW_DAYS);
     const matching = await client.execute({
       sql: `
         SELECT t.id,t.date
         FROM transactions t
         LEFT JOIN bank_statement_entries e ON e.transaction_id=t.id
         WHERE t.type=? AND t.amount=?
+          AND t.date>=? AND t.date<=?
           AND e.id IS NULL AND t.source NOT LIKE 'Bank:%'
-        ORDER BY t.created_at
-        LIMIT 50
+        ORDER BY t.date,t.created_at
       `,
-      args: [entry.type, entry.amount],
+      args: [entry.type, entry.amount, jendela.dari, jendela.sampai],
     });
-    const matchingWithinSettlementWindow = matching.rows.filter(
-      (candidate) =>
-        dateDistanceInDays(entry.date, String(candidate.date)) <= 3,
-    );
+    let matchingWithinSettlementWindow = matching.rows;
+    if (matchingWithinSettlementWindow.length > 1) {
+      // Lebih dari satu: yang dibayar lewat rekening ini menang — kalau tepat satu.
+      const dariRekening = await kandidatDariRekening(
+        client,
+        String(input.account.id),
+        matchingWithinSettlementWindow.map((candidate) => String(candidate.id)),
+      );
+      const tersaring = matchingWithinSettlementWindow.filter((candidate) =>
+        dariRekening.has(String(candidate.id)),
+      );
+      if (tersaring.length) matchingWithinSettlementWindow = tersaring;
+    }
     const matchedTransactionId =
       matchingWithinSettlementWindow.length === 1
         ? String(matchingWithinSettlementWindow[0].id)
@@ -743,6 +804,7 @@ export async function handleBankAccounts(
       throw new ApiError(404, "NOT_FOUND", "Mutasi bank tidak ditemukan.");
     }
     const row = entry.rows[0];
+    const jendela = rentangTanggal(String(row.date), BANK_MATCH_WINDOW_DAYS);
     const result = await client.execute({
       sql: `
         SELECT t.*,p.name AS project_name
@@ -750,18 +812,15 @@ export async function handleBankAccounts(
         LEFT JOIN projects p ON p.id=t.project_id
         LEFT JOIN bank_statement_entries e ON e.transaction_id=t.id AND e.id<>?
         WHERE t.type=? AND t.amount=? AND e.id IS NULL
+          AND t.date>=? AND t.date<=?
           AND t.source NOT LIKE 'Bank:%'
         ORDER BY t.date DESC,t.created_at DESC
         LIMIT 100
       `,
-      args: [entryId, row.type, row.amount],
+      args: [entryId, row.type, row.amount, jendela.dari, jendela.sampai],
     });
     return ok(
       result.rows
-        .filter(
-          (candidate) =>
-            dateDistanceInDays(String(row.date), String(candidate.date)) <= 14,
-        )
         .map((candidate) => ({
           id: String(candidate.id),
           date: String(candidate.date),
@@ -918,6 +977,17 @@ export async function handleBankAccounts(
           409,
           "INVALID_RECONCILIATION_TARGET",
           "Pilih transaksi dengan arah dan nominal yang sama serta belum direkonsiliasi.",
+        );
+      }
+      // Tanggal ikut diperiksa — dulu tidak sama sekali, jadi sebuah mutasi
+      // bisa dicocokkan ke transaksi dari bulan mana pun asal nominalnya sama.
+      const jarak = dateDistanceInDays(String(entry.date), String(target.date));
+      if (jarak > BANK_MATCH_WINDOW_DAYS) {
+        throw new ApiError(
+          422,
+          "MATCH_DATE_TOO_FAR",
+          `Tanggal transaksi berselisih ${jarak} hari dari mutasi; batasnya ${BANK_MATCH_WINDOW_DAYS} hari.`,
+          { distanceDays: jarak, windowDays: BANK_MATCH_WINDOW_DAYS },
         );
       }
       const statements = [];

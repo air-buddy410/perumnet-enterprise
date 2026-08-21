@@ -1,4 +1,5 @@
 import "server-only";
+import { tanggalReversal } from "../cash-ledger";
 
 import { createHash, randomUUID } from "node:crypto";
 import { canAccess } from "@/shared/access";
@@ -1405,7 +1406,7 @@ export async function handleProjectExpenses(
               advanceId: settlement.advance_id ? String(settlement.advance_id) : undefined,
               type: "Reversal",
               amount: asNumber(original.amount),
-              date: new Date().toISOString().slice(0, 10),
+              date: tanggalReversal(String(original.date), new Date().toISOString()),
               bankAccountId: settlement.bank_account_id ? String(settlement.bank_account_id) : undefined,
               reference: `VOID-${String(expense.number)}`,
               projectId: String(expense.project_id),
@@ -1739,7 +1740,7 @@ export async function handleProjectAdvances(
           advanceId,
           type: "Reversal",
           amount: asNumber(row.amount),
-          date: new Date().toISOString().slice(0, 10),
+          date: tanggalReversal(String(row.disbursed_date), new Date().toISOString()),
           reference: `VOID-${String(row.number)}`,
           projectId: String(row.project_id),
           description: `Pembatalan uang muka ${String(row.number)} · ${input.reason}`,

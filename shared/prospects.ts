@@ -28,6 +28,44 @@ export const prospectStatusLabels: Record<
   Lost: { id: "Tidak jadi", en: "Lost" },
 };
 
+// ── Transisi status ──────────────────────────────────────────────────
+//
+// Sampai 21 Agustus 2026 status prospek bisa diubah ke apa pun, termasuk
+// Lost → Won dalam satu PATCH, dan "Won" tidak pernah menghasilkan apa-apa:
+// proyek selalu diketik ulang dari nol. Tabel ini dipakai server (menolak)
+// DAN layar (menyaring pilihan), jadi keduanya tidak bisa berbeda pendapat.
+//
+// Won hanya punya satu pintu keluar: tidak ada. Prospek yang sudah jadi klien
+// tidak kembali jadi calon. Lost boleh dibuka kembali ke New — itu memang
+// kejadian nyata (klien menghubungi lagi tahun depannya).
+
+export const prospectTransitions: Record<
+  ProspectStatus,
+  readonly ProspectStatus[]
+> = {
+  New: ["Contacted", "Qualified", "Lost"],
+  Contacted: ["Qualified", "Proposal", "Lost"],
+  Qualified: ["Proposal", "Lost"],
+  // Mundur satu langkah boleh: penawaran ditarik, kualifikasi ulang.
+  Proposal: ["Won", "Lost", "Qualified"],
+  Won: [],
+  Lost: ["New"],
+};
+
+export function allowedProspectTransitions(from: ProspectStatus) {
+  return prospectTransitions[from] ?? [];
+}
+
+/** Status yang sama selalu boleh (no-op); selain itu mengikuti tabel. */
+export function canTransitionProspect(from: ProspectStatus, to: ProspectStatus) {
+  return from === to || allowedProspectTransitions(from).includes(to);
+}
+
+/** Prospek yang sudah tidak mungkin menjadi proyek. */
+export function prospectIsClosedLost(status: ProspectStatus) {
+  return status === "Lost";
+}
+
 // Segmen diambil dari nama lembar di workbook kontak milik pemilik, bukan
 // dikarang: itu pembagian pasar yang benar-benar dipakai tim.
 export const prospectSegments = [

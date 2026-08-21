@@ -100,7 +100,18 @@ export async function getDocumentTaxes(
   return result.rows.map((row) => mapTaxSnapshot(row));
 }
 
-function obligationDirection(tax: TaxSnapshot) {
+/**
+ * Arah kewajiban. Untuk pajak POTONG arahnya ditentukan oleh siapa yang
+ * memotong — bukan oleh `accounting_treatment`: kalau KITA memotong dari vendor
+ * (SPK/PO), uangnya tertahan di kita dan wajib disetor (Payable); kalau KLIEN
+ * memotong dari kita (Invoice), itu piutang kredit pajak (Receivable). Dulu
+ * Withhold + "Expense" menghasilkan `undefined`: uang potongannya tidak pernah
+ * menjadi kewajiban siapa pun dan diam-diam terhitung laba.
+ */
+function obligationDirection(tax: TaxSnapshot, documentType: TaxDocumentType) {
+  if (tax.effect === "Withhold") {
+    return documentType === "Invoice" ? "Receivable" : "Payable";
+  }
   if (tax.accountingTreatment === "Payable") return "Payable";
   if (
     tax.accountingTreatment === "Receivable" ||
@@ -109,6 +120,112 @@ function obligationDirection(tax: TaxSnapshot) {
     return "Receivable";
   }
   return undefined;
+}
+
+function obligationStatusFor(amount: number, settled: number) {
+  if (settled <= 0) return "Outstanding";
+  if (settled >= amount) return "Settled";
+  return "Partially Settled";
+}
+
+async function upsertObligation(
+  client: DatabaseClient,
+  tax: TaxSnapshot,
+  direction: "Payable" | "Receivable",
+  amount: number,
+  dueDate: string | undefined,
+  timestamp: string,
+) {
+  const existing = await client.execute({
+    sql: "SELECT settled_amount FROM tax_obligations WHERE document_tax_id=? LIMIT 1",
+    args: [tax.id],
+  });
+  const settled = Number(existing.rows[0]?.settled_amount ?? 0);
+  await client.execute({
+    sql: `INSERT INTO tax_obligations
+      (id,document_tax_id,project_id,direction,amount,settled_amount,status,
+       reporting_status,tax_period,due_date,created_at,updated_at)
+      VALUES (?,?,?,?,?,0,?,'Candidate',?,?,?,?)
+      ON CONFLICT (document_tax_id) DO UPDATE SET
+        project_id=excluded.project_id,
+        direction=excluded.direction,
+        amount=excluded.amount,
+        status=excluded.status,
+        tax_period=COALESCE(excluded.tax_period,tax_obligations.tax_period),
+        due_date=COALESCE(excluded.due_date,tax_obligations.due_date),
+        updated_at=excluded.updated_at`,
+    args: [
+      `tax-obligation-${randomUUID()}`,
+      tax.id,
+      tax.projectId ?? null,
+      direction,
+      amount,
+      obligationStatusFor(amount, settled),
+      dueDate?.slice(0, 7) ?? null,
+      dueDate ?? null,
+      timestamp,
+      timestamp,
+    ],
+  });
+}
+
+/**
+ * Kewajiban pajak POTONG mengikuti kas yang benar-benar dipotong.
+ *
+ * PPh 23 terutang saat pembayaran, bukan saat dokumen disetujui. Dulu
+ * `lockDocumentTaxes` mencatat kewajiban sebesar snapshot PENUH begitu SPK
+ * disetujui, sementara `payOrder` memotong per pembayaran — dan tidak ada yang
+ * merekonsiliasi keduanya: dokumen yang baru 50% dibayar tetap melaporkan 100%
+ * PPh sebagai utang, lalu seluruhnya dikurangkan dari laba aman dibagikan.
+ *
+ * Dipanggil setiap pembayaran dipost atau di-void, di dalam transaksinya.
+ * Beberapa aturan potong pada satu dokumen berbagi potongan secara prorata
+ * snapshot-nya; tanpa potongan (dan belum ada setoran) barisnya dihapus.
+ */
+export async function refreshWithholdingObligations(
+  client: DatabaseClient,
+  documentType: TaxDocumentType,
+  documentId: string,
+  dueDate?: string,
+) {
+  const taxes = (await getDocumentTaxes(client, documentType, documentId)).filter(
+    (tax) => tax.effect === "Withhold",
+  );
+  if (!taxes.length) return;
+  const withheldResult = await client.execute(
+    documentType === "Invoice"
+      ? {
+          sql: "SELECT COALESCE(SUM(withholding_amount),0) AS total FROM invoice_payments WHERE invoice_id=? AND status='Posted'",
+          args: [documentId],
+        }
+      : {
+          sql: "SELECT COALESCE(SUM(withholding_amount),0) AS total FROM spk_payments WHERE spk_id=? AND status='Posted'",
+          args: [documentId],
+        },
+  );
+  const withheld = Number(withheldResult.rows[0]?.total ?? 0);
+  const snapshotTotal = taxes.reduce((sum, tax) => sum + tax.amount, 0);
+  const timestamp = new Date().toISOString();
+  let allocated = 0;
+  for (const [index, tax] of taxes.entries()) {
+    const last = index === taxes.length - 1;
+    const share = last
+      ? withheld - allocated
+      : snapshotTotal > 0
+        ? Math.round((withheld * tax.amount) / snapshotTotal)
+        : 0;
+    allocated += share;
+    const direction = obligationDirection(tax, documentType);
+    if (!direction) continue;
+    if (share > 0) {
+      await upsertObligation(client, tax, direction, share, dueDate, timestamp);
+      continue;
+    }
+    await client.execute({
+      sql: "DELETE FROM tax_obligations WHERE document_tax_id=? AND settled_amount=0",
+      args: [tax.id],
+    });
+  }
 }
 
 export async function lockDocumentTaxes(
@@ -127,32 +244,12 @@ export async function lockDocumentTaxes(
   const taxes = await getDocumentTaxes(client, documentType, documentId);
   if (documentType === "Quotation") return taxes;
   for (const tax of taxes) {
-    const direction = obligationDirection(tax);
+    // Pajak potong tidak dicatat di sini: kewajibannya lahir saat pemotongan
+    // (refreshWithholdingObligations), bukan saat dokumen dikunci.
+    if (tax.effect === "Withhold") continue;
+    const direction = obligationDirection(tax, documentType);
     if (!direction || tax.amount <= 0) continue;
-    await client.execute({
-      sql: `INSERT INTO tax_obligations
-        (id,document_tax_id,project_id,direction,amount,settled_amount,status,
-         reporting_status,tax_period,due_date,created_at,updated_at)
-        VALUES (?,?,?,?,?,0,'Outstanding','Candidate',?,?,?,?)
-        ON CONFLICT (document_tax_id) DO UPDATE SET
-          project_id=excluded.project_id,
-          direction=excluded.direction,
-          amount=excluded.amount,
-          tax_period=COALESCE(excluded.tax_period,tax_obligations.tax_period),
-          due_date=COALESCE(excluded.due_date,tax_obligations.due_date),
-          updated_at=excluded.updated_at`,
-      args: [
-        `tax-obligation-${randomUUID()}`,
-        tax.id,
-        tax.projectId ?? null,
-        direction,
-        tax.amount,
-        dueDate?.slice(0, 7) ?? null,
-        dueDate ?? null,
-        timestamp,
-        timestamp,
-      ],
-    });
+    await upsertObligation(client, tax, direction, tax.amount, dueDate, timestamp);
   }
   return taxes;
 }

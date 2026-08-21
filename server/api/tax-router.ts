@@ -5,6 +5,7 @@ import { canAccess } from "@/shared/access";
 import { z } from "zod";
 import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
+import { tanggalReversal } from "../cash-ledger";
 import { calculateQuotationCommercialTotals } from "../commercial";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { csvCell } from "../spreadsheet";
@@ -45,6 +46,26 @@ const ruleSchema = z.object({
   sortOrder: z.number().int().min(0).max(10_000).default(0),
 });
 const rulePatchSchema = partialPatchSchema(ruleSchema);
+
+/**
+ * Pajak POTONG hanya bisa menjadi utang (kita memotong vendor) atau piutang
+ * (klien memotong kita). Dibukukan sebagai "Expense" atau "Recoverable" berarti
+ * uang potongannya tidak pernah menjadi kewajiban siapa pun: ia tertahan di
+ * kas, tidak masuk daftar kewajiban, dan diam-diam terhitung laba.
+ */
+function assertRuleTreatment(rule: { effect: string; accountingTreatment: string }) {
+  if (
+    rule.effect === "Withhold" &&
+    !["Payable", "Receivable"].includes(rule.accountingTreatment)
+  ) {
+    throw new ApiError(
+      422,
+      "TAX_RULE_TREATMENT_INVALID",
+      "Pajak potong hanya boleh dibukukan sebagai Payable (kita yang memotong) atau Receivable (klien yang memotong).",
+      { effect: rule.effect, accountingTreatment: rule.accountingTreatment },
+    );
+  }
+}
 const documentTaxSchema = z.object({
   ruleIds: z.array(idSchema).max(20),
 });
@@ -381,6 +402,7 @@ export async function handleTaxRules(
   assertAdmin(user);
   if (request.method === "POST" && !ruleId) {
     const input = ruleSchema.parse(await jsonBody(request));
+    assertRuleTreatment(input);
     const id = `tax-rule-${randomUUID()}`;
     const timestamp = now();
     await client.execute({
@@ -415,6 +437,12 @@ export async function handleTaxRules(
     });
     if (!current.rows[0]) throw new ApiError(404, "NOT_FOUND", "Aturan pajak tidak ditemukan.");
     const input = rulePatchSchema.parse(await jsonBody(request));
+    assertRuleTreatment({
+      effect: String(input.effect ?? current.rows[0].effect),
+      accountingTreatment: String(
+        input.accountingTreatment ?? current.rows[0].accounting_treatment,
+      ),
+    });
     const merged = ruleSchema.parse({
       code: input.code ?? current.rows[0].code,
       name: input.name ?? current.rows[0].name,
@@ -987,7 +1015,7 @@ export async function handleTaxSettlements(
         args: [
           reversalId,
           settlement.project_id ?? null,
-          timestamp.slice(0, 10),
+          tanggalReversal(String(settlement.settlement_date), timestamp),
           String(settlement.direction) === "Payable" ? "Pemasukan" : "Pengeluaran",
           `Reversal settlement pajak ${String(settlement.payment_reference)}`,
           settlement.amount,

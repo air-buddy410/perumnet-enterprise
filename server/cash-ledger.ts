@@ -40,6 +40,24 @@ export function countsAsCashCondition(alias = "transactions") {
  * The list is the source convention already used by every void path; a reversal
  * source is never reused for an ordinary posting.
  */
+/**
+ * Tanggal yang dipakai baris reversal ketika sebuah pembayaran di-void.
+ *
+ * Void berarti "catatan ini keliru" — bukan pengembalian dana. Kas yang
+ * dicatat Juli lalu dibatalkan September seharusnya hilang dari JULI, bukan
+ * muncul sebagai arus kas baru di September: totalnya memang kembali nol,
+ * tetapi laporan bulanan keliru di dua bulan sekaligus. Tidak ada kunci
+ * periode pada `transactions` (penutupan pajak bekerja per kewajiban, bukan per
+ * tanggal), jadi reversal boleh mendarat di tanggal asalnya.
+ *
+ * Kalau tanggal asal tidak terbaca (baris lama yang cacat), jatuh ke hari ini
+ * supaya reversalnya tetap tercatat.
+ */
+export function tanggalReversal(tanggalAsal: string | null | undefined, fallbackIso: string) {
+  const asal = String(tanggalAsal ?? "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(asal) ? asal : fallbackIso.slice(0, 10);
+}
+
 export const REVERSAL_CASH_SOURCES = [
   "Invoice Payment Reversal",
   "Procurement Reversal",

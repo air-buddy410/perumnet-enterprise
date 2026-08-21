@@ -62,6 +62,7 @@ import {
 } from "../auth-rate-limit";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import { claimSequence } from "../db/counters";
+import { insertProjectRecord } from "./project-create";
 import { geocodeLocation } from "../geocode";
 import {
   emailDeliveryConfigured,
@@ -81,6 +82,7 @@ import {
   countsAsCashCondition,
   grossExpenseSum,
   grossIncomeSum,
+  tanggalReversal,
   unreconciledImportCondition,
 } from "../cash-ledger";
 import { asNumber, formatDate, initials, parseJson } from "../format";
@@ -88,6 +90,7 @@ import {
   calculateTaxAmount,
   documentTaxSummary,
   lockDocumentTaxes,
+  refreshWithholdingObligations,
 } from "../tax";
 import { deleteProjectFile, readProjectFile, storeProjectFile } from "../storage";
 import { csvCell } from "../spreadsheet";
@@ -115,6 +118,7 @@ import {
 } from "./commercial-package-router";
 import {
   assertBoqTotalCoversInvoices,
+  clampDiscountValue,
   ensureBoq,
   resetProjectValidation,
   syncCommercialValues,
@@ -128,7 +132,7 @@ import {
   handleProcurementOrders,
   handleVendorCategories,
 } from "./procurement-router";
-import { handleProfitShares } from "./profit-share-router";
+import { handleProfitShares, operatingProfit } from "./profit-share-router";
 import {
   handleProjectAdvances,
   handleProjectExpenseCategories,
@@ -136,6 +140,7 @@ import {
 } from "./project-expense-router";
 import { handleStandaloneBoqs } from "./standalone-boq-router";
 import { renderSopPdf } from "./sop-pdf";
+import { handleAlurPng } from "./alur-png";
 import {
   handleDocumentTaxes,
   handleQuotationTaxMode,
@@ -1390,10 +1395,6 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     assertDateOrder(input.startDate, input.targetDate);
     const pin = resolveProjectPin(input);
     const pinnedByHand = pin !== null && pin.latitude !== null;
-    const id = randomUUID();
-    const sequence = await claimSequence(client, "projects", "SELECT code AS value FROM projects");
-    const code = `PN-${new Date().getUTCFullYear().toString().slice(-2)}${String(new Date().getUTCMonth() + 1).padStart(2, "0")}-${String(sequence).padStart(3, "0")}`;
-    const timestamp = now();
     if (input.managerId) {
       await ensureExists(
         "SELECT id FROM users WHERE id=? AND status='Aktif'",
@@ -1401,23 +1402,24 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
         "Project Manager aktif tidak ditemukan.",
       );
     }
-    await client.batch(
-      [
-        {
-          sql: "INSERT INTO projects (id,code,name,client,client_email,client_contact_name,location,status,start_date,target_date,value,manager_id,created_by,latitude,longitude,coordinate_source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-          args: [id, code, input.name, input.client, input.clientEmail || null, input.clientContactName || null, input.location, input.status, input.startDate ?? null, input.targetDate ?? null, input.value, input.managerId ?? user.id, user.id, pin?.latitude ?? null, pin?.longitude ?? null, pinnedByHand ? "manual" : null, timestamp, timestamp],
-        },
-        {
-          sql: "INSERT INTO project_members (project_id,user_id,created_at) VALUES (?,?,?) ON CONFLICT (project_id,user_id) DO NOTHING",
-          args: [id, input.managerId ?? user.id, timestamp],
-        },
-        {
-          sql: "INSERT INTO project_members (project_id,user_id,created_at) VALUES (?,?,?) ON CONFLICT (project_id,user_id) DO NOTHING",
-          args: [id, user.id, timestamp],
-        },
-      ],
-      "write",
-    );
+    // Penomoran + INSERT dipakai bersama dengan konversi calon klien
+    // (server/api/project-create.ts), supaya dua pintu tidak punya dua INSERT.
+    const { id } = await insertProjectRecord(client, {
+      name: input.name,
+      client: input.client,
+      clientEmail: input.clientEmail,
+      clientContactName: input.clientContactName,
+      location: input.location,
+      status: input.status,
+      startDate: input.startDate,
+      targetDate: input.targetDate,
+      value: input.value,
+      managerId: input.managerId ?? user.id,
+      createdBy: user.id,
+      latitude: pin?.latitude ?? null,
+      longitude: pin?.longitude ?? null,
+      coordinateSource: pinnedByHand ? "manual" : null,
+    });
     await writeAuditLog(client, request, user, "create", "project", id, input);
     await notifyProjectStakeholders(client, {
       projectId: id,
@@ -2749,7 +2751,11 @@ async function handleQuotations(request: Request, user: AuthUser) {
             boq.totals.selling, revisionNo, current.id,
             input.discountEnabled === undefined ? current.discount_enabled : input.discountEnabled ? 1 : 0,
             input.discountType ?? current.discount_type,
-            input.discountValue ?? current.discount_value,
+            clampDiscountValue(
+              String(input.discountType ?? current.discount_type),
+              asNumber(input.discountValue ?? current.discount_value),
+              boq.totals.selling,
+            ),
             0, 0, current.tax_enabled, asNumber(current.tax_revision) + 1,
             input.roundingMode ?? current.rounding_mode,
             input.roundingStep ?? current.rounding_step,
@@ -2993,9 +2999,13 @@ async function handleQuotationHistory(request: Request, user: AuthUser) {
   if (!projectId) throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
   await assertProjectAccess(user, projectId);
   const packageId = await resolveCommercialPackageId(client, projectId, searchParams.get("packageId"));
+  // Riwayat PAKET memang memuat seluruh quotation di paket itu — Original
+  // beserta revisinya DAN quotation Addendum (skenario D1/F1/F2 mengunci ini).
+  // Yang disematkan ke scope adalah layar quotation (GET/PATCH/DELETE), bukan
+  // riwayatnya. `scope_id` ikut dipulangkan supaya layar bisa mengelompokkan.
   const result = await client.execute({
     sql: `SELECT id,number,revision_no,status,total,grand_total,issued_at,
-      created_at,supersedes_id
+      created_at,supersedes_id,scope_id
       FROM quotations WHERE project_id=? AND package_id=?
       ORDER BY revision_no DESC,created_at DESC`,
     args: [projectId, packageId],
@@ -3010,6 +3020,7 @@ async function handleQuotationHistory(request: Request, user: AuthUser) {
     issuedAt: String(row.issued_at),
     createdAt: String(row.created_at),
     supersedesId: row.supersedes_id ? String(row.supersedes_id) : null,
+    scopeId: row.scope_id ? String(row.scope_id) : null,
   })));
 }
 
@@ -3143,18 +3154,31 @@ async function getInvoice(client: Awaited<ReturnType<typeof getDatabase>>["clien
   };
 }
 
+/**
+ * Batas invoice Nominal: Σ invoice PAKET ini tidak boleh melampaui kontrak
+ * paket ini.
+ *
+ * Dulu kueri quotationnya tidak menyebut paket maupun scope, dan jumlah
+ * invoice-nya se-proyek. Pada proyek dua paket, invoice paket B memakan jatah
+ * paket A dan ditolak INVOICE_EXCEEDS_QUOTATION tanpa alasan; kelas bug yang
+ * sama persis dengan yang baru diperbaiki di GET /api/quotations.
+ */
 async function assertInvoiceAmountWithinQuotation(
   client: Awaited<ReturnType<typeof getDatabase>>["client"],
   projectId: string,
   amount: number,
+  requestedPackageId?: string | null,
   excludeInvoiceId?: string,
 ) {
-  const boq = await getBoq(projectId);
+  const packageId = await resolveCommercialPackageId(client, projectId, requestedPackageId ?? null);
+  const boq = await getBoq(projectId, packageId);
+  const scopeId = boq.scopeId ?? null;
   const quotation = await client.execute({
     sql: `SELECT CASE WHEN grand_total>0 THEN grand_total ELSE total END AS total
-      FROM quotations WHERE project_id=? AND status<>'Superseded'
-      ORDER BY CASE status WHEN 'Accepted' THEN 0 ELSE 1 END,created_at DESC LIMIT 1`,
-    args: [projectId],
+      FROM quotations WHERE project_id=? AND package_id=? AND status<>'Superseded'
+      ${scopeId ? "AND scope_id=?" : ""}
+      ORDER BY CASE status WHEN 'Accepted' THEN 0 ELSE 1 END,revision_no DESC,created_at DESC LIMIT 1`,
+    args: scopeId ? [projectId, packageId, scopeId] : [projectId, packageId],
   });
   const commercialTotal = quotation.rows[0]
     ? asNumber(quotation.rows[0].total)
@@ -3163,12 +3187,13 @@ async function assertInvoiceAmountWithinQuotation(
     throw new ApiError(
       409,
       "QUOTATION_REQUIRED",
-      "BoQ atau Quotation proyek belum memiliki nilai yang dapat ditagihkan.",
+      "BoQ atau Quotation paket ini belum memiliki nilai yang dapat ditagihkan.",
     );
   }
   const existing = await client.execute({
-    sql: `SELECT COALESCE(SUM(amount),0) AS total FROM invoices WHERE project_id=?${excludeInvoiceId ? " AND id<>?" : ""}`,
-    args: excludeInvoiceId ? [projectId, excludeInvoiceId] : [projectId],
+    sql: `SELECT COALESCE(SUM(amount),0) AS total FROM invoices
+      WHERE project_id=? AND package_id=?${excludeInvoiceId ? " AND id<>?" : ""}`,
+    args: excludeInvoiceId ? [projectId, packageId, excludeInvoiceId] : [projectId, packageId],
   });
   const committed = asNumber(existing.rows[0]?.total);
   if (committed + amount > commercialTotal) {
@@ -3395,7 +3420,12 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
       : null;
     const legacyAmount = input.amount ?? 0;
     if (!allocation) {
-      await assertInvoiceAmountWithinQuotation(client, input.projectId, legacyAmount);
+      await assertInvoiceAmountWithinQuotation(
+        client,
+        input.projectId,
+        legacyAmount,
+        input.packageId ?? source.packageId,
+      );
     }
     const sequence = await claimSequence(client, "invoices", "SELECT number AS value FROM invoices");
     const id = randomUUID();
@@ -3620,6 +3650,9 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
           invoiceId,
         ],
       });
+      // Piutang PPh yang dipotong klien lahir sebesar yang benar-benar
+      // dipotong pada pembayaran ini — bukan snapshot penuh saat invoice terbit.
+      await refreshWithholdingObligations(tx, "Invoice", invoiceId, input.paidDate);
     });
     await writeAuditLog(client, request, user, "pay", "invoice", invoiceId, {
       paymentId,
@@ -3711,7 +3744,7 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
           args: [
             randomUUID(),
             payment.project_id,
-            timestamp.slice(0, 10),
+            tanggalReversal(String(payment.paid_date), timestamp),
             "Pengeluaran",
             `Reversal pembayaran ${String(payment.number)}`,
             payment.cash_amount,
@@ -3743,6 +3776,7 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
           invoiceId,
         ],
       });
+      await refreshWithholdingObligations(tx, "Invoice", invoiceId);
     });
     await writeAuditLog(client, request, user, "void_payment", "invoice", invoiceId, {
       paymentId,
@@ -3862,6 +3896,7 @@ async function handleInvoices(request: Request, path: string[], user: AuthUser) 
         client,
         String(current.project_id),
         input.amount ?? asNumber(current.amount),
+        current.package_id ? String(current.package_id) : null,
         invoiceId,
       );
     }
@@ -4567,9 +4602,12 @@ async function projectHandoverComplete(
   });
   const delivering = asNumber(result.rows[0]?.delivering);
   const handedOver = asNumber(result.rows[0]?.handed_over);
-  // No package in delivery (legacy/degenerate data) keeps the historic
-  // behaviour: the handover closes the project.
-  return delivering === 0 || handedOver >= delivering;
+  // Proyek hanya menutup diri kalau memang ADA paket berkontrak dan semuanya
+  // sudah diserahterimakan. Dulu `delivering === 0` ikut menutup: BAST pertama
+  // pada proyek yang belum punya satu pun quotation Accepted langsung
+  // menjadikannya Selesai tanpa kontrak. Proyek seperti itu tetap Aktif;
+  // menutupnya adalah keputusan manual di Manajemen Proyek.
+  return delivering >= 1 && handedOver >= delivering;
 }
 
 // Revoking a BAST undoes the handover that closed the project. Re-evaluate the
@@ -4643,7 +4681,17 @@ async function handleValidations(request: Request, path: string[], user: AuthUse
   const action = path[2];
   const searchParams = new URL(request.url).searchParams;
   const projectId = searchParams.get("projectId");
-  const deliveryCycle = Math.max(1, Number(searchParams.get("deliveryCycle") ?? 1));
+  // `Math.max(1, NaN)` adalah NaN, bukan 1 — dan NaN itu dulu diikat sebagai
+  // argumen SQL. Siklus harus bilangan bulat ≥ 1 atau ditolak dengan jelas.
+  const deliveryCycleRaw = searchParams.get("deliveryCycle");
+  const deliveryCycle = deliveryCycleRaw === null ? 1 : Number(deliveryCycleRaw);
+  if (!Number.isInteger(deliveryCycle) || deliveryCycle < 1 || deliveryCycle > 100) {
+    throw new ApiError(
+      422,
+      "INVALID_DELIVERY_CYCLE",
+      "Siklus serah terima harus bilangan bulat antara 1 dan 100.",
+    );
+  }
 
   if (!validationId && request.method === "GET") {
     if (!projectId) throw new ApiError(400, "PROJECT_REQUIRED", "Pilih proyek terlebih dahulu.");
@@ -5051,67 +5099,74 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
         seal_name_snapshot=?,seal_role_snapshot=?,updated_at=? WHERE id=?`,
       args: [verificationToken, seal.signer_name, seal.signer_role, timestamp, bastId],
     });
+    // Urutan: token + cap ditulis lebih dulu (PDF-nya memuat keduanya), PDF
+    // dirender dan disimpan, lalu SATU transaksi mengunci dokumen dan — kalau
+    // ini serah terima terakhir — menutup proyek. Dulu lima langkah tulis
+    // berjalan tanpa transaksi dengan rollback tangan: proses yang mati di
+    // tengah meninggalkan `status='Final'` tanpa `finalized_at`, dan
+    // penutupan proyek bisa tertinggal dari penguncian BAST-nya. Sekarang
+    // keduanya menang-atau-kalah bersama; yang tersisa di luar transaksi hanya
+    // tulisan sementara (token/cap), yang dibatalkan bila penguncian tidak
+    // pernah terjadi.
+    void projectBeforeFinalization;
     let stored: Awaited<ReturnType<typeof storeProjectFile>> | null = null;
+    let pdfHash = "";
     let projectClosed = false;
     try {
       const pdfResponse = await renderBusinessPdf("bast", bastId, user.preferredLanguage);
       const pdf = await pdfResponse.arrayBuffer();
-      const pdfHash = createHash("sha256").update(Buffer.from(pdf)).digest("hex");
+      pdfHash = createHash("sha256").update(Buffer.from(pdf)).digest("hex");
       stored = await storeProjectFile(
         `bast-final-${bastId}-${randomUUID()}.pdf`,
         "application/pdf",
         pdf,
       );
-      await client.execute({
-        sql: `UPDATE basts SET finalized_pdf_storage_url=?,
-          finalized_pdf_content_base64=?,pdf_hash=?,finalized_at=?,finalized_by=?,
-          updated_at=? WHERE id=?`,
-        args: [
-          stored.storageUrl,
-          stored.contentBase64,
-          pdfHash,
-          timestamp,
-          user.id,
-          timestamp,
-          bastId,
-        ],
-      });
-      // Only the last outstanding package handover closes the project.
-      if (await projectHandoverComplete(client, String(bast.project_id))) {
-        await client.execute({
-          sql: "UPDATE projects SET status='Selesai',updated_at=? WHERE id=?",
-          args: [timestamp, bast.project_id],
+      const storedFile = stored;
+      projectClosed = await client.transaction(async (tx) => {
+        await tx.execute({
+          sql: `UPDATE basts SET finalized_pdf_storage_url=?,
+            finalized_pdf_content_base64=?,pdf_hash=?,finalized_at=?,finalized_by=?,
+            updated_at=? WHERE id=?`,
+          args: [
+            storedFile.storageUrl,
+            storedFile.contentBase64,
+            pdfHash,
+            timestamp,
+            user.id,
+            timestamp,
+            bastId,
+          ],
         });
-        projectClosed = true;
-      }
-      await writeAuditLog(client, request, user, "finalize", "bast", bastId, {
-        pdfHash,
-        verificationToken,
-        packageId: bast.package_id,
-        deliveryCycle: bast.delivery_cycle,
-        projectClosed,
+        // Only the last outstanding package handover closes the project.
+        if (await projectHandoverComplete(tx, String(bast.project_id))) {
+          await tx.execute({
+            sql: "UPDATE projects SET status='Selesai',updated_at=? WHERE id=?",
+            args: [timestamp, bast.project_id],
+          });
+          return true;
+        }
+        return false;
       });
     } catch (error) {
       if (stored?.storageUrl) await cleanupProjectFile(stored.storageUrl, "BAST finalize rollback");
+      // Transaksinya tidak pernah commit (finalized_at masih NULL): batalkan
+      // tulisan sementara saja. Bila sudah commit, baris ini tidak menyentuh
+      // apa pun.
       await client.execute({
         sql: `UPDATE basts SET status=?,verification_token=NULL,
-          seal_name_snapshot=NULL,seal_role_snapshot=NULL,
-          finalized_pdf_storage_url=NULL,finalized_pdf_content_base64=NULL,
-          pdf_hash=NULL,finalized_at=NULL,finalized_by=NULL,updated_at=? WHERE id=?`,
+          seal_name_snapshot=NULL,seal_role_snapshot=NULL,updated_at=?
+          WHERE id=? AND finalized_at IS NULL`,
         args: [bast.status, now(), bastId],
       });
-      // Mirror the forward path: restore the project status only if this
-      // finalize is the call that changed it. Rewriting it unconditionally
-      // would clobber a status another package's handover had legitimately
-      // set in the meantime.
-      if (projectClosed) {
-        await client.execute({
-          sql: "UPDATE projects SET status=?,updated_at=? WHERE id=?",
-          args: [projectBeforeFinalization.status, now(), bast.project_id],
-        });
-      }
       throw error;
     }
+    await writeAuditLog(client, request, user, "finalize", "bast", bastId, {
+      pdfHash,
+      verificationToken,
+      packageId: bast.package_id,
+      deliveryCycle: bast.delivery_cycle,
+      projectClosed,
+    });
     await notifyProjectStakeholders(client, {
       projectId: String(bast.project_id),
       eventType: "bast_finalized",
@@ -5345,7 +5400,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
     // in it, so a Project Manager exporting their own ledger is never met with
     // a refusal for a report they are entitled to.
     const canSeeMargin = canAccess(user.permissions, "margin", "view");
-    const profitRows = canSeeMargin ? (await client.execute({
+    const profitRowsRaw = canSeeMargin ? (await client.execute({
       sql: `
         SELECT p.id,p.code,p.name,
           COALESCE((
@@ -5414,24 +5469,23 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         ORDER BY p.code
       `,
       args: profitArgs as never[],
-    })).rows
-      .map((row) => {
-        const netProfit = asNumber(row.net_profit);
+    })).rows : [];
+
+    // Laba bersih dan laba ditahan memakai SATU rumus — operatingProfit milik
+    // modul bagi laba — bukan salinan lokal. Dulu laporan ini menghitung
+    // net_profit tanpa pajak terpulihkan dan tanpa utang pajak, sehingga "laba
+    // ditahan" di laporan dan di panel bagi laba adalah dua angka yang berbeda
+    // untuk proyek yang sama.
+    const profitRows = (await Promise.all(profitRowsRaw.map(async (row) => {
+        const profit = await operatingProfit(client, String(row.id));
+        const netProfit = profit.netProfit;
         const allocatedAmount = asNumber(row.allocated_amount);
         return {
           project: `${String(row.code)} - ${String(row.name)}`,
           netProfit,
           allocatedAmount,
           paidAmount: asNumber(row.paid_amount),
-          retainedProfit:
-            netProfit -
-            Math.max(
-              0,
-              asNumber(row.committed_vendor_cost) -
-                asNumber(row.procurement_paid),
-            ) -
-            asNumber(row.outstanding_reimbursement) -
-            allocatedAmount,
+          retainedProfit: profit.distributableProfit - allocatedAmount,
           budgetBoq: asNumber(row.budget_boq),
           committedVendorCost: asNumber(row.committed_vendor_cost),
           procurementPaid: asNumber(row.procurement_paid),
@@ -5443,7 +5497,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           outstandingReimbursement: Math.max(0, asNumber(row.outstanding_reimbursement)),
           acceptedAddenda: asNumber(row.accepted_addenda),
         };
-      })
+      })))
       .filter(
         (row) =>
           row.netProfit !== 0 ||
@@ -5452,7 +5506,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
           row.committedVendorCost !== 0 ||
           row.outstandingReimbursement !== 0 ||
           row.acceptedAddenda !== 0,
-      ) : [];
+      );
     const taxResult = await client.execute({
       sql: `SELECT p.code,p.name,dt.rule_name,dt.rule_name_en,o.direction,
         o.amount,o.settled_amount,o.status
@@ -5732,7 +5786,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
       ["invoice", "spk"].includes(input.source.toLowerCase()) ||
       input.source.toLowerCase().startsWith("bank:") ||
       input.source.toLowerCase().startsWith("profit share") ||
-      input.source.toLowerCase().startsWith("procurement ") ||
+      input.source.toLowerCase().startsWith("procurement") ||
       input.source.toLowerCase().startsWith("invoice payment") ||
       input.source.toLowerCase().startsWith("tax settlement") ||
       input.source.toLowerCase().startsWith("project expense") ||
@@ -5778,7 +5832,7 @@ async function handleTransactions(request: Request, path: string[], user: AuthUs
         (["invoice", "spk"].includes(input.source.toLowerCase()) ||
           input.source.toLowerCase().startsWith("bank:") ||
           input.source.toLowerCase().startsWith("profit share") ||
-          input.source.toLowerCase().startsWith("procurement ") ||
+          input.source.toLowerCase().startsWith("procurement") ||
           input.source.toLowerCase().startsWith("invoice payment") ||
           input.source.toLowerCase().startsWith("tax settlement") ||
           input.source.toLowerCase().startsWith("project expense") ||
@@ -6794,6 +6848,9 @@ export async function dispatchApi(request: Request, path: string[]) {
   if (resource === "documents") return handleDocuments(request, path, user);
   if (resource === "audit-logs") return handleAudit(request, user);
   if (resource === "search") return handleSearch(request, user);
+  if (resource === "help" && path[1] === "alur.png") {
+    return handleAlurPng(request, user);
+  }
   if (resource === "help" && path[1] === "sop.pdf") {
     return renderSopPdf(request, user);
   }

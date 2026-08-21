@@ -2278,6 +2278,9 @@ test("backend PRD works end-to-end with persistence, PDF, auth, and RBAC", async
       await request(`/api/procurement-orders/${purchaseOrder.id}/payments`, {
         method: "POST",
         body: JSON.stringify({
+          // Termin wajib disebut sejak 21 Agustus 2026 (TERM_REQUIRED, 422);
+          // yang diuji di sini tetap penolakan 409 karena barang belum diterima.
+          termId: approvedPurchaseOrder.terms.find((term) => term.type === "Final").id,
           amount: 450_000,
           paidDate: "2026-07-29",
           vendorInvoiceNumber: "TAG-PO-002",

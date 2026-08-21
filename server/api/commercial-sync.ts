@@ -22,8 +22,14 @@ export async function assertBoqTotalCoversInvoices(
   proposedTotal: number,
   packageId?: string,
 ) {
+  // Satuan yang sama: `proposedTotal` adalah subtotal BoQ PRA-diskon dan
+  // PRA-pajak, jadi yang dibandingkan adalah porsi subtotal yang sudah
+  // ditagihkan (`subtotal_snapshot` untuk invoice Percent), bukan `amount` yang
+  // sudah memuat pajak. Dulu `SUM(amount)` dipakai: dengan PPN 11% ambangnya
+  // meleset 11% ke atas dan menolak suntingan BoQ yang sah.
   const result = await client.execute({
-    sql: `SELECT COALESCE(SUM(amount),0) AS total FROM invoices
+    sql: `SELECT COALESCE(SUM(CASE WHEN calculation_mode='Percent'
+        THEN subtotal_snapshot ELSE amount END),0) AS total FROM invoices
       WHERE project_id=?${packageId ? " AND package_id=?" : ""}`,
     args: packageId ? [projectId, packageId] : [projectId],
   });
@@ -35,6 +41,60 @@ export async function assertBoqTotalCoversInvoices(
       `Nilai BoQ tidak boleh lebih kecil dari total Invoice yang sudah diterbitkan (${invoicedTotal}). Edit atau hapus Invoice terlebih dahulu.`,
     );
   }
+}
+
+/**
+ * Nilai diskon yang dibawa ke revisi baru dipotong ke subtotal barunya.
+ * `calculateQuotationCommercialTotals` memang sudah meng-clamp saat menghitung,
+ * jadi grand total aman — tetapi nilai yang TERSIMPAN ikut disalin mentah, dan
+ * layar menampilkan diskon nominal yang lebih besar dari pekerjaannya.
+ */
+export function clampDiscountValue(
+  discountType: string,
+  discountValue: number,
+  subtotal: number,
+) {
+  if (discountType === "Percent") return Math.min(10_000, Math.max(0, discountValue));
+  return Math.min(Math.max(0, subtotal), Math.max(0, discountValue));
+}
+
+/**
+ * Nilai proyek = jumlah per PAKET: kontrak yang sudah diterima klien kalau
+ * ada, kalau belum ada maka BoQ paket itu.
+ *
+ * Dulu dihitung se-proyek: `accepted_total > 0 ? accepted_total : boq_total`.
+ * Paket A yang Accepted 100 jt membuat paket B yang masih Draft 50 jt lenyap
+ * dari nilai proyek — dua cabangnya bahkan tidak mengukur hal yang sama
+ * (kontrak satu paket vs BoQ seluruh proyek). Proyek lama tanpa paket jatuh
+ * ke perhitungan se-proyek.
+ */
+export async function hitungNilaiProyek(client: DatabaseClient, projectId: string) {
+  const perPaket = await client.execute({
+    sql: `SELECT cp.id,
+      COALESCE((SELECT SUM(CASE WHEN q.grand_total>0 THEN q.grand_total ELSE q.total END)
+        FROM quotations q WHERE q.package_id=cp.id AND q.status='Accepted'),0) AS accepted_total,
+      COALESCE((SELECT SUM(i.quantity*i.selling_price)
+        FROM boq_items i JOIN boq_scopes s ON s.id=i.scope_id
+        WHERE s.package_id=cp.id),0) AS boq_total
+      FROM project_commercial_packages cp WHERE cp.project_id=?`,
+    args: [projectId],
+  });
+  if (perPaket.rows.length) {
+    return perPaket.rows.reduce((sum, row) => {
+      const accepted = asNumber(row.accepted_total);
+      return sum + (accepted > 0 ? accepted : asNumber(row.boq_total));
+    }, 0);
+  }
+  const seProyek = await client.execute({
+    sql: `SELECT
+      COALESCE((SELECT SUM(CASE WHEN q.grand_total>0 THEN q.grand_total ELSE q.total END)
+        FROM quotations q WHERE q.project_id=? AND q.status='Accepted'),0) AS accepted_total,
+      COALESCE((SELECT SUM(i.quantity*i.selling_price)
+        FROM boq_items i JOIN boqs b ON b.id=i.boq_id WHERE b.project_id=?),0) AS boq_total`,
+    args: [projectId, projectId],
+  });
+  const accepted = asNumber(seProyek.rows[0]?.accepted_total);
+  return accepted > 0 ? accepted : asNumber(seProyek.rows[0]?.boq_total);
 }
 
 // A validation checklist describes the BoQ it was signed against. The moment the
@@ -108,7 +168,12 @@ export async function syncCommercialValues(
           `${String(oldQuote.number).replace(/-R\d+$/, "")}-R${revisionNo}`,
           oldQuote.issued_at, oldQuote.valid_until, asNumber(oldQuote.live_total), revisionNo,
           oldQuote.id, oldQuote.discount_enabled, oldQuote.discount_type,
-          oldQuote.discount_value, 0, 0, oldQuote.tax_enabled,
+          clampDiscountValue(
+            String(oldQuote.discount_type),
+            asNumber(oldQuote.discount_value),
+            asNumber(oldQuote.live_total),
+          ),
+          0, 0, oldQuote.tax_enabled,
           asNumber(oldQuote.tax_revision) + 1, oldQuote.rounding_mode,
           oldQuote.rounding_step, oldQuote.rounding_adjustment, oldQuote.rounding_reason,
           0, timestamp, timestamp,
@@ -146,26 +211,7 @@ export async function syncCommercialValues(
       );
     }
   }
-  const totalResult = await client.execute({
-    sql: `
-      SELECT
-        COALESCE(SUM(i.quantity * i.selling_price), 0) AS boq_total,
-        COALESCE((
-          SELECT SUM(CASE WHEN q.grand_total>0 THEN q.grand_total ELSE q.total END)
-          FROM quotations q
-          WHERE q.project_id=? AND q.status='Accepted'
-        ),0) AS accepted_total
-      FROM boq_items i
-      JOIN boqs b ON b.id = i.boq_id
-      WHERE b.project_id = ?
-    `,
-    args: [projectId, projectId],
-  });
-  const acceptedTotal = asNumber(totalResult.rows[0]?.accepted_total);
-  const total =
-    acceptedTotal > 0
-      ? acceptedTotal
-      : asNumber(totalResult.rows[0]?.boq_total);
+  const total = await hitungNilaiProyek(client, projectId);
   const timestamp = now();
   await client.batch(
     [

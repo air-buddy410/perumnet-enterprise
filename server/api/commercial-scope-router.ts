@@ -10,6 +10,7 @@ import { claimSequence } from "../db/counters";
 import { resolveCommercialPackageId } from "./commercial-package-router";
 import {
   assertBoqTotalCoversInvoices,
+  hitungNilaiProyek,
   resetProjectValidation,
   syncCommercialValues,
 } from "./commercial-sync";
@@ -259,25 +260,16 @@ function quotationNumber(count: number) {
 
 export async function syncProjectCommercialValue(client: DatabaseClient, projectId: string) {
   await client.execute({
+    // HANYA Draft — sama dengan syncCommercialValues. Tanpa filter status,
+    // total quotation Superseded dan Accepted ikut ditimpa dari BoQ hidup, dan
+    // riwayat revisi mencetak angka yang sudah bukan angka historisnya.
     sql: `UPDATE quotations SET total=COALESCE((
       SELECT SUM(i.quantity*i.selling_price)
       FROM boq_items i WHERE i.scope_id=quotations.scope_id
-    ),0),updated_at=? WHERE project_id=?`,
+    ),0),updated_at=? WHERE project_id=? AND status='Draft'`,
     args: [now(), projectId],
   });
-  const totals = await client.execute({
-    sql: `SELECT
-      COALESCE(SUM(CASE WHEN q.status='Accepted'
-        THEN CASE WHEN q.grand_total>0 THEN q.grand_total ELSE q.total END
-        ELSE 0 END),0) AS accepted_total,
-      COALESCE((SELECT SUM(i.quantity*i.selling_price)
-        FROM boq_items i JOIN boqs b ON b.id=i.boq_id
-        WHERE b.project_id=?),0) AS boq_total
-      FROM quotations q WHERE q.project_id=?`,
-    args: [projectId, projectId],
-  });
-  const accepted = numberValue(totals.rows[0]?.accepted_total);
-  const total = accepted > 0 ? accepted : numberValue(totals.rows[0]?.boq_total);
+  const total = await hitungNilaiProyek(client, projectId);
   await client.execute({
     sql: "UPDATE projects SET value=?,updated_at=? WHERE id=?",
     args: [total, now(), projectId],

@@ -48,7 +48,13 @@ test("tidak ada parameter telanjang di dalam uji IS NULL", () => {
       // adalah pemakaiannya di dalam SQL.
       const bersih = baris.trim();
       if (bersih.startsWith("//") || bersih.startsWith("*")) return;
-      if (/\?\s+IS\s+(NOT\s+)?NULL/i.test(baris)) {
+      // Keluarga yang sama: parameter telanjang di awal ekspresi yang tipenya
+      // harus disimpulkan PostgreSQL dari parameter itu sendiri.
+      if (
+        /\?\s+IS\s+(NOT\s+)?NULL/i.test(baris) ||
+        /COALESCE\(\s*\?/i.test(baris) ||
+        /CASE\s+WHEN\s+\?/i.test(baris)
+      ) {
         pelanggaran.push(`${berkas.replace(akar, "server")}:${index + 1}: ${bersih}`);
       }
     });

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { jsPDF } from "jspdf";
 import QRCode from "qrcode";
 import { ApiError } from "./errors";
+import { resolveCommercialPackageId } from "./commercial-package-router";
 import { grossCashContribution } from "../cash-ledger";
 import { getDatabase } from "../db/client";
 import { asNumber, formatDate, parseJson } from "../format";
@@ -815,14 +816,20 @@ async function quotationPdf(projectOrQuotationId: string, language: PdfLanguage)
   const quotationResult = directQuotation.rows[0]
     ? directQuotation
     : await client.execute({
+        // Quotation PAKET DEFAULT proyek, scope Original, bukan yang Superseded.
+        // Dulu: `s.sequence=0 ORDER BY created_at DESC` tanpa paket dan tanpa
+        // status — `sequence` unik per boq (bukan per paket), jadi paket ke-2
+        // tidak pernah punya sequence 0, dan revisi lama yang Superseded bisa
+        // tercetak sebagai dokumen berjalan.
         sql: `SELECT q.*,s.kind AS scope_kind,s.title AS scope_title,s.sequence,
           cp.title AS package_title
           FROM quotations q
           LEFT JOIN boq_scopes s ON s.id=q.scope_id
           LEFT JOIN project_commercial_packages cp ON cp.id=q.package_id
-          WHERE q.project_id=? AND (s.sequence=0 OR q.scope_id IS NULL)
-          ORDER BY q.created_at DESC LIMIT 1`,
-        args: [projectId],
+          WHERE q.project_id=? AND q.package_id=? AND q.status<>'Superseded'
+            AND (q.scope_id IS NULL OR (s.kind='Original' AND s.parent_scope_id IS NULL))
+          ORDER BY q.revision_no DESC,q.created_at DESC LIMIT 1`,
+        args: [projectId, await resolveCommercialPackageId(client, projectId, null)],
       });
   let quotation = quotationResult.rows[0];
   if (quotation?.id && String(quotation.status) === "Draft") {
