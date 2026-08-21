@@ -40,7 +40,10 @@ function pekerjaEmail(nama, cwd) {
     exec_mode: "fork",
     autorestart: true,
     restart_delay: 5000,
-    max_memory_restart: "180M",
+    // 300M, bukan 180M: worker yang sedang jalan duduk di 84–90 MB setelah
+    // 24 jam. Batas 180M belum pernah dipakai sungguhan dan sisanya terlalu
+    // tipis untuk pertumbuhan wajar heap Node.
+    max_memory_restart: "300M",
     env: { NODE_ENV: "production", EMAIL_ENV_FILE: ".env.production" },
   };
 }
