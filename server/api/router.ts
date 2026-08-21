@@ -2561,13 +2561,17 @@ async function handleQuotations(request: Request, user: AuthUser) {
     // sekali; di keadaan itu perilaku lama dipertahankan apa adanya.
     const boq = await getBoq(projectId, packageId);
     const scopeId = boq.scopeId ?? null;
+    // Syaratnya dirakit di JavaScript, BUKAN sebagai `? IS NULL` di dalam SQL.
+    // PostgreSQL menolak parameter telanjang di posisi itu dengan 42P18
+    // ("could not determine data type of parameter"), sedangkan SQLite
+    // menerimanya — jadi bentuk itu lulus seluruh tes lalu jatuh di server.
     const result = await client.execute({
       sql: `SELECT q.*,cp.title AS package_title FROM quotations q
         LEFT JOIN project_commercial_packages cp ON cp.id=q.package_id
         WHERE q.project_id=? AND q.package_id=? AND q.status<>'Superseded'
-          AND (? IS NULL OR q.scope_id=?)
+          ${scopeId ? "AND q.scope_id=?" : ""}
         ORDER BY q.revision_no DESC,q.created_at DESC LIMIT 1`,
-      args: [projectId, packageId, scopeId, scopeId],
+      args: scopeId ? [projectId, packageId, scopeId] : [projectId, packageId],
     });
     if (result.rows[0]) {
       return ok(
@@ -2888,11 +2892,15 @@ async function handleQuotations(request: Request, user: AuthUser) {
     // masih Draft terhapus tanpa ada yang menyadarinya.
     const deleteBoq = await getBoq(projectId, packageId);
     const deleteScopeId = deleteBoq.scopeId ?? null;
+    // Dirakit di JavaScript, bukan `? IS NULL`. Lihat catatan di cabang GET.
     const result = await client.execute({
       sql: `SELECT id,status,scope_id FROM quotations WHERE project_id=? AND package_id=?
-        AND status<>'Superseded' AND (? IS NULL OR scope_id=?)
+        AND status<>'Superseded'
+        ${deleteScopeId ? "AND scope_id=?" : ""}
         ORDER BY revision_no DESC,created_at DESC LIMIT 1`,
-      args: [projectId, packageId, deleteScopeId, deleteScopeId],
+      args: deleteScopeId
+        ? [projectId, packageId, deleteScopeId]
+        : [projectId, packageId],
     });
     const currentRow = result.rows[0];
     if (!currentRow) throw new ApiError(404, "NOT_FOUND", "Quotation tidak ditemukan.");
