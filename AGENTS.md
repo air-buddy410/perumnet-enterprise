@@ -8,6 +8,13 @@ PerumNet ada di **`docs/WORKFLOW-TIM.md`**. Baca itu sebelum mengubah apa pun.
 - Permintaan Luna → Opus: `docs/PERMINTAAN-FRONTEND-KE-BACKEND.md`
 - Kontrak Opus → Luna: `docs/HANDOFF-BACKEND-KE-FRONTEND.md`
 
+**Luna: tugas yang sedang menunggumu ada di KEPALA
+`docs/HANDOFF-BACKEND-KE-FRONTEND.md`**, di blok "🔴 Yang sedang menunggumu".
+Baca berkas itu saat memulai sesi dan saat ditanya "ada tugas apa" — jangan
+dijawab dari ingatan. Papan itu berubah di antara sesi tanpa ada yang
+memberitahumu: Opus menulis ke sana, dan tidak ada kanal langsung ke sesi
+Codex yang sedang terbuka.
+
 Ringkas:
 
 - Aturan domain ditegakkan di server, bukan UI.
