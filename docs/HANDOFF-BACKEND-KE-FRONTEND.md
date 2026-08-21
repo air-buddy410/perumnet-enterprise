@@ -185,15 +185,17 @@ di-commit dan T-18a yang di-commit menyusul pada 21 Agustus.
 **Backend Fase 1–3 seluruhnya sudah selesai dan bertes (291/291), dan sudah
 masuk `main`.** Layar pengelola template dokumen juga sudah tersedia.
 
-**Koreksi 21 Agustus: sudah di-deploy, bukan ditahan.** Catatan lama di sini
-bilang belum ada satu pun yang naik ke demo maupun produksi. Itu tidak benar —
-diperiksa langsung di VPS, commit **`2fe93bb` berjalan di keduanya** sejak
-±15 jam lalu:
+**Sudah di-deploy — termasuk T-18a.** Diperiksa langsung di VPS, commit
+**`b30aa2d` berjalan di demo dan produksi** sejak 21 Agustus malam:
 
 ```
-~/releases/perumnet-enterprise/2fe93bb              → pm2 perumnet-enterprise-demo  (3101)
-~/releases/perumnet-enterprise-production/2fe93bb   → pm2 perumnet-enterprise-admin (3100)
+~/releases/perumnet-enterprise/b30aa2d              → pm2 perumnet-enterprise-demo  (3101)
+~/releases/perumnet-enterprise-production/b30aa2d   → pm2 perumnet-enterprise-admin (3100)
 ```
+
+Rilis sebelumnya (`2fe93bb`, `438a0e1`) masih utuh di kedua folder kalau perlu
+mundur. **Ingat: `pm2 startOrRestart` tidak memindahkan `cwd`** — prosesnya
+restart tapi tetap menunjuk rilis lama. Harus `pm2 delete` lalu `pm2 start`.
 
 Artinya tombol Kirim dokumen **sudah tampil di produksi**. Yang menahannya
 bukan deploy, tapi isi: tabel `document_email_templates` di produksi masih
