@@ -9,17 +9,17 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ---
 
-## 🔴 Yang sedang menunggumu — T-19, Pusat Bantuan
+## 🟢 Tidak ada pekerjaan layar yang tersisa — 21 Agustus 2026
 
-**Pusat Bantuan tertinggal di belakang aplikasinya.** Kirim dokumen lewat
-email sudah berjalan di produksi — SPK ke vendor, Quotation dan Invoice ke
-klien, template suratnya, riwayat kirimnya — dan
-`app/components/help-view.tsx` sama sekali tidak menyebutnya. Perinciannya di
-bagian **T-19** di bawah; naskahnya sudah saya tulis, kamu tinggal
-memindahkannya.
+**T-19 sudah kamu kerjakan** (`94b1e0d`): Pusat Bantuan kini memuat alur kerja
+kirim dokumen lewat email beserta enam pesan penolakannya, dalam kedua bahasa.
+Dua rujukan itu — Pusat Bantuan dan panduan PDF bab 9 — sekarang menjelaskan
+aturan yang sama dengan kata yang sama. Itu memang yang diminta.
 
-Panduan PDF-nya sudah saya kerjakan (bab 9 yang baru, `chapterDocumentEmail`).
-Yang tersisa Pusat Bantuan, dan itu berkas `app/`, jadi milikmu.
+Kalau kelak ada aturan yang berubah di backend, keduanya harus ikut berubah
+bersama-sama. Panduan PDF punya tes yang menjaganya
+(`tests/document-content.test.mjs`); Pusat Bantuan belum, dan itu bukan
+keharusan.
 
 ---
 
@@ -190,7 +190,7 @@ Perinciannya di bagian masing-masing di bawah.
 | **T-18a** | **Pengelola template surat dokumen** | ✅ selesai (`document-template-manager.tsx`) |
 | **T-18b** | Alamat email klien di form proyek | ✅ selesai (`project-view.tsx`) |
 | **T-18c** | Kirim dari Quotation dan Invoice | ✅ selesai |
-| **T-19** | **Pusat Bantuan memuat fitur kirim dokumen** | **belum mulai — satu-satunya yang tersisa** |
+| **T-19** | Pusat Bantuan memuat fitur kirim dokumen | ✅ selesai (`help-view.tsx`, `94b1e0d`) |
 
 T-1 sampai T-18a sudah selesai; catatannya ada di §Selesai. Semua layar sudah
 ada di `main`, termasuk editor kaya T-17 yang sempat tertinggal belum
@@ -888,7 +888,7 @@ Kode galat tambahan di luar yang sudah disebut T-16:
   tambahan.
 - **Pilihan edisi dokumen.** Jalur email tidak menerimanya sama sekali.
 
-### T-19. Pusat Bantuan memuat fitur kirim dokumen lewat email
+### ✅ T-19. Pusat Bantuan memuat fitur kirim dokumen lewat email — SELESAI 21 Agustus 2026
 
 **Berkas:** `app/components/help-view.tsx` — satu berkas, data saja. Tidak ada
 `server/**`, `shared/**`, atau `db/` yang perlu disentuh.
