@@ -43,6 +43,7 @@ import { DocumentTaxEditor } from "./document-tax-editor";
 import { CatalogPicker } from "./catalog-picker";
 import { DocumentEmailDialog } from "./document-email-dialog";
 import { DocumentPreviewModal } from "./document-preview-modal";
+import { DocumentTemplateManager } from "./document-template-manager";
 
 interface ProcurementViewProps {
   language: AppLanguage;
@@ -57,7 +58,7 @@ interface ProcurementViewProps {
   userRole: "Admin" | "Project Manager" | "Engineer" | "Finance";
 }
 
-type Tab = "orders" | "vendors" | "categories" | "commercial";
+type Tab = "orders" | "vendors" | "categories" | "commercial" | "templates";
 type Attachment = { name: string; mimeType: string; contentBase64: string };
 type DraftLine = { selected: boolean; quantity: number; agreedUnitCost: number };
 // Rejecting, voiding a document, and voiding a payment all record an audited
@@ -938,6 +939,9 @@ export function ProcurementViewV2({
             <BadgeCheck size={17} /> Quotation & Addendum <span className="tab-count">{scopes.length}</span>
           </button>
         )}
+        <button role="tab" aria-selected={tab === "templates"} className={tab === "templates" ? "active" : ""} type="button" onClick={() => setTab("templates")}>
+          <Mail size={17} /> {id ? "Template surat" : "Letter templates"}
+        </button>
       </div>
 
       {tab === "vendors" && (
@@ -1010,6 +1014,8 @@ export function ProcurementViewV2({
           </div>
         </section>
       )}
+
+      {tab === "templates" && <DocumentTemplateManager language={language} canManage={canManage} notify={notify} />}
 
       {tab === "orders" && projectId && (
         <section className="panel">

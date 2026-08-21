@@ -9,11 +9,12 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ---
 
-## 🔴 Yang sedang menunggumu — 21 Agustus 2026
+## 🟢 Tidak ada pekerjaan layar yang tersisa — 21 Agustus 2026
 
-**Tinggal satu tugas layar: T-18a, pengelola template surat dokumen.**
-Lompat ke bagian *T-18 → a*. T-16, T-18b, dan T-18c ternyata sudah kamu
-kerjakan — sudah saya tandai selesai, tidak perlu disentuh lagi.
+**T-18a, pengelola template surat dokumen, sudah dikerjakan.**
+Implementasinya ada di `app/components/document-template-manager.tsx` dan
+menjadi tab di Procurement. T-16, T-18b, dan T-18c juga sudah selesai, tidak
+perlu disentuh lagi.
 
 Tiga hal yang berubah sejak terakhir kamu membaca berkas ini:
 
@@ -165,7 +166,7 @@ Papan permintaan Opus → Luna (`WORKFLOW-TIM.md` §5). Backend-nya sudah jalan
 di demo; yang tersisa murni tampilan. Tandai ✅ dan pindahkan ke §Selesai
 kalau sudah dikerjakan.
 
-### Yang masih terbuka — per 2026-08-20
+### Status tugas — diperbarui 21 Agustus 2026
 
 Daftar pendek supaya tidak ada yang tercecer di antara entri yang panjang.
 Perinciannya di bagian masing-masing di bawah.
@@ -173,16 +174,16 @@ Perinciannya di bagian masing-masing di bawah.
 | | Tugas | Keadaan |
 |---|---|---|
 | **T-16** | Kirim SPK/PO ke vendor — dialog kirim, riwayat, batas unggah | ✅ selesai (`document-email-dialog.tsx`) |
-| **T-18a** | **Pengelola template surat dokumen** | **belum mulai — satu-satunya yang tersisa, dan tanpa ini tombol Kirim tidak punya template untuk dipilih** |
+| **T-18a** | **Pengelola template surat dokumen** | ✅ selesai (`document-template-manager.tsx`) |
 | **T-18b** | Alamat email klien di form proyek | ✅ selesai (`project-view.tsx`) |
 | **T-18c** | Kirim dari Quotation dan Invoice | ✅ selesai |
 
-T-1 sampai T-17 sudah selesai; catatannya ada di §Selesai. **Diperiksa ulang
-21 Agustus: tinggal T-18a.** Semua layar lain sudah ada di `main`, termasuk
-editor kaya T-17 yang sempat tertinggal belum di-commit.
+T-1 sampai T-18a sudah selesai; catatannya ada di §Selesai. Semua layar sudah
+ada di `main`, termasuk editor kaya T-17 yang sempat tertinggal belum
+di-commit dan T-18a yang di-commit menyusul pada 21 Agustus.
 
 **Backend Fase 1–3 seluruhnya sudah selesai dan bertes (291/291), dan sudah
-masuk `main`.** Yang menahan peluncuran tinggal layar.
+masuk `main`.** Layar pengelola template dokumen juga sudah tersedia.
 
 **Koreksi 21 Agustus: sudah di-deploy, bukan ditahan.** Catatan lama di sini
 bilang belum ada satu pun yang naik ke demo maupun produksi. Itu tidak benar —
@@ -198,8 +199,9 @@ Artinya tombol Kirim dokumen **sudah tampil di produksi**. Yang menahannya
 bukan deploy, tapi isi: tabel `document_email_templates` di produksi masih
 kosong, jadi daftar templatenya kosong. Untuk sekarang itu belum melukai
 siapa pun — produksi juga belum punya proyek, quotation, maupun invoice
-(10 pengguna, sisanya nol). Tapi begitu data operasional masuk sebelum T-18a
-ada, tombol itu jadi tombol yang tidak bisa dipakai di depan pengguna nyata.
+(10 pengguna, sisanya nol). Template contoh sekarang dapat dikelola lewat
+tab Procurement; isi produksi tetap perlu diisi oleh pengguna yang memiliki
+izin Kelola Procurement.
 
 Kalau ada yang menurutmu kurang atau kontraknya keliru, tulis di
 `docs/PERMINTAAN-FRONTEND-KE-BACKEND.md`. Menolak tugas karena kontraknya belum
@@ -688,8 +690,8 @@ saat memeriksa ulang, bukan saat menulis T-16.
 Tanpa (a), tombol Kirim punya daftar template yang kosong dan tidak ada cara
 mengisinya dari mana pun.
 
-**Diperiksa ulang 2026-08-20 malam — (b) dan (c) ternyata sudah dikerjakan.**
-Yang tersisa hanya (a). Hasil pemeriksaan, bukan ingatan:
+**Diperiksa ulang 2026-08-21 — (b) dan (c) sudah dikerjakan, dan layar (a)
+sekarang juga sudah tersedia.** Hasil pemeriksaan, bukan ingatan:
 
 | | Keadaan | Bukti |
 |---|---|---|
@@ -697,17 +699,18 @@ Yang tersisa hanya (a). Hasil pemeriksaan, bukan ingatan:
 | Backend (b) | ada | kolom `client_email` + `client_contact_name`, ditambahkan lewat `ensureColumn` (`server/db/initialize.ts:3302`) |
 | Backend (c) | ada | SPK/PO `procurement-router.ts:2164`, quotation `commercial-scope-router.ts:879`, invoice `router.ts:3485` |
 | Tes | 291/291 lulus | `npm test`, 20 Agustus |
-| Isi database | **0 template**, 5 proyek, **0 punya email klien** | dibaca dari `perumnet.local.db` |
+| Isi database | **3 template contoh**, 5 proyek, **0 punya email klien** | disiapkan lewat `scripts/seed-template-dokumen.mjs` |
 
 - **(b) sudah jadi** — `project-view.tsx` punya isian email + PIC klien dan
   mem-PATCH keduanya. Tidak ada yang perlu dikerjakan lagi.
 - **(c) sudah jadi** — `document-email-dialog.tsx` terpasang di `billing-view`,
   `project-view`, dan `procurement-v2-view`, lengkap dengan riwayat kirim dan
   keadaan kosong.
-- **(a) belum ada, dan itu yang menahan semuanya.** Dialognya sudah benar
-  menampilkan "Buat template dokumen terlebih dahulu" — tapi memang belum ada
-  layar untuk membuatnya, dan database masih kosong. Sampai (a) jadi, tombol
-  Kirim tidak bisa dipakai siapa pun.
+- **(a) sudah jadi** — `document-template-manager.tsx` menyediakan daftar per
+  jenis dokumen, CRUD template, defaults pengirim dari server, placeholder
+  dinamis dari jawaban server, editor `text`/`rich`, dan keadaan read-only
+  sesuai izin Kelola Procurement. Template tersimpan langsung tersedia di
+  dialog Kirim dokumen.
 
 Satu koreksi kecil untuk (c): `document-email-dialog.tsx:475` membaca
 `defaults?.starter`, padahal endpoint template dokumen **tidak pernah
@@ -717,7 +720,7 @@ mengirim** `starter` — hanya endpoint template prospek yang punya itu
 tidak pernah jalan. Tidak merusak apa pun karena teks cadangannya sudah benar,
 jadi cukup dibuang saat lewat sana — bukan pekerjaan tersendiri.
 
-#### a. Pengelola template surat dokumen — SATU-SATUNYA YANG TERSISA
+#### a. Pengelola template surat dokumen — ✅ SELESAI 21 Agustus 2026
 
 Endpoint-nya sudah ada dan berpola sama persis dengan template prospek:
 
@@ -896,3 +899,12 @@ Kode galat tambahan di luar yang sudah disebut T-16:
   bukan HTML. Paste dipaksa menjadi `text/plain`, template `text` lama tetap
   dipertahankan, dan template HTML tulisan tangan tidak diubah menjadi keluaran
   editor. Preview tetap memakai hasil render server.
+
+- **T-18a** — `document-template-manager.tsx` menjadi tab di Procurement dan
+  menyediakan CRUD template untuk `spk`, `quotation`, dan `invoice`, defaults
+  pengirim dari server, placeholder dinamis per jenis dokumen, editor
+  `text`/`rich`, preservasi template HTML tulisan tangan, soft-delete, serta
+  mode read-only untuk izin View. Preview surat lengkap tetap dibuat oleh
+  server di dialog Kirim dokumen; endpoint preview generik yang tertulis di
+  kontrak tetapi belum ada di router sudah dicatat di
+  `docs/PERMINTAAN-FRONTEND-KE-BACKEND.md`.

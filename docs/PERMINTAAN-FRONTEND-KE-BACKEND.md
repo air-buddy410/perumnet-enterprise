@@ -23,7 +23,10 @@ field-nya di `docs/HANDOFF-BACKEND-KE-FRONTEND.md`, bukan di sini.
 
 ## Terbuka
 
-_(belum ada — silakan diisi)_
+### Preview generik template surat dokumen
+- **Layar:** Procurement → Template surat dokumen
+- **Butuh:** `POST /api/document-email-templates/:id/preview` dengan body `{ documentType: "spk" | "quotation" | "invoice", documentId }`, yang mengembalikan `subject`, `bodyHtml`, `recipient`, `recipientName`, dan `attachments` seperti kontrak di `docs/HANDOFF-BACKEND-KE-FRONTEND.md` §T-16.
+- **Kenapa tidak bisa di sisi frontend:** preview harus memakai placeholder, identitas perusahaan, tanda tangan, penerima, dan PDF dokumen yang dirender server. Endpoint tersebut tertulis di handoff, tetapi `dispatchDocumentEmailTemplateApi` saat ini belum menangani path `/:id/preview` dan menjawab 404. Jangan merender atau menebak surat lengkap di browser.
 
 ---
 

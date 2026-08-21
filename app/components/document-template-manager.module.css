@@ -1,0 +1,516 @@
+.manager {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.managerHead {
+  align-items: flex-start;
+}
+
+.managerHead p {
+  max-width: 690px;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.headActions,
+.editorActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.infoNotice,
+.errorNotice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 15px 20px 0;
+  border-radius: 8px;
+  padding: 11px 12px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.infoNotice {
+  border: 1px solid #cce8e4;
+  background: #effaf8;
+  color: #176d68;
+}
+
+.errorNotice {
+  align-items: center;
+  border: 1px solid #f0d4d4;
+  background: #fff7f7;
+  color: #9b4444;
+}
+
+.infoNotice svg,
+.errorNotice svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.errorNotice > span {
+  flex: 1;
+}
+
+.workspace {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(235px, 0.34fr) minmax(0, 0.66fr);
+}
+
+.library {
+  min-width: 0;
+  border-right: 1px solid var(--line);
+  padding: 18px;
+  background: #fbfdfd;
+}
+
+.kindSwitcher {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 4px;
+  background: #f3f8f7;
+}
+
+.kindButton,
+.kindActive {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: 7px;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-align: left;
+}
+
+.kindButton:hover {
+  background: #eaf8f6;
+  color: var(--teal-dark);
+}
+
+.kindActive {
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(41, 75, 79, 0.1);
+  color: var(--teal-dark);
+}
+
+.kindButton small,
+.kindActive small {
+  display: inline-grid;
+  min-width: 21px;
+  height: 21px;
+  place-items: center;
+  border-radius: 999px;
+  background: #e3f3f0;
+  color: var(--teal-dark);
+  font-size: 10px;
+}
+
+.kindActive small {
+  background: var(--teal);
+  color: #fff;
+}
+
+.libraryHeading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 22px 2px 9px;
+}
+
+.libraryHeading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.libraryHeading span {
+  color: var(--teal-dark);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.libraryHeading strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.libraryHeading > small {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.templateList {
+  display: grid;
+  gap: 6px;
+}
+
+.templateItem,
+.templateItemActive {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 31px minmax(0, 1fr) 15px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 9px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.templateItem:hover,
+.templateItemActive {
+  border-color: #c9e7e2;
+  background: #eff9f7;
+}
+
+.templateIcon {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border-radius: 8px;
+  background: #e4f6f3;
+  color: var(--teal-dark);
+}
+
+.templateItemCopy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.templateItemCopy strong,
+.templateItemCopy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.templateItemCopy strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.templateItemCopy small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.emptyState {
+  display: flex;
+  min-height: 170px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 7px;
+  padding: 20px 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.emptyState svg {
+  color: var(--teal);
+}
+
+.emptyState strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.emptyState span {
+  max-width: 215px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.editor {
+  min-width: 0;
+}
+
+.editorHead {
+  display: flex;
+  min-height: 82px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding: 18px 20px;
+}
+
+.editorHead > div:first-child {
+  min-width: 0;
+}
+
+.editorHead h3 {
+  margin-top: 5px;
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.editorHead p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.form {
+  padding: 20px;
+}
+
+.form fieldset {
+  min-width: 0;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.full {
+  grid-column: 1 / -1;
+}
+
+.formGrid b {
+  color: #b24848;
+}
+
+.sectionHeading {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
+.sectionHeading strong {
+  color: var(--teal-dark);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.sectionHeading span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.placeholderSection {
+  display: grid;
+  gap: 15px;
+  margin-top: 20px;
+  border: 1px solid #cde8e3;
+  border-radius: 9px;
+  padding: 14px;
+  background: #f4fbfa;
+}
+
+.placeholderHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.placeholderHeading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.placeholderHeading strong {
+  color: var(--teal-dark);
+  font-size: 12px;
+}
+
+.placeholderHeading span:not(.placeholderKind) {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.placeholderKind {
+  border-radius: 999px;
+  padding: 5px 8px;
+  background: #dff4f0;
+  color: var(--teal-dark);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.placeholderGroup {
+  display: grid;
+  gap: 7px;
+}
+
+.placeholderGroup > span {
+  color: var(--grey);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.placeholderRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.placeholderButton {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid #c9e4df;
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: #fff;
+  color: var(--teal-dark);
+  text-align: left;
+}
+
+.placeholderButton:hover {
+  border-color: var(--teal);
+  background: #eaf8f6;
+}
+
+.placeholderButton code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.placeholderButton small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.muted {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.formFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
+.formFooter > span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.previewNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 20px 20px;
+  border-radius: 8px;
+  padding: 12px;
+  background: #f6faf9;
+  color: var(--teal-dark);
+}
+
+.previewNote > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.previewNote > div {
+  display: grid;
+  gap: 3px;
+}
+
+.previewNote strong {
+  font-size: 11px;
+}
+
+.previewNote span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+@media (max-width: 900px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .library {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .kindSwitcher {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .templateList {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .managerHead,
+  .editorHead,
+  .formFooter {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .headActions,
+  .editorActions {
+    justify-content: stretch;
+  }
+
+  .headActions .button,
+  .editorActions .button,
+  .formFooter .button {
+    flex: 1;
+  }
+
+  .formGrid,
+  .templateList {
+    grid-template-columns: 1fr;
+  }
+
+  .form,
+  .library {
+    padding: 15px;
+  }
+
+  .previewNote {
+    margin-right: 15px;
+    margin-left: 15px;
+  }
+}
