@@ -156,9 +156,24 @@ T-1 sampai T-17 sudah selesai; catatannya ada di §Selesai. **Diperiksa ulang
 editor kaya T-17 yang sempat tertinggal belum di-commit.
 
 **Backend Fase 1–3 seluruhnya sudah selesai dan bertes (291/291), dan sudah
-masuk `main`.** Yang menahan peluncuran tinggal layar. Belum ada satu pun yang
-di-deploy ke demo maupun produksi — sengaja, supaya naiknya sekaligus dan bisa
-dicoba utuh.
+masuk `main`.** Yang menahan peluncuran tinggal layar.
+
+**Koreksi 21 Agustus: sudah di-deploy, bukan ditahan.** Catatan lama di sini
+bilang belum ada satu pun yang naik ke demo maupun produksi. Itu tidak benar —
+diperiksa langsung di VPS, commit **`2fe93bb` berjalan di keduanya** sejak
+±15 jam lalu:
+
+```
+~/releases/perumnet-enterprise/2fe93bb              → pm2 perumnet-enterprise-demo  (3101)
+~/releases/perumnet-enterprise-production/2fe93bb   → pm2 perumnet-enterprise-admin (3100)
+```
+
+Artinya tombol Kirim dokumen **sudah tampil di produksi**. Yang menahannya
+bukan deploy, tapi isi: tabel `document_email_templates` di produksi masih
+kosong, jadi daftar templatenya kosong. Untuk sekarang itu belum melukai
+siapa pun — produksi juga belum punya proyek, quotation, maupun invoice
+(10 pengguna, sisanya nol). Tapi begitu data operasional masuk sebelum T-18a
+ada, tombol itu jadi tombol yang tidak bisa dipakai di depan pengguna nyata.
 
 Kalau ada yang menurutmu kurang atau kontraknya keliru, tulis di
 `docs/PERMINTAAN-FRONTEND-KE-BACKEND.md`. Menolak tugas karena kontraknya belum
