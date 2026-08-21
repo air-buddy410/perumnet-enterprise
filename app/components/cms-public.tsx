@@ -8,7 +8,6 @@ import {
   Check,
   ChevronRight,
   Clock3,
-  Code2,
   Globe2,
   Home,
   Mail,
@@ -39,6 +38,7 @@ import {
   serviceStructuredData,
 } from "@/server/public-seo";
 import { PublicLanguageSwitcher } from "./public-language-switcher";
+import { PublicHeroVideo } from "./public-hero-video";
 import { PublicLeadForm } from "./public-lead-form";
 import { PublicMobileMenu } from "./public-mobile-menu";
 import { PublicMotionController } from "./public-motion-controller";
@@ -362,10 +362,6 @@ function FaqSection({ content, language }: { content: CmsContent; language: Publ
 
 export function HomePage({ content, language }: { content: CmsContent; language: PublicLanguage }) {
   const labs = content.services.find((service) => service.slug === "perumnet-labs");
-  const wifi = content.services.find((service) => service.slug === "managed-wifi");
-  const smartHome = content.services.find((service) => service.slug === "smart-home-device");
-  const cctv = content.services.find((service) => service.slug === "cctv");
-  const pabx = content.services.find((service) => service.slug === "ip-pabx");
   const coreServices = content.services.filter((service) => service.slug !== "perumnet-labs").slice(0, 4);
   return (
     <PublicShell content={content} language={language} active="home">
@@ -373,30 +369,22 @@ export function HomePage({ content, language }: { content: CmsContent; language:
         <div className={styles.heroGrid}>
           <div className={styles.heroCopy} data-reveal>
             <span className={styles.eyebrow}><Sparkles size={14} /> {text(content, language, "home", "hero_eyebrow", "SOLUSI IT TERINTEGRASI · BALI", "INTEGRATED IT SOLUTIONS · BALI")}</span>
-            <h1>{text(content, language, "home", "hero_title", "Sistem IT yang rapi, stabil, dan siap dipakai.", "Well-organized IT systems, stable and ready to use.")}</h1>
-            <p>{text(content, language, "home", "hero_description", "PerumNet Enterprise menangani jaringan, CCTV, Smart Home, IP PABX, dan software untuk hotel, villa, kantor, sekolah, serta area komersial di Bali.", "PerumNet Enterprise delivers networks, CCTV, Smart Home, IP PABX, and software for hotels, villas, offices, schools, and commercial sites across Bali.")}</p>
+            <h1>{text(content, language, "home", "hero_title", "Infrastruktur IT yang bekerja tanpa hambatan.", "IT infrastructure that works without interruption.")}</h1>
+            <p>{text(content, language, "home", "hero_description", "Satu tim untuk merancang, memasang, dan menjaga access point, router, switch, fiber optic, CCTV, serta software operasional—dari survei jaringan hingga monitoring setelah implementasi.", "One team to design, install, and maintain access points, routers, switches, fibre optics, CCTV, and operational software—from the network survey through post-installation monitoring.")}</p>
             <div className={styles.heroActions}>
               <a className={styles.primaryButton} href={waLink(content, language)} target="_blank" rel="noreferrer">{setting(content, language, "cta_text", "Konsultasikan Kebutuhan Anda", "Discuss Your Requirements")} <ArrowRight size={18} /></a>
               <Link className={styles.secondaryButton} href={publicHref(language, "/portfolio")}>{language === "id" ? "Lihat hasil pekerjaan" : "View our work"}</Link>
             </div>
-            <div className={styles.heroTrust}><span><ShieldCheck size={17} /> {language === "id" ? "Instalasi terdokumentasi" : "Documented delivery"}</span><span><Clock3 size={17} /> {language === "id" ? "Respons dukungan cepat" : "Responsive support"}</span></div>
           </div>
-          <div className={styles.heroVisual} data-reveal data-reveal-delay="120" aria-label={language === "id" ? "Ilustrasi sistem terintegrasi" : "Integrated systems illustration"}>
-            <div className={styles.visualGlow} /><div className={`${styles.orbit} ${styles.orbitOne}`} /><div className={`${styles.orbit} ${styles.orbitTwo}`} />
-            <div className={styles.visualCenter}><img src="/perumnet-mark.png" alt="PerumNet Enterprise" /></div>
-            <div className={`${styles.visualNode} ${styles.nodeWifi}`}><Wifi size={24} /><span>{wifi ? localized(wifi.title, wifi.titleEn, language) : "Managed WiFi"}</span><small>{language === "id" ? "Terpantau" : "Monitored"}</small></div>
-            <div className={`${styles.visualNode} ${styles.nodeSmartHome}`}><Home size={24} /><span>{smartHome ? localized(smartHome.title, smartHome.titleEn, language) : "Smart Home"}</span><small>{language === "id" ? "Terintegrasi" : "Integrated"}</small></div>
-            <div className={`${styles.visualNode} ${styles.nodeCamera}`}><Cctv size={24} /><span>{cctv ? localized(cctv.title, cctv.titleEn, language) : "CCTV"}</span><small>{language === "id" ? "Terlindungi" : "Protected"}</small></div>
-            <div className={`${styles.visualNode} ${styles.nodePhone}`}><Phone size={24} /><span>{pabx ? localized(pabx.title, pabx.titleEn, language) : "IP PABX"}</span><small>{language === "id" ? "Terhubung" : "Connected"}</small></div>
-            <div className={`${styles.visualNode} ${styles.nodeLabs}`}><Code2 size={24} /><span>{labs ? localized(labs.title, labs.titleEn, language) : "PerumNet Labs"}</span><small>{language === "id" ? "Dikembangkan" : "Building"}</small></div>
-            <div className={styles.signalCard}><span className={styles.liveDot} /> {language === "id" ? "Sistem terpantau" : "Monitored systems"} <strong>24/7</strong></div>
-          </div>
+          <PublicHeroVideo language={language} />
         </div>
-        <div className={styles.statsBar} data-reveal data-reveal-delay="180">
-          <div><strong>{content.services.length}</strong><span>{language === "id" ? "Solusi inti terintegrasi" : "Integrated core solutions"}</span></div>
-          <div><strong>24/7</strong><span>{language === "id" ? "Dukungan operasional" : "Operational support"}</span></div>
-          <div><strong>{language === "id" ? "1 tim" : "1 team"}</strong><span>{language === "id" ? "Dari survei hingga support" : "From survey to support"}</span></div>
-          <div><strong>Bali</strong><span>{language === "id" ? "Berbasis dan siap melayani" : "Based and ready to serve"}</span></div>
+        <div className={styles.heroProofBar} data-reveal data-reveal-delay="180">
+          <div className={styles.heroProofInner}>
+            <div className={styles.heroProofItem}><ShieldCheck size={20} /><span>{language === "id" ? "Instalasi terdokumentasi" : "Documented installation"}</span></div>
+            <div className={styles.heroProofItem}><Clock3 size={20} /><span>{language === "id" ? "Dukungan responsif" : "Responsive support"}</span></div>
+            <div className={styles.heroProofItem}><Network size={20} /><span>{language === "id" ? "Satu tim dari survei hingga support" : "One team from survey to support"}</span></div>
+            <div className={styles.heroProofItem}><MapPin size={20} /><span>{language === "id" ? "Berbasis di Bali" : "Based in Bali"}</span></div>
+          </div>
         </div>
       </section>
 
