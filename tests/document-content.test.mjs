@@ -711,3 +711,69 @@ test("the English editions print English", async () => {
 
   await loginAsAdmin();
 });
+
+// ------------------------------------------------------------------- (8) ---
+//
+// (8) Panduan operasional tertinggal di belakang aplikasinya.
+//
+// Kirim dokumen lewat email sudah berjalan di produksi sejak Agustus 2026 —
+// SPK ke vendor, Quotation dan Invoice ke klien, dengan PDF resminya dilampirkan
+// aplikasi — tetapi panduan yang diunduh pengguna sama sekali tidak menyebutnya.
+// Panduan yang diam tentang fitur yang ada lebih berbahaya daripada panduan yang
+// tidak ada: pembacanya menyimpulkan fiturnya memang belum ada.
+//
+// Batas lampiran DIBACA DARI SUMBERNYA, bukan ditulis ulang di sini. Kalau
+// suatu hari batasnya diubah di shared/document-email.ts dan panduannya tidak
+// ikut, tes ini yang gagal — bukan pengguna yang menghitung ulang sendiri
+// kenapa suratnya ditolak.
+
+function constantFromSource(name) {
+  const source = readFileSync(
+    new URL("../shared/document-email.ts", import.meta.url),
+    "utf8",
+  );
+  const match = source.match(new RegExp(`export const ${name} = ([^;]+);`));
+  assert.ok(match, `${name} must still be a plain constant`);
+  // Nilainya ditulis sebagai perkalian (10 * 1024 * 1024), jadi dihitung, bukan
+  // dibaca sebagai angka tunggal.
+  return match[1]
+    .split("*")
+    .map((part) => Number(part.trim()))
+    .reduce((hasil, angka) => hasil * angka, 1);
+}
+
+test("the manual documents sending documents by email, with the limits the server actually enforces", async () => {
+  await loginAsAdmin();
+  const manual = await pdfText("/api/help/sop.pdf?language=id");
+
+  assert.match(manual.flat, /Mengirim dokumen resmi lewat email/);
+
+  // Pembedaan yang paling mudah salah dipahami di seluruh fitur ini: Kirim
+  // membuka pembayaran, Kirim Email mengirim suratnya. Menggabungkan keduanya
+  // membuat kemampuan membayar bergantung pada jabat tangan SMTP. Yang diperiksa
+  // isi catatannya, bukan judulnya — judul callout dicetak huruf besar semua.
+  assert.match(manual.flat, /tidak pernah bergantung pada berhasil atau gagalnya satu jabat tangan SMTP/);
+
+  // Aturan status yang berbeda per dokumen, dan mudah dikira seragam.
+  assert.match(manual.flat, /Status Invoice TIDAK berubah karena dikirim/);
+
+  const jumlah = constantFromSource("ATTACHMENT_MAX_COUNT");
+  const totalMb = Math.round(
+    constantFromSource("ATTACHMENT_TOTAL_MAX_BYTES") / (1024 * 1024),
+  );
+  assert.match(manual.flat, new RegExp(`${jumlah} berkas`));
+  assert.match(manual.flat, new RegExp(`${totalMb} MB, termasuk dokumen resminya`));
+
+  // Penolakan yang paling sering ditemui pengguna harus punya jalan keluar
+  // tertulis, bukan cuma muncul di layar.
+  assert.match(manual.flat, /belum punya alamat email klien/);
+  assert.match(manual.flat, /Template ini bukan untuk Quotation/);
+});
+
+test("the English edition of the manual documents it in English too", async () => {
+  await loginAsAdmin("en");
+  const manual = await pdfText("/api/help/sop.pdf?language=en");
+  assert.match(manual.flat, /Sending official documents by email/);
+  assert.match(manual.flat, /never depends on whether one SMTP handshake succeeded/);
+  assert.doesNotMatch(manual.flat, /Mengirim dokumen resmi lewat email/);
+});

@@ -9,12 +9,25 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ---
 
-## 🟢 Tidak ada pekerjaan layar yang tersisa — 21 Agustus 2026
+## 🔴 Yang sedang menunggumu — T-19, Pusat Bantuan
+
+**Pusat Bantuan tertinggal di belakang aplikasinya.** Kirim dokumen lewat
+email sudah berjalan di produksi — SPK ke vendor, Quotation dan Invoice ke
+klien, template suratnya, riwayat kirimnya — dan
+`app/components/help-view.tsx` sama sekali tidak menyebutnya. Perinciannya di
+bagian **T-19** di bawah; naskahnya sudah saya tulis, kamu tinggal
+memindahkannya.
+
+Panduan PDF-nya sudah saya kerjakan (bab 9 yang baru, `chapterDocumentEmail`).
+Yang tersisa Pusat Bantuan, dan itu berkas `app/`, jadi milikmu.
+
+---
 
 **T-18a, pengelola template surat dokumen, sudah dikerjakan.**
 Implementasinya ada di `app/components/document-template-manager.tsx` dan
 menjadi tab di Procurement. T-16, T-18b, dan T-18c juga sudah selesai, tidak
-perlu disentuh lagi.
+perlu disentuh lagi. Permintaanmu soal endpoint pratinjau juga sudah jadi —
+lihat §T-18a.
 
 Tiga hal yang berubah sejak terakhir kamu membaca berkas ini:
 
@@ -177,13 +190,15 @@ Perinciannya di bagian masing-masing di bawah.
 | **T-18a** | **Pengelola template surat dokumen** | ✅ selesai (`document-template-manager.tsx`) |
 | **T-18b** | Alamat email klien di form proyek | ✅ selesai (`project-view.tsx`) |
 | **T-18c** | Kirim dari Quotation dan Invoice | ✅ selesai |
+| **T-19** | **Pusat Bantuan memuat fitur kirim dokumen** | **belum mulai — satu-satunya yang tersisa** |
 
 T-1 sampai T-18a sudah selesai; catatannya ada di §Selesai. Semua layar sudah
 ada di `main`, termasuk editor kaya T-17 yang sempat tertinggal belum
 di-commit dan T-18a yang di-commit menyusul pada 21 Agustus.
 
-**Backend Fase 1–3 seluruhnya sudah selesai dan bertes (291/291), dan sudah
-masuk `main`.** Layar pengelola template dokumen juga sudah tersedia.
+**Backend Fase 1–3 seluruhnya sudah selesai dan bertes, dan sudah masuk
+`main`.** Layar pengelola template dokumen juga sudah tersedia, begitu pula
+endpoint pratinjau yang kamu minta.
 
 **Sudah di-deploy — termasuk T-18a.** Diperiksa langsung di VPS, commit
 **`b30aa2d` berjalan di demo dan produksi** sejak 21 Agustus malam:
@@ -872,6 +887,97 @@ Kode galat tambahan di luar yang sudah disebut T-16:
 - **Unggah untuk dokumen resminya.** Sama seperti T-16 — hanya lampiran
   tambahan.
 - **Pilihan edisi dokumen.** Jalur email tidak menerimanya sama sekali.
+
+### T-19. Pusat Bantuan memuat fitur kirim dokumen lewat email
+
+**Berkas:** `app/components/help-view.tsx` — satu berkas, data saja. Tidak ada
+`server/**`, `shared/**`, atau `db/` yang perlu disentuh.
+
+**Kenapa ini penting, bukan sekadar rapi.** Pusat Bantuan yang diam tentang
+fitur yang sudah ada lebih berbahaya daripada Pusat Bantuan yang tidak ada:
+pembacanya menyimpulkan fiturnya memang belum ada, lalu mengirim dokumen
+lewat jalan lain. Fitur ini sudah berjalan di produksi sejak Agustus 2026.
+
+**Naskahnya sudah ada, tinggal dipindahkan.** Saya sudah menulis materi yang
+sama untuk panduan PDF: `server/api/sop-pdf-content.ts`, cari
+`chapterDocumentEmail`. Di sana setiap kalimat berpasangan `[Indonesia,
+Inggris]`, jadi kedua bahasa sudah tersedia. **Baca dari sana, jangan
+mengarang ulang** — kalau dua rujukan menjelaskan aturan yang sama dengan kata
+berbeda, salah satunya pasti keliru dan tidak ada yang tahu yang mana.
+
+Pusat Bantuan memang lebih ringkas daripada panduan PDF; itu disengaja dan
+tertulis di panduannya sendiri. Ringkas, jangan salin mentah-mentah.
+
+#### a. Satu entri alur kerja baru
+
+Tambahkan satu `WorkflowGuide` di `workflowsId` **dan** padanannya di
+`workflowsEn`, disisipkan tepat setelah entri `key: "procurement"` supaya
+urutannya sama dengan panduan PDF.
+
+```ts
+{
+  key: "document-email",
+  icon: Mail,                     // lucide-react, sudah dipakai di berkas ini
+  title: "Mengirim dokumen resmi lewat email",
+  summary: "...",
+  who: "...",
+  where: "...",
+  prepare: "...",
+  steps: ["...", "..."],
+  after: "...",
+}
+```
+
+Isinya diambil dari `chapterDocumentEmail`: `lead` → `summary`, tiga baris
+`meta` → `who` / `where` / `prepare`, `steps` → `steps`, dan `note` +
+`bullets` → `after`.
+
+Empat hal yang **wajib ikut**, sebab justru itu yang paling mudah salah
+dipahami dan tidak bisa ditebak dari layar:
+
+1. **Kirim dan Kirim Email berbeda.** Kirim berarti dokumen dinyatakan sudah
+   sampai ke vendor lewat cara apa pun, dan ia gerbang yang membuka
+   pembayaran. Kirim Email benar-benar mengirim suratnya. Dipisah supaya
+   kemampuan membayar tidak pernah bergantung pada satu jabat tangan SMTP.
+2. **Status Invoice TIDAK berubah karena dikirim** — status invoice adalah
+   keadaan pembayaran, bukan pengiriman. Tapi **Quotation Draft ikut ditandai
+   terkirim** lewat transisi yang sama dengan tombol Tandai sudah dikirim,
+   termasuk penguncian item BoQ-nya.
+3. **PDF SPK yang dikirim ke vendor adalah edisi vendor**, tanpa kolom Budget.
+4. **Izinnya per jenis dokumen:** SPK/PO butuh Kelola pada Procurement &
+   Vendor; Quotation/Invoice butuh Kelola pada Quotation & Invoice.
+
+#### b. Enam entri pesan kesalahan baru
+
+Tambahkan enam `MessageGuide` di `messagesId` **dan** `messagesEn`. Keenamnya
+sudah saya tulis lengkap dengan arti dan jalan keluarnya di bab
+`chapterMessages` pada `sop-pdf-content.ts` — enam baris terakhir sebelum
+`chapterAppendix`:
+
+| `key` yang disarankan | Pesannya |
+|---|---|
+| `template-kind-mismatch` | Template ini bukan untuk Quotation / Invoice / SPK |
+| `client-email-missing` | Proyek … belum punya alamat email klien |
+| `vendor-email-missing` | Vendor … belum punya alamat email |
+| `order-not-sendable` | Hanya dokumen yang sudah Disetujui yang dapat dikirim ke vendor |
+| `template-required` | Pilih template surat lebih dulu |
+| `attachment-too-large` | Seluruh lampiran melebihi batas 10 MB per email |
+
+Jangan menulis ulang angkanya dari ingatan. Batas yang berlaku ada di
+`shared/document-email.ts`: 5 lampiran tambahan, 10 MB per berkas, 10 MB
+untuk seluruh lampiran termasuk dokumen resminya, dan hanya PDF, PNG, JPEG,
+serta WebP.
+
+#### c. Entri glosarium, kalau perlu
+
+`glossaryId` / `glossaryEn` belum punya istilah untuk fitur ini. Kalau menurutmu
+"Template surat dokumen" atau "Riwayat kirim" layak masuk, silakan — ini
+penilaianmu, bukan keharusan.
+
+**Selesai berarti:** `npm run lint` bersih, dan Pusat Bantuan dalam kedua
+bahasa memuat alur kerja itu beserta keenam pesannya. Panduan PDF-nya sudah
+punya tes yang menjaga isinya (`tests/document-content.test.mjs`); kalau kamu
+mau menambah tes serupa untuk Pusat Bantuan, silakan, tapi tidak wajib.
 
 ### Selesai
 

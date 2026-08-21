@@ -1051,6 +1051,163 @@ export const chapterProcurement: Chapter = {
   ],
 };
 
+export const chapterDocumentEmail: Chapter = {
+  id: "document-email",
+  title: [
+    "Mengirim dokumen resmi lewat email",
+    "Sending official documents by email",
+  ],
+  blocks: [
+    {
+      kind: "lead",
+      text: [
+        "SPK dan PO dapat dikirim ke vendor, Quotation dan Invoice ke klien, langsung dari dokumennya. Surat pengantarnya disusun server dari template yang Anda simpan, dan PDF resminya dilampirkan aplikasi — bukan berkas yang diunggah ulang seseorang. Yang Anda lihat di pratinjau memang persis yang diterima penerima.",
+        "An SPK or PO can be sent to the vendor, and a quotation or invoice to the client, straight from the document itself. The covering letter is composed on the server from a template you saved, and the official PDF is attached by the application rather than re-uploaded by hand. What the preview shows is exactly what the recipient receives.",
+      ],
+    },
+    {
+      kind: "meta",
+      rows: [
+        {
+          label: ["Siapa yang boleh", "Who may do it"],
+          value: [
+            "Mengirim SPK atau PO memerlukan izin Kelola pada Procurement & Vendor. Mengirim Quotation atau Invoice memerlukan izin Kelola pada Quotation & Invoice. Template suratnya dikelola dengan izin Kelola pada Procurement & Vendor; izin Lihat hanya cukup untuk membaca template dan riwayat.",
+            "Sending an SPK or PO requires Manage on Procurement & Vendors. Sending a quotation or invoice requires Manage on Quotations & Invoices. The letter templates are maintained with Manage on Procurement & Vendors; View is only enough to read the templates and the delivery history.",
+          ],
+        },
+        {
+          label: ["Di mana", "Where"],
+          value: [
+            "Tombol Kirim Email pada dokumennya masing-masing. Templatenya di Procurement & Vendor, tab Template surat.",
+            "The Send Email button on each document. The templates live on the Procurement & Vendors screen, under the Letter templates tab.",
+          ],
+        },
+        {
+          label: ["Prasyarat", "Prerequisites"],
+          value: [
+            "Mailserver sudah dikonfigurasi; satu template tersimpan untuk jenis dokumen yang bersangkutan; dan alamat penerima sudah terisi — email vendor di master vendor untuk SPK dan PO, atau alamat email klien pada proyek untuk Quotation dan Invoice.",
+            "A configured mail server; one saved template for that document type; and a recipient address already on file — the vendor email in the vendor master for an SPK or PO, or the project's client email for a quotation or invoice.",
+          ],
+        },
+      ],
+    },
+    {
+      kind: "steps",
+      items: [
+        [
+          "Siapkan templatenya lebih dulu. Buka Procurement & Vendor, tab Template surat, lalu pilih jenis dokumen: SPK, Quotation, atau Invoice. Template dibuat per jenis dan tidak dapat dipakai lintas jenis.",
+          "Prepare the template first. Open Procurement & Vendors, the Letter templates tab, then choose the document type: SPK, Quotation, or Invoice. Templates belong to one type and cannot be used across types.",
+        ],
+        [
+          "Tulis subjek dan isi surat. Penanda yang tersedia ditampilkan layar sesuai jenis dokumennya, dan seluruh nilainya diambil dari baris dokumen — tidak ada satu pun yang berasal dari ketikan pengirim.",
+          "Write the subject and the body. The available placeholders are listed on screen for that document type, and every value is read from the document record — none of them come from anything the sender types.",
+        ],
+        [
+          "Isi surat dapat berupa teks biasa atau memakai editor kaya. Kop berlogo, identitas perusahaan, tanda tangan, dan alamat kantor ditambahkan aplikasi; tidak ada yang perlu menulis HTML. Kolom tanda tangan yang dikosongkan jatuh ke kontak perusahaan.",
+          "The body may be plain text or written in the rich editor. The letterhead with the logo, the company identity, the signature, and the office address are added by the application; nobody needs to write HTML. Signature fields left blank fall back to the company contact details.",
+        ],
+        [
+          "Buka dokumen yang hendak dikirim dan tekan Kirim Email. Pilih template, lalu buat pratinjau. Pratinjau dibuat server, lengkap dengan kop, tanda tangan, penerima, dan PDF dokumennya — bukan tiruan yang digambar di layar.",
+          "Open the document you want to send and press Send Email. Choose a template, then generate the preview. The preview is produced by the server, complete with the letterhead, the signature, the recipient, and the document PDF — not an imitation drawn on screen.",
+        ],
+        [
+          "Bila perlu, tambahkan lampiran lain. Dokumen resminya sendiri tidak perlu — dan tidak boleh — diunggah ulang; aplikasi selalu melampirkan versi yang dirender dari data terkini.",
+          "Add other attachments if needed. The official document itself never has to be — and must not be — uploaded again; the application always attaches the version rendered from the current data.",
+        ],
+        [
+          "Tekan Kirim. Suratnya masuk antrean, bukan langsung keluar. Riwayat kirim di dialog yang sama menunjukkan keadaannya: Masih diproses, Terkirim, Gagal, atau Dilewati, lengkap dengan penerima, subjek, dan daftar lampirannya.",
+          "Press Send. The letter enters a queue rather than leaving immediately. The delivery history in the same dialog shows its state — In progress, Sent, Failed, or Skipped — together with the recipient, the subject, and the list of attachments.",
+        ],
+      ],
+    },
+    {
+      kind: "note",
+      title: [
+        "Kirim dan Kirim Email adalah dua hal yang berbeda",
+        "Send and Send Email are two different things",
+      ],
+      text: [
+        "Kirim berarti seseorang menyatakan dokumen sudah sampai ke vendor, dengan cara apa pun — diantar, dicetak, dikirim lewat kurir. Ia gerbang yang membuka pembayaran. Kirim Email benar-benar mengirimkan suratnya. Keduanya sengaja dipisah supaya kemampuan membayar dokumen tidak pernah bergantung pada berhasil atau gagalnya satu jabat tangan SMTP. Menekan Kirim Email pada SPK yang sudah Disetujui ikut menandainya Dikirim, karena itu memang tindakan mengirim.",
+        "Send means somebody states the document has reached the vendor by whatever means — delivered, printed, couriered. It is the gate that opens payment. Send Email actually sends the letter. The two are kept apart deliberately so that the ability to pay a document never depends on whether one SMTP handshake succeeded. Pressing Send Email on an approved SPK also marks it as Sent, because that genuinely is an act of sending.",
+      ],
+    },
+    {
+      kind: "bullets",
+      items: [
+        [
+          "Quotation berstatus Draft yang dikirim lewat email ikut ditandai sudah dikirim, lewat transisi yang sama dengan tombol Tandai sudah dikirim — termasuk penguncian item BoQ-nya. Mengirim penawaran memang menguncinya.",
+          "A Draft quotation sent by email is also marked as sent, through the same transition as the Mark as sent button — BoQ item locking included. Sending a quotation does lock it.",
+        ],
+        [
+          "Status Invoice TIDAK berubah karena dikirim. Status invoice adalah keadaan pembayaran, bukan keadaan pengiriman; menumpanginya akan mencampur dua hal yang kebetulan sama-sama bernama status.",
+          "An invoice's status does NOT change when it is emailed. An invoice status describes payment, not delivery; overloading it would merge two different things that happen to share the word status.",
+        ],
+        [
+          "PDF SPK yang dikirim ke vendor adalah edisi vendor, yang tidak pernah memuat kolom Budget — harga modal PerumNet per item. Edisi internal hanya dapat diambil dari dalam aplikasi oleh yang memang sudah boleh membacanya.",
+          "The SPK PDF sent to a vendor is the vendor edition, which never carries the Budget column — PerumNet's own cost per item. The internal edition can only be fetched from inside the application by someone already entitled to read it.",
+        ],
+        [
+          "Surat yang gagal dicoba ulang otomatis setelah 1, 5, 15, dan 60 menit. Setelah lima percobaan ia berhenti dan tercatat Gagal, bukan dicoba selamanya.",
+          "A failed letter is retried automatically after 1, 5, 15, and 60 minutes. After five attempts it stops and is recorded as Failed rather than retried forever.",
+        ],
+      ],
+    },
+    {
+      kind: "table",
+      widths: [38, 62],
+      head: [
+        ["Batas lampiran", "Attachment limits"],
+        ["Nilai", "Value"],
+      ],
+      rows: [
+        [
+          ["Lampiran tambahan per email", "Extra attachments per email"],
+          ["5 berkas; dokumen resminya tidak ikut dihitung", "5 files; the official document is not counted"],
+        ],
+        [
+          ["Ukuran satu berkas", "Size of a single file"],
+          ["10 MB", "10 MB"],
+        ],
+        [
+          ["Total seluruh lampiran", "Total of all attachments"],
+          [
+            "10 MB, termasuk dokumen resminya. Banyak gateway email perusahaan membuang lampiran di atas itu tanpa memberi tahu siapa pun.",
+            "10 MB, the official document included. Many corporate email gateways silently drop attachments above that.",
+          ],
+        ],
+        [
+          ["Jenis berkas", "File types"],
+          [
+            "PDF, PNG, JPEG, dan WebP. Diperiksa dari isi berkasnya, bukan dari namanya.",
+            "PDF, PNG, JPEG, and WebP. Checked from the file contents, not from its name.",
+          ],
+        ],
+      ],
+    },
+    {
+      kind: "pitfalls",
+      items: [
+        [
+          "Memakai template Invoice untuk mengirim SPK. Template terikat pada satu jenis dokumen; aplikasi menolak dan menyebutkan jenis template yang sebenarnya.",
+          "Using an Invoice template to send an SPK. A template is bound to one document type; the application refuses and states what type the template actually is.",
+        ],
+        [
+          "Mengirim Quotation atau Invoice untuk proyek yang belum punya alamat email klien. Isi lebih dulu di Manajemen Proyek; kolom itu baru ada sejak Agustus 2026 dan proyek lama belum mengisinya.",
+          "Sending a quotation or invoice for a project with no client email address. Fill it in first under Project Management; the field is new as of August 2026 and older projects do not have it.",
+        ],
+        [
+          "Mengirim SPK yang belum Disetujui. Hanya dokumen yang sudah disetujui yang boleh dikirim ke vendor, dan pratinjau pun ditolak dengan alasan yang sama.",
+          "Sending an SPK that has not been approved. Only approved documents may go to a vendor, and the preview is refused for the same reason.",
+        ],
+        [
+          "Melampirkan ulang PDF dokumennya sendiri. Salinan yang diunggah tangan bisa saja versi lama; yang dilampirkan aplikasi selalu dirender dari data terkini.",
+          "Attaching the document's own PDF again by hand. A hand-uploaded copy may be an old version; the one the application attaches is always rendered from the current data.",
+        ],
+      ],
+    },
+  ],
+};
+
 export const chapterHandover: Chapter = {
   id: "handover",
   title: ["Serah terima di lokasi: validasi lalu BAST", "Handover on site: validation, then the certificate"],
@@ -2433,6 +2590,36 @@ export const chapterMessages: Chapter = {
           meaning: ["Tautan konfirmasi penggantian alamat email hanya berlaku 60 menit dan hanya sekali pakai. Tautan juga hangus bila ada permintaan penggantian yang lebih baru atau bila kata sandi akun telah diatur ulang.", "An email change confirmation link is valid for 60 minutes and only once. It also lapses if a newer change was requested or if the account password was reset."],
           action: ["Buka Profil Saya dan ajukan penggantian alamat email sekali lagi agar tautan baru dikirim ke alamat yang dituju.", "Open My Profile and request the email address change again so a fresh link is sent to the intended address."],
         },
+        {
+          message: ["Template ini bukan untuk Quotation. / bukan untuk Invoice. / bukan untuk SPK.", "This template is not for quotations. / not for invoices. / not for work orders."],
+          meaning: ["Template surat terikat pada satu jenis dokumen, karena penandanya berbeda per jenis. Template Invoice mengenal jatuh tempo dan sisa tagihan; template SPK mengenal vendor dan tanggal mulai. Menukarnya akan menghasilkan surat dengan penanda yang tidak pernah terisi.", "A letter template belongs to one document type, because the placeholders differ per type. An invoice template knows about due dates and outstanding balances; a work order template knows about vendors and start dates. Swapping them would produce a letter with placeholders that never fill in."],
+          action: ["Pesannya menyebut jenis template yang sebenarnya. Buka Procurement & Vendor, tab Template surat, pilih jenis dokumen yang benar, lalu pilih atau buat template di sana.", "The message states what type the template actually is. Open Procurement & Vendors, the Letter templates tab, choose the correct document type, and pick or create a template there."],
+        },
+        {
+          message: ["Proyek ... belum punya alamat email klien. Isi lebih dulu di Manajemen Proyek.", "The named project has no client email address yet. Fill it in under Project Management first."],
+          meaning: ["Quotation dan Invoice dikirim ke alamat email klien yang tersimpan pada proyeknya, bukan yang diketik saat mengirim. Kolom itu baru ada sejak Agustus 2026, jadi proyek yang dibuat sebelumnya belum mengisinya.", "Quotations and invoices go to the client email address stored on the project, not one typed at send time. The field is new as of August 2026, so projects created before that do not have it."],
+          action: ["Buka proyeknya di Manajemen Proyek, isi alamat email klien beserta nama PIC-nya, lalu ulangi pengiriman. Pesan sejenis tentang alamat tidak valid berarti isinya bukan alamat email yang benar.", "Open the project under Project Management, fill in the client email address and the contact name, then send again. A related message about an invalid address means what is stored is not a well-formed email address."],
+        },
+        {
+          message: ["Vendor ... belum punya alamat email. Isi lebih dulu di Procurement & Vendor — yang boleh mengubahnya Admin atau Finance.", "The named vendor has no email address. Fill it in under Procurement & Vendors — only an Admin or Finance user may change it."],
+          meaning: ["SPK dan PO dikirim ke alamat email pada master vendor. Pesannya menyebut siapa yang boleh membetulkannya karena yang mentok di sini bisa jadi Project Manager, yang memang tidak boleh mengubah data vendor.", "Work orders and POs go to the address on the vendor master. The message names who may fix it because whoever hits this may well be a Project Manager, who is not allowed to change vendor records."],
+          action: ["Minta Admin atau Finance membuka master vendor dan mengisi alamat emailnya. Tidak ada yang tertulis dan tidak ada surat yang terlanjur keluar saat pesan ini muncul.", "Ask an Admin or Finance user to open the vendor master and fill in the email address. Nothing is recorded and no letter leaves when this message appears."],
+        },
+        {
+          message: ["Hanya dokumen yang sudah Disetujui yang dapat dikirim ke vendor.", "Only approved documents may be sent to a vendor."],
+          meaning: ["SPK atau PO ini masih Draft atau baru Diajukan. Mengirim surat resmi atas dokumen yang belum disetujui berarti mengikat perusahaan pada komitmen yang belum diputuskan.", "This SPK or PO is still a draft or merely submitted. Sending an official letter for an unapproved document would bind the company to a commitment nobody has decided on."],
+          action: ["Selesaikan dulu Ajukan lalu Setujui. Aturan yang sama berlaku untuk pratinjau: pratinjau bukan jalan memutar, dan ditolak dengan alasan yang persis sama.", "Complete Submit and then Approve first. The same rule applies to the preview: it is not a way around this and is refused for exactly the same reason."],
+        },
+        {
+          message: ["Pilih template surat lebih dulu.", "Choose a letter template first."],
+          meaning: ["Tidak ada template yang dipilih, atau belum ada satu pun template untuk jenis dokumen ini.", "No template was selected, or none exists yet for this document type."],
+          action: ["Buka Procurement & Vendor, tab Template surat, dan buat satu template untuk jenis dokumen itu. Satu template bisa dipakai berulang kali; penandanya terisi sendiri dari setiap dokumen.", "Open Procurement & Vendors, the Letter templates tab, and create one template for that document type. A single template is reused; its placeholders fill themselves in from each document."],
+        },
+        {
+          message: ["Seluruh lampiran berjumlah sekian MB, melebihi batas 10 MB per email.", "The message states the total attachment size and that it exceeds the 10 MB limit per email."],
+          meaning: ["Batas 10 MB menghitung dokumen resminya sekaligus, bukan hanya berkas yang Anda tambahkan. Batas itu bukan angka sembarangan: banyak gateway email perusahaan membuang lampiran di atasnya tanpa memberi tahu siapa pun, sehingga surat tampak Terkirim padahal lampirannya dicopot di tengah jalan.", "The 10 MB limit counts the official document too, not only the files you added. The figure is not arbitrary: many corporate email gateways silently drop attachments above it, so a letter looks Sent while its attachment was stripped along the way."],
+          action: ["Kurangi atau perkecil lampiran tambahan. Pesan sejenis menyebut satu berkas melebihi 10 MB, atau maksimal lima lampiran tambahan per email. Untuk berkas besar, kirim tautan unduhan di isi suratnya.", "Remove or shrink the extra attachments. Related messages name a single file above 10 MB, or the maximum of five extra attachments per email. For large files, put a download link in the body of the letter instead."],
+        },
       ],
     },
   ],
@@ -2647,6 +2834,7 @@ export const guideChapters: Chapter[] = [
   chapterInvoicePayment,
   chapterAddendum,
   chapterProcurement,
+  chapterDocumentEmail,
   chapterHandover,
   chapterExpenses,
   chapterBank,
