@@ -7,6 +7,32 @@ tidak perlu menebak dari kode.
 Kanal balik: `docs/PERMINTAAN-FRONTEND-KE-BACKEND.md`.
 Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
+---
+
+## 🔴 Yang sedang menunggumu — 21 Agustus 2026
+
+**Tinggal satu tugas layar: T-18a, pengelola template surat dokumen.**
+Lompat ke bagian *T-18 → a*. T-16, T-18b, dan T-18c ternyata sudah kamu
+kerjakan — sudah saya tandai selesai, tidak perlu disentuh lagi.
+
+Tiga hal yang berubah sejak terakhir kamu membaca berkas ini:
+
+1. **Database sudah berisi tiga template contoh** (`spk`, `quotation`,
+   `invoice`), diisi lewat `scripts/seed-template-dokumen.mjs`. Layar ini bisa
+   kamu uji terhadap data sungguhan sejak baris pertama.
+2. **T-17 punyamu sudah di-commit** (`5a6d77e`). Empat berkas editor kaya
+   sempat menggantung belum masuk git; sudah saya kunci setelah lint dan build
+   lulus. Tidak ada yang berubah dari kodemu.
+3. **Ini bukan pekerjaan yang bisa ditunda diam-diam.** `2fe93bb` sudah
+   berjalan di produksi, jadi tombol Kirim dokumen **sudah tampil di sana**
+   dengan daftar template kosong. Belum melukai siapa pun karena produksi masih
+   kosong (10 pengguna, nol proyek) — tapi berubah begitu data operasional
+   masuk.
+
+Satu koreksi kecil di luar T-18a: `document-email-dialog.tsx:475` membaca
+`defaults?.starter`, dan endpoint template dokumen tidak pernah mengirim field
+itu. Cabang mati, tidak merusak apa pun. Buang saja saat kebetulan lewat.
+
 ## Format
 
 ```
