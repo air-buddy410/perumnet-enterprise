@@ -211,20 +211,27 @@ async function lampiranTambahan(form: FormData): Promise<PreparedAttachment[]> {
   return hasil;
 }
 
-export async function previewClientDocumentEmail(
+/**
+ * Inti pratinjau — menerima templateId sebagai argumen, bukan membacanya dari
+ * badan permintaan.
+ *
+ * Dipisah karena ada DUA jalur yang meminta pratinjau yang sama: dialog Kirim
+ * (memegang dokumen, memilih template) dan layar pengelola template (memegang
+ * template, menunjuk dokumen contoh). Keduanya harus menyusun surat yang sama
+ * persis; kalau masing-masing menyusun sendiri, keduanya bisa menyimpang tanpa
+ * ada satu tes pun yang gagal.
+ */
+export async function previewClientDocumentEmailWithTemplate(
   client: DatabaseClient,
-  request: Request,
   user: AuthUser,
   kind: "quotation" | "invoice",
   documentId: string,
+  templateId: string,
 ) {
-  const input = z
-    .object({ templateId: z.string().trim().min(1) })
-    .parse(await request.json());
   const siap =
     kind === "quotation"
-      ? await siapkanQuotation(client, user, documentId, input.templateId)
-      : await siapkanInvoice(client, user, documentId, input.templateId);
+      ? await siapkanQuotation(client, user, documentId, templateId)
+      : await siapkanInvoice(client, user, documentId, templateId);
   const { surat, lampiran } = await susunKiriman(
     client,
     bahanKiriman(kind, siap, documentId),
@@ -243,6 +250,25 @@ export async function previewClientDocumentEmail(
     },
     200,
     { "Cache-Control": "no-store" },
+  );
+}
+
+export async function previewClientDocumentEmail(
+  client: DatabaseClient,
+  request: Request,
+  user: AuthUser,
+  kind: "quotation" | "invoice",
+  documentId: string,
+) {
+  const input = z
+    .object({ templateId: z.string().trim().min(1) })
+    .parse(await request.json());
+  return previewClientDocumentEmailWithTemplate(
+    client,
+    user,
+    kind,
+    documentId,
+    input.templateId,
   );
 }
 

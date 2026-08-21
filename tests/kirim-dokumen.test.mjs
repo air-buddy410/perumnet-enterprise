@@ -717,3 +717,128 @@ test("quotation Draft ikut ditandai terkirim, lewat transisi yang sama", async (
     "item BoQ tidak ikut terkunci — transisinya dilewati",
   );
 });
+
+// ---------------------------------------------------------------------------
+// Pratinjau dari sisi TEMPLATE.
+//
+// Layar pengelola template memegang templatenya dan menunjuk dokumen contoh —
+// kebalikan dari dialog Kirim, yang memegang dokumen dan memilih templatenya.
+// Endpoint ini ada supaya layar itu tidak perlu menebak isi suratnya di
+// browser: placeholder, identitas perusahaan, tanda tangan, dan PDF dokumen
+// semuanya dirender server.
+//
+// Yang dijaga di sini BUKAN "endpoint-nya menjawab 200", melainkan bahwa dua
+// jalur pratinjau memulangkan surat yang SAMA. Kalau masing-masing menyusun
+// sendiri, keduanya bisa menyimpang perlahan tanpa satu tes pun gagal, dan
+// yang dilihat pengelola template bukan lagi yang diterima penerima.
+
+test("pratinjau dari sisi template sama persis dengan pratinjau dari sisi dokumen (SPK)", async () => {
+  const lewatDokumen = await json(
+    `/api/procurement-orders/${konteks.orderBeremail.id}/send-email-preview`,
+    { method: "POST", body: JSON.stringify({ templateId: konteks.templateId }) },
+  );
+  const lewatTemplate = await json(
+    `/api/document-email-templates/${konteks.templateId}/preview`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        documentType: "spk",
+        documentId: konteks.orderBeremail.id,
+      }),
+    },
+  );
+  assert.deepEqual(lewatTemplate, lewatDokumen);
+  assert.equal(lewatTemplate.recipient, "vendor@contoh.test");
+  assert.ok(lewatTemplate.attachments[0].generated, "PDF resmi harus ikut terhitung");
+});
+
+test("pratinjau dari sisi template sama persis dengan pratinjau dari sisi dokumen (quotation)", async () => {
+  const lewatDokumen = await json(
+    `/api/quotations/${konteks.quotationId}/send-email-preview`,
+    { method: "POST", body: JSON.stringify({ templateId: konteks.templateQuotation }) },
+  );
+  const lewatTemplate = await json(
+    `/api/document-email-templates/${konteks.templateQuotation}/preview`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        documentType: "quotation",
+        documentId: konteks.quotationId,
+      }),
+    },
+  );
+  assert.deepEqual(lewatTemplate, lewatDokumen);
+});
+
+test("template SPK ditolak untuk dokumen quotation", async () => {
+  const gagal = await galat(
+    `/api/document-email-templates/${konteks.templateId}/preview`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        documentType: "quotation",
+        documentId: konteks.quotationId,
+      }),
+    },
+  );
+  assert.equal(gagal.status, 422);
+  assert.equal(gagal.code, "TEMPLATE_KIND_MISMATCH");
+  // Jenis template yang sebenarnya ikut dipulangkan, supaya layar bisa
+  // menunjukkan tab mana yang benar tanpa menebak.
+  assert.equal(gagal.details?.documentKind, "spk");
+});
+
+test("jenis dokumen di luar daftar ditolak sebelum menyentuh database", async () => {
+  const gagal = await galat(
+    `/api/document-email-templates/${konteks.templateId}/preview`,
+    {
+      method: "POST",
+      body: JSON.stringify({ documentType: "kontrak", documentId: "apa-saja" }),
+    },
+  );
+  assert.equal(gagal.status, 422);
+});
+
+test("pratinjau template hanya menerima POST", async () => {
+  const gagal = await galat(
+    `/api/document-email-templates/${konteks.templateId}/preview`,
+  );
+  assert.equal(gagal.status, 405);
+  assert.equal(gagal.code, "METHOD_NOT_ALLOWED");
+});
+
+test("aksi yang tidak dikenal di bawah template menjawab 404, bukan memulangkan templatenya", async () => {
+  const gagal = await galat(
+    `/api/document-email-templates/${konteks.templateId}/entah-apa`,
+  );
+  assert.equal(gagal.status, 404);
+});
+
+test("dokumen yang tidak ada menjawab 404, bukan 500", async () => {
+  const gagal = await galat(
+    `/api/document-email-templates/${konteks.templateId}/preview`,
+    {
+      method: "POST",
+      body: JSON.stringify({ documentType: "spk", documentId: "tidak-ada-sama-sekali" }),
+    },
+  );
+  assert.equal(gagal.status, 404);
+});
+
+test("aturan dokumen tetap berlaku di jalur pratinjau template", async () => {
+  // Pratinjau bukan pintu belakang. Dokumen yang tidak bisa dikirim juga tidak
+  // bisa dipratinjau — kalau tidak, layar template jadi satu-satunya tempat di
+  // aplikasi ini yang bisa merender surat untuk penerima yang tidak ada.
+  const gagal = await galat(
+    `/api/document-email-templates/${konteks.templateId}/preview`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        documentType: "spk",
+        documentId: konteks.orderTanpaEmail.id,
+      }),
+    },
+  );
+  assert.equal(gagal.status, 409);
+  assert.equal(gagal.code, "VENDOR_EMAIL_MISSING");
+});

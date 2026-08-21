@@ -12,7 +12,9 @@ import {
   type DocumentEmailKind,
 } from "../../shared/document-email";
 import { letterBodyFormats } from "../../shared/email-delivery";
+import { previewClientDocumentEmailWithTemplate } from "./client-document-email";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
+import { previewSpkEmailWithTemplate } from "./procurement-router";
 
 /**
  * Template surat pengantar dokumen.
@@ -37,6 +39,16 @@ const templateSchema = z.object({
   senderEmail: z.union([z.string().trim().email().max(254), z.literal("")]).default(""),
   senderPhone: z.string().trim().max(40).default(""),
   language: z.enum(["id", "en"]).default("id"),
+});
+
+/**
+ * Pratinjau dari sisi template: yang dipegang pemanggil adalah templatenya,
+ * dan dokumen contoh yang ditunjuk. Kebalikan dari `send-email-preview` per
+ * dokumen, yang memegang dokumen dan memilih templatenya.
+ */
+const previewSchema = z.object({
+  documentType: z.enum(documentEmailKinds),
+  documentId: z.string().trim().min(1).max(120),
 });
 
 function penjaga(user: AuthUser, level: "view" | "manage") {
@@ -195,12 +207,59 @@ async function deleteTemplate(request: Request, id: string, user: AuthUser) {
   return noContent();
 }
 
+/**
+ * Pratinjau surat lengkap untuk satu template terhadap satu dokumen sungguhan.
+ *
+ * TIDAK menyusun suratnya sendiri. Ia memanggil inti yang sama dengan tombol
+ * pratinjau di dialog Kirim, supaya apa yang dilihat pengelola template persis
+ * apa yang nanti diterima penerima. Placeholder, identitas perusahaan, tanda
+ * tangan, dan PDF dokumen semuanya datang dari sana.
+ *
+ * Penjaganya PER JENIS DOKUMEN, bukan penjaga `procurement` di bawah: yang
+ * boleh melihat pratinjau surat invoice adalah yang boleh mengirim invoice.
+ * Keduanya sudah ditegakkan di dalam `siapkan*` yang dipanggil di bawah,
+ * sebelum satu baris data pun dibaca — jadi jangan menambahkan penjaga
+ * gabungan di sini. Bentuk itu pernah ada di modul belanja proyek dan dibuang
+ * karena tidak ada yang bisa menjawab siapa sebenarnya boleh apa.
+ *
+ * Ketidakcocokan jenis (`TEMPLATE_KIND_MISMATCH`) juga ditegakkan di sana,
+ * lewat pemuat template yang sama dengan jalur kirim.
+ */
+async function previewTemplate(request: Request, templateId: string, user: AuthUser) {
+  const input = previewSchema.parse(await jsonBody(request));
+  const { client } = await getDatabase();
+  if (input.documentType === "spk") {
+    return previewSpkEmailWithTemplate(client, user, input.documentId, templateId);
+  }
+  return previewClientDocumentEmailWithTemplate(
+    client,
+    user,
+    input.documentType,
+    input.documentId,
+    templateId,
+  );
+}
+
 export async function dispatchDocumentEmailTemplateApi(
   request: Request,
   path: string[],
   user: AuthUser,
 ) {
   const id = path[1];
+  const action = path[2];
+
+  // Sebelum penjaga procurement di bawah: pratinjau memakai penjaga per jenis
+  // dokumen. Lihat catatan di previewTemplate.
+  if (id && action === "preview") {
+    if (request.method !== "POST") {
+      throw new ApiError(405, "METHOD_NOT_ALLOWED", "Pratinjau template memakai POST.");
+    }
+    return previewTemplate(request, id, user);
+  }
+  if (action) {
+    throw new ApiError(404, "NOT_FOUND", "Endpoint template dokumen tidak ditemukan.");
+  }
+
   penjaga(user, request.method === "GET" ? "view" : "manage");
 
   if (!id) {

@@ -1422,12 +1422,23 @@ async function bacaLampiranTambahan(form: FormData): Promise<PreparedAttachment[
   return hasil;
 }
 
-async function previewOrderEmail(request: Request, user: AuthUser, orderId: string) {
-  const { client } = await getDatabase();
-  const input = z
-    .object({ templateId: idSchema })
-    .parse(await jsonBody(request));
-  const siap = await siapkanKirimSpk(client, user, orderId, input.templateId);
+/**
+ * Inti pratinjau surat SPK — menerima templateId sebagai argumen, bukan
+ * membacanya dari badan permintaan.
+ *
+ * Dipisah karena ada DUA jalur yang meminta pratinjau yang sama: dialog Kirim
+ * (memegang dokumen, memilih template) dan layar pengelola template (memegang
+ * template, menunjuk dokumen contoh). Keduanya harus menyusun surat yang sama
+ * persis; kalau masing-masing menyusun sendiri, keduanya bisa menyimpang tanpa
+ * ada satu tes pun yang gagal.
+ */
+export async function previewSpkEmailWithTemplate(
+  client: DatabaseClient,
+  user: AuthUser,
+  orderId: string,
+  templateId: string,
+) {
+  const siap = await siapkanKirimSpk(client, user, orderId, templateId);
   const { surat, lampiran } = await susunKiriman(client, {
     kind: "spk",
     documentId: orderId,
@@ -1461,6 +1472,14 @@ async function previewOrderEmail(request: Request, user: AuthUser, orderId: stri
     200,
     { "Cache-Control": "no-store" },
   );
+}
+
+async function previewOrderEmail(request: Request, user: AuthUser, orderId: string) {
+  const { client } = await getDatabase();
+  const input = z
+    .object({ templateId: idSchema })
+    .parse(await jsonBody(request));
+  return previewSpkEmailWithTemplate(client, user, orderId, input.templateId);
 }
 
 async function sendOrderEmail(request: Request, user: AuthUser, orderId: string) {

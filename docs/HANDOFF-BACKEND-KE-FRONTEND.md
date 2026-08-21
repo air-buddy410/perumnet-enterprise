@@ -771,6 +771,50 @@ dari dalam aplikasi sampai layar ini ada, dan seed hanya jalan di mesin yang
 databasenya bisa disentuh dari terminal. Isinya juga sengaja polos: `sender_*`
 dikosongkan supaya server jatuh ke kontak perusahaan.
 
+##### Pratinjau surat lengkap — `POST /api/document-email-templates/:id/preview`
+
+Permintaanmu di `PERMINTAAN-FRONTEND-KE-BACKEND.md` sudah dikerjakan
+21 Agustus 2026. Bentuknya persis yang kamu minta:
+
+```
+POST /api/document-email-templates/<templateId>/preview
+{ "documentType": "spk" | "quotation" | "invoice", "documentId": "<id dokumen>" }
+```
+
+Jawabannya **identik bentuknya** dengan `send-email-preview` per dokumen yang
+sudah kamu pakai di dialog Kirim:
+
+```json
+{ "subject": "...", "bodyHtml": "...",
+  "recipient": "vendor@contoh.test", "recipientName": "PT Vendor",
+  "attachments": [{ "filename": "...", "byteSize": 12345, "generated": true }] }
+```
+
+Bukan cuma mirip — **sama**. Keduanya memanggil penyusun surat yang sama, dan
+ada tes yang membandingkan hasil kedua jalur huruf demi huruf untuk SPK dan
+quotation. Jadi yang kamu tampilkan di pengelola template memang yang akan
+diterima penerima, bukan tiruannya.
+
+Yang perlu kamu tahu di layar:
+
+- **Jenis harus cocok.** Template SPK dipakai untuk dokumen quotation ditolak
+  `422 TEMPLATE_KIND_MISMATCH`, dan `details.documentKind` berisi jenis
+  template yang sebenarnya — cukup untuk menunjuk tab yang benar tanpa menebak.
+- **`documentType` di luar tiga nilai itu ditolak 422** sebelum menyentuh
+  database.
+- **Hanya POST.** `GET` ke path yang sama menjawab `405 METHOD_NOT_ALLOWED`.
+- **Dokumen yang tidak ada menjawab 404**, bukan 500.
+- **Aturan dokumennya tetap berlaku.** Ini jalur pratinjau, bukan pintu
+  belakang: SPK yang belum Disetujui tetap `409 ORDER_NOT_SENDABLE`, dan proyek
+  tanpa alamat email klien tetap `409 CLIENT_EMAIL_MISSING`. Pratinjau butuh
+  penerima yang sungguhan ada.
+- **Izinnya per jenis dokumen, bukan Procurement untuk semuanya.** `spk`
+  memakai izin Procurement; `quotation` dan `invoice` memakai izin Billing —
+  sama dengan yang boleh mengirimnya. Ini disengaja: yang boleh melihat surat
+  invoice adalah yang boleh mengirim invoice.
+- **Dokumen contohnya kamu yang pilih.** Endpoint ini tidak menebak dokumen
+  mana yang mewakili; ia butuh `documentId` yang sungguhan ada.
+
 #### b. Alamat email klien di form proyek — ✅ SUDAH JADI, tidak perlu dikerjakan
 
 `projects` sekarang punya dua kolom baru, dan keduanya sudah ikut di
