@@ -11,6 +11,7 @@ import {
   FileSpreadsheet,
   HandCoins,
   Landmark,
+  Mail,
   PackageSearch,
   Percent,
   ReceiptText,
@@ -172,6 +173,24 @@ const workflowsId: WorkflowGuide[] = [
       "Catat pembayaran: isi bruto, pajak dipotong, kas aktual, tanggal bayar, nomor tagihan vendor, referensi, rekening perusahaan, lalu unggah bukti transfer.",
     ],
     after: "Dokumen yang sudah disetujui terkunci dan nilainya menjadi komitmen. Hanya kas nyata yang masuk Buku Kas. Sisa komitmen yang belum dibayar mengurangi laba yang aman dibagikan. Selesai bersifat final: dokumen yang sudah Selesai tidak dapat diselesaikan lagi, tetapi pelunasan terakhirnya tetap boleh dicatat sesudah itu, karena retensi dan pelunasan memang mendarat setelah pekerjaan ditandatangani. Seluruh perubahan SPK dan PO hanya terjadi di layar ini; di layar lain dokumen kerja bersifat baca saja.",
+  },
+  {
+    key: "document-email",
+    icon: Mail,
+    title: "Mengirim dokumen resmi lewat email",
+    summary: "SPK dan PO dapat dikirim ke vendor, Quotation dan Invoice ke klien, langsung dari dokumennya. Surat pengantarnya disusun server dari template yang Anda simpan, dan PDF resminya dilampirkan aplikasi — bukan berkas yang diunggah ulang seseorang. Yang Anda lihat di pratinjau memang persis yang diterima penerima.",
+    who: "Mengirim SPK atau PO memerlukan izin Kelola pada Procurement & Vendor. Mengirim Quotation atau Invoice memerlukan izin Kelola pada Quotation & Invoice. Template suratnya dikelola dengan izin Kelola pada Procurement & Vendor; izin Lihat hanya cukup untuk membaca template dan riwayat.",
+    where: "Tombol Kirim Email pada dokumennya masing-masing. Templatenya di Procurement & Vendor, tab Template surat.",
+    prepare: "Mailserver sudah dikonfigurasi; satu template tersimpan untuk jenis dokumen yang bersangkutan; dan alamat penerima sudah terisi — email vendor di master vendor untuk SPK dan PO, atau alamat email klien pada proyek untuk Quotation dan Invoice.",
+    steps: [
+      "Siapkan templatenya lebih dulu. Buka Procurement & Vendor, tab Template surat, lalu pilih jenis dokumen: SPK, Quotation, atau Invoice. Template dibuat per jenis dan tidak dapat dipakai lintas jenis.",
+      "Tulis subjek dan isi surat. Penanda yang tersedia ditampilkan layar sesuai jenis dokumennya, dan seluruh nilainya diambil dari baris dokumen — tidak ada satu pun yang berasal dari ketikan pengirim.",
+      "Isi surat dapat berupa teks biasa atau memakai editor kaya. Kop berlogo, identitas perusahaan, tanda tangan, dan alamat kantor ditambahkan aplikasi; tidak ada yang perlu menulis HTML. Kolom tanda tangan yang dikosongkan jatuh ke kontak perusahaan.",
+      "Buka dokumen yang hendak dikirim dan tekan Kirim Email. Pilih template, lalu buat pratinjau. Pratinjau dibuat server, lengkap dengan kop, tanda tangan, penerima, dan PDF dokumennya — bukan tiruan yang digambar di layar.",
+      "Bila perlu, tambahkan lampiran lain. Dokumen resminya sendiri tidak perlu — dan tidak boleh — diunggah ulang; aplikasi selalu melampirkan versi yang dirender dari data terkini.",
+      "Tekan Kirim. Suratnya masuk antrean, bukan langsung keluar. Riwayat kirim di dialog yang sama menunjukkan keadaannya: Masih diproses, Terkirim, Gagal, atau Dilewati, lengkap dengan penerima, subjek, dan daftar lampirannya.",
+    ],
+    after: "Kirim berarti seseorang menyatakan dokumen sudah sampai ke vendor, dengan cara apa pun — diantar, dicetak, dikirim lewat kurir. Ia gerbang yang membuka pembayaran. Kirim Email benar-benar mengirimkan suratnya. Keduanya sengaja dipisah supaya kemampuan membayar dokumen tidak pernah bergantung pada berhasil atau gagalnya satu jabat tangan SMTP. Menekan Kirim Email pada SPK yang sudah Disetujui ikut menandainya Dikirim, karena itu memang tindakan mengirim. Quotation berstatus Draft yang dikirim lewat email ikut ditandai sudah dikirim melalui transisi yang sama dengan tombol Tandai sudah dikirim, termasuk penguncian item BoQ-nya. Status Invoice TIDAK berubah karena dikirim; status invoice adalah keadaan pembayaran, bukan keadaan pengiriman. PDF SPK yang dikirim ke vendor adalah edisi vendor tanpa kolom Budget. Surat yang gagal dicoba ulang otomatis setelah 1, 5, 15, dan 60 menit, lalu berhenti setelah lima percobaan dan tercatat Gagal.",
   },
   {
     key: "handover",
@@ -432,6 +451,24 @@ const workflowsEn: WorkflowGuide[] = [
       "Record the payment: gross amount, tax withheld, actual cash, payment date, vendor invoice number, reference, company bank account, and the transfer receipt.",
     ],
     after: "An approved document is locked and its value becomes a commitment. Only real cash enters the Cash Ledger. Unpaid commitments reduce the profit that is safe to distribute. Completion is final: a document already Completed cannot be completed again, though its final settlement may still be recorded afterwards, because retention and final payment land after the work is signed off. Every change to a Work Order or PO happens on this screen alone; everywhere else those documents are read-only.",
+  },
+  {
+    key: "document-email",
+    icon: Mail,
+    title: "Sending official documents by email",
+    summary: "An SPK or PO can be sent to the vendor, and a quotation or invoice to the client, straight from the document itself. The covering letter is composed on the server from a template you saved, and the official PDF is attached by the application rather than re-uploaded by hand. What the preview shows is exactly what the recipient receives.",
+    who: "Sending an SPK or PO requires Manage on Procurement & Vendors. Sending a quotation or invoice requires Manage on Quotations & Invoices. The letter templates are maintained with Manage on Procurement & Vendors; View is only enough to read the templates and the delivery history.",
+    where: "The Send Email button on each document. The templates live on the Procurement & Vendors screen, under the Letter templates tab.",
+    prepare: "A configured mail server; one saved template for that document type; and a recipient address already on file — the vendor email in the vendor master for an SPK or PO, or the project's client email for a quotation or invoice.",
+    steps: [
+      "Prepare the template first. Open Procurement & Vendors, the Letter templates tab, then choose the document type: SPK, Quotation, or Invoice. Templates belong to one type and cannot be used across types.",
+      "Write the subject and the body. The available placeholders are listed on screen for that document type, and every value is read from the document record — none of them come from anything the sender types.",
+      "The body may be plain text or written in the rich editor. The letterhead with the logo, the company identity, the signature, and the office address are added by the application; nobody needs to write HTML. Signature fields left blank fall back to the company contact details.",
+      "Open the document you want to send and press Send Email. Choose a template, then generate the preview. The preview is produced by the server, complete with the letterhead, the signature, the recipient, and the document PDF — not an imitation drawn on screen.",
+      "Add other attachments if needed. The official document itself never has to be — and must not be — uploaded again; the application always attaches the version rendered from the current data.",
+      "Press Send. The letter enters a queue rather than leaving immediately. The delivery history in the same dialog shows its state — In progress, Sent, Failed, or Skipped — together with the recipient, the subject, and the list of attachments.",
+    ],
+    after: "Send means somebody states the document has reached the vendor by whatever means — delivered, printed, couriered. It is the gate that opens payment. Send Email actually sends the letter. The two are kept apart deliberately so that the ability to pay a document never depends on whether one SMTP handshake succeeded. Pressing Send Email on an approved SPK also marks it as Sent, because that genuinely is an act of sending. A Draft quotation sent by email is also marked as sent through the same transition as the Mark as sent button, including BoQ item locking. An invoice's status does NOT change when it is emailed; invoice status describes payment, not delivery. The SPK PDF sent to a vendor is the vendor edition without the Budget column. A failed letter is retried automatically after 1, 5, 15, and 60 minutes, then stops after five attempts and is recorded as Failed.",
   },
   {
     key: "handover",
@@ -875,6 +912,42 @@ const messagesId: MessageGuide[] = [
     meaning: "Sambungan ke mailserver gagal. Kata sandi lama Anda masih berlaku dan tidak ada yang berubah.",
     action: "Coba lagi beberapa saat kemudian. Bila berulang, laporkan ke administrator sistem — pesan ini berbeda dari kata sandi salah, dan tidak perlu mereset apa pun.",
   },
+  {
+    key: "template-kind-mismatch",
+    message: "Template ini bukan untuk Quotation. / bukan untuk Invoice. / bukan untuk SPK.",
+    meaning: "Template surat terikat pada satu jenis dokumen, karena penandanya berbeda per jenis. Template Invoice mengenal jatuh tempo dan sisa tagihan; template SPK mengenal vendor dan tanggal mulai. Menukarnya akan menghasilkan surat dengan penanda yang tidak pernah terisi.",
+    action: "Pesannya menyebut jenis template yang sebenarnya. Buka Procurement & Vendor, tab Template surat, pilih jenis dokumen yang benar, lalu pilih atau buat template di sana.",
+  },
+  {
+    key: "client-email-missing",
+    message: "Proyek ... belum punya alamat email klien. Isi lebih dulu di Manajemen Proyek.",
+    meaning: "Quotation dan Invoice dikirim ke alamat email klien yang tersimpan pada proyeknya, bukan yang diketik saat mengirim. Kolom itu baru ada sejak Agustus 2026, jadi proyek yang dibuat sebelumnya belum mengisinya.",
+    action: "Buka proyeknya di Manajemen Proyek, isi alamat email klien beserta nama PIC-nya, lalu ulangi pengiriman. Pesan sejenis tentang alamat tidak valid berarti isinya bukan alamat email yang benar.",
+  },
+  {
+    key: "vendor-email-missing",
+    message: "Vendor ... belum punya alamat email. Isi lebih dulu di Procurement & Vendor — yang boleh mengubahnya Admin atau Finance.",
+    meaning: "SPK dan PO dikirim ke alamat email pada master vendor. Pesannya menyebut siapa yang boleh membetulkannya karena yang mentok di sini bisa jadi Project Manager, yang memang tidak boleh mengubah data vendor.",
+    action: "Minta Admin atau Finance membuka master vendor dan mengisi alamat emailnya. Tidak ada yang tertulis dan tidak ada surat yang terlanjur keluar saat pesan ini muncul.",
+  },
+  {
+    key: "order-not-sendable",
+    message: "Hanya dokumen yang sudah Disetujui yang dapat dikirim ke vendor.",
+    meaning: "SPK atau PO ini masih Draft atau baru Diajukan. Mengirim surat resmi atas dokumen yang belum disetujui berarti mengikat perusahaan pada komitmen yang belum diputuskan.",
+    action: "Selesaikan dulu Ajukan lalu Setujui. Aturan yang sama berlaku untuk pratinjau: pratinjau bukan jalan memutar, dan ditolak dengan alasan yang persis sama.",
+  },
+  {
+    key: "template-required",
+    message: "Pilih template surat lebih dulu.",
+    meaning: "Tidak ada template yang dipilih, atau belum ada satu pun template untuk jenis dokumen ini.",
+    action: "Buka Procurement & Vendor, tab Template surat, dan buat satu template untuk jenis dokumen itu. Satu template bisa dipakai berulang kali; penandanya terisi sendiri dari setiap dokumen.",
+  },
+  {
+    key: "attachment-too-large",
+    message: "Seluruh lampiran berjumlah sekian MB, melebihi batas 10 MB per email.",
+    meaning: "Batas 10 MB menghitung dokumen resminya sekaligus, bukan hanya berkas yang Anda tambahkan. Batas itu bukan angka sembarangan: banyak gateway email perusahaan membuang lampiran di atasnya tanpa memberi tahu siapa pun, sehingga surat tampak Terkirim padahal lampirannya dicopot di tengah jalan.",
+    action: "Kurangi atau perkecil lampiran tambahan. Pesan sejenis menyebut satu berkas melebihi 10 MB, atau maksimal lima lampiran tambahan per email. Untuk berkas besar, kirim tautan unduhan di isi suratnya.",
+  },
 ];
 
 const messagesEn: MessageGuide[] = [
@@ -1171,6 +1244,42 @@ const messagesEn: MessageGuide[] = [
     message: "The mail server cannot be reached, so the password has not been changed.",
     meaning: "The connection to the mail server failed. Your old password still works and nothing changed.",
     action: "Try again shortly. If it keeps happening, report it to the system administrator — this message is not the same as a wrong password, and nothing needs resetting.",
+  },
+  {
+    key: "template-kind-mismatch",
+    message: "This template is not for quotations. / not for invoices. / not for work orders.",
+    meaning: "A letter template belongs to one document type, because the placeholders differ per type. An invoice template knows about due dates and outstanding balances; a work order template knows about vendors and start dates. Swapping them would produce a letter with placeholders that never fill in.",
+    action: "The message states what type the template actually is. Open Procurement & Vendors, the Letter templates tab, choose the correct document type, and pick or create a template there.",
+  },
+  {
+    key: "client-email-missing",
+    message: "The named project has no client email address yet. Fill it in under Project Management first.",
+    meaning: "Quotations and invoices go to the client email address stored on the project, not one typed at send time. The field is new as of August 2026, so projects created before that do not have it.",
+    action: "Open the project under Project Management, fill in the client email address and the contact name, then send again. A related message about an invalid address means what is stored is not a well-formed email address.",
+  },
+  {
+    key: "vendor-email-missing",
+    message: "The named vendor has no email address. Fill it in under Procurement & Vendors — only an Admin or Finance user may change it.",
+    meaning: "Work orders and POs go to the address on the vendor master. The message names who may fix it because whoever hits this may well be a Project Manager, who is not allowed to change vendor records.",
+    action: "Ask an Admin or Finance user to open the vendor master and fill in the email address. Nothing is recorded and no letter leaves when this message appears.",
+  },
+  {
+    key: "order-not-sendable",
+    message: "Only approved documents may be sent to a vendor.",
+    meaning: "This SPK or PO is still a draft or merely submitted. Sending an official letter for an unapproved document would bind the company to a commitment nobody has decided on.",
+    action: "Complete Submit and then Approve first. The same rule applies to the preview: it is not a way around this and is refused for exactly the same reason.",
+  },
+  {
+    key: "template-required",
+    message: "Choose a letter template first.",
+    meaning: "No template was selected, or none exists yet for this document type.",
+    action: "Open Procurement & Vendors, the Letter templates tab, and create one template for that document type. A single template is reused; its placeholders fill themselves in from each document.",
+  },
+  {
+    key: "attachment-too-large",
+    message: "The message states the total attachment size and that it exceeds the 10 MB limit per email.",
+    meaning: "The 10 MB limit counts the official document too, not only the files you added. The figure is not arbitrary: many corporate email gateways silently drop attachments above it, so a letter looks Sent while its attachment was stripped along the way.",
+    action: "Remove or shrink the extra attachments. Related messages name a single file above 10 MB, or the maximum of five extra attachments per email. For large files, put a download link in the body of the letter instead.",
   },
 ];
 
