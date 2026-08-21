@@ -1409,3 +1409,127 @@ test("scenario E3: voiding a superseded revision is refused and leaves the live 
   const scope = await scopeQuotation(project.id, secondRevision.id);
   assert.notEqual(scope.status, "Void");
 });
+
+// ---------------------------------------------------------------------------
+// Skenario F: GET, PATCH, dan DELETE di URL yang sama harus menunjuk dokumen
+// yang sama.
+//
+// Dilaporkan sebagai "nilai quotation dan di edit berbeda". Penyebabnya bukan
+// perhitungan: GET /api/quotations mengambil quotation TERBARU di seluruh paket
+// tanpa memandang scope, sedangkan PATCH sudah menyematkan scope Original.
+// Begitu satu Addendum dibuat, quotationnya menjadi yang terbaru — layar
+// membaca angka Addendum tetapi menulis ke quotation Original.
+//
+// Akibatnya berlapis, dan yang paling mahal bukan angka yang terlihat salah:
+// termin invoice dihitung dari `grandTotal` yang dibaca GET, jadi "50% dari
+// kontrak" menagih separuh nilai Addendum, bukan separuh kontrak. Dan DELETE
+// yang juga tidak menyematkan scope menghapus quotation Addendum ketika
+// pengguna menekan Hapus pada quotation Original.
+
+test("scenario F1: an addendum never hijacks the package quotation screen", async () => {
+  const project = await createProject("Proyek Addendum Tidak Membajak");
+  await addBoqItem(project.id, 10_000_000, 1, "Pekerjaan utama");
+
+  const boqSubtotal = async () => {
+    const boq = await json(`/api/boq?projectId=${project.id}`);
+    return boq.items.reduce((sum, item) => sum + item.quantity * item.sellingPrice, 0);
+  };
+
+  await patchQuotation(project.id, { status: "Sent" });
+  const asli = await getQuotation(project.id);
+  await acceptQuotation(asli.id, "f1-original");
+
+  const addendum = await json(
+    `/api/boq/scopes?projectId=${project.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Addendum F1",
+        items: [{
+          category: "Jasa",
+          description: "Pekerjaan tambahan",
+          quantity: 1,
+          unit: "paket",
+          costPrice: 100_000,
+          sellingPrice: 250_000,
+        }],
+      }),
+    },
+    201,
+  );
+  assert.equal(addendum.kind, "Addendum");
+
+  // Layar Quotation menaruh dua angka ini berdampingan: `total` di ringkasan,
+  // dan jumlah item BoQ di form edit. Keduanya harus menggambarkan dokumen yang
+  // sama, sebab form edit menghitung pratinjau diskon dari yang kedua sementara
+  // server menerapkannya pada yang pertama.
+  const sesudah = await getQuotation(project.id);
+  assert.equal(sesudah.id, asli.id, "layar tetap memegang quotation Original");
+  assert.equal(
+    sesudah.total,
+    await boqSubtotal(),
+    "subtotal di ringkasan sama dengan subtotal BoQ di form edit",
+  );
+  assert.equal(sesudah.total, 10_000_000);
+  assert.notEqual(
+    sesudah.id,
+    addendum.quotation.id,
+    "quotation Addendum tidak boleh mengambil alih layar paket",
+  );
+
+  // Addendum tetap punya tempatnya sendiri — ia tidak hilang, hanya tidak
+  // membajak layar paket.
+  const riwayat = await quotationHistory(project.id);
+  assert.ok(
+    riwayat.some((entry) => entry.id === addendum.quotation.id),
+    "quotation Addendum tetap terbaca di riwayat paket",
+  );
+});
+
+test("scenario F2: Hapus on the package quotation never deletes the addendum's", async () => {
+  const project = await createProject("Proyek Hapus Tidak Salah Sasaran");
+  await addBoqItem(project.id, 8_000_000, 1, "Pekerjaan utama");
+  await patchQuotation(project.id, { status: "Sent" });
+  const asli = await getQuotation(project.id);
+  await acceptQuotation(asli.id, "f2-original");
+
+  const addendum = await json(
+    `/api/boq/scopes?projectId=${project.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        title: "Addendum F2",
+        items: [{
+          category: "Jasa",
+          description: "Pekerjaan tambahan",
+          quantity: 1,
+          unit: "paket",
+          costPrice: 200_000,
+          sellingPrice: 500_000,
+        }],
+      }),
+    },
+    201,
+  );
+
+  // DELETE menunjuk quotation Original yang sudah Accepted, jadi ia ditolak
+  // dengan sopan. Sebelum perbaikan ia menunjuk quotation Addendum yang masih
+  // Draft dan MENGHAPUSNYA — 204, tanpa satu pun peringatan.
+  const gagal = await request(
+    `/api/quotations?projectId=${project.id}`,
+    { method: "DELETE" },
+  );
+  assert.equal(gagal.status, 409, "penghapusan ditolak, bukan 204");
+  const isiGagal = await gagal.json();
+  assert.equal(isiGagal.error.code, "ACCEPTED_QUOTATION_LOCKED");
+
+  const riwayat = await quotationHistory(project.id);
+  assert.ok(
+    riwayat.some((entry) => entry.id === addendum.quotation.id),
+    "quotation Addendum masih ada",
+  );
+  assert.ok(
+    riwayat.some((entry) => entry.id === asli.id),
+    "quotation Original juga masih ada",
+  );
+});

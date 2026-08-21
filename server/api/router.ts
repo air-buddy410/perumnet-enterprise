@@ -2589,19 +2589,33 @@ async function handleQuotations(request: Request, user: AuthUser) {
   );
 
   if (request.method === "GET") {
+    // Disematkan ke scope Original paket ini, sama seperti PATCH di bawah.
+    //
+    // Dulu tidak: GET mengambil quotation TERBARU di seluruh paket tanpa
+    // memandang scope, sedangkan PATCH sudah menyematkan `ensured.scopeId`.
+    // Begitu satu Addendum dibuat, quotation Addendum menjadi yang terbaru —
+    // jadi layar Quotation MEMBACA angka Addendum tetapi MENULIS ke quotation
+    // Original. Yang terlihat pengguna: "Subtotal pekerjaan" memperlihatkan
+    // nilai addendum sementara "Subtotal BoQ" di form edit memperlihatkan nilai
+    // Original, dan persentase termin dihitung dari kontrak yang salah.
+    //
+    // `boq.scopeId` null hanya bila paket ini belum punya scope Original sama
+    // sekali; di keadaan itu perilaku lama dipertahankan apa adanya.
+    const boq = await getBoq(projectId, packageId);
+    const scopeId = boq.scopeId ?? null;
     const result = await client.execute({
       sql: `SELECT q.*,cp.title AS package_title FROM quotations q
         LEFT JOIN project_commercial_packages cp ON cp.id=q.package_id
         WHERE q.project_id=? AND q.package_id=? AND q.status<>'Superseded'
+          AND (? IS NULL OR q.scope_id=?)
         ORDER BY q.revision_no DESC,q.created_at DESC LIMIT 1`,
-      args: [projectId, packageId],
+      args: [projectId, packageId, scopeId, scopeId],
     });
     if (result.rows[0]) {
       return ok(
         await quotationResponse(client, result.rows[0], user.preferredLanguage),
       );
     }
-    const boq = await getBoq(projectId, packageId);
     return ok({
       id: null,
       projectId,
@@ -2909,10 +2923,18 @@ async function handleQuotations(request: Request, user: AuthUser) {
 
   if (request.method === "DELETE") {
     assertAccess(user, "billing", "manage");
+    // Disematkan ke scope Original, sama seperti GET dan PATCH. Tanpa ini
+    // tombol Hapus di layar Quotation menghapus quotation TERBARU di paket —
+    // sesudah ada Addendum, itu quotation Addendum, bukan dokumen yang sedang
+    // dibuka pengguna. Penjaga "Accepted" tidak menolongnya: Addendum yang
+    // masih Draft terhapus tanpa ada yang menyadarinya.
+    const deleteBoq = await getBoq(projectId, packageId);
+    const deleteScopeId = deleteBoq.scopeId ?? null;
     const result = await client.execute({
       sql: `SELECT id,status,scope_id FROM quotations WHERE project_id=? AND package_id=?
-        AND status<>'Superseded' ORDER BY revision_no DESC,created_at DESC LIMIT 1`,
-      args: [projectId, packageId],
+        AND status<>'Superseded' AND (? IS NULL OR scope_id=?)
+        ORDER BY revision_no DESC,created_at DESC LIMIT 1`,
+      args: [projectId, packageId, deleteScopeId, deleteScopeId],
     });
     const currentRow = result.rows[0];
     if (!currentRow) throw new ApiError(404, "NOT_FOUND", "Quotation tidak ditemukan.");
