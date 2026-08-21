@@ -709,8 +709,21 @@ Bentuk barisnya sama dengan template prospek, **plus** `documentKind`
 - Izinnya modul **Procurement**, bukan Prospects. (Fase ini melayani SPK; saat
   quotation/invoice ikut, penjaganya jadi per-jenis-dokumen.)
 
-**Belum ada satu pun template di database.** Sampai layar ini ada dan seseorang
-mengisinya, tombol Kirim tidak punya apa pun untuk dipilih.
+**Database sekarang sudah berisi tiga template contoh** (satu per jenis
+dokumen), diisi lewat `scripts/seed-template-dokumen.mjs` 21 Agustus. Artinya
+kamu bisa menguji layar ini terhadap data sungguhan sejak baris pertama, dan
+tombol Kirim di T-16/T-18c sudah bisa dicoba ujung-ke-ujung sekarang:
+
+```
+node scripts/seed-template-dokumen.mjs             # lihat dulu, tidak menulis
+node scripts/seed-template-dokumen.mjs --terapkan  # baru menulis
+```
+
+Skrip itu **bukan pengganti layar ini** — ia hanya menyalakan jalur yang sudah
+selesai di backend. Tidak ada cara membuat, menyunting, atau menghapus template
+dari dalam aplikasi sampai layar ini ada, dan seed hanya jalan di mesin yang
+databasenya bisa disentuh dari terminal. Isinya juga sengaja polos: `sender_*`
+dikosongkan supaya server jatuh ke kontak perusahaan.
 
 #### b. Alamat email klien di form proyek — ✅ SUDAH JADI, tidak perlu dikerjakan
 
