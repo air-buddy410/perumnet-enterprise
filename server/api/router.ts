@@ -15,6 +15,8 @@ import {
 import { writeAuditLog } from "../audit";
 import { authProviderMode, verifyMailserverPassword } from "../mail-auth";
 import { listBastDeliveries, previewBastEmail, sendBastEmail } from "./bast-email";
+import { handleFinanceEvidence } from "./finance-evidence-router";
+import { ledgerEvidenceKey } from "../finance-evidence";
 import {
   listClientDocumentDeliveries,
   previewClientDocumentEmail,
@@ -5345,6 +5347,11 @@ function mapTransaction(
     // is shown, but it must not be counted as cash (it usually duplicates a
     // source-document transaction that already booked the same money).
     countsAsCash: !Boolean(row.unreconciled_import),
+    // Tautan ke arsip bukti (22 Agu 2026). Sebelumnya reference_id dibuang di
+    // sini, sehingga baris buku kas tidak pernah bisa "klik ke buktinya".
+    referenceId: row.reference_id ? String(row.reference_id) : null,
+    origin: String(row.origin ?? "system"),
+    evidence: ledgerEvidenceKey(row),
   };
 }
 
@@ -6874,6 +6881,9 @@ export async function dispatchApi(request: Request, path: string[]) {
   if (resource === "finance" && path[1] === "summary") return handleFinance(request, user);
   if (resource === "finance" && path[1] === "company-treasury") {
     return handleCompanyTreasury(request, user);
+  }
+  if (resource === "finance" && path[1] === "evidence") {
+    return handleFinanceEvidence(request, path, user);
   }
   if (resource === "bank-accounts") return handleBankAccounts(request, path, user);
   if (resource === "profit-shares") return handleProfitShares(request, path, user);

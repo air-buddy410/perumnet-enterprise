@@ -52,12 +52,9 @@ export const KNOWN_LEDGER_SOURCES = Object.keys(LEDGER_SOURCE_KIND);
  * kunci bukti (arsip memetakannya ke belanja/uang muka asal lewat
  * `expense_id`/`advance_id`).
  */
-export function ledgerEvidenceKey(row: {
-  id: unknown;
-  source: unknown;
-  reference_id?: unknown;
-  origin?: unknown;
-}): { kind: FinanceEvidenceKind; evidenceId: string } {
+export function ledgerEvidenceKey(
+  row: Record<string, unknown>,
+): { kind: FinanceEvidenceKind; evidenceId: string } {
   const id = String(row.id);
   const source = String(row.source ?? "");
   const reference = row.reference_id ? String(row.reference_id) : null;
