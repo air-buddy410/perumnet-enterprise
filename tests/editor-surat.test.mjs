@@ -63,15 +63,53 @@ test("setiap focus() di editor memakai preventScroll", () => {
   assert.match(editor, /preventScroll: true/, "konstantanya hilang");
 });
 
-// Kotak ini duduk di tengah form. Tab adalah cara orang pindah kolom; kalau ia
-// disandera untuk indentasi, tidak ada jalan keluar lewat papan ketik.
-test("Tab tidak disandera editor", () => {
-  assert.doesNotMatch(
+// Kotak ini duduk di tengah form, dan Tab adalah cara orang pindah kolom.
+//
+// Tes ini SEMPAT SALAH: ia mencocokkan tulisan `event.key === "Tab"` dan
+// menyatakan lulus ketika Tab ditulis `event.key.toLowerCase() === TAB_KEY`.
+// Ejaan yang berbeda, perilaku yang sama — dan penjaga yang memberi rasa aman
+// palsu. Yang dijaga sekarang bukan ejaannya, melainkan syaratnya:
+//
+//   Tab boleh dipakai untuk indentasi ASAL ada jalan keluar lewat papan ketik.
+//
+// Pola Esc-lalu-Tab itu yang dipakai editor kode di web, dan ia sah. Yang
+// tidak boleh adalah Tab yang dicegat tanpa jalan keluar sama sekali —
+// pengguna papan ketik dan pembaca layar terjebak di dalam kotak.
+test("kalau Tab dipakai untuk indentasi, harus ada jalan keluar lewat papan ketik", () => {
+  const tabDicegat = /event\.key(?:\.toLowerCase\(\))? === (?:"Tab"|"tab"|TAB_KEY)/.test(editor);
+  if (!tabDicegat) {
+    // Tab dibiarkan berpindah kolom — indentasi wajib punya pintasan lain.
+    assert.match(editor, /event\.key === "\]"/, "indentasi hilang sama sekali");
+    return;
+  }
+  assert.match(
     editor,
-    /event\.key === "Tab"/,
-    "Tab dicegat lagi — pengguna papan ketik terjebak di dalam kotak isi surat",
+    /event\.key === "Escape"/,
+    "Tab dicegat tanpa jalan keluar; sediakan Esc-lalu-Tab atau lepaskan Tab",
   );
-  assert.match(editor, /event\.key === "\]"/, "indentasi harus tetap tersedia lewat Ctrl/Cmd + ]");
+  // Jalan keluarnya harus benar-benar MELEPAS Tab, bukan sekadar mencatat.
+  assert.match(
+    editor,
+    /allowTabNavigationRef\.current\s*=\s*true/,
+    "Escape tidak menyalakan izin berpindah",
+  );
+  assert.match(
+    editor,
+    /if \(allowTabNavigationRef\.current\)[\s\S]{0,120}?return;/,
+    "izin berpindah tidak pernah dipakai untuk melepas Tab",
+  );
+  // Dan harus padam lagi saat fokus meninggalkan kotak, supaya Tab berikutnya
+  // tidak diam-diam melompat keluar.
+  assert.match(editor, /onBlur=\{\(\) => \{[\s\S]{0,160}?allowTabNavigationRef\.current = false/);
+});
+
+// Jalan keluar yang tidak diberitahukan sama saja dengan tidak ada. Keterangan
+// di bawah editor harus menyebutnya, dalam dua bahasa.
+test("jalan keluar papan ketik disebutkan di keterangan editor", () => {
+  const tabDicegat = /event\.key(?:\.toLowerCase\(\))? === (?:"Tab"|"tab"|TAB_KEY)/.test(editor);
+  if (!tabDicegat) return;
+  assert.match(editor, /Esc lalu Tab/, "keterangan bahasa Indonesia tidak menyebut jalan keluarnya");
+  assert.match(editor, /Esc, then Tab/i, "keterangan bahasa Inggris tidak menyebut jalan keluarnya");
 });
 
 // Permukaan tulis sempat mengumumkan dirinya sebagai "Toolbar" kepada pembaca
