@@ -44,6 +44,8 @@ type RichTextEditorProps = {
   format: RichTextFormat;
   disabled?: boolean;
   language?: RichTextLanguage;
+  invalid?: boolean;
+  describedBy?: string;
   onChange: (value: string, format: RichTextFormat) => void;
 };
 
@@ -348,7 +350,7 @@ function textPosition(root: HTMLElement, target: number) {
 }
 
 export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(function RichTextEditor(
-  { value, format, disabled = false, language = "id", onChange },
+  { value, format, disabled = false, language = "id", invalid = false, describedBy, onChange },
   ref,
 ) {
   const editorRef = useRef<HTMLDivElement>(null);
@@ -622,6 +624,8 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
       role="textbox"
       aria-multiline="true"
       aria-label={labels.surface}
+      aria-invalid={invalid || undefined}
+      aria-describedby={describedBy}
       data-placeholder={labels.placeholder}
       onInput={emitHtml}
       onPaste={handlePaste}
