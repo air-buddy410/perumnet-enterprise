@@ -9,7 +9,7 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ---
 
-## 🔴 Yang sedang menunggumu — T-23, pintu kedua template surat
+## ✅ Tidak ada tugas frontend yang tertunda
 
 Pemilik menemukan ini saat menguji: ia membuat template "Mengirim Dokumen
 Quotation" di **Calon Klien**, lalu heran template itu tidak muncul di dialog
@@ -18,10 +18,10 @@ template dokumen hanya punya SATU pintu, di Procurement & Vendor. Orang yang
 mengirim quotation bekerja di layar Quotation & Invoice dan tidak akan pernah
 menemukannya di sana.
 
-Sisi server sudah saya kerjakan (commit `template surat: izin per jenis`):
-izin kini mengikuti JENIS dokumen, daftar disaring per izin, dan responsnya
-membawa `viewableKinds`, `manageableKinds`, serta `audience`. Yang tersisa
-layarnya — perinciannya di bagian **T-23** di bawah.
+Sisi server sudah saya kerjakan (commit `template surat: izin per jenis`), dan
+layar T-23 juga sudah selesai. Izin mengikuti JENIS dokumen, daftar disaring
+per izin, dan respons membawa `viewableKinds`, `manageableKinds`, serta
+`audience`.
 
 T-20, T-21, dan T-22 sudah selesai (`f32fdca`).
 
@@ -183,7 +183,7 @@ Papan permintaan Opus → Luna (`WORKFLOW-TIM.md` §5). Backend-nya sudah jalan
 di demo; yang tersisa murni tampilan. Tandai ✅ dan pindahkan ke §Selesai
 kalau sudah dikerjakan.
 
-### Status tugas — diperbarui 21 Agustus 2026
+### Status tugas — diperbarui 22 Agustus 2026
 
 Daftar pendek supaya tidak ada yang tercecer di antara entri yang panjang.
 Perinciannya di bagian masing-masing di bawah.
@@ -198,7 +198,7 @@ Perinciannya di bagian masing-masing di bawah.
 | **T-20** | Bagan alur di Pusat Bantuan | ✅ selesai (`f32fdca`) |
 | **T-21** | Tombol Jadikan proyek di Calon Klien | ✅ selesai (`f32fdca`) |
 | **T-22** | Layar & Pusat Bantuan menyesuaikan aturan hasil audit | ✅ selesai (`f32fdca`) |
-| **T-23** | **Pintu kedua pengelola template surat di Quotation & Invoice** | **belum mulai** |
+| **T-23** | **Pintu kedua pengelola template surat di Quotation & Invoice** | ✅ selesai (`billing-view.tsx`, `document-template-manager.tsx`) |
 
 T-1 sampai T-18a sudah selesai; catatannya ada di §Selesai. Semua layar sudah
 ada di `main`, termasuk editor kaya T-17 yang sempat tertinggal belum
@@ -896,7 +896,7 @@ Kode galat tambahan di luar yang sudah disebut T-16:
   tambahan.
 - **Pilihan edisi dokumen.** Jalur email tidak menerimanya sama sekali.
 
-### T-23. Pengelola template surat punya pintu di Quotation & Invoice
+### ✅ T-23. Pengelola template surat punya pintu di Quotation & Invoice — SELESAI 22 Agustus 2026
 
 **Masalahnya bukan datanya, melainkan letaknya.** Template dokumen sudah
 dipisah per jenis (`spk` / `quotation` / `invoice`) dengan penanda dan izin
@@ -957,6 +957,12 @@ invoice, lalu `{{jatuh_tempo}}` tidak pernah terisi.
 **Kirim BAST lewat email belum ada** dan diputuskan pemilik belum diperlukan
 (22 Agustus 2026). Kalau kelak dibutuhkan, itu jenis dokumen baru di server
 lebih dulu, bukan template yang dikarang di layar.
+
+Implementasi selesai di `billing-view.tsx`, `document-template-manager.tsx`,
+`procurement-v2-view.tsx`, dan `document-email-dialog.tsx`. QA browser
+memverifikasi tab Billing hanya menampilkan template klien, Procurement hanya
+menampilkan SPK/PO, label audience, serta layout mobile. Full suite lulus
+352/352.
 
 ### ✅ T-20. Bagan alur aplikasi di Pusat Bantuan — SELESAI 22 Agustus 2026
 
@@ -1210,3 +1216,8 @@ mau menambah tes serupa untuk Pusat Bantuan, silakan, tapi tidak wajib.
   server di dialog Kirim dokumen; endpoint preview generik yang tertulis di
   kontrak tetapi belum ada di router sudah dicatat di
   `docs/PERMINTAAN-FRONTEND-KE-BACKEND.md`.
+- **T-23** — `DocumentTemplateManager` dipakai ulang sebagai pintu kedua di
+  Quotation & Invoice untuk template `quotation`/`invoice`, sementara
+  Procurement dibatasi ke `spk`. Tab dan tombol edit mengikuti
+  `viewableKinds`/`manageableKinds` dari server, judul kelompok memakai label
+  audience, dan empty state dialog Kirim menyediakan tombol **Buat template**.

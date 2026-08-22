@@ -110,6 +110,7 @@ type DocumentEmailDialogProps = {
   canViewHistory?: boolean;
   onClose: () => void;
   onOpenRecipient?: () => void;
+  onOpenTemplateManager?: (kind: DocumentEmailKind) => void;
   onSent: () => Promise<void>;
 };
 
@@ -253,6 +254,7 @@ export function DocumentEmailDialog({
   canViewHistory = canManage,
   onClose,
   onOpenRecipient,
+  onOpenTemplateManager,
   onSent,
 }: DocumentEmailDialogProps) {
   const id = language === "id";
@@ -512,7 +514,7 @@ export function DocumentEmailDialog({
           <div className={styles.dialogGrid}>
             <section className={styles.templatePane} aria-label={id ? "Pilih template" : "Choose template"}>
               <div className={styles.sectionHeading}><div><span className="eyebrow">01 · TEMPLATE</span><h3>{id ? "Pilih template surat" : "Choose letter template"}</h3></div><button type="button" className="icon-button" onClick={() => setRefreshKey((value) => value + 1)} aria-label={id ? "Muat ulang template" : "Reload templates"}><RefreshCw size={15} /></button></div>
-              {loading ? <div className={styles.loadingState}><Loader2 className="spin" size={20} /> {id ? "Memuat template…" : "Loading templates…"}</div> : templateError ? <div className={styles.errorNotice}><AlertTriangle size={17} /><span>{templateError.message}</span></div> : templates.length ? <label className={styles.templateSelect}><span>{id ? "Template pengantar" : "Letter template"}</span><select value={selectedTemplateId} onChange={(event) => selectTemplate(event.target.value)} disabled={!canManage}><option value="">{id ? "Pilih template" : "Choose a template"}</option>{templates.map((template) => <option value={template.id} key={template.id}>{template.name} · {template.language.toUpperCase()}</option>)}</select></label> : <div className={styles.emptyState}><FileText size={22} /><strong>{id ? `Belum ada template ${isVendor ? "vendor" : "klien"}` : `No ${isVendor ? "vendor" : "client"} email template`}</strong><span>{starter ? `${starter.name} tersedia sebagai contoh, tetapi template tersimpan diperlukan untuk mengirim.` : (id ? "Buat template dokumen terlebih dahulu." : "Create a document template first.")}</span></div>}
+              {loading ? <div className={styles.loadingState}><Loader2 className="spin" size={20} /> {id ? "Memuat template…" : "Loading templates…"}</div> : templateError ? <div className={styles.errorNotice}><AlertTriangle size={17} /><span>{templateError.message}</span></div> : templates.length ? <label className={styles.templateSelect}><span>{id ? "Template pengantar" : "Letter template"}</span><select value={selectedTemplateId} onChange={(event) => selectTemplate(event.target.value)} disabled={!canManage}><option value="">{id ? "Pilih template" : "Choose a template"}</option>{templates.map((template) => <option value={template.id} key={template.id}>{template.name} · {template.language.toUpperCase()}</option>)}</select></label> : <div className={styles.emptyState}><FileText size={22} /><strong>{id ? `Belum ada template ${isVendor ? "vendor" : "klien"}` : `No ${isVendor ? "vendor" : "client"} email template`}</strong><span>{starter ? `${starter.name} tersedia sebagai contoh, tetapi template tersimpan diperlukan untuk mengirim.` : (id ? "Buat template dokumen terlebih dahulu." : "Create a document template first.")}</span>{onOpenTemplateManager && <button className="button subtle small" type="button" data-testid="open-document-template-manager" onClick={() => onOpenTemplateManager(target.kind)}>{id ? "Buat template" : "Create template"}</button>}</div>}
               {selectedTemplate && <div className={styles.templateSummary}><strong>{selectedTemplate.name}</strong><span>{selectedTemplate.subject}</span><small>{id ? "Isi surat berasal dari template server; dokumen resmi dibuat server saat dikirim." : "The server template supplies the letter; the official document is generated when sent."}</small></div>}
               {selectedTemplateId && <div className={styles.templateGuard}>{id ? "Preview wajib sebelum tombol Kirim aktif." : "Preview is required before Send becomes active."}</div>}
             </section>

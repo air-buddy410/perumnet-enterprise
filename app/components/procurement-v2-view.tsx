@@ -1033,7 +1033,7 @@ export function ProcurementViewV2({
         </section>
       )}
 
-      {tab === "templates" && <DocumentTemplateManager language={language} canManage={canManage} notify={notify} />}
+      {tab === "templates" && <DocumentTemplateManager language={language} canManage={canManage} notify={notify} kinds={["spk"]} />}
 
       {tab === "orders" && projectId && (
         <section className="panel">

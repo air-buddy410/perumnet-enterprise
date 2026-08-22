@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
+  documentEmailAudience,
+  documentEmailAudienceLabels,
   documentEmailKindLabels,
   documentEmailKinds,
   documentEmailPlaceholderHints,
@@ -51,6 +53,8 @@ type TemplateResponse = {
   items: DocumentEmailTemplate[];
   defaults?: TemplateDefaults;
   placeholders?: Partial<Record<DocumentEmailKind, string[]>>;
+  viewableKinds?: unknown;
+  manageableKinds?: unknown;
 };
 
 type TemplateForm = Omit<DocumentEmailTemplate, "id" | "createdAt" | "updatedAt">;
@@ -59,6 +63,8 @@ type DocumentTemplateManagerProps = {
   language: AppLanguage;
   canManage: boolean;
   notify: (message: string) => void;
+  kinds?: readonly DocumentEmailKind[];
+  initialKind?: DocumentEmailKind;
 };
 
 const emptyPlaceholders: Record<DocumentEmailKind, string[]> = {
@@ -122,6 +128,16 @@ function isDocumentEmailKind(value: string): value is DocumentEmailKind {
   return (documentEmailKinds as readonly string[]).includes(value);
 }
 
+function normalizeKinds(
+  value: unknown,
+  fallback: readonly DocumentEmailKind[] = [],
+) {
+  const values = Array.isArray(value)
+    ? value.filter((item): item is DocumentEmailKind => typeof item === "string" && isDocumentEmailKind(item))
+    : fallback;
+  return documentEmailKinds.filter((kind) => values.includes(kind));
+}
+
 function isLetterBodyFormat(value: string): value is LetterBodyFormat {
   return value === "text" || value === "rich" || value === "html";
 }
@@ -143,12 +159,24 @@ export function DocumentTemplateManager({
   language,
   canManage,
   notify,
+  kinds,
+  initialKind,
 }: DocumentTemplateManagerProps) {
   const id = language === "id";
+  const requestedKindKey = kinds?.length ? kinds.join(",") : documentEmailKinds.join(",");
+  const requestedKinds = useMemo(
+    () => normalizeKinds(requestedKindKey.split(","), documentEmailKinds),
+    [requestedKindKey],
+  );
+  const initialSelectedKind = initialKind && requestedKinds.includes(initialKind)
+    ? initialKind
+    : requestedKinds[0] ?? "spk";
   const [templates, setTemplates] = useState<DocumentEmailTemplate[]>([]);
   const [defaults, setDefaults] = useState<TemplateDefaults | null>(null);
   const [placeholders, setPlaceholders] = useState(emptyPlaceholders);
-  const [selectedKind, setSelectedKind] = useState<DocumentEmailKind>("spk");
+  const [viewableKinds, setViewableKinds] = useState<DocumentEmailKind[]>([]);
+  const [manageableKinds, setManageableKinds] = useState<DocumentEmailKind[]>([]);
+  const [selectedKind, setSelectedKind] = useState<DocumentEmailKind>(initialSelectedKind);
   const [selectedId, setSelectedId] = useState("");
   const [form, setForm] = useState<TemplateForm>(() => emptyForm("spk", null));
   const [dirty, setDirty] = useState(false);
@@ -184,13 +212,26 @@ export function DocumentTemplateManager({
       const data = await api<TemplateResponse>("/api/document-email-templates");
       const nextTemplates = (data.items ?? []).map(normalizeTemplate);
       const nextDefaults = data.defaults ?? null;
+      const nextViewableKinds = normalizeKinds(
+        data.viewableKinds,
+        nextTemplates.map((template) => template.documentKind),
+      );
+      const nextManageableKinds = normalizeKinds(
+        data.manageableKinds,
+        canManage ? nextViewableKinds : [],
+      );
       setTemplates(nextTemplates);
       setDefaults(nextDefaults);
       setPlaceholders(normalizePlaceholders(data.placeholders));
+      setViewableKinds(nextViewableKinds);
+      setManageableKinds(nextManageableKinds);
 
       if (!initializedRef.current) {
-        const first = nextTemplates.find((template) => template.documentKind === "spk") ?? nextTemplates[0] ?? null;
-        applySelection(first, first?.documentKind ?? "spk", nextDefaults);
+        const preferredKind = initialKind && requestedKinds.includes(initialKind) && nextViewableKinds.includes(initialKind)
+          ? initialKind
+          : requestedKinds.find((kind) => nextViewableKinds.includes(kind)) ?? nextViewableKinds[0] ?? "spk";
+        const first = nextTemplates.find((template) => template.documentKind === preferredKind) ?? null;
+        applySelection(first, preferredKind, nextDefaults);
         initializedRef.current = true;
       } else if (
         selectedIdRef.current &&
@@ -207,7 +248,7 @@ export function DocumentTemplateManager({
       setLoading(false);
       setBusy((current) => current === "refresh" ? "" : current);
     }
-  }, [applySelection, language, notify]);
+  }, [applySelection, canManage, initialKind, language, notify, requestedKinds]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadTemplates(), 0);
@@ -218,7 +259,20 @@ export function DocumentTemplateManager({
     () => templates.filter((template) => template.documentKind === selectedKind),
     [selectedKind, templates],
   );
+  const visibleKinds = useMemo(
+    () => requestedKinds.filter((kind) => viewableKinds.includes(kind)),
+    [requestedKinds, viewableKinds],
+  );
+  const manageableVisibleKinds = useMemo(
+    () => visibleKinds.filter((kind) => manageableKinds.includes(kind)),
+    [manageableKinds, visibleKinds],
+  );
   const currentPlaceholders = placeholders[form.documentKind] ?? [];
+  const canManageKind = canManage && manageableKinds.includes(form.documentKind);
+  const canCreate = canManage && manageableVisibleKinds.length > 0;
+  const audience = documentEmailAudience[selectedKind];
+  const audienceLabel = documentEmailAudienceLabels[audience][id ? "id" : "en"];
+  const permissionLabel = audience === "vendor" ? "Procurement & Vendor" : "Quotation & Invoice";
 
   function confirmDiscard() {
     if (!dirtyRef.current) return true;
@@ -230,7 +284,7 @@ export function DocumentTemplateManager({
   }
 
   function selectKind(kind: DocumentEmailKind) {
-    if (kind === selectedKind || !confirmDiscard()) return;
+    if (!visibleKinds.includes(kind) || kind === selectedKind || !confirmDiscard()) return;
     const first = templates.find((template) => template.documentKind === kind) ?? null;
     applySelection(first, kind, defaults);
   }
@@ -242,7 +296,10 @@ export function DocumentTemplateManager({
 
   function createNewTemplate() {
     if (!confirmDiscard()) return;
-    applySelection(null, selectedKind, defaults);
+    const kind = manageableVisibleKinds.includes(selectedKind)
+      ? selectedKind
+      : manageableVisibleKinds[0] ?? selectedKind;
+    applySelection(null, kind, defaults);
   }
 
   function updateForm<K extends keyof TemplateForm>(key: K, value: TemplateForm[K]) {
@@ -269,7 +326,7 @@ export function DocumentTemplateManager({
 
   async function saveTemplate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!canManage || busy) return;
+    if (!canManageKind || busy) return;
 
     const payload = {
       documentKind: form.documentKind,
@@ -313,7 +370,7 @@ export function DocumentTemplateManager({
   }
 
   async function deleteTemplate() {
-    if (!canManage || !selectedId || busy) return;
+    if (!canManageKind || !selectedId || busy) return;
     const confirmed = window.confirm(
       id
         ? "Hapus template ini? Riwayat surat yang sudah ada tetap disimpan."
@@ -337,8 +394,8 @@ export function DocumentTemplateManager({
   }
 
   const selectedTemplate = templates.find((template) => template.id === selectedId) ?? null;
-  const kindLabel = documentEmailKindLabels[selectedKind][id ? "id" : "en"];
   const formKindLabel = documentEmailKindLabels[form.documentKind][id ? "id" : "en"];
+  const formKindOptions = visibleKinds.filter((kind) => manageableKinds.includes(kind) || kind === form.documentKind);
 
   return (
     <section className={`panel ${styles.manager}`} data-testid="document-template-manager">
@@ -346,23 +403,23 @@ export function DocumentTemplateManager({
         <div>
           <span className="eyebrow">{id ? "TEMPLATE SURAT DOKUMEN" : "DOCUMENT LETTER TEMPLATES"}</span>
           <h2>{id ? "Pengelola template surat" : "Document letter templates"}</h2>
-          <p>{id ? "Atur surat pengantar yang dipakai saat mengirim SPK, Quotation, dan Invoice." : "Manage the letters used when sending Work Orders, Quotations, and Invoices."}</p>
+          <p>{id ? `Atur ${audienceLabel.toLowerCase()} yang dipakai saat mengirim dokumen.` : `Manage ${audienceLabel.toLowerCase()} used when sending documents.`}</p>
         </div>
         <div className={styles.headActions}>
           <button className="button secondary small" type="button" onClick={() => void loadTemplates()} disabled={Boolean(busy)}>
             {busy === "refresh" ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}
             {id ? "Muat ulang" : "Refresh"}
           </button>
-          <button className="button primary small" type="button" onClick={createNewTemplate} disabled={!canManage || Boolean(busy)} title={!canManage ? (id ? "Izin Kelola Procurement diperlukan." : "Procurement Manage permission is required.") : undefined}>
+          <button className="button primary small" type="button" onClick={createNewTemplate} disabled={!canCreate || Boolean(busy)} title={!canCreate ? (id ? `Izin Kelola ${permissionLabel} diperlukan.` : `${permissionLabel} Manage permission is required.`) : undefined}>
             <Plus size={15} /> {id ? "Template baru" : "New template"}
           </button>
         </div>
       </header>
 
-      {!canManage && (
+      {!loading && visibleKinds.length > 0 && !canManageKind && (
         <div className={styles.infoNotice} role="status">
           <AlertTriangle size={17} />
-          <span>{id ? "Mode lihat saja. Izin Kelola pada modul Procurement diperlukan untuk membuat, mengubah, atau menghapus template." : "Read-only mode. Procurement Manage permission is required to create, edit, or delete templates."}</span>
+          <span>{id ? `Mode lihat saja. Izin Kelola ${permissionLabel} diperlukan untuk membuat, mengubah, atau menghapus template.` : `Read-only mode. ${permissionLabel} Manage permission is required to create, edit, or delete templates.`}</span>
         </div>
       )}
       {loadError && (
@@ -376,7 +433,7 @@ export function DocumentTemplateManager({
       <div className={styles.workspace}>
         <aside className={styles.library} aria-label={id ? "Daftar template" : "Template library"}>
           <div className={styles.kindSwitcher} role="tablist" aria-label={id ? "Jenis dokumen" : "Document type"}>
-            {documentEmailKinds.map((kind) => {
+            {visibleKinds.map((kind) => {
               const label = documentEmailKindLabels[kind][id ? "id" : "en"];
               const count = templates.filter((template) => template.documentKind === kind).length;
               return (
@@ -395,7 +452,7 @@ export function DocumentTemplateManager({
           </div>
 
           <div className={styles.libraryHeading}>
-            <div><span>LIBRARY</span><strong>{kindLabel}</strong></div>
+            <div><span>LIBRARY</span><strong>{audienceLabel}</strong></div>
             <small>{visibleTemplates.length} {id ? "template" : "templates"}</small>
           </div>
           <div className={styles.templateList}>
@@ -418,7 +475,7 @@ export function DocumentTemplateManager({
               <div className={styles.emptyState}>
                 <FileText size={25} />
                 <strong>{id ? "Belum ada template." : "No templates yet."}</strong>
-                <span>{canManage ? (id ? "Buat template pertama untuk mengaktifkan pengiriman dokumen." : "Create the first template to enable document delivery.") : (id ? "Belum ada template yang bisa ditampilkan." : "There are no templates to display.")}</span>
+                <span>{canCreate ? (id ? "Buat template pertama untuk mengaktifkan pengiriman dokumen." : "Create the first template to enable document delivery.") : (id ? "Belum ada template yang bisa ditampilkan." : "There are no templates to display.")}</span>
               </div>
             )}
           </div>
@@ -432,8 +489,8 @@ export function DocumentTemplateManager({
               <p>{id ? "Gunakan placeholder dari server agar nilai dokumen diisi aman saat surat dirender." : "Use server-provided placeholders so document values are rendered safely."}</p>
             </div>
             <div className={styles.editorActions}>
-              {selectedId && <button className="button danger small" type="button" onClick={() => void deleteTemplate()} disabled={!canManage || Boolean(busy)}><Trash2 size={14} /> {id ? "Hapus" : "Delete"}</button>}
-              <button className="button primary small" type="submit" form="document-template-form" disabled={!canManage || Boolean(busy)} title={!canManage ? (id ? "Izin Kelola Procurement diperlukan untuk menyimpan." : "Procurement Manage permission is required to save.") : undefined}>
+              {selectedId && <button className="button danger small" type="button" onClick={() => void deleteTemplate()} disabled={!canManageKind || Boolean(busy)}><Trash2 size={14} /> {id ? "Hapus" : "Delete"}</button>}
+              <button className="button primary small" type="submit" form="document-template-form" disabled={!canManageKind || Boolean(busy)} title={!canManageKind ? (id ? `Izin Kelola ${permissionLabel} diperlukan untuk menyimpan.` : `${permissionLabel} Manage permission is required to save.`) : undefined}>
                 {busy === "save" ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}
                 {id ? "Simpan" : "Save"}
               </button>
@@ -441,7 +498,7 @@ export function DocumentTemplateManager({
           </div>
 
           <form id="document-template-form" className={styles.form} onSubmit={saveTemplate}>
-            <fieldset disabled={!canManage || Boolean(busy)}>
+            <fieldset disabled={!canManageKind || Boolean(busy)}>
               <div className={styles.formGrid}>
                 <label className="field">
                   <span>{id ? "Nama template" : "Template name"} <b>*</b></span>
@@ -450,7 +507,7 @@ export function DocumentTemplateManager({
                 <label className="field">
                   <span>{id ? "Jenis dokumen" : "Document type"} <b>*</b></span>
                   <select value={form.documentKind} onChange={(event) => updateForm("documentKind", event.target.value as DocumentEmailKind)} required>
-                    {documentEmailKinds.map((kind) => <option value={kind} key={kind}>{documentEmailKindLabels[kind][id ? "id" : "en"]}</option>)}
+                    {formKindOptions.map((kind) => <option value={kind} key={kind}>{documentEmailKindLabels[kind][id ? "id" : "en"]}</option>)}
                   </select>
                 </label>
                 <label className={`field ${styles.full}`}>
@@ -471,7 +528,7 @@ export function DocumentTemplateManager({
                     ref={bodyEditorRef}
                     value={form.bodyHtml}
                     format={form.bodyFormat}
-                    disabled={!canManage || Boolean(busy)}
+                    disabled={!canManageKind || Boolean(busy)}
                     language={language}
                     onChange={(bodyHtml, bodyFormat) => {
                       setForm((current) => ({ ...current, bodyHtml, bodyFormat }));
@@ -521,7 +578,7 @@ export function DocumentTemplateManager({
                       <div className={styles.placeholderRow}>
                         {currentPlaceholders.map((placeholder) => {
                           const hint = documentEmailPlaceholderHints[placeholder];
-                          return <button type="button" className={styles.placeholderButton} key={`body-${placeholder}`} onClick={() => insertPlaceholder("bodyHtml", placeholder)} disabled={!canManage || Boolean(busy)}><code>{`{{${placeholder}}}`}</code><small>{hint?.[id ? "id" : "en"] ?? placeholder}</small></button>;
+                          return <button type="button" className={styles.placeholderButton} key={`body-${placeholder}`} onClick={() => insertPlaceholder("bodyHtml", placeholder)} disabled={!canManageKind || Boolean(busy)}><code>{`{{${placeholder}}}`}</code><small>{hint?.[id ? "id" : "en"] ?? placeholder}</small></button>;
                         })}
                       </div>
                     </div>
@@ -530,7 +587,7 @@ export function DocumentTemplateManager({
                       <div className={styles.placeholderRow}>
                         {currentPlaceholders.map((placeholder) => {
                           const hint = documentEmailPlaceholderHints[placeholder];
-                          return <button type="button" className={styles.placeholderButton} key={`subject-${placeholder}`} onClick={() => insertPlaceholder("subject", placeholder)} disabled={!canManage || Boolean(busy)}><code>{`{{${placeholder}}}`}</code><small>{hint?.[id ? "id" : "en"] ?? placeholder}</small></button>;
+                          return <button type="button" className={styles.placeholderButton} key={`subject-${placeholder}`} onClick={() => insertPlaceholder("subject", placeholder)} disabled={!canManageKind || Boolean(busy)}><code>{`{{${placeholder}}}`}</code><small>{hint?.[id ? "id" : "en"] ?? placeholder}</small></button>;
                         })}
                       </div>
                     </div>
@@ -542,7 +599,7 @@ export function DocumentTemplateManager({
 
               <div className={styles.formFooter}>
                 <span>{dirty ? (id ? "Perubahan belum disimpan." : "You have unsaved changes.") : (id ? "Template tersimpan akan muncul di dialog Kirim dokumen." : "Saved templates appear in the document delivery dialog.")}</span>
-                <button className="button primary" type="submit" disabled={!canManage || Boolean(busy)}>
+                <button className="button primary" type="submit" disabled={!canManageKind || Boolean(busy)}>
                   {busy === "save" ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}
                   {id ? "Simpan template" : "Save template"}
                 </button>

@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { documentEmailKinds, type DocumentEmailKind } from "../../shared/document-email";
 import { api, downloadApiFile, messageOf } from "../api-client";
 import { BankAccount, BoqItem, CommercialPackage, formatCurrency, Invoice, Project } from "../data";
 import { type AppLanguage, localizedDate, localizedLabel } from "../i18n";
@@ -26,6 +27,7 @@ import { DocumentTaxEditor } from "./document-tax-editor";
 import { CommercialPackageSwitcher } from "./commercial-package-switcher";
 import { DocumentEmailDialog, type DocumentEmailTarget } from "./document-email-dialog";
 import { DocumentPreviewModal } from "./document-preview-modal";
+import { DocumentTemplateManager } from "./document-template-manager";
 
 interface BillingViewProps {
   language: AppLanguage;
@@ -38,7 +40,13 @@ interface BillingViewProps {
   onOpenProject?: () => void;
 }
 
-type BillingTab = "quotation" | "invoice";
+type BillingTab = "quotation" | "invoice" | "templates";
+
+const billingTemplateKinds = ["quotation", "invoice"] as const satisfies readonly DocumentEmailKind[];
+
+function isDocumentEmailKind(value: unknown): value is DocumentEmailKind {
+  return typeof value === "string" && (documentEmailKinds as readonly string[]).includes(value);
+}
 
 interface Quotation {
   id: string | null;
@@ -199,10 +207,35 @@ export function BillingView({
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [preview, setPreview] = useState<{ url: string; title: string; filename: string } | null>(null);
   const [emailTarget, setEmailTarget] = useState<DocumentEmailTarget | null>(null);
+  const [templateViewableKinds, setTemplateViewableKinds] = useState<DocumentEmailKind[]>([]);
+  const [templateAvailabilityReady, setTemplateAvailabilityReady] = useState(false);
+  const [templateManagerKind, setTemplateManagerKind] = useState<DocumentEmailKind>("quotation");
 
   const selectPackage = useCallback((nextPackageId: string, nextPackages: CommercialPackage[]) => {
     void nextPackages;
     setPackageId(nextPackageId);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    api<{ viewableKinds?: unknown }>("/api/document-email-templates")
+      .then((data) => {
+        if (!active) return;
+        const nextKinds = Array.isArray(data.viewableKinds)
+          ? data.viewableKinds.filter(isDocumentEmailKind)
+          : [];
+        setTemplateViewableKinds(nextKinds);
+      })
+      .catch(() => {
+        if (!active) return;
+        setTemplateViewableKinds([]);
+      })
+      .finally(() => {
+        if (active) setTemplateAvailabilityReady(true);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -335,6 +368,7 @@ export function BillingView({
       : quotation?.status === "Sent"
         ? (id ? "Nilai terkunci sampai BoQ berubah" : "Value is locked until the BoQ changes")
         : (id ? "Periksa tanggal dan isi dokumen" : "Review dates and document content");
+  const canViewClientTemplates = templateAvailabilityReady && billingTemplateKinds.some((kind) => templateViewableKinds.includes(kind));
 
   function setValidityDays(days: number) {
     if (!quotationIssuedAt) return;
@@ -477,6 +511,13 @@ export function BillingView({
       recipientName: project.clientContactName?.trim() || project.client,
       recipientEmail: project.clientEmail,
     });
+  }
+
+  function openTemplateManager(kind: DocumentEmailKind) {
+    if (!billingTemplateKinds.some((candidate) => candidate === kind)) return;
+    setEmailTarget(null);
+    setTemplateManagerKind(kind);
+    setActiveTab("templates");
   }
 
   async function downloadInvoice(invoice: Invoice) {
@@ -722,7 +763,22 @@ export function BillingView({
         <button role="tab" aria-selected={activeTab === "invoice"} className={activeTab === "invoice" ? "active" : ""} type="button" onClick={() => setActiveTab("invoice")}>
           <ReceiptText size={17} /> Invoice <span className="tab-count">{invoices.length}</span>
         </button>
+        {canViewClientTemplates && (
+          <button data-testid="billing-template-tab" role="tab" aria-selected={activeTab === "templates"} className={activeTab === "templates" ? "active" : ""} type="button" onClick={() => setActiveTab("templates")}>
+            <Mail size={17} /> {id ? "Template surat" : "Letter templates"}
+          </button>
+        )}
       </div>
+
+      {activeTab === "templates" && canViewClientTemplates && (
+        <DocumentTemplateManager
+          language={language}
+          canManage={canManage}
+          notify={notify}
+          kinds={billingTemplateKinds}
+          initialKind={templateManagerKind}
+        />
+      )}
 
       {activeTab === "quotation" && (
         <section className="billing-layout">
@@ -1002,6 +1058,7 @@ export function BillingView({
         canViewHistory
         onClose={() => setEmailTarget(null)}
         onOpenRecipient={onOpenProject ? () => { setEmailTarget(null); onOpenProject(); } : undefined}
+        onOpenTemplateManager={openTemplateManager}
         onSent={async () => { setReloadKey((key) => key + 1); }}
       />}
 
