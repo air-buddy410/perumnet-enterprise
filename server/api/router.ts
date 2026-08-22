@@ -133,7 +133,11 @@ import {
   handleProcurementOrders,
   handleVendorCategories,
 } from "./procurement-router";
-import { handleProfitShares, operatingProfit } from "./profit-share-router";
+import {
+  handleCompanyTreasury,
+  handleProfitShares,
+  operatingProfit,
+} from "./profit-share-router";
 import {
   handleProjectAdvances,
   handleProjectExpenseCategories,
@@ -6868,6 +6872,9 @@ export async function dispatchApi(request: Request, path: string[]) {
   }
   if (resource === "project-advances") return handleProjectAdvances(request, path, user);
   if (resource === "finance" && path[1] === "summary") return handleFinance(request, user);
+  if (resource === "finance" && path[1] === "company-treasury") {
+    return handleCompanyTreasury(request, user);
+  }
   if (resource === "bank-accounts") return handleBankAccounts(request, path, user);
   if (resource === "profit-shares") return handleProfitShares(request, path, user);
   if (resource === "tax") return handleTax(request, path, user);

@@ -611,3 +611,214 @@ test("T: template quotation/invoice ikut izin Billing, SPK ikut Procurement", as
 
   await masuk("admin@perumnet.id");
 });
+
+// ── Alokasi sisa laba ke kas perusahaan ──────────────────────────────────────
+//
+// Keputusan pemilik 22 Agustus 2026: sisa laba yang tidak diambil siapa pun
+// dialokasikan ke perusahaan, dan terlihat di pos kas perusahaan.
+//
+// Pemindahan itu dicatat dua kaki, dan DUA INVARIAN inilah yang membuatnya
+// benar. Keduanya diuji di bawah, karena keduanya diam-diam bisa salah:
+//
+//   1. Kas bersih perusahaan TIDAK BERGERAK. Uangnya sudah ada di rekening
+//      sejak klien membayar; yang berpindah cuma kepemilikannya. Kaki keluar
+//      tanpa kaki masuk akan membuat kas perusahaan menyusut dari ketiadaan.
+//   2. Kas MASUK bruto juga tidak bergerak. Kaki masuknya bukan uang dari luar.
+//      Kalau ia dijumlahkan sebagai pemasukan, "Kas masuk" naik setiap kali
+//      laba ditahan dan tidak ada yang pernah menurunkannya kembali — persis
+//      jenis penggelembungan yang dulu terjadi pada baris pembalik.
+
+async function proyekBerlaba(nama, nilai) {
+  const proyek = await buatProyek(nama);
+  await tambahItem(proyek.id, null, nilai);
+  const q = await terimaQuotation(proyek.id, null, nama.toLowerCase().replace(/\s+/g, "-"));
+  const bank = await rekening(`Bank ${nama}`);
+  const invoice = await json("/api/invoices", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId: proyek.id, quotationId: q.id, type: "Pelunasan",
+      issueDate: "2026-07-02", dueDate: "2026-07-16",
+      calculationMode: "Percent", installmentBps: 10_000,
+    }),
+  }, 201);
+  await json(`/api/invoices/${invoice.id}/payments`, {
+    method: "POST",
+    body: JSON.stringify({
+      grossAmount: invoice.amount, cashAmount: invoice.amount, withholdingAmount: 0,
+      paidDate: "2026-07-20", paymentReference: `AUD-${proyek.code}`,
+      paymentMethod: "Transfer Bank", bankAccountId: bank.id, attachment: lampiran("bayar"),
+    }),
+  }, 201);
+  return proyek;
+}
+
+async function kasGlobal() {
+  const r = await json("/api/finance/summary");
+  return { income: r.income, expense: r.expense, netCash: r.netCash };
+}
+
+test("K1: sisa laba dialokasikan ke kas perusahaan tanpa menggerakkan kas bersih", async () => {
+  await masuk("admin@perumnet.id");
+  const proyek = await proyekBerlaba("Kas Perusahaan", 40_000_000);
+
+  const awal = await json(`/api/profit-shares?projectId=${proyek.id}`);
+  assert.equal(awal.unallocatedPercentage, 100);
+  assert.equal(awal.companyShare, null);
+  const aman = awal.distributableProfit;
+  assert.ok(aman > 0, `laba aman positif (${aman})`);
+
+  const orang = await json("/api/profit-shares", {
+    method: "POST",
+    body: JSON.stringify({ projectId: proyek.id, recipientName: "Mitra Satu", percentage: 60 }),
+  }, 201);
+  assert.equal(orang.recipientKind, "person");
+  await json(`/api/profit-shares/${orang.id}/approve`, { method: "POST" });
+  await json(`/api/profit-shares/${orang.id}/pay`, {
+    method: "POST", body: JSON.stringify({ paidDate: "2026-07-25" }),
+  });
+
+  // Persentase sengaja TIDAK dikirim: server yang menghitung sisanya.
+  const perusahaan = await json("/api/profit-shares", {
+    method: "POST",
+    body: JSON.stringify({ projectId: proyek.id, recipientKind: "company" }),
+  }, 201);
+  assert.equal(perusahaan.recipientKind, "company");
+  assert.equal(perusahaan.recipientName, "Kas Perusahaan");
+  assert.equal(perusahaan.percentage, 40, "sisa 40% dihitung server, bukan dikirim layar");
+
+  const disetujui = await json(`/api/profit-shares/${perusahaan.id}/approve`, { method: "POST" });
+  const nominal = disetujui.amount;
+  assert.ok(nominal > 0);
+
+  const sebelum = await kasGlobal();
+  const bendahara = await json(`/api/profit-shares/${perusahaan.id}/pay`, {
+    method: "POST", body: JSON.stringify({ paidDate: "2026-07-26" }),
+  });
+  assert.equal(bendahara.status, "Paid");
+  assert.ok(bendahara.companyTransactionId, "kaki kas perusahaan tidak tertulis");
+
+  const sesudah = await kasGlobal();
+  assert.equal(sesudah.netCash, sebelum.netCash, "kas bersih perusahaan bergerak — uangnya tidak ke mana-mana");
+  assert.equal(sesudah.income, sebelum.income, "kas masuk bruto ikut naik: pemindahan internal dihitung sebagai pemasukan");
+  assert.equal(sesudah.expense, sebelum.expense, "kas keluar bruto ikut naik: dua kaki tidak saling meniadakan");
+
+  // Di dalam proyeknya, kaki keluar itu MEMANG dihitung: labanya sudah
+  // teralokasi habis, jadi kas proyeknya menutup di nol.
+  const kasProyek = await json(`/api/finance/summary?projectId=${proyek.id}`);
+  assert.equal(kasProyek.netCash, 0, "kas proyek tidak tutup di nol setelah seluruh labanya dialokasikan");
+
+  const ringkas = await json(`/api/profit-shares?projectId=${proyek.id}`);
+  assert.equal(ringkas.unallocatedPercentage, 0, "seluruh laba sudah punya pemilik");
+  assert.equal(ringkas.retainedProfit, 0, "tidak ada lagi laba yang menggantung");
+  assert.ok(ringkas.companyShare, "companyShare tidak terbaca di ringkasan");
+  assert.equal(ringkas.companyShare.id, perusahaan.id);
+
+  const pos = await json("/api/finance/company-treasury");
+  const baris = pos.entries.filter((e) => e.shareId === perusahaan.id);
+  assert.equal(baris.length, 1, "pos kas perusahaan tidak mencatat pemindahan ini");
+  assert.equal(baris[0].amount, nominal);
+  assert.equal(baris[0].projectCode, proyek.code, "baris pos kas harus bisa ditelusuri ke proyeknya");
+  assert.equal(baris[0].reversed, false);
+});
+
+test("K2: laba yang sudah ditahan tidak menyusutkan laba proyeknya sendiri", async () => {
+  await masuk("admin@perumnet.id");
+  const proyek = await proyekBerlaba("Umpan Balik Laba", 30_000_000);
+  const awal = await json(`/api/profit-shares?projectId=${proyek.id}`);
+  const aman = awal.distributableProfit;
+
+  const perusahaan = await json("/api/profit-shares", {
+    method: "POST",
+    body: JSON.stringify({ projectId: proyek.id, recipientKind: "company", percentage: 50 }),
+  }, 201);
+  await json(`/api/profit-shares/${perusahaan.id}/approve`, { method: "POST" });
+  await json(`/api/profit-shares/${perusahaan.id}/pay`, {
+    method: "POST", body: JSON.stringify({ paidDate: "2026-07-26" }),
+  });
+
+  // Kaki keluarnya ADA di buku kas proyek. Kalau ia ikut dihitung sebagai biaya
+  // proyek, laba amannya menyusut — lalu sisa berikutnya dihitung dari angka
+  // yang sudah mengecil, dan seterusnya tanpa henti.
+  const sesudah = await json(`/api/profit-shares?projectId=${proyek.id}`);
+  assert.equal(sesudah.distributableProfit, aman, "alokasi ke perusahaan menyusutkan laba yang menjadi dasarnya sendiri");
+  assert.equal(sesudah.unallocatedPercentage, 50);
+});
+
+test("K3: membatalkan alokasi perusahaan membalik KEDUA kakinya", async () => {
+  await masuk("admin@perumnet.id");
+  const proyek = await proyekBerlaba("Batal Kas Perusahaan", 20_000_000);
+  const perusahaan = await json("/api/profit-shares", {
+    method: "POST",
+    body: JSON.stringify({ projectId: proyek.id, recipientKind: "company", percentage: 100 }),
+  }, 201);
+  await json(`/api/profit-shares/${perusahaan.id}/approve`, { method: "POST" });
+  await json(`/api/profit-shares/${perusahaan.id}/pay`, {
+    method: "POST", body: JSON.stringify({ paidDate: "2026-07-26" }),
+  });
+
+  const sebelumBatal = await kasGlobal();
+  const posSebelum = await json("/api/finance/company-treasury");
+  assert.ok(posSebelum.balance > 0);
+
+  await json(`/api/profit-shares/${perusahaan.id}/void`, { method: "POST" });
+
+  const sesudahBatal = await kasGlobal();
+  assert.equal(sesudahBatal.netCash, sebelumBatal.netCash, "membatalkan pemindahan internal menggerakkan kas bersih");
+  assert.equal(sesudahBatal.income, sebelumBatal.income);
+  assert.equal(sesudahBatal.expense, sebelumBatal.expense);
+
+  const posSesudah = await json("/api/finance/company-treasury");
+  const milikProyek = posSesudah.entries.filter((e) => e.shareId === perusahaan.id);
+  assert.equal(milikProyek.length, 2, "baris asal dan pembaliknya harus dua-duanya terbaca");
+  assert.equal(milikProyek.filter((e) => e.reversed).length, 1);
+  assert.equal(
+    posSesudah.balance,
+    posSebelum.balance - milikProyek.filter((e) => !e.reversed)[0].amount,
+    "saldo pos kas perusahaan tidak turun setelah pembatalan",
+  );
+});
+
+test("K4: hanya satu alokasi perusahaan per proyek, dan tanpa penerima orang", async () => {
+  await masuk("admin@perumnet.id");
+  const proyek = await proyekBerlaba("Satu Kas Saja", 15_000_000);
+  const pertama = await json("/api/profit-shares", {
+    method: "POST",
+    body: JSON.stringify({ projectId: proyek.id, recipientKind: "company", percentage: 30 }),
+  }, 201);
+  const kedua = await galat("/api/profit-shares", {
+    method: "POST",
+    body: JSON.stringify({ projectId: proyek.id, recipientKind: "company", percentage: 10 }),
+  });
+  assert.equal(kedua.status, 409);
+  assert.equal(kedua.code, "COMPANY_SHARE_EXISTS");
+  assert.equal(kedua.details?.shareId, pertama.id, "pesannya harus menunjuk alokasi yang sudah ada");
+
+  const admin = await json("/api/users?role=Admin");
+  const denganOrang = await galat("/api/profit-shares", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId: proyek.id, recipientKind: "company", percentage: 5,
+      recipientUserId: Array.isArray(admin) ? admin[0]?.id : admin.items?.[0]?.id,
+    }),
+  });
+  assert.equal(denganOrang.code, "COMPANY_SHARE_HAS_NO_USER");
+
+  // Alokasi perusahaan dibatalkan dulu, lalu 100% dihabiskan orang. Dengan
+  // begitu penolakan di bawah benar-benar karena tidak ada sisa — bukan karena
+  // sudah ada alokasi perusahaan lain, yang diperiksa lebih dulu.
+  await json(`/api/profit-shares/${pertama.id}/void`, { method: "POST" });
+  await json("/api/profit-shares", {
+    method: "POST",
+    body: JSON.stringify({ projectId: proyek.id, recipientName: "Mitra Sisa", percentage: 70 }),
+  }, 201);
+  await json("/api/profit-shares", {
+    method: "POST",
+    body: JSON.stringify({ projectId: proyek.id, recipientName: "Mitra Sisanya Lagi", percentage: 30 }),
+  }, 201);
+  const habis = await galat("/api/profit-shares", {
+    method: "POST",
+    body: JSON.stringify({ projectId: proyek.id, recipientKind: "company" }),
+  });
+  assert.equal(habis.status, 409);
+  assert.equal(habis.code, "NOTHING_LEFT_TO_ALLOCATE");
+});

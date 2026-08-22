@@ -1871,6 +1871,16 @@ async function ensureCommercialPackageSchema(client: DatabaseClient) {
     ["basts", "revocation_reason", "TEXT"],
     ["basts", "seal_name_snapshot", "TEXT"],
     ["basts", "seal_role_snapshot", "TEXT"],
+    // Sisa laba yang dialokasikan ke perusahaan sendiri, bukan ke orang.
+    // Kolom, bukan tabel baru: yang dibagi tetap laba yang sama, batas 100%
+    // yang sama, dan penguncian nominal yang sama. Yang berbeda hanya penerima
+    // dan apa yang terjadi pada kas — dan itu dua hal, bukan alur baru.
+    ["project_profit_shares", "recipient_kind", "TEXT NOT NULL DEFAULT 'person'"],
+    // Kaki kedua: baris kas TINGKAT PERUSAHAAN (tanpa project_id) yang menerima
+    // pindahan itu. Disimpan supaya pembatalan bisa membalik KEDUA kaki; tanpa
+    // ini, void hanya membalik kaki proyeknya dan pos kas perusahaan menyimpan
+    // uang yang alasannya sudah dihapus.
+    ["project_profit_shares", "company_transaction_id", "TEXT REFERENCES transactions(id) ON DELETE SET NULL"],
     ["tax_obligations", "reporting_status", "TEXT NOT NULL DEFAULT 'Candidate'"],
     ["tax_obligations", "tax_period", "TEXT"],
     ["tax_obligations", "tax_invoice_number", "TEXT"],

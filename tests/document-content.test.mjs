@@ -823,6 +823,22 @@ test("the manual says where document templates live and whose permission governs
 // menyebut fiturnya ada. Ini kalimat yang menjawab pertanyaan "kenapa nomor di
 // email saya beda dengan yang di layar verifikasi" — dan satu-satunya tempat
 // pemakai bisa menemukannya sendiri.
+// Angka yang salah paham di sini akan muncul sebagai "kok kas masuk kita naik
+// terus" berbulan-bulan kemudian. Panduan harus menyebut alasannya, bukan
+// hanya menyebut tombolnya ada.
+test("panduan menjelaskan alokasi ke kas perusahaan dan kenapa kas tidak bergerak", async () => {
+  await loginAsAdmin();
+  const id = await pdfText("/api/help/sop.pdf?language=id");
+  assert.match(id.flat, /Alokasikan sisanya ke kas perusahaan/);
+  assert.match(id.flat, /Kas bersih perusahaan tidak bergerak satu rupiah pun/);
+  assert.match(id.flat, /tidak ikut mengurangi laba yang menjadi dasarnya sendiri/);
+  assert.match(id.flat, /Proyek ini sudah punya alokasi ke kas perusahaan/);
+
+  await loginAsAdmin("en");
+  const en = await pdfText("/api/help/sop.pdf?language=en");
+  assert.match(en.flat, /Net company cash does not move by a single rupiah/);
+});
+
 test("panduan menjelaskan kenapa lampiran BAST adalah arsip, bukan cetakan baru", async () => {
   await loginAsAdmin();
   const id = await pdfText("/api/help/sop.pdf?language=id");

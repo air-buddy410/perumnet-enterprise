@@ -11,8 +11,10 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ## 🔴 Yang sedang menunggumu
 
-Dua tugas, **T-24 dan T-25**. T-25 lebih mendesak: ia bug yang sedang tampil di
-demo dan salah di depan pemilik.
+Tiga tugas: **T-24, T-25, T-26**. T-25 lebih mendesak — ia bug yang sedang
+tampil di demo dan salah di depan pemilik. T-26 backend-nya sedang saya
+kerjakan saat baris ini ditulis; kontraknya sudah pasti, jadi kamu bisa mulai
+sekarang. Kalau ada yang berubah, saya perbarui §T-26 dan menandainya.
 
 ### T-25 — "Sisa dapat ditagihkan" memakai dasar yang keliru (BUG, prioritas)
 
@@ -1339,3 +1341,103 @@ adalah **arsip final yang tersimpan**, bukan render baru seperti tiga jenis
 lain. Jangan menawarkan opsi "render ulang" atau "lampirkan versi terbaru" di
 dialognya — byte-nya harus sama persis dengan yang sidiknya sudah dicatat,
 atau halaman verifikasi klien akan menyatakan dokumennya tidak sah.
+
+
+---
+
+### T-26 — Alokasi sisa laba ke Kas Perusahaan (kontrak backend)
+
+**Keputusan pemilik, 22 Agustus 2026.** Di layar Laba & Bagi Hasil, setelah
+orang-orang mendapat bagiannya, sisa laba menggantung sebagai "Laba ditahan"
+tanpa pemilik yang jelas. Pemilik ingin sisa itu bisa **dialokasikan ke
+perusahaan**, dan uangnya terlihat masuk ke pos kas perusahaan.
+
+Contoh nyata dari demo (PN-2608-004): laba aman dibagikan 110.135.000, tiga
+orang mengambil 70% (77.094.500), sisa 33.040.500 tidak punya baris apa pun.
+
+- **Dipakai untuk:** panel Laba & Bagi Hasil, dan satu tampilan baru "Kas
+  Perusahaan" di Pembukuan.
+- **Izin:** sama dengan alokasi lain — peran Admin atau Finance, `margin`
+  Kelola + `finance` Kelola untuk menyusun; menyetujui tetap Admin saja.
+
+#### 1. Alokasi bertipe perusahaan
+
+`POST /api/profit-shares` menerima field baru **`recipientKind`**:
+`"person"` (bawaan, perilaku lama persis) atau `"company"`.
+
+Untuk `"company"`:
+
+- `recipientUserId` **tidak boleh diisi** → 422 `COMPANY_SHARE_HAS_NO_USER`.
+- `recipientName` boleh dikosongkan; server mengisinya `"Kas Perusahaan"`.
+- `percentage` boleh dikosongkan → server memakai **sisa persentase yang belum
+  dialokasikan**. Ini yang membuat tombol "Alokasikan sisanya" cukup satu POST
+  tanpa frontend menghitung sendiri (dan tanpa balapan dengan alokasi lain).
+- Hanya boleh ada **satu** alokasi perusahaan aktif per proyek → 409
+  `COMPANY_SHARE_EXISTS` dengan `details.shareId` menunjuk yang sudah ada.
+
+`PATCH`, `approve`, `pay`, `void`, dan `DELETE` memakai endpoint yang **sama
+persis** dengan alokasi orang. Tidak ada endpoint baru untuk ini.
+
+#### 2. Yang berbeda hanya labelnya
+
+Setiap alokasi di `allocations[]` sekarang membawa **`recipientKind`**. Untuk
+yang `"company"`:
+
+- Ikon/label penerima: "Kas Perusahaan", bukan avatar orang.
+- Tombol **Bayar** sebaiknya berbunyi **"Pindahkan ke kas perusahaan"** — tidak
+  ada orang yang dibayar, uangnya berpindah pos. Endpoint dan badannya tetap
+  `POST /api/profit-shares/:id/pay` dengan `{ paidDate }`.
+- Setelah dieksekusi, statusnya tetap `Paid`. Kalau ingin lebih jujur di layar,
+  tampilkan "Dipindahkan" untuk `recipientKind === "company"`.
+
+Ringkasan `GET /api/profit-shares?projectId=` bertambah:
+
+| Field | Arti |
+|---|---|
+| `companyShare` | Alokasi perusahaan yang aktif, atau `null`. Bentuknya sama dengan satu item `allocations[]`. |
+| `unallocatedPercentage` | Sisa persen yang belum dialokasikan (0–100). Pakai ini untuk menyalakan/mematikan tombol "Alokasikan sisanya". |
+
+`retainedProfit` tetap ada dan tetap berarti "yang belum dialokasikan ke
+siapa pun". Setelah sisa dialokasikan ke perusahaan, angka itu menjadi 0 —
+memang itu tujuannya.
+
+#### 3. Tampilan baru: Kas Perusahaan
+
+`GET /api/finance/company-treasury` (opsional `?from=&to=`):
+
+```json
+{
+  "balance": 33040500,
+  "entries": [
+    { "projectId": "...", "projectCode": "PN-2608-004", "projectName": "Sandy House",
+      "amount": 33040500, "date": "2026-08-22", "shareId": "...", "reversed": false }
+  ]
+}
+```
+
+Taruh sebagai kartu atau tab di Pembukuan. `balance` sudah bersih dari yang
+dibatalkan; `entries[].reversed` menandai baris yang sudah dibalik supaya
+riwayatnya tetap terbaca.
+
+#### 4. Yang TIDAK boleh kamu tampilkan sebagai kas masuk
+
+Pemindahan ini dicatat dua kaki: Pengeluaran di proyeknya, dan Pemasukan di
+tingkat perusahaan. **Kas bersih perusahaan tidak berubah sama sekali** — uang
+itu memang sudah ada di rekening sejak klien membayar; yang berpindah cuma
+kepemilikannya.
+
+Kaki masuknya sengaja TIDAK dijumlahkan sebagai "Kas masuk" di ringkasan
+Pembukuan (server yang mengaturnya, kamu tidak perlu apa-apa). Jadi jangan
+membuat kartu yang menjumlahkan `companyTreasury.balance` ke dalam total kas
+masuk — angkanya akan dihitung dua kali, dan itu persis kesalahan yang
+penanganan di server ini hindari.
+
+#### 5. Galat yang perlu ditangani
+
+| Kode | HTTP | Kapan |
+|---|---|---|
+| `COMPANY_SHARE_EXISTS` | 409 | Proyek sudah punya alokasi perusahaan aktif. |
+| `COMPANY_SHARE_HAS_NO_USER` | 422 | `recipientUserId` ikut terkirim untuk `recipientKind: "company"`. |
+| `NOTHING_LEFT_TO_ALLOCATE` | 409 | `percentage` dikosongkan tapi 100% sudah teralokasi. Matikan tombolnya saat `unallocatedPercentage === 0`. |
+| `PROFIT_SHARE_EXCEEDS_100_PERCENT` | 409 | Sama seperti sebelumnya. |
+| `NO_DISTRIBUTABLE_PROFIT` | 409 | Sama seperti sebelumnya, saat menyetujui. |

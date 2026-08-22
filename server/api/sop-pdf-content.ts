@@ -1823,6 +1823,10 @@ export const chapterProfit: Chapter = {
           "Tekan Bayar dan isi tanggal pembayaran. Alokasi harus sudah disetujui sebelum dapat dibayar.",
           "Press Pay and enter the payment date. An allocation must be approved before it can be paid.",
         ],
+        [
+          "Sisa yang tidak diambil siapa pun dialokasikan ke perusahaan lewat Alokasikan sisanya ke kas perusahaan. Persentasenya tidak perlu diketik: aplikasi memakai sisa yang belum dialokasikan pada saat tombol ditekan. Satu proyek hanya boleh punya satu alokasi perusahaan yang aktif.",
+          "Whatever nobody claims is allocated to the company through Allocate the remainder to company cash. There is no percentage to type: the application uses whatever is still unallocated at the moment the button is pressed. A project may have only one active company allocation.",
+        ],
       ],
     },
     {
@@ -1851,6 +1855,17 @@ export const chapterProfit: Chapter = {
     },
     {
       kind: "note",
+      title: [
+        "Alokasi ke kas perusahaan tidak menggerakkan kas sama sekali",
+        "Allocating to company cash moves no money at all",
+      ],
+      text: [
+        "Bagian orang benar-benar keluar dari perusahaan, jadi ia satu baris kas keluar. Bagian perusahaan tidak keluar ke mana-mana: uangnya sudah ada di rekening sejak klien membayar, dan yang berubah hanya kepemilikannya — dari milik proyek itu menjadi milik perusahaan. Karena itu ia dicatat dua kaki: kas keluar pada proyeknya, supaya proyek itu tutup di nol dan labanya benar-benar teralokasi habis, dan kas masuk pada tingkat perusahaan, yang muncul di pos Kas Perusahaan di Pembukuan. Kas bersih perusahaan tidak bergerak satu rupiah pun. Kaki masuknya juga sengaja TIDAK dijumlahkan ke dalam angka Kas masuk: tidak ada satu rupiah pun yang datang dari luar, dan kalau ia dihitung, angka Kas masuk akan naik setiap kali laba ditahan tanpa pernah turun kembali. Membatalkan alokasi membalik kedua kakinya sekaligus.",
+        "A person's share genuinely leaves the company, so it is a single cash-out line. The company's share leaves nothing: the money has been in the account since the client paid, and only its ownership changes — from belonging to that project to belonging to the company. It is therefore booked on two legs: cash out on the project, so that project closes at zero with its profit fully allocated, and cash in at company level, which appears under Company Cash in Finance. Net company cash does not move by a single rupiah. The incoming leg is also deliberately NOT added into the Cash in figure: not one rupiah arrived from outside, and counting it would make Cash in climb every time profit is retained without ever coming down. Voiding an allocation reverses both legs at once.",
+      ],
+    },
+    {
+      kind: "note",
       title: ["Total yang dikunci tidak boleh melampaui laba aman saat ini", "The locked total may never exceed today's safe profit"],
       text: [
         "Persentase dibatasi 100%, tetapi rupiahnya dikunci satu per satu pada waktu yang berbeda. Sejak 21 Agustus 2026 menyetujui sebuah alokasi juga memeriksa: nominal yang sudah dikunci untuk alokasi lain ditambah nominal ini tidak boleh melebihi laba aman dibagikan SAAT INI. Kalau laba turun setelah alokasi pertama dikunci, alokasi berikutnya ditolak sampai labanya kembali.",
@@ -1863,6 +1878,8 @@ export const chapterProfit: Chapter = {
         ["Laba ditahan kini memakai satu rumus di panel bagi laba dan di laporan keuangan: laba aman dibagikan dikurangi yang dialokasikan. Dulu laporan mengabaikan pajak terpulihkan dan utang pajak, jadi dua layar menunjukkan dua angka.", "Retained profit now uses one formula on the profit-sharing panel and in the finance report: distributable profit minus what is allocated. The report used to ignore recoverable and payable tax, so two screens showed two figures."],
         ["Ringkasan membedakan yang sudah dikunci (Approved dan Paid) dari alokasi Draft yang masih bergerak mengikuti kas.", "The summary separates what is locked (Approved and Paid) from Draft allocations that still move with cash."],
         ["Pembatalan bagi laba hanya terhalang bila pembayarannya sudah dicocokkan dengan mutasi bank — sama dengan pembatalan lain di aplikasi ini.", "Voiding a profit share is only blocked when its payout is matched to a bank line — the same rule as every other void in this application."],
+        ["Alokasi ke kas perusahaan tidak ikut mengurangi laba yang menjadi dasarnya sendiri. Kalau ia dihitung sebagai biaya proyek, mengalokasikan sisa laba akan menyusutkan laba itu juga, lalu sisa berikutnya dihitung dari angka yang sudah mengecil — umpan balik yang tidak pernah berhenti.", "A company allocation does not reduce the profit it is calculated from. Were it counted as a project cost, allocating the remainder would shrink that same profit, and the next remainder would be computed from an already-smaller figure — a feedback loop with no end."],
+        ["Laba ditahan berarti yang belum dialokasikan ke siapa pun. Setelah sisanya diberikan ke kas perusahaan, angka itu menjadi nol; yang ditahan perusahaan terbaca di pos Kas Perusahaan, bukan lagi sebagai sisa yang menggantung.", "Retained profit means whatever nobody has been allocated yet. Once the remainder goes to company cash, that figure becomes zero; what the company keeps is read from the Company Cash pot rather than as a dangling residue."],
       ],
     },
   ],
@@ -2808,6 +2825,16 @@ export const chapterMessages: Chapter = {
           message: ["Sidik arsip BAST tidak cocok dengan catatannya. Pengiriman dibatalkan.", "The handover archive's fingerprint does not match its record. The delivery was cancelled."],
           meaning: ["Berkas PDF yang tersimpan tidak lagi sama dengan sidik SHA-256 yang dicatat saat finalisasi. Halaman verifikasi publik akan menyatakan dokumen itu tidak sah, jadi mengirimkannya hanya memindahkan kegagalan ke tangan klien.", "The stored PDF no longer matches the SHA-256 fingerprint recorded at finalisation. The public verification page would declare the document invalid, so sending it would merely hand the failure to the client."],
           action: ["Ini bukan kesalahan pengguna — hubungi Admin. Arsipnya perlu diperiksa lebih dulu; bila memang rusak, BAST-nya dicabut dan diterbitkan ulang sebagai revisi berikutnya.", "This is not a user error — contact an Admin. The archive has to be examined first; if it is genuinely damaged, the certificate is revoked and re-issued as the next revision."],
+        },
+        {
+          message: ["Proyek ini sudah punya alokasi ke kas perusahaan.", "This project already has an allocation to company cash."],
+          meaning: ["Satu proyek hanya boleh punya satu alokasi perusahaan yang aktif. Dua baris yang sama-sama berarti \"sisanya milik perusahaan\" tidak menambah informasi apa pun, tetapi membuat siapa pun yang membacanya bertanya mana yang benar.", "A project may have only one active company allocation. Two rows that both mean \"the rest belongs to the company\" add no information but leave anyone reading them wondering which is the real one."],
+          action: ["Ubah persentase alokasi yang sudah ada selama masih Draft, atau batalkan lalu buat yang baru. Pesannya menyebut alokasi mana yang dimaksud.", "Change the existing allocation's percentage while it is still a Draft, or void it and create a new one. The message states which allocation it means."],
+        },
+        {
+          message: ["Seluruh laba proyek ini sudah dialokasikan.", "All of this project's profit has already been allocated."],
+          meaning: ["Tombol Alokasikan sisanya memakai sisa yang belum dialokasikan, dan sisanya nol.", "The Allocate the remainder button uses whatever is still unallocated, and there is none."],
+          action: ["Batalkan salah satu alokasi lebih dulu bila ada porsi yang perlu dipindahkan ke perusahaan.", "Void one of the existing allocations first if some portion needs to move to the company."],
         },
         {
           message: ["Vendor ... belum punya alamat email. Isi lebih dulu di Procurement & Vendor — yang boleh mengubahnya Admin atau Finance.", "The named vendor has no email address. Fill it in under Procurement & Vendors — only an Admin or Finance user may change it."],

@@ -65,10 +65,39 @@ export const REVERSAL_CASH_SOURCES = [
   "Project Advance Reversal",
   "Profit Share Reversal",
   "Tax Settlement Reversal",
+  "Company Treasury Reversal",
+] as const;
+
+/**
+ * Sisa laba yang dialokasikan ke perusahaan tidak pernah meninggalkan
+ * perusahaan — ia hanya berpindah dari "milik proyek ini" menjadi "milik
+ * perusahaan". Karena itu ia dicatat dua kaki: Pengeluaran pada proyeknya, dan
+ * Pemasukan pada tingkat perusahaan (tanpa `project_id`).
+ *
+ * Kaki masuknya BUKAN kas masuk. Kalau ia dijumlahkan sebagai pemasukan,
+ * "Kas masuk" perusahaan ikut naik setiap kali laba dialokasikan — padahal
+ * tidak ada satu rupiah pun yang datang dari luar. Setelah dua puluh proyek,
+ * angka itu menggelembung sebesar seluruh laba yang pernah ditahan, dan tidak
+ * ada yang pernah menurunkannya kembali.
+ *
+ * Jadi ia diperlakukan sama seperti baris pembalik: mengurangi sisi yang
+ * berlawanan, bukan menambah sisinya sendiri. Hasilnya kas bersih perusahaan
+ * tidak berubah sama sekali (yang memang benar — uangnya tidak ke mana-mana),
+ * sementara laporan per proyek tetap melihat kaki keluarnya dan menutup di nol.
+ */
+export const CONTRA_ONLY_CASH_SOURCES = ["Company Treasury In"] as const;
+
+/**
+ * Baris yang NETO terhadap sisi berlawanan, bukan menambah sisinya sendiri:
+ * seluruh baris pembalik, ditambah kaki masuk pemindahan ke kas perusahaan.
+ */
+export const CONTRA_CASH_SOURCES = [
+  ...REVERSAL_CASH_SOURCES,
+  ...CONTRA_ONLY_CASH_SOURCES,
 ] as const;
 
 export function reversalCashCondition(alias = "transactions") {
-  const sources = REVERSAL_CASH_SOURCES.map((source) => `'${source}'`).join(",");
+  const sources = CONTRA_CASH_SOURCES.map((source) => `'${source}'`).join(",");
   return `${alias}.source IN (${sources})`;
 }
 
@@ -108,7 +137,7 @@ export function grossCashContribution(entry: {
   source: string;
   amount: number;
 }) {
-  const reversal = (REVERSAL_CASH_SOURCES as readonly string[]).includes(
+  const reversal = (CONTRA_CASH_SOURCES as readonly string[]).includes(
     entry.source,
   );
   const inflow = entry.type === "Pemasukan";

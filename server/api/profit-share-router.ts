@@ -24,17 +24,32 @@ import {
 
 const idSchema = z.string().trim().min(1).max(100);
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+/**
+ * `recipientKind: "company"` adalah sisa laba yang tinggal di perusahaan.
+ *
+ * `recipientName` dan `percentage` boleh dikosongkan untuk jenis itu: namanya
+ * selalu sama, dan persentasenya hampir selalu "sisanya". Membiarkan SERVER
+ * menghitung sisa itu bukan kenyamanan — frontend yang menghitungnya sendiri
+ * akan salah begitu ada alokasi lain masuk di antara ia membaca dan mengirim.
+ */
+const RECIPIENT_KINDS = ["person", "company"] as const;
+const COMPANY_RECIPIENT_NAME = "Kas Perusahaan";
+
 const allocationSchema = z.object({
   projectId: idSchema,
+  recipientKind: z.enum(RECIPIENT_KINDS).default("person"),
   recipientUserId: idSchema.optional(),
-  recipientName: z.string().trim().min(2).max(120),
-  percentage: z.number().positive().max(100),
+  recipientName: z.string().trim().min(2).max(120).optional(),
+  percentage: z.number().positive().max(100).optional(),
   notes: z.string().trim().max(500).optional().default(""),
 });
 // `notes` carries a `.default("")`, so a plain `.partial()` erased the stored
 // note whenever the client patched only the recipient or the percentage.
+// `recipientKind` sengaja tidak ikut: memindahkan alokasi orang menjadi alokasi
+// perusahaan (atau sebaliknya) mengubah apa yang terjadi pada kas saat
+// dieksekusi. Batalkan lalu buat yang baru.
 const allocationUpdateSchema = partialPatchSchema(
-  allocationSchema.omit({ projectId: true }),
+  allocationSchema.omit({ projectId: true, recipientKind: true }),
 );
 const paymentSchema = z.object({
   paidDate: isoDateSchema,
@@ -68,8 +83,22 @@ async function requireProject(client: DatabaseClient, projectId: string) {
   return result.rows[0];
 }
 
-const OPERATING_SCOPE =
-  "transactions.source NOT IN ('Profit Share','Profit Share Reversal')";
+// Pembagian dan pembalikannya adalah HASIL dari perhitungan ini, jadi ia tidak
+// pernah masuk kembali ke dalamnya. Pemindahan ke kas perusahaan ikut di sini
+// karena alasan yang sama, dan alasan kedua yang lebih tajam: kalau ia dihitung
+// sebagai pengeluaran proyek, mengalokasikan sisa laba akan MENURUNKAN laba itu
+// sendiri, lalu sisa berikutnya dihitung dari angka yang sudah menyusut. Umpan
+// balik yang tidak pernah berhenti.
+const COMPANY_TREASURY_SOURCES = [
+  "Company Treasury",
+  "Company Treasury In",
+  "Company Treasury Reversal",
+  "Company Treasury In Reversal",
+] as const;
+
+const OPERATING_SCOPE = `transactions.source NOT IN ('Profit Share','Profit Share Reversal',${COMPANY_TREASURY_SOURCES.map(
+  (source) => `'${source}'`,
+).join(",")})`;
 
 export async function operatingProfit(client: DatabaseClient, projectId: string) {
   const result = await client.execute({
@@ -207,6 +236,7 @@ function mapShare(row: Record<string, unknown>, previewNet: number) {
   return {
     id: String(row.id),
     projectId: String(row.project_id),
+    recipientKind: String(row.recipient_kind ?? "person"),
     recipientUserId: row.recipient_user_id
       ? String(row.recipient_user_id)
       : undefined,
@@ -221,6 +251,9 @@ function mapShare(row: Record<string, unknown>, previewNet: number) {
     paidDate: row.paid_date ? String(row.paid_date) : undefined,
     transactionId: row.transaction_id
       ? String(row.transaction_id)
+      : undefined,
+    companyTransactionId: row.company_transaction_id
+      ? String(row.company_transaction_id)
       : undefined,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -255,6 +288,10 @@ async function summary(client: DatabaseClient, projectId: string) {
   const paidAmount = active
     .filter((item) => item.status === "Paid")
     .reduce((total, item) => total + item.amount, 0);
+  const allocatedPercentage = active.reduce(
+    (total, item) => total + item.percentage,
+    0,
+  );
   return {
     project: {
       id: String(project.id),
@@ -263,14 +300,16 @@ async function summary(client: DatabaseClient, projectId: string) {
       client: String(project.client),
     },
     ...profit,
-    allocatedPercentage: active.reduce(
-      (total, item) => total + item.percentage,
-      0,
-    ),
+    allocatedPercentage,
+    // Dipisah supaya layar tidak menghitungnya sendiri dari 100 dikurangi
+    // sesuatu, lalu keliru saat ada alokasi yang dibatalkan.
+    unallocatedPercentage: Math.max(0, 100 - allocatedPercentage),
     allocatedAmount,
     lockedAmount,
     paidAmount,
     retainedProfit: profit.distributableProfit - allocatedAmount,
+    companyShare:
+      active.find((item) => item.recipientKind === "company") ?? null,
     allocations,
   };
 }
@@ -284,6 +323,98 @@ async function findShare(client: DatabaseClient, id: string) {
     throw new ApiError(404, "NOT_FOUND", "Pembagian keuntungan tidak ditemukan.");
   }
   return result.rows[0];
+}
+
+/**
+ * Pos kas perusahaan: laba yang sudah dialokasikan ke perusahaan sendiri.
+ *
+ * Dibaca dari BUKU KAS, bukan dari tabel alokasi. Keduanya biasanya sama, tapi
+ * kalau suatu hari berbeda, yang benar adalah buku kas — itulah yang dipakai
+ * seluruh laporan keuangan lain, dan angka pos ini harus bisa dicocokkan
+ * dengannya baris per baris.
+ *
+ * Baris pembalik dikurangkan, bukan disembunyikan: alokasi yang dibatalkan
+ * tetap terbaca di riwayat, hanya tidak ikut menambah saldo.
+ */
+export async function companyTreasury(
+  client: DatabaseClient,
+  range: { from?: string | null; to?: string | null } = {},
+) {
+  const conditions = ["t.source IN ('Company Treasury In','Company Treasury In Reversal')"];
+  const args: unknown[] = [];
+  if (range.from) {
+    conditions.push("t.date>=?");
+    args.push(range.from);
+  }
+  if (range.to) {
+    conditions.push("t.date<=?");
+    args.push(range.to);
+  }
+  const result = await client.execute({
+    sql: `SELECT t.id,t.date,t.amount,t.source,t.reference_id,t.description,
+        s.project_id,p.code AS project_code,p.name AS project_name
+      FROM transactions t
+      LEFT JOIN project_profit_shares s
+        ON s.id = replace(t.reference_id, ':void', '')
+      LEFT JOIN projects p ON p.id=s.project_id
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY t.date DESC, t.created_at DESC`,
+    args: args as never[],
+  });
+  let balance = 0;
+  const entries = result.rows.map((row) => {
+    const reversed = String(row.source) === "Company Treasury In Reversal";
+    const amount = asNumber(row.amount);
+    balance += reversed ? -amount : amount;
+    return {
+      id: String(row.id),
+      date: String(row.date),
+      amount,
+      reversed,
+      shareId: String(row.reference_id ?? "").replace(":void", ""),
+      projectId: row.project_id ? String(row.project_id) : null,
+      projectCode: row.project_code ? String(row.project_code) : null,
+      projectName: row.project_name ? String(row.project_name) : null,
+      description: String(row.description ?? ""),
+    };
+  });
+  return { balance, entries };
+}
+
+export async function handleCompanyTreasury(request: Request, user: AuthUser) {
+  if (request.method !== "GET") {
+    throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
+  }
+  // Angka ini adalah angka LABA, bukan sekadar kas: ia menyebutkan berapa
+  // banyak keuntungan yang ditahan perusahaan. Jadi ia mengikuti izin Laba &
+  // Bagi Hasil, sama seperti Laba Bersih Dasar dan Laba Ditahan di laporan —
+  // bukan izin Pembukuan, yang dipegang lebih banyak orang.
+  if (!canAccess(user.permissions, "finance", "view")) {
+    throw new ApiError(
+      403,
+      "FORBIDDEN",
+      "Peran Anda tidak memiliki akses ke Pembukuan.",
+      { module: "finance" },
+    );
+  }
+  if (!canAccess(user.permissions, "margin", "view")) {
+    throw new ApiError(
+      403,
+      "FORBIDDEN",
+      "Peran Anda tidak memiliki akses ke angka laba perusahaan.",
+      { module: "margin" },
+    );
+  }
+  const { client } = await getDatabase();
+  const url = new URL(request.url);
+  return ok(
+    await companyTreasury(client, {
+      from: url.searchParams.get("from"),
+      to: url.searchParams.get("to"),
+    }),
+    200,
+    { "Cache-Control": "no-store" },
+  );
 }
 
 export async function handleProfitShares(
@@ -311,6 +442,36 @@ export async function handleProfitShares(
   if (request.method === "POST" && !shareId) {
     const input = allocationSchema.parse(await jsonBody(request));
     await requireProject(client, input.projectId);
+    const perusahaan = input.recipientKind === "company";
+    if (perusahaan && input.recipientUserId) {
+      throw new ApiError(
+        422,
+        "COMPANY_SHARE_HAS_NO_USER",
+        "Alokasi ke kas perusahaan tidak punya penerima orang.",
+      );
+    }
+    if (perusahaan) {
+      const sudahAda = await client.execute({
+        sql: `SELECT id FROM project_profit_shares
+          WHERE project_id=? AND recipient_kind='company' AND status<>'Void' LIMIT 1`,
+        args: [input.projectId],
+      });
+      if (sudahAda.rows.length) {
+        throw new ApiError(
+          409,
+          "COMPANY_SHARE_EXISTS",
+          "Proyek ini sudah punya alokasi ke kas perusahaan. Ubah atau batalkan yang ada.",
+          { shareId: String(sudahAda.rows[0].id) },
+        );
+      }
+    }
+    if (!perusahaan && !input.recipientName) {
+      throw new ApiError(
+        422,
+        "RECIPIENT_REQUIRED",
+        "Nama penerima wajib diisi.",
+      );
+    }
     if (input.recipientUserId) {
       const userResult = await client.execute({
         sql: "SELECT id FROM users WHERE id=? AND status='Aktif' LIMIT 1",
@@ -324,11 +485,24 @@ export async function handleProfitShares(
         );
       }
     }
-    const percentageBps = Math.round(input.percentage * 100);
-    if (
-      (await activePercentage(client, input.projectId)) + percentageBps >
-      10_000
-    ) {
+    const sudahDialokasikan = await activePercentage(client, input.projectId);
+    // Persentase yang dikosongkan berarti "sisanya" — dan sisanya dihitung DI
+    // SINI, bukan di layar. Antara layar membaca dan mengirim, alokasi lain
+    // bisa masuk; angka yang dihitung frontend akan melampaui 100% tanpa ada
+    // yang tahu sebabnya.
+    const percentageBps =
+      input.percentage === undefined
+        ? 10_000 - sudahDialokasikan
+        : Math.round(input.percentage * 100);
+    if (percentageBps <= 0) {
+      throw new ApiError(
+        409,
+        "NOTHING_LEFT_TO_ALLOCATE",
+        "Seluruh laba proyek ini sudah dialokasikan.",
+        { allocatedPercentage: sudahDialokasikan / 100 },
+      );
+    }
+    if (sudahDialokasikan + percentageBps > 10_000) {
       throw new ApiError(
         409,
         "PROFIT_SHARE_EXCEEDS_100_PERCENT",
@@ -340,14 +514,17 @@ export async function handleProfitShares(
     await client.execute({
       sql: `
         INSERT INTO project_profit_shares
-          (id,project_id,recipient_user_id,recipient_name,percentage_bps,amount,status,notes,created_by,created_at,updated_at)
-        VALUES (?,?,?,?,?,0,'Draft',?,?,?,?)
+          (id,project_id,recipient_kind,recipient_user_id,recipient_name,percentage_bps,amount,status,notes,created_by,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,0,'Draft',?,?,?,?)
       `,
       args: [
         id,
         input.projectId,
+        input.recipientKind,
         input.recipientUserId ?? null,
-        input.recipientName,
+        perusahaan
+          ? input.recipientName || COMPANY_RECIPIENT_NAME
+          : input.recipientName,
         percentageBps,
         input.notes || null,
         user.id,
@@ -357,7 +534,8 @@ export async function handleProfitShares(
     });
     await writeAuditLog(client, request, user, "create", "profit_share", id, {
       projectId: input.projectId,
-      percentage: input.percentage,
+      percentage: percentageBps / 100,
+      recipientKind: input.recipientKind,
       recipientName: input.recipientName,
     });
     const response = await summary(client, input.projectId);
@@ -501,35 +679,86 @@ export async function handleProfitShares(
         "Alokasi harus disetujui Admin sebelum dibayar.",
       );
     }
+    const perusahaan = String(current.recipient_kind ?? "person") === "company";
+    // Baris kas perusahaan tidak punya project_id, jadi kode proyeknya harus
+    // ikut ke dalam keterangan — kalau tidak, pos kas perusahaan berisi
+    // sederet baris yang tak seorang pun bisa telusuri asalnya.
+    const proyek = await requireProject(client, String(current.project_id));
     const transactionId = randomUUID();
+    const companyTransactionId = randomUUID();
     const timestamp = new Date().toISOString();
+    // Bagian orang KELUAR dari perusahaan: satu baris, Pengeluaran, selesai.
+    //
+    // Bagian perusahaan TIDAK keluar. Ia berpindah dari "milik proyek ini"
+    // menjadi "milik perusahaan", jadi dicatat dua kaki: Pengeluaran pada
+    // proyeknya — supaya proyeknya tutup di nol dan labanya benar-benar
+    // teralokasi habis — dan Pemasukan pada tingkat perusahaan, tanpa
+    // project_id. Kas bersih perusahaan tidak bergerak satu rupiah pun, karena
+    // memang tidak ada yang bergerak.
+    //
+    // Kaki masuknya memakai sumber `Company Treasury In`, yang di cash-ledger
+    // terdaftar sebagai baris NETO: ia mengurangi sisi pengeluaran, bukan
+    // menambah pemasukan. Kalau ia dijumlahkan sebagai kas masuk, "Kas masuk"
+    // perusahaan akan naik setiap kali laba ditahan — padahal tidak sepeser pun
+    // datang dari luar, dan tidak ada yang pernah menurunkannya kembali.
     await client.batch(
       [
         {
           sql: `
             INSERT INTO transactions
               (id,project_id,date,type,description,amount,source,reference_id,category,origin,created_by,created_at,updated_at)
-            VALUES (?,? ,?,'Pengeluaran',?,?,'Profit Share',?,'Bagi Hasil','system',?,?,?)
+            VALUES (?,? ,?,'Pengeluaran',?,?,?,?,'Bagi Hasil','system',?,?,?)
           `,
           args: [
             transactionId,
             current.project_id,
             input.paidDate,
-            `Pembagian keuntungan - ${String(current.recipient_name)}`,
+            perusahaan
+              ? `Alokasi laba ke kas perusahaan - ${String(current.recipient_name)}`
+              : `Pembagian keuntungan - ${String(current.recipient_name)}`,
             current.amount,
+            perusahaan ? "Company Treasury" : "Profit Share",
             shareId,
             user.id,
             timestamp,
             timestamp,
           ],
         },
+        ...(perusahaan
+          ? [
+              {
+                sql: `
+                  INSERT INTO transactions
+                    (id,project_id,date,type,description,amount,source,reference_id,category,origin,created_by,created_at,updated_at)
+                  VALUES (?,NULL,?,'Pemasukan',?,?,'Company Treasury In',?,'Bagi Hasil','system',?,?,?)
+                `,
+                args: [
+                  companyTransactionId,
+                  input.paidDate,
+                  `Laba ditahan dari ${String(proyek.code)} - ${String(proyek.name)}`,
+                  current.amount,
+                  shareId,
+                  user.id,
+                  timestamp,
+                  timestamp,
+                ],
+              },
+            ]
+          : []),
         {
           sql: `
             UPDATE project_profit_shares
-            SET status='Paid',paid_date=?,transaction_id=?,paid_by=?,updated_at=?
+            SET status='Paid',paid_date=?,transaction_id=?,company_transaction_id=?,paid_by=?,updated_at=?
             WHERE id=?
           `,
-          args: [input.paidDate, transactionId, user.id, timestamp, shareId],
+          args: [
+            input.paidDate,
+            transactionId,
+            perusahaan ? companyTransactionId : null,
+            user.id,
+            timestamp,
+            shareId,
+          ],
         },
       ],
       "write",
@@ -537,6 +766,8 @@ export async function handleProfitShares(
     await writeAuditLog(client, request, user, "pay", "profit_share", shareId, {
       amount: asNumber(current.amount),
       paidDate: input.paidDate,
+      recipientKind: perusahaan ? "company" : "person",
+      companyTransactionId: perusahaan ? companyTransactionId : null,
     });
     const response = await summary(client, String(current.project_id));
     return ok(response.allocations.find((item) => item.id === shareId));
@@ -580,6 +811,9 @@ export async function handleProfitShares(
     // left, so the ledger no longer matched the bank. Reverse it: the payout
     // stays, a dated reversal cancels it, and net cash returns to pre-payout.
     const reversalId = randomUUID();
+    const companyReversalId = randomUUID();
+    const perusahaan = String(current.recipient_kind ?? "person") === "company";
+    const tanggalBalik = tanggalReversal(String(current.paid_date), timestamp);
     await client.batch(
       [
         ...(current.transaction_id
@@ -588,13 +822,40 @@ export async function handleProfitShares(
                 sql: `
                   INSERT INTO transactions
                     (id,project_id,date,type,description,amount,source,reference_id,category,origin,created_by,created_at,updated_at)
-                  VALUES (?,?,?,'Pemasukan',?,?,'Profit Share Reversal',?,'Bagi Hasil','system',?,?,?)
+                  VALUES (?,?,?,'Pemasukan',?,?,?,?,'Bagi Hasil','system',?,?,?)
                 `,
                 args: [
                   reversalId,
                   current.project_id,
-                  tanggalReversal(String(current.paid_date), timestamp),
-                  `Pembatalan pembagian keuntungan - ${String(current.recipient_name)}`,
+                  tanggalBalik,
+                  perusahaan
+                    ? `Pembatalan alokasi ke kas perusahaan - ${String(current.recipient_name)}`
+                    : `Pembatalan pembagian keuntungan - ${String(current.recipient_name)}`,
+                  current.amount,
+                  perusahaan ? "Company Treasury Reversal" : "Profit Share Reversal",
+                  `${shareId}:void`,
+                  user.id,
+                  timestamp,
+                  timestamp,
+                ],
+              },
+            ]
+          : []),
+        // Kaki kedua dibalik juga. Tanpa baris ini, pos kas perusahaan tetap
+        // memegang uang yang alasannya sudah dihapus — dan kas bersih
+        // perusahaan naik sebesar alokasi yang dibatalkan, dari ketiadaan.
+        ...(current.company_transaction_id
+          ? [
+              {
+                sql: `
+                  INSERT INTO transactions
+                    (id,project_id,date,type,description,amount,source,reference_id,category,origin,created_by,created_at,updated_at)
+                  VALUES (?,NULL,?,'Pengeluaran',?,?,'Company Treasury In Reversal',?,'Bagi Hasil','system',?,?,?)
+                `,
+                args: [
+                  companyReversalId,
+                  tanggalBalik,
+                  `Pembatalan laba ditahan - ${String(current.recipient_name)}`,
                   current.amount,
                   `${shareId}:void`,
                   user.id,
@@ -618,6 +879,9 @@ export async function handleProfitShares(
     await writeAuditLog(client, request, user, "void", "profit_share", shareId, {
       previousStatus: current.status,
       reversalTransactionId: current.transaction_id ? reversalId : null,
+      companyReversalTransactionId: current.company_transaction_id
+        ? companyReversalId
+        : null,
     });
     const response = await summary(client, String(current.project_id));
     return ok(response.allocations.find((item) => item.id === shareId));
