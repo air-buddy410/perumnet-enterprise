@@ -9,7 +9,38 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ---
 
-## 🔴 Yang sedang menunggumu
+## ✅ Tidak ada tugas frontend yang tertunda
+
+**T-27 dan T-28 sudah SAYA kerjakan sendiri** atas permintaan pemilik — dia
+sedang menguji dan terhalang keduanya. Maaf sudah masuk ke wilayahmu; berkas
+yang saya sentuh `app/panel/rich-text-editor.tsx` dan
+`app/panel/prospects-editor.tsx`. Perubahannya kecil dan sengaja saya batasi
+pada penyebabnya saja:
+
+1. `Field` dapat prop `as`; hanya field "Isi surat" yang memakai `as="div"`.
+   Tiga puluh field lain tetap `<label>` seperti semula.
+2. Keempat `focus()` memakai `preventScroll`.
+3. **Tab dikembalikan ke fungsi pindah kolom, indentasi pindah ke Ctrl/Cmd + ]**
+   — ini keputusan yang mengubah fiturmu dari `b492ec5`, jadi tolong dibaca.
+   Alasannya di komentar `handleKeyDown`. Pasangan Shift+Tab tidak saya bawa:
+   `execCommand("outdent")` bekerja pada blockquote dan daftar, bukan pada
+   spasi-tanpa-putus yang disisipkan indentasi ini, jadi ia tidak pernah
+   benar-benar membatalkannya. Kalau kamu punya alasan lain, silakan ubah —
+   yang tidak boleh kembali cuma Tab yang menyandera fokus.
+4. `aria-label` permukaan tulis tidak lagi memakai label toolbar.
+
+`tests/editor-surat.test.mjs` menjaga keempatnya sebagai pemeriksaan sumber
+(tidak ada peramban di suite ini). Keempat tes itu sudah dibuktikan GAGAL pada
+kode `b492ec5` dan lulus sesudahnya.
+
+Kontrak T-24/T-25/T-26 tetap ditinggal di bawah sebagai rujukan.
+
+Papan `docs/PERMINTAAN-FRONTEND-KE-BACKEND.md` kosong.
+
+---
+
+<details>
+<summary>T-27 dan T-28 — diagnosis lengkapnya (arsip)</summary>
 
 ### T-27 — Editor "Isi surat" di Calon Klien tidak bisa diketik sama sekali (BUG, prioritas)
 
@@ -107,6 +138,8 @@ Keputusannya ada padamu; yang wajib diperbaiki adalah gulirnya.
 
 Uji di tab BAST, Invoice, Quotation, dan juga Calon Klien (T-27 menyentuh
 berkas yang sama).
+
+</details>
 
 ---
 

@@ -71,6 +71,21 @@ const CSS_FONT_SIZE_ALIASES: Record<string, string> = {
 };
 const PARAGRAPH_INDENT = "\u00a0\u00a0\u00a0\u00a0";
 
+/**
+ * `focus()` secara bawaan MENGGULIR elemennya ke dalam pandangan.
+ *
+ * Editor ini memanggilnya empat kali, dan satu ketukan tombol bisa melewati
+ * tiga di antaranya: restoreSelection → focus, insertText → focus, lalu
+ * emitHtml → restoreSelection → focus lagi. Bagi orang yang sedang mengetik
+ * jauh di dalam surat, tampilannya melompat naik tiga kali dalam satu ketukan
+ * — dan karena permukaan tulisnya sendiri `overflow: auto`, isi suratnya ikut
+ * tergulir, bukan cuma halamannya.
+ *
+ * Caret yang baru berpindah akan terlihat sendiri tanpa dipaksa. Yang tidak
+ * pernah benar adalah memaksa gulir pada setiap perubahan seleksi.
+ */
+const FOCUS_TANPA_GULIR = { preventScroll: true } as const;
+
 const copy = {
   id: {
     toolbar: "Format isi surat",
@@ -97,9 +112,10 @@ const copy = {
     undo: "Urungkan",
     redo: "Ulangi",
     clear: "Hapus format",
+    surface: "Isi surat",
     placeholder: "Tulis isi surat di sini…",
     help: "Editor visual menyimpan HTML aman. Toolbar mendukung paragraf, judul, ukuran dan keluarga font, alignment, daftar, kutipan, tautan, warna, serta undo/redo.",
-    tabIndent: "Tab menambah indentasi paragraf; Shift+Tab menguranginya.",
+    tabIndent: "Ctrl/Cmd + ] menambah indentasi paragraf; Tab tetap berpindah ke kolom berikutnya.",
     linkPrompt: "Masukkan URL tautan (http, https, atau mailto)",
     linkSelection: "Pilih teks terlebih dahulu untuk dijadikan tautan.",
     invalidLink: "Gunakan tautan http, https, atau mailto.",
@@ -129,9 +145,10 @@ const copy = {
     undo: "Undo",
     redo: "Redo",
     clear: "Clear formatting",
+    surface: "Letter body",
     placeholder: "Write the letter here…",
     help: "The visual editor stores safe HTML. The toolbar supports paragraphs, headings, font family and size, alignment, lists, quotes, links, color, and undo/redo.",
-    tabIndent: "Tab indents the paragraph; Shift+Tab reduces the indent.",
+    tabIndent: "Ctrl/Cmd + ] indents the paragraph; Tab still moves to the next field.",
     linkPrompt: "Enter a link URL (http, https, or mailto)",
     linkSelection: "Select text first to turn it into a link.",
     invalidLink: "Use an http, https, or mailto link.",
@@ -364,7 +381,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     range.setEnd(end.node, end.offset);
     selection.removeAllRanges();
     selection.addRange(range);
-    editor.focus();
+    editor.focus(FOCUS_TANPA_GULIR);
   }, []);
 
   useEffect(() => {
@@ -398,7 +415,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
   const runCommand = useCallback((command: string, commandValue?: string) => {
     if (disabled || !editorRef.current) return;
     restoreSelection();
-    editorRef.current.focus();
+    editorRef.current.focus(FOCUS_TANPA_GULIR);
     document.execCommand("styleWithCSS", false, "true");
     document.execCommand(command, false, commandValue);
     emitHtml();
@@ -407,7 +424,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
   const insertText = useCallback((text: string) => {
     if (disabled || !editorRef.current) return;
     restoreSelection();
-    editorRef.current.focus();
+    editorRef.current.focus(FOCUS_TANPA_GULIR);
     const inserted = document.execCommand("insertText", false, text);
     if (!inserted) {
       const selection = window.getSelection();
@@ -426,7 +443,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
   }, [disabled, emitHtml, restoreSelection]);
 
   useImperativeHandle(ref, () => ({
-    focus: () => editorRef.current?.focus(),
+    focus: () => editorRef.current?.focus(FOCUS_TANPA_GULIR),
     insertPlaceholder: insertText,
   }), [insertText]);
 
@@ -436,15 +453,27 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     if (plainText) insertText(plainText);
   }
 
+  // Tab TIDAK disandera di sini, dan itu disengaja.
+  //
+  // Kotak ini duduk di tengah form: Nama template → Bahasa → Subjek → Isi
+  // surat. Tab adalah cara orang berpindah kolom. Ketika ia dipakai untuk
+  // indentasi, satu-satunya jalan keluar dari kotak ini tinggal tetikus —
+  // pengguna papan ketik dan pembaca layar terjebak di dalamnya, dan pemilik
+  // sendiri menemukannya dengan menekan Tab untuk pindah kolom.
+  //
+  // Indentasi pindah ke Ctrl/Cmd + ], pintasan yang tidak bertabrakan dengan
+  // apa pun. Pasangan Shift+Tab yang dulu memanggil `outdent` sengaja tidak
+  // dibawa: `execCommand("outdent")` bekerja pada blockquote dan daftar, bukan
+  // pada spasi-tanpa-putus yang disisipkan indentasi ini, jadi ia tidak pernah
+  // benar-benar membatalkannya. Backspace yang membatalkannya.
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (disabled) return;
-    if (event.key === "Tab" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    if (!(event.metaKey || event.ctrlKey)) return;
+    if (event.key === "]") {
       event.preventDefault();
-      if (event.shiftKey) runCommand("outdent");
-      else insertText(PARAGRAPH_INDENT);
+      insertText(PARAGRAPH_INDENT);
       return;
     }
-    if (!(event.metaKey || event.ctrlKey)) return;
     const shortcut = event.key.toLowerCase();
     const command = shortcut === "b" ? "bold" : shortcut === "i" ? "italic" : shortcut === "u" ? "underline" : "";
     if (!command) return;
@@ -535,7 +564,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
       suppressContentEditableWarning
       role="textbox"
       aria-multiline="true"
-      aria-label={labels.toolbar}
+      aria-label={labels.surface}
       data-placeholder={labels.placeholder}
       onInput={emitHtml}
       onPaste={handlePaste}
