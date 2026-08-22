@@ -13,7 +13,7 @@ type Language = "id" | "en";
 
 // Bumped whenever the manual's structure or coverage changes, so a printed copy
 // can be compared against the edition currently shipping.
-const GUIDE_EDITION = "2.2";
+const GUIDE_EDITION = "2.3";
 
 // Colours reuse the existing PerumNet document palette so the guide sits next to
 // the quotation, invoice, and handover PDFs without looking foreign.
@@ -344,8 +344,8 @@ function buildGuide(
     y += 8;
     paragraph(
       en
-        ? "Chapters 1 and 2 explain who may do what and how the whole chain fits together — chapter 2 opens with the flow chart. Chapters 3 to 16 are the day-to-day workflows, in the order the work actually happens. Chapters 17 to 21 are reference material."
-        : "Bab 1 dan 2 menjelaskan siapa boleh mengerjakan apa dan bagaimana seluruh rantai kerja tersusun — bab 2 dibuka dengan bagan alurnya. Bab 3 sampai 16 adalah alur kerja sehari-hari, disusun mengikuti urutan pekerjaan sesungguhnya. Bab 17 sampai 21 adalah bahan rujukan.",
+        ? "Chapters 1 and 2 explain who may do what and how the whole chain fits together — chapter 2 opens with the flow chart. Chapters 3 to 18 are the day-to-day workflows, in the order the work actually happens. Chapters 19 to 23 are reference material."
+        : "Bab 1 dan 2 menjelaskan siapa boleh mengerjakan apa dan bagaimana seluruh rantai kerja tersusun — bab 2 dibuka dengan bagan alurnya. Bab 3 sampai 18 adalah alur kerja sehari-hari, disusun mengikuti urutan pekerjaan sesungguhnya. Bab 19 sampai 23 adalah bahan rujukan.",
       { size: SMALL_SIZE, lh: SMALL_LH, colour: MUTED, gap: 5 },
     );
 

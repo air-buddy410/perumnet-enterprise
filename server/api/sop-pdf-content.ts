@@ -526,6 +526,92 @@ export const chapterStart: Chapter = {
   ],
 };
 
+export const chapterProjectMedia: Chapter = {
+  id: "project-media",
+  title: ["Dokumentasi foto dan berkas proyek", "Project photos and files"],
+  blocks: [
+    {
+      kind: "lead",
+      text: [
+        "Setiap proyek punya galeri foto dan berkasnya sendiri: foto progres dari lapangan, gambar kerja, dan dokumen pendukung. Sejak 22 Agustus 2026 foto dapat diunggah banyak sekaligus, tiap foto diperiksa isinya, dan riwayatnya tersusun menurut kapan fotonya diambil — bukan kapan seseorang sempat mengunggahnya.",
+        "Every project has its own gallery of photos and files: progress photos from the site, working drawings, and supporting documents. Since 22 August 2026 photos can be uploaded in batches, every photo is checked by its contents, and the history is ordered by when the photo was taken — not by when somebody got around to uploading it.",
+      ],
+    },
+    {
+      kind: "meta",
+      rows: [
+        {
+          label: ["Siapa yang boleh", "Who may do it"],
+          value: [
+            "Mengunggah, mengubah keterangan, dan menghapus memerlukan izin Kelola pada Manajemen Proyek. Izin Lihat cukup untuk membuka galeri. Project Manager dan Engineer hanya melihat proyek tempat mereka terdaftar sebagai anggota.",
+            "Uploading, editing captions, and deleting require Manage on Project Management. View is enough to open the gallery. Project Managers and Engineers only see projects they are members of.",
+          ],
+        },
+        {
+          label: ["Di mana", "Where"],
+          value: [
+            "Bagian Dokumentasi pada halaman proyek, dan menu Galeri Proyek untuk melihat foto dari seluruh proyek yang dapat Anda akses.",
+            "The Documentation section of the project page, and the Project Gallery menu for photos across every project you can access.",
+          ],
+        },
+        {
+          label: ["Batas", "Limits"],
+          value: [
+            "JPG, PNG, WebP, dan PDF. Maksimal 10 berkas per unggahan, tiap berkas maksimal 5 MB, jumlah seluruhnya maksimal 25 MB per unggahan, dan 500 berkas per proyek.",
+            "JPG, PNG, WebP, and PDF. At most 10 files per upload, each at most 5 MB, at most 25 MB in total per upload, and 500 files per project.",
+          ],
+        },
+      ],
+    },
+    {
+      kind: "steps",
+      items: [
+        [
+          "Buka proyeknya, lalu pilih beberapa foto sekaligus pada tombol Unggah. Keterangan yang diisi berlaku untuk seluruh foto dalam unggahan itu, dan dapat diubah satu per satu sesudahnya.",
+          "Open the project, then pick several photos at once on the Upload button. The caption you enter applies to every photo in that upload and can be changed one by one afterwards.",
+        ],
+        [
+          "Perhatikan hasilnya per berkas. Yang diterima masuk galeri; yang ditolak disebut bersama alasannya, tanpa menggagalkan berkas lain dalam unggahan yang sama.",
+          "Read the result per file. Accepted files enter the gallery; rejected ones are listed with the reason, without failing the other files in the same upload.",
+        ],
+        [
+          "Tanggal foto diambil dari data kamera (EXIF) bila ada. Foto yang dikirim lewat WhatsApp kehilangan data itu, sehingga memakai waktu unggah — ubah tanggalnya dari keterangan foto bila perlu.",
+          "The photo date comes from the camera data (EXIF) when present. Photos forwarded through WhatsApp lose that data and fall back to the upload time — change the date from the photo caption if needed.",
+        ],
+        [
+          "Galeri menampilkan thumbnail, bukan foto aslinya; foto asli dibuka saat diklik. Galeri Proyek menyaring per proyek, per bulan, dan per kata dalam keterangan.",
+          "The gallery shows thumbnails, not the originals; the original opens on click. The Project Gallery filters by project, by month, and by words in the caption.",
+        ],
+      ],
+    },
+    {
+      kind: "note",
+      title: ["Isi berkas yang diperiksa, bukan namanya", "The contents are checked, not the name"],
+      text: [
+        "Nama berkas dan tipe yang diakui peramban sama-sama ditentukan pengirim, jadi keduanya tidak membuktikan apa pun. Setiap gambar dibaca oleh aplikasi: PNG yang diberi nama .jpg ditolak sebagai tidak sesuai isinya, gambar animasi ditolak, dan berkas yang bukan gambar sama sekali ditolak. Byte yang persis sama dengan foto yang sudah ada di proyek itu dilewati dan ditunjukkan foto yang sudah ada — mengunggah ulang bukan foto baru.",
+        "The file name and the type the browser reports are both chosen by the sender, so neither proves anything. Every image is read by the application: a PNG named .jpg is rejected as not matching its contents, animated images are rejected, and files that are not images at all are rejected. Bytes identical to a photo already in the project are skipped and the existing photo is pointed out — re-uploading is not a new photo.",
+      ],
+    },
+    {
+      kind: "pitfalls",
+      items: [
+        [
+          "Memilih lebih dari 10 berkas sekaligus. Unggahan ditolak seluruhnya sebelum satu pun diproses; pecah menjadi beberapa unggahan.",
+          "Selecting more than 10 files at once. The upload is refused before any file is processed; split it into several uploads.",
+        ],
+        [
+          "Menghapus foto untuk mengunggah versi yang lebih bagus. Menghapus juga membuang thumbnail dan catatannya dari galeri; riwayatnya hanya tersisa di audit log.",
+          "Deleting a photo to upload a nicer version. Deleting also removes the thumbnail and its entry from the gallery; only the audit log keeps a trace.",
+        ],
+        [
+          "Mengandalkan urutan unggah untuk membaca kronologi. Galeri mengurutkan menurut tanggal foto; foto lama yang baru diunggah tetap berada pada bulannya.",
+          "Relying on upload order to read the chronology. The gallery orders by photo date; an old photo uploaded late still lands in its own month.",
+        ],
+      ],
+    },
+  ],
+};
+
 export const chapterQuotation: Chapter = {
   id: "quotation",
   title: ["Menyiapkan penawaran untuk klien", "Preparing a quotation for a client"],
@@ -1655,6 +1741,98 @@ export const chapterBank: Chapter = {
       items: [
         ["Bila beberapa transaksi sama arah, nominal, dan tanggalnya, yang dibayar lewat rekening yang sedang diimpor yang dicocokkan. Kalau masih lebih dari satu, tidak ada yang dicocokkan otomatis — lebih baik menunggu tangan manusia daripada salah pasang.", "When several transactions share direction, amount, and date, the one paid through the account being imported is matched. If more than one remains, nothing is matched automatically — better to wait for a human than to pair the wrong one."],
         ["Mutasi yang tidak cocok tetap tercatat tetapi tidak dihitung sebagai kas; Buku Kas dan laba aman dibagikan tidak pernah menghitung uang yang sama dua kali.", "An unmatched line stays recorded but never counts as cash; the Cash Ledger and distributable profit never count the same money twice."],
+      ],
+    },
+  ],
+};
+
+export const chapterEvidence: Chapter = {
+  id: "evidence",
+  title: ["Arsip bukti keuangan", "Financial evidence archive"],
+  blocks: [
+    {
+      kind: "lead",
+      text: [
+        "Arsip Bukti mengumpulkan setiap catatan kas dan buktinya di satu tempat: pembayaran klien, pembayaran vendor, setoran pajak, belanja dan reimburse, uang muka, bagi hasil, mutasi bank, transaksi manual, ditambah tanda terima quotation dan BAST final. Finance tidak lagi membuka modul satu per satu untuk menemukan bukti transfer.",
+        "The Evidence Archive gathers every cash record and its proof in one place: client payments, vendor payments, tax settlements, expenses and reimbursements, advances, profit shares, bank lines, manual transactions, plus quotation acceptances and final handover certificates. Finance no longer opens each module in turn to find a transfer receipt.",
+      ],
+    },
+    {
+      kind: "meta",
+      rows: [
+        {
+          label: ["Siapa yang boleh", "Who may do it"],
+          value: [
+            "Membuka arsip memerlukan izin Lihat pada Pembukuan. Tiap baris hanya tampil bila Anda juga punya izin pada modul asalnya — pembayaran vendor mengikuti Procurement & Vendor, pembayaran invoice mengikuti Quotation & Invoice, dan seterusnya. Melampirkan dan menghapus bukti memerlukan izin Kelola pada Pembukuan dan pada modul asalnya, sehingga hanya Admin dan Finance yang melakukannya.",
+            "Opening the archive requires View on Finance. Each row only appears if you also hold permission on its source module — vendor payments follow Procurement & Vendors, invoice payments follow Quotations & Invoices, and so on. Attaching and deleting proof requires Manage on Finance and on the source module, so only Admin and Finance do it.",
+          ],
+        },
+        {
+          label: ["Di mana", "Where"],
+          value: ["Pembukuan, bagian Arsip Bukti.", "Finance, the Evidence Archive section."],
+        },
+      ],
+    },
+    {
+      kind: "table",
+      widths: [34, 66],
+      head: [
+        ["Jenis catatan", "Record type"],
+        ["Dari mana buktinya", "Where its proof comes from"],
+      ],
+      rows: [
+        [
+          ["Pembayaran invoice, pembayaran vendor, setoran pajak, tanda terima quotation", "Invoice payment, vendor payment, tax settlement, quotation acceptance"],
+          ["Berkas yang diunggah bersama catatannya. Sampai 22 Agustus 2026 berkas-berkas ini tidak pernah bisa dibuka dari mana pun; kini dibuka dari arsip.", "The file uploaded together with the record. Until 22 August 2026 these files could not be opened from anywhere; now they open from the archive."],
+        ],
+        [
+          ["Belanja proyek dan reimburse", "Project expenses and reimbursements"],
+          ["Lampiran belanja proyek (nota, invoice vendor, bukti bayar).", "The expense attachments (receipt, vendor invoice, payment proof)."],
+        ],
+        [
+          ["BAST final", "Final handover certificate"],
+          ["Arsip PDF yang dikunci saat finalisasi.", "The PDF archive locked at finalization."],
+        ],
+        [
+          ["Uang muka, bagi hasil, transaksi manual, mutasi bank", "Advances, profit shares, manual transactions, bank lines"],
+          ["Tidak punya bukti bawaan. Lampirkan dari arsip. PDF mutasi bank yang diimpor tidak disimpan aplikasi, jadi untuk mutasi bank buktinya hanya bisa datang dari lampiran.", "No built-in proof. Attach it from the archive. The imported bank statement PDF is not kept by the application, so for bank lines proof can only come from an attachment."],
+        ],
+      ],
+    },
+    {
+      kind: "steps",
+      items: [
+        [
+          "Cari dengan nomor dokumen, nama klien atau vendor, referensi transfer, kode proyek, atau nominal persisnya. Saring per jenis, arah, periode, proyek, dan Tanpa bukti.",
+          "Search by document number, client or vendor name, transfer reference, project code, or the exact amount. Filter by type, direction, period, project, and Without proof.",
+        ],
+        [
+          "Buka bukti dari tombol pada barisnya, atau buka dokumen asalnya (PDF invoice, quotation, SPK, BAST).",
+          "Open the proof from the button on its row, or open the source document (invoice, quotation, work order, or handover PDF).",
+        ],
+        [
+          "Lampirkan bukti ke baris mana pun — maksimal 5 berkas per unggahan, PDF atau gambar, masing-masing maksimal 10 MB. Berkas yang sama tidak dapat dilampirkan dua kali pada baris yang sama.",
+          "Attach proof to any row — at most 5 files per upload, PDF or image, each at most 10 MB. The same file cannot be attached twice to the same row.",
+        ],
+        [
+          "Gunakan saringan Tanpa bukti secara berkala untuk mengejar catatan yang buktinya belum ada.",
+          "Use the Without proof filter regularly to chase records whose proof is still missing.",
+        ],
+      ],
+    },
+    {
+      kind: "note",
+      title: ["Pembatalan tampil sebagai baris sendiri", "Voids appear as their own rows"],
+      text: [
+        "Setiap pembatalan pembayaran adalah uang yang sama kembali, dan arsip menampilkannya sebagai baris tersendiri yang ditandai sebagai pembalikan, menunjuk bukti baris asalnya. Baris pembalikan tidak pernah dihitung sebagai tanpa bukti. Karena arsip bertulang punggung Buku Kas, jumlah barisnya selalu cocok dengan Buku Kas — termasuk catatan lama bersumber tak dikenal, yang tampil sebagai Catatan kas lain.",
+        "Every payment void is the same money coming back, and the archive shows it as its own row marked as a reversal, pointing at the proof of the original row. Reversal rows are never counted as missing proof. Because the archive is built on the Cash Ledger, its row count always matches the ledger — including old entries from unknown sources, which appear as Other cash entry.",
+      ],
+    },
+    {
+      kind: "locked",
+      text: [
+        "Bukti yang diunggah bersama catatannya hanya dapat dibaca dari arsip, tidak dihapus. Lampiran arsip dapat dihapus oleh Admin atau oleh pengunggahnya sendiri — kecuali bila transaksinya sudah dicocokkan dengan mutasi bank; bukti dari transaksi yang sudah direkonsiliasi tidak dapat dihapus siapa pun. Setiap unggahan dan penghapusan tercatat di audit log.",
+        "Proof uploaded together with a record can only be read from the archive, never deleted. Archive attachments may be deleted by an Admin or by whoever uploaded them — unless the transaction has been matched to a bank line; proof on a reconciled transaction cannot be deleted by anyone. Every upload and deletion is written to the audit log.",
       ],
     },
   ],
@@ -2827,6 +3005,36 @@ export const chapterMessages: Chapter = {
           action: ["Ini bukan kesalahan pengguna — hubungi Admin. Arsipnya perlu diperiksa lebih dulu; bila memang rusak, BAST-nya dicabut dan diterbitkan ulang sebagai revisi berikutnya.", "This is not a user error — contact an Admin. The archive has to be examined first; if it is genuinely damaged, the certificate is revoked and re-issued as the next revision."],
         },
         {
+          message: ["Tipe file tidak sesuai dengan isi gambarnya.", "The file type does not match the image contents."],
+          meaning: ["Nama dan tipe berkas ditentukan pengirim; aplikasi membaca isinya. Berkas ini mengaku JPG, PNG, atau WebP tetapi isinya bukan itu.", "The file name and type are chosen by the sender; the application reads the contents. This file claims to be a JPG, PNG, or WebP but its contents say otherwise."],
+          action: ["Buka berkasnya di komputer dan simpan ulang sebagai JPG atau PNG yang sebenarnya, lalu unggah lagi. Dalam unggahan banyak berkas, hanya berkas ini yang dilewati.", "Open the file on a computer and re-save it as a genuine JPG or PNG, then upload again. In a multi-file upload only this file is skipped."],
+        },
+        {
+          message: ["... sudah ada di proyek ini.", "... already exists in this project."],
+          meaning: ["Byte berkas ini persis sama dengan foto atau berkas yang sudah ada di proyek itu. Mengunggah ulang bukan foto baru.", "The bytes of this file are identical to a photo or file already in that project. Re-uploading is not a new photo."],
+          action: ["Tidak perlu apa-apa; pesannya menunjuk dokumen yang sudah ada. Bila memang foto berbeda, periksa apakah yang dipilih benar.", "Nothing to do; the message points at the existing document. If it really is a different photo, check that the right one was selected."],
+        },
+        {
+          message: ["Maksimal 10 berkas per unggahan. / Proyek ini sudah memuat 500 berkas. / Tidak ada berkas yang bisa diterima.", "At most 10 files per upload. / This project already holds 500 files. / No file could be accepted."],
+          meaning: ["Batas unggahan foto proyek. Yang ketiga berarti setiap berkas dalam unggahan itu ditolak, masing-masing dengan alasannya sendiri.", "The project photo upload limits. The third means every file in that upload was rejected, each with its own reason."],
+          action: ["Pecah unggahan besar menjadi beberapa kali; untuk proyek yang penuh, hapus berkas yang tidak lagi dibutuhkan. Baca alasan per berkas sebelum mengulang.", "Split a large upload into several; for a full project, delete files no longer needed. Read the per-file reason before retrying."],
+        },
+        {
+          message: ["... sudah dilampirkan pada bukti ini.", "... is already attached to this evidence."],
+          meaning: ["Berkas dengan isi yang sama sudah menjadi lampiran baris bukti itu.", "A file with the same contents is already attached to that evidence row."],
+          action: ["Tidak perlu dilampirkan lagi. Buka lampiran yang ada dari baris tersebut.", "No need to attach it again. Open the existing attachment from that row."],
+        },
+        {
+          message: ["Transaksi ini sudah dicocokkan dengan mutasi bank; lampirannya tidak dapat dihapus.", "This transaction has been matched to a bank line; its attachment cannot be deleted."],
+          meaning: ["Bukti dari transaksi yang sudah direkonsiliasi adalah bagian dari jejak rekonsiliasi itu. Menghapusnya akan meninggalkan mutasi bank yang menunjuk ke bukti yang sudah tidak ada.", "Proof on a reconciled transaction is part of that reconciliation trail. Deleting it would leave a bank line pointing at proof that no longer exists."],
+          action: ["Bila lampirannya keliru, lampirkan berkas yang benar di sampingnya dan beri catatan. Lampiran yang sudah ada tetap tinggal.", "If the attachment is wrong, attach the correct file next to it with a note. The existing attachment stays."],
+        },
+        {
+          message: ["Catatan ini tidak menyimpan bukti.", "This record holds no proof."],
+          meaning: ["Jenis catatan ini tidak punya berkas bawaan — uang muka, bagi hasil, transaksi manual, dan mutasi bank — atau catatannya dibuat tanpa lampiran.", "This record type has no built-in file — advances, profit shares, manual transactions, bank lines — or the record was created without an attachment."],
+          action: ["Lampirkan buktinya dari Arsip Bukti.", "Attach the proof from the Evidence Archive."],
+        },
+        {
           message: ["Proyek ini sudah punya alokasi ke kas perusahaan.", "This project already has an allocation to company cash."],
           meaning: ["Satu proyek hanya boleh punya satu alokasi perusahaan yang aktif. Dua baris yang sama-sama berarti \"sisanya milik perusahaan\" tidak menambah informasi apa pun, tetapi membuat siapa pun yang membacanya bertanya mana yang benar.", "A project may have only one active company allocation. Two rows that both mean \"the rest belongs to the company\" add no information but leave anyone reading them wondering which is the real one."],
           action: ["Ubah persentase alokasi yang sudah ada selama masih Draft, atau batalkan lalu buat yang baru. Pesannya menyebut alokasi mana yang dimaksud.", "Change the existing allocation's percentage while it is still a Draft, or void it and create a new one. The message states which allocation it means."],
@@ -3120,6 +3328,7 @@ export const guideChapters: Chapter[] = [
   chapterRoles,
   chapterFlow,
   chapterStart,
+  chapterProjectMedia,
   chapterQuotation,
   chapterInstallment,
   chapterInvoicePayment,
@@ -3129,6 +3338,7 @@ export const guideChapters: Chapter[] = [
   chapterHandover,
   chapterExpenses,
   chapterBank,
+  chapterEvidence,
   chapterTax,
   chapterProfit,
   chapterCatalog,

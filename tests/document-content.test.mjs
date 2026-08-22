@@ -787,7 +787,7 @@ test("the English edition of the manual documents it in English too", async () =
 test("the manual carries the audited flows: deal conversion, per-term evidence, withholding on payment, profit cap, bank window, reversal dating", async () => {
   await loginAsAdmin();
   const manual = await pdfText("/api/help/sop.pdf?language=id");
-  assert.match(manual.flat, /Edisi 2\.2/);
+  assert.match(manual.flat, /Edisi 2\.3/);
   assert.match(manual.flat, /Jadikan proyek: dari calon klien ke proyek/);
   // Judul callout dicetak HURUF BESAR; yang dicocokkan kalimat isinya.
   assert.match(manual.flat, /termin wajib dipilih saat mencatat pembayaran vendor/);
@@ -798,17 +798,17 @@ test("the manual carries the audited flows: deal conversion, per-term evidence, 
   assert.match(manual.flat, /tetap Aktif walau BAST-nya final/);
   assert.match(manual.flat, /Bagan alur pemakaian aplikasi/, "keterangan bagan tercetak di bab alur");
   // Daftar isi mengikuti jumlah bab yang sebenarnya.
-  assert.match(manual.flat, /Bab 3 sampai 16/);
+  assert.match(manual.flat, /Bab 3 sampai 18/);
 });
 
 test("the English edition carries the same audited flows", async () => {
   await loginAsAdmin("en");
   const manual = await pdfText("/api/help/sop.pdf?language=en");
-  assert.match(manual.flat, /Edition 2\.2/);
+  assert.match(manual.flat, /Edition 2\.3/);
   assert.match(manual.flat, /Convert to project: from prospect to project/);
   assert.match(manual.flat, /Since 21 August 2026 withholding taxes/);
   assert.match(manual.flat, /all use the same window: 14 days/);
-  assert.match(manual.flat, /Chapters 3 to 16/);
+  assert.match(manual.flat, /Chapters 3 to 18/);
 });
 
 test("the manual says where document templates live and whose permission governs them", async () => {
@@ -838,6 +838,24 @@ test("panduan menjelaskan alokasi ke kas perusahaan dan kenapa kas tidak bergera
   await loginAsAdmin("en");
   const en = await pdfText("/api/help/sop.pdf?language=en");
   assert.match(en.flat, /Net company cash does not move by a single rupiah/);
+});
+
+test("panduan memuat bab foto proyek dan arsip bukti, dalam dua bahasa", async () => {
+  await loginAsAdmin();
+  const id = await pdfText("/api/help/sop.pdf?language=id");
+  assert.match(id.flat, /Dokumentasi foto dan berkas proyek/);
+  assert.match(id.flat, /bukan kapan seseorang sempat mengunggahnya/);
+  assert.match(id.flat, /Maksimal 10 berkas per unggahan/);
+  assert.match(id.flat, /Arsip bukti keuangan/);
+  assert.match(id.flat, /tidak pernah bisa dibuka dari mana pun; kini dibuka dari arsip/);
+  assert.match(id.flat, /Baris pembalikan tidak pernah dihitung sebagai tanpa bukti/);
+  assert.match(id.flat, /Tipe file tidak sesuai dengan isi gambarnya/);
+
+  await loginAsAdmin("en");
+  const en = await pdfText("/api/help/sop.pdf?language=en");
+  assert.match(en.flat, /Project photos and files/);
+  assert.match(en.flat, /Financial evidence archive/);
+  assert.match(en.flat, /Reversal rows are never counted as missing proof/);
 });
 
 test("panduan menjelaskan kenapa lampiran BAST adalah arsip, bukan cetakan baru", async () => {
