@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
+import sharp, { type Metadata as SharpMetadata } from "sharp";
 import { ApiError } from "./api/errors";
 import {
   ATTACHMENT_ALLOWED_MIME_TYPES,
@@ -166,4 +167,123 @@ export function assertAttachmentBudget(attachments: PreparedAttachment[]) {
       { byteSize: total, limit: ATTACHMENT_TOTAL_MAX_BYTES },
     );
   }
+}
+
+// ── Gambar ───────────────────────────────────────────────────────────────
+//
+// Foto yang diunggah orang diperiksa ISINYA oleh sharp, bukan tipe yang
+// diakui peramban: tipe yang tersimpan adalah yang nanti dipakai sebagai
+// Content-Type saat berkas dilayani kembali, dan membiarkan pengunggah
+// menentukannya berarti membiarkan pengunggah menentukan apa yang dijalankan
+// peramban orang lain. Pola ini diangkat dari `preparePortfolioImage`
+// (cms-router) — dengan dua perbedaan: batas sisinya 12.000 px, karena foto
+// HP masa kini 4032×3024 dan kamera DSLR lebih lebar lagi; dan gambar animasi
+// ditolak, karena thumbnail dari frame pertama menyesatkan.
+
+/** Sisi terpanjang yang diterima. */
+export const IMAGE_MAX_SIDE = 12_000;
+/** Batas piksel total — 40 MP terdekode ≈ 160 MB RGBA, di proses 700 MB. */
+export const IMAGE_MAX_PIXELS = 40_000_000;
+/** Lebar thumbnail galeri. Cukup untuk petak 3–4 kolom di layar retina. */
+export const THUMBNAIL_WIDTH = 480;
+
+const SHARP_FORMAT_MIME: Record<string, string> = {
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+};
+
+export interface PreparedImage extends PreparedAttachment {
+  /** Dimensi seperti yang DILIHAT, sudah memperhitungkan orientasi EXIF. */
+  width: number;
+  height: number;
+  orientation: number | null;
+  /** Blok EXIF mentah bila ada — untuk tanggal pengambilan. */
+  exif: Buffer | null;
+}
+
+export async function prepareUploadedImage(
+  filename: string,
+  declaredMime: string,
+  content: ArrayBuffer,
+): Promise<PreparedImage> {
+  const nama = safeAttachmentFilename(filename, "foto");
+  if (!Object.values(SHARP_FORMAT_MIME).includes(declaredMime)) {
+    throw new ApiError(
+      415,
+      "UNSUPPORTED_FILE",
+      "Gunakan gambar JPG, PNG, atau WebP.",
+      { filename: nama },
+    );
+  }
+  const buffer = Buffer.from(content);
+  let metadata: SharpMetadata;
+  try {
+    metadata = await sharp(buffer, {
+      failOn: "error",
+      limitInputPixels: IMAGE_MAX_PIXELS,
+    }).metadata();
+  } catch {
+    throw new ApiError(415, "INVALID_IMAGE", "Isi berkas bukan gambar yang valid.", {
+      filename: nama,
+    });
+  }
+  if ((metadata.pages ?? 1) > 1) {
+    throw new ApiError(415, "ANIMATED_IMAGE", "Gambar animasi tidak didukung.", {
+      filename: nama,
+    });
+  }
+  const width = metadata.width ?? 0;
+  const height = metadata.height ?? 0;
+  if (width > IMAGE_MAX_SIDE || height > IMAGE_MAX_SIDE || width * height > IMAGE_MAX_PIXELS) {
+    throw new ApiError(
+      422,
+      "IMAGE_DIMENSIONS",
+      `Dimensi gambar maksimal ${IMAGE_MAX_SIDE} piksel per sisi dan ${IMAGE_MAX_PIXELS / 1_000_000} megapiksel.`,
+      { filename: nama, width, height },
+    );
+  }
+  if (SHARP_FORMAT_MIME[metadata.format ?? ""] !== declaredMime) {
+    throw new ApiError(
+      415,
+      "IMAGE_TYPE_MISMATCH",
+      "Tipe file tidak sesuai dengan isi gambarnya.",
+      { filename: nama, declared: declaredMime, actual: metadata.format ?? null },
+    );
+  }
+  const orientation = metadata.orientation ?? null;
+  const diputar = orientation !== null && orientation >= 5;
+  return {
+    filename: nama,
+    mimeType: declaredMime,
+    content,
+    byteSize: content.byteLength,
+    sha256: createHash("sha256").update(buffer).digest("hex"),
+    generated: false,
+    width: diputar ? height : width,
+    height: diputar ? width : height,
+    orientation,
+    exif: metadata.exif ?? null,
+  };
+}
+
+/**
+ * Thumbnail WebP selebar THUMBNAIL_WIDTH, sudah diputar sesuai EXIF.
+ * Dipanggil sekali saat unggah dan disimpan; galeri tidak pernah memuat
+ * foto asli untuk petak-petaknya.
+ */
+export async function makeThumbnail(content: ArrayBuffer) {
+  return sharp(Buffer.from(content), {
+    failOn: "error",
+    limitInputPixels: IMAGE_MAX_PIXELS,
+  })
+    .rotate()
+    .resize({ width: THUMBNAIL_WIDTH, withoutEnlargement: true })
+    .webp({ quality: 78 })
+    .toBuffer();
+}
+
+/** Header Content-Disposition untuk berkas yang dilayani kembali. */
+export function inlineDisposition(name: string, fallback = "berkas") {
+  return `inline; filename*=UTF-8''${encodeURIComponent(safeAttachmentFilename(name, fallback))}`;
 }

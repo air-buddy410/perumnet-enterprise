@@ -19,7 +19,12 @@ export async function storeUploadedFile(
   // di UPLOAD_DIR, dinamai id-nya saja. Yang membedakan hanya kunci di R2.
   // Union-nya sengaja tertutup: itu yang membuat tidak ada yang pernah menulis
   // ke prefiks R2 yang salah ketik.
-  namespace: "project-documents" | "project-expenses" | "email-attachments",
+  namespace:
+    | "project-documents"
+    | "project-expenses"
+    | "email-attachments"
+    // Lampiran arsip bukti keuangan (22 Agu 2026). Prefiks R2 `finance-evidence/`.
+    | "finance-evidence",
   id: string,
   mimeType: string,
   content: ArrayBuffer,

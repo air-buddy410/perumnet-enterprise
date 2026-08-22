@@ -248,7 +248,16 @@ CREATE TABLE IF NOT EXISTS project_documents (
   content_base64 TEXT,
   uploaded_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   uploader_name TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  -- Ditambahkan 22 Agu 2026 (foto progres): basis data lama mendapatkannya
+  -- lewat ensureProjectDocumentMediaSchema, bersama indeksnya.
+  caption TEXT,
+  taken_at TEXT,
+  sha256 TEXT,
+  width INTEGER,
+  height INTEGER,
+  thumb_storage_url TEXT,
+  thumb_content_base64 TEXT
 );
 CREATE INDEX IF NOT EXISTS project_documents_project_idx ON project_documents(project_id);
 
@@ -792,6 +801,35 @@ CREATE INDEX IF NOT EXISTS project_expense_attachments_expense_idx
   ON project_expense_attachments(expense_id,created_at);
 CREATE INDEX IF NOT EXISTS project_expense_attachments_hash_idx
   ON project_expense_attachments(sha256);
+
+-- Lampiran arsip bukti keuangan (22 Agu 2026): bukti yang dilampirkan
+-- BELAKANGAN ke catatan kas mana pun — uang muka, reimburse, bagi hasil,
+-- transaksi manual, atau tambahan pada pembayaran yang sudah punya bukti.
+--
+-- Polimorfik, tanpa foreign key: (evidence_kind, evidence_id) menunjuk ke
+-- tabel yang berbeda per jenis. Daftar jenis hidup di shared/finance-evidence.ts,
+-- sengaja tanpa CHECK — CHECK pada tabel berisi data sudah dua kali menuntut
+-- pembangunan ulang tabel (lihat ensureBastVoidStatus, ensureDocumentEmailBastKind).
+-- Indeks unik sha256 per baris adalah penjaga duplikat di tingkat basis data:
+-- dua unggahan bersamaan tidak bisa sama-sama menang.
+CREATE TABLE IF NOT EXISTS finance_evidence_attachments (
+  id TEXT PRIMARY KEY,
+  evidence_kind TEXT NOT NULL,
+  evidence_id TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  byte_size INTEGER NOT NULL CHECK (byte_size > 0 AND byte_size <= 10485760),
+  sha256 TEXT NOT NULL,
+  storage_url TEXT,
+  content_base64 TEXT,
+  note TEXT,
+  uploaded_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS finance_evidence_attachments_evidence_idx
+  ON finance_evidence_attachments(evidence_kind,evidence_id,created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS finance_evidence_attachments_sha_unique
+  ON finance_evidence_attachments(evidence_kind,evidence_id,sha256);
 
 CREATE TABLE IF NOT EXISTS project_expense_settlements (
   id TEXT PRIMARY KEY,
@@ -3244,6 +3282,43 @@ async function ensureProjectCoordinateSchema(client: DatabaseClient) {
   }
 }
 
+/**
+ * Foto progres proyek (22 Agu 2026): keterangan, tanggal foto dari EXIF,
+ * sidik sha256 untuk dedupe, dimensi, dan thumbnail.
+ *
+ * Indeksnya dibuat DI SINI, setelah kolomnya ada — bukan di `schemaSql`. Pada
+ * basis data yang tabelnya sudah ada, blok itu berjalan lebih dulu dan
+ * `CREATE TABLE IF NOT EXISTS` tidak menambah kolom; indeks atas kolom yang
+ * belum ada menggagalkan seluruh initializeDatabase. Itu persis yang
+ * menjatuhkan demo dan produksi pada 20 Agustus 2026.
+ */
+async function ensureProjectDocumentMediaSchema(client: DatabaseClient) {
+  const columns: Array<[string, string]> = [
+    ["caption", "TEXT"],
+    ["taken_at", "TEXT"],
+    ["sha256", "TEXT"],
+    ["width", "INTEGER"],
+    ["height", "INTEGER"],
+    ["thumb_storage_url", "TEXT"],
+    ["thumb_content_base64", "TEXT"],
+  ];
+  for (const [column, definition] of columns) {
+    await ensureColumn(client, "project_documents", column, definition);
+  }
+  // Baris lama tidak punya EXIF yang tersimpan; waktu unggah adalah perkiraan
+  // terbaik yang tersedia, dan galeri butuh SETIAP baris punya tanggal foto.
+  await client.execute(
+    "UPDATE project_documents SET taken_at=created_at WHERE taken_at IS NULL",
+  );
+  for (const sql of [
+    "CREATE INDEX IF NOT EXISTS project_documents_project_created_idx ON project_documents(project_id,created_at)",
+    "CREATE INDEX IF NOT EXISTS project_documents_project_taken_idx ON project_documents(project_id,taken_at)",
+    "CREATE INDEX IF NOT EXISTS project_documents_project_sha_idx ON project_documents(project_id,sha256)",
+  ]) {
+    await client.execute(sql);
+  }
+}
+
 async function ensurePortfolioGalleryLimit(client: DatabaseClient) {
   if (client.dialect === "postgres") {
     const constraints = await client.execute(`SELECT pg_get_constraintdef(oid) AS definition
@@ -3493,6 +3568,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureBankReconciliationSchema(client);
   await ensureTransactionOriginColumn(client);
   await ensureProjectCoordinateSchema(client);
+  await ensureProjectDocumentMediaSchema(client);
   await ensurePortfolioGalleryLimit(client);
   await ensureDocumentEmailBastKind(client);
   await ensureDocumentCounters(client);
