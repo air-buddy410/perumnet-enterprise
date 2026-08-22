@@ -69,6 +69,7 @@ const CSS_FONT_SIZE_ALIASES: Record<string, string> = {
   "x-large": "24px",
   "xx-large": "32px",
 };
+const PARAGRAPH_INDENT = "\u00a0\u00a0\u00a0\u00a0";
 
 const copy = {
   id: {
@@ -98,6 +99,7 @@ const copy = {
     clear: "Hapus format",
     placeholder: "Tulis isi surat di sini…",
     help: "Editor visual menyimpan HTML aman. Toolbar mendukung paragraf, judul, ukuran dan keluarga font, alignment, daftar, kutipan, tautan, warna, serta undo/redo.",
+    tabIndent: "Tab menambah indentasi paragraf; Shift+Tab menguranginya.",
     linkPrompt: "Masukkan URL tautan (http, https, atau mailto)",
     linkSelection: "Pilih teks terlebih dahulu untuk dijadikan tautan.",
     invalidLink: "Gunakan tautan http, https, atau mailto.",
@@ -129,6 +131,7 @@ const copy = {
     clear: "Clear formatting",
     placeholder: "Write the letter here…",
     help: "The visual editor stores safe HTML. The toolbar supports paragraphs, headings, font family and size, alignment, lists, quotes, links, color, and undo/redo.",
+    tabIndent: "Tab indents the paragraph; Shift+Tab reduces the indent.",
     linkPrompt: "Enter a link URL (http, https, or mailto)",
     linkSelection: "Select text first to turn it into a link.",
     invalidLink: "Use an http, https, or mailto link.",
@@ -434,7 +437,14 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (disabled || !(event.metaKey || event.ctrlKey)) return;
+    if (disabled) return;
+    if (event.key === "Tab" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      if (event.shiftKey) runCommand("outdent");
+      else insertText(PARAGRAPH_INDENT);
+      return;
+    }
+    if (!(event.metaKey || event.ctrlKey)) return;
     const shortcut = event.key.toLowerCase();
     const command = shortcut === "b" ? "bold" : shortcut === "i" ? "italic" : shortcut === "u" ? "underline" : "";
     if (!command) return;
@@ -532,7 +542,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
       onKeyDown={handleKeyDown}
       onBlur={saveSelection}
     />
-    <small className={styles.richTextHelp}>{labels.help} {format !== "html" ? (language === "id" ? "Template lama akan beralih ke editor visual saat mulai diedit." : "Legacy templates switch to the visual editor when you start editing.") : ""}</small>
+    <small className={styles.richTextHelp}>{labels.help} {labels.tabIndent} {format !== "html" ? (language === "id" ? "Template lama akan beralih ke editor visual saat mulai diedit." : "Legacy templates switch to the visual editor when you start editing.") : ""}</small>
   </div>;
 });
 
