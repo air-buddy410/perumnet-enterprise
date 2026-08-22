@@ -423,10 +423,16 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     emitHtml();
   }, [disabled, emitHtml, restoreSelection]);
 
-  const insertText = useCallback((text: string) => {
+  const insertText = useCallback((text: string, restoreSavedSelection = true) => {
     if (disabled || !editorRef.current) return;
-    restoreSelection();
-    editorRef.current.focus(FOCUS_TANPA_GULIR);
+    const editor = editorRef.current;
+    if (restoreSavedSelection) {
+      restoreSelection();
+      editor.focus(FOCUS_TANPA_GULIR);
+    } else {
+      const selection = window.getSelection();
+      if (!selection?.rangeCount || !editor.contains(selection.getRangeAt(0).commonAncestorContainer)) return;
+    }
     const inserted = document.execCommand("insertText", false, text);
     if (!inserted) {
       const selection = window.getSelection();
@@ -446,7 +452,6 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
 
   const removeParagraphIndent = useCallback(() => {
     if (disabled || !editorRef.current) return;
-    restoreSelection();
 
     const editor = editorRef.current;
     const selection = window.getSelection();
@@ -480,7 +485,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     selection.removeAllRanges();
     selection.addRange(nextRange);
     emitHtml();
-  }, [disabled, emitHtml, restoreSelection]);
+  }, [disabled, emitHtml]);
 
   useImperativeHandle(ref, () => ({
     focus: () => editorRef.current?.focus(FOCUS_TANPA_GULIR),
@@ -492,7 +497,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     const plainText = event.clipboardData.getData("text/plain");
     if (plainText) {
       saveSelection();
-      insertText(plainText);
+      insertText(plainText, false);
     }
   }
 
@@ -516,14 +521,14 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
       }
       event.preventDefault();
       if (event.shiftKey) removeParagraphIndent();
-      else insertText(PARAGRAPH_INDENT);
+      else insertText(PARAGRAPH_INDENT, false);
       return;
     }
 
     if (!(event.metaKey || event.ctrlKey)) return;
     if (event.key === "]") {
       event.preventDefault();
-      insertText(PARAGRAPH_INDENT);
+      insertText(PARAGRAPH_INDENT, false);
       return;
     }
     const shortcut = event.key.toLowerCase();
