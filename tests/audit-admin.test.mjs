@@ -492,3 +492,93 @@ test("D: konversi prospek butuh izin proyek; Lost tidak bisa langsung Won tapi b
   const baris = daftar.items.find((p) => p.id === prospek.id);
   assert.equal(baris.projectCode, hasil.project.code, "daftar prospek menampilkan kode proyeknya");
 });
+
+// ── Template surat dokumen: izin mengikuti jenis dokumennya ─────────────────
+//
+// Dilaporkan pemilik 22 Agustus 2026: template quotation dibuat di Calon Klien
+// dan tidak pernah muncul di dialog Kirim. Dua sistem berbeda — itu benar —
+// tetapi pengelola template dokumen dijaga izin Procurement untuk SEMUA jenis,
+// sehingga Finance tanpa izin Procurement tidak bisa membuat template invoice
+// sekalipun ia yang menagih.
+
+test("T: template quotation/invoice ikut izin Billing, SPK ikut Procurement", async () => {
+  await masuk("admin@perumnet.id");
+  const buat = (documentKind, name) => json("/api/document-email-templates", {
+    method: "POST",
+    body: JSON.stringify({
+      documentKind, name,
+      subject: `${name} {{nomor}}`,
+      bodyHtml: "Yth. {{klien}},\n\nTerlampir {{nomor}}.",
+      bodyFormat: "text",
+    }),
+  }, 201);
+  const tplQuotation = await buat("quotation", `Pengantar Penawaran ${Date.now()}`);
+  const tplSpk = await buat("spk", `Pengantar SPK ${Date.now()}`);
+
+  const semua = await json("/api/document-email-templates");
+  assert.deepEqual(semua.viewableKinds.sort(), ["invoice", "quotation", "spk"], "Admin melihat semua jenis");
+  assert.equal(semua.audience.quotation, "klien");
+  assert.equal(semua.audience.spk, "vendor");
+
+  // Akun Finance khusus: izin Billing penuh, Procurement dicabut.
+  const email = `finance.template.${Date.now()}@perumnet.id`;
+  const sandi = "Finance-Template-2026";
+  const akun = await json("/api/users", {
+    method: "POST",
+    body: JSON.stringify({
+      name: "Finance Template", email, password: sandi, role: "Finance", status: "Aktif",
+    }),
+  }, 201);
+  await json(`/api/users/${akun.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ permissions: { ...akun.permissions, procurement: "none", billing: "manage" } }),
+  });
+
+  await request("/api/auth/logout", { method: "POST" });
+  cookie = "";
+  const masukFinance = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password: sandi, remember: false }),
+    redirect: "manual",
+  });
+  assert.equal(masukFinance.status, 200);
+  cookie = masukFinance.headers.get("set-cookie")?.split(";")[0] ?? "";
+
+  // Boleh mengelola template klien...
+  const daftar = await json("/api/document-email-templates");
+  assert.deepEqual(daftar.viewableKinds.sort(), ["invoice", "quotation"], "hanya jenis klien yang terlihat");
+  assert.equal(daftar.items.some((t) => t.id === tplQuotation.id), true, "template quotation terbaca");
+  assert.equal(daftar.items.some((t) => t.id === tplSpk.id), false, "template SPK disaring, bukan menolak seluruh daftar");
+  const invoiceBaru = await json("/api/document-email-templates", {
+    method: "POST",
+    body: JSON.stringify({
+      documentKind: "invoice", name: `Pengantar Invoice ${Date.now()}`,
+      subject: "Invoice {{nomor}}", bodyHtml: "Yth. {{klien}},\n\nInvoice {{nomor}}.", bodyFormat: "text",
+    }),
+  }, 201);
+  assert.equal(invoiceBaru.documentKind, "invoice");
+
+  // ...tetapi tidak boleh menyentuh template vendor.
+  const bacaSpk = await galat(`/api/document-email-templates/${tplSpk.id}`);
+  assert.equal(bacaSpk.status, 403);
+  assert.equal(bacaSpk.details?.module, "procurement");
+  const buatSpk = await galat("/api/document-email-templates", {
+    method: "POST",
+    body: JSON.stringify({
+      documentKind: "spk", name: "SPK Terlarang",
+      subject: "SPK {{nomor}}", bodyHtml: "Yth. {{vendor}},\n\nTerlampir {{nomor}}.", bodyFormat: "text",
+    }),
+  });
+  assert.equal(buatSpk.status, 403);
+  const hapusSpk = await galat(`/api/document-email-templates/${tplSpk.id}`, { method: "DELETE" });
+  assert.equal(hapusSpk.status, 403);
+  // Memindahkan template klien menjadi template vendor juga ditolak.
+  const pindah = await galat(`/api/document-email-templates/${tplQuotation.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ documentKind: "spk" }),
+  });
+  assert.equal(pindah.status, 403);
+
+  await masuk("admin@perumnet.id");
+});

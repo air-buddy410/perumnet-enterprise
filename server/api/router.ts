@@ -627,8 +627,11 @@ const resourceModules: Record<string, AccessModule> = {
   invoices: "billing",
   quotations: "billing",
   vendors: "procurement",
-  "document-email-templates": "procurement",
   "vendor-categories": "procurement",
+  // `document-email-templates` sengaja TIDAK di sini: izinnya per JENIS
+  // dokumen (SPK → procurement, Quotation/Invoice → billing), dan router-nya
+  // yang menegakkan. Gerbang satu-modul di sini akan menolak Finance yang izin
+  // Procurement-nya dicabut, padahal ia yang menulis surat pengantar invoice.
   spks: "procurement",
   "procurement-orders": "procurement",
   bast: "bast",

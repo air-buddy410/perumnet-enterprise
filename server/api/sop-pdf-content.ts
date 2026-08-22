@@ -1256,6 +1256,14 @@ export const chapterDocumentEmail: Chapter = {
         ],
       ],
     },
+    {
+      kind: "note",
+      title: ["Di mana template surat dokumen dikelola", "Where document letter templates live"],
+      text: [
+        "Template surat dokumen berbeda dari template surat Calon Klien, dan memang harus berbeda: penerimanya klien atau vendor yang sudah berkontrak, penandanya nomor dokumen dan nilai, dan PDF resminya ikut dilampirkan. Template SPK dan PO dikelola di Procurement & Vendor; template Quotation dan Invoice di Quotation & Invoice. Izinnya mengikuti jenis dokumennya — sejak 22 Agustus 2026 Finance tidak lagi perlu izin Procurement untuk menulis surat pengantar invoice, dan daftar template yang di luar izin disaring, bukan menolak seluruh layar.",
+        "Document letter templates differ from the Prospects letter templates, and they should: the recipient is a client or vendor already under contract, the placeholders are document numbers and amounts, and the official PDF is attached. SPK and PO templates are managed under Procurement & Vendors; Quotation and Invoice templates under Quotations & Invoices. Permissions follow the document type — since 22 August 2026 Finance no longer needs Procurement rights to write an invoice covering letter, and templates outside your permission are filtered out rather than refusing the whole screen.",
+      ],
+    },
   ],
 };
 
@@ -2736,6 +2744,11 @@ export const chapterMessages: Chapter = {
           message: ["Tautan konfirmasi email tidak valid atau sudah kedaluwarsa.", "This email confirmation link is invalid or has already expired."],
           meaning: ["Tautan konfirmasi penggantian alamat email hanya berlaku 60 menit dan hanya sekali pakai. Tautan juga hangus bila ada permintaan penggantian yang lebih baru atau bila kata sandi akun telah diatur ulang.", "An email change confirmation link is valid for 60 minutes and only once. It also lapses if a newer change was requested or if the account password was reset."],
           action: ["Buka Profil Saya dan ajukan penggantian alamat email sekali lagi agar tautan baru dikirim ke alamat yang dituju.", "Open My Profile and request the email address change again so a fresh link is sent to the intended address."],
+        },
+        {
+          message: ["Peran Anda tidak memiliki akses ke template surat Quotation / Invoice / SPK-PO.", "Your role has no access to Quotation / Invoice / SPK-PO letter templates."],
+          meaning: ["Izin template mengikuti jenis dokumennya: SPK dan PO ikut Procurement & Vendor, Quotation dan Invoice ikut Quotation & Invoice. Template yang boleh Anda lihat tetap muncul; yang di luar izin disaring diam-diam, bukan menolak seluruh daftar.", "Template permissions follow the document type: SPK and PO follow Procurement & Vendors, quotations and invoices follow Quotations & Invoices. Templates you may see still appear; the rest are filtered out rather than refusing the whole list."],
+          action: ["Minta Admin membuka Pengguna & Akses dan menyetel modul yang sesuai ke Kelola. Kalau Anda hanya menagih klien, izin Quotation & Invoice sudah cukup — izin Procurement tidak lagi diperlukan.", "Ask an Admin to open Users & Access and set the matching module to Manage. If you only bill clients, Quotations & Invoices is enough — Procurement rights are no longer required."],
         },
         {
           message: ["Template ini bukan untuk Quotation. / bukan untuk Invoice. / bukan untuk SPK.", "This template is not for quotations. / not for invoices. / not for work orders."],

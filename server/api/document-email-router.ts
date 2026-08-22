@@ -7,6 +7,7 @@ import { writeAuditLog } from "../audit";
 import type { AuthUser } from "../auth";
 import { getDatabase, type DatabaseClient } from "../db/client";
 import {
+  documentEmailAudience,
   documentEmailKinds,
   documentEmailPlaceholders,
   type DocumentEmailKind,
@@ -19,13 +20,17 @@ import { previewSpkEmailWithTemplate } from "./procurement-router";
 /**
  * Template surat pengantar dokumen.
  *
- * Fase ini hanya melayani SPK/PO, jadi penjaganya modul `procurement` — sama
- * dengan yang boleh mengirimnya. Saat quotation dan invoice ikut, penjaganya
- * menjadi per-jenis-dokumen (`billing` untuk keduanya).
+ * Penjaganya PER JENIS DOKUMEN, bukan satu modul untuk semuanya: template SPK
+ * mengikuti izin Procurement & Vendor, template Quotation dan Invoice
+ * mengikuti izin Quotation & Invoice — sama dengan yang boleh MENGIRIM
+ * dokumennya. Sampai 22 Agustus 2026 semuanya menuntut izin Procurement,
+ * sehingga Finance yang izin Procurement-nya dicabut tidak bisa membuat
+ * template invoice sekalipun ia yang menagih.
  *
- * Sengaja BUKAN penjaga gabungan "procurement ATAU billing": bentuk seperti itu
- * pernah ada di modul belanja proyek dan dibuang, karena tidak ada yang bisa
- * menjawab dengan pasti siapa yang sebenarnya boleh apa.
+ * Ini BUKAN penjaga gabungan "procurement ATAU billing" — bentuk kabur itu
+ * pernah ada di modul belanja proyek dan dibuang karena tidak ada yang bisa
+ * menjawab siapa sebenarnya boleh apa. Di sini pemetaannya eksplisit dan
+ * satu arah: jenis dokumen → modul izinnya.
  */
 
 const templateSchema = z.object({
@@ -51,16 +56,41 @@ const previewSchema = z.object({
   documentId: z.string().trim().min(1).max(120),
 });
 
-function penjaga(user: AuthUser, level: "view" | "manage") {
-  if (!canAccess(user.permissions, "procurement", level)) {
+/** Jenis dokumen → modul izin yang menaunginya. */
+const MODUL_PER_JENIS: Record<DocumentEmailKind, "procurement" | "billing"> = {
+  spk: "procurement",
+  quotation: "billing",
+  invoice: "billing",
+};
+
+const LABEL_JENIS: Record<DocumentEmailKind, string> = {
+  spk: "SPK/PO",
+  quotation: "Quotation",
+  invoice: "Invoice",
+};
+
+function penjaga(
+  user: AuthUser,
+  level: "view" | "manage",
+  kind: DocumentEmailKind,
+) {
+  if (!canAccess(user.permissions, MODUL_PER_JENIS[kind], level)) {
     throw new ApiError(
       403,
       "FORBIDDEN",
       level === "manage"
-        ? "Anda hanya bisa melihat template surat, tidak mengubahnya."
-        : "Peran Anda tidak memiliki akses ke template surat dokumen.",
+        ? `Anda hanya bisa melihat template surat ${LABEL_JENIS[kind]}, tidak mengubahnya.`
+        : `Peran Anda tidak memiliki akses ke template surat ${LABEL_JENIS[kind]}.`,
+      { documentKind: kind, module: MODUL_PER_JENIS[kind] },
     );
   }
+}
+
+/** Jenis yang boleh dilihat/dikelola akun ini — dipakai layar untuk memilih tab. */
+function jenisYangBoleh(user: AuthUser, level: "view" | "manage") {
+  return documentEmailKinds.filter((kind) =>
+    canAccess(user.permissions, MODUL_PER_JENIS[kind], level),
+  );
 }
 
 function mapTemplate(row: Record<string, unknown>) {
@@ -95,16 +125,30 @@ async function listTemplates(request: Request, user: AuthUser) {
   const { client } = await getDatabase();
   const url = new URL(request.url);
   const kind = url.searchParams.get("documentType");
-  const clauses = ["deleted_at IS NULL"];
-  const args: unknown[] = [];
+  const bolehLihat = jenisYangBoleh(user, "view");
+  // Jenis yang disebut harus boleh dilihat; tanpa penyebutan, daftarnya
+  // DISARING ke yang boleh — bukan ditolak. "Kamu melihat yang kamu boleh
+  // lihat" adalah jawaban yang jelas; menolak seluruh daftar karena satu
+  // jenis tidak boleh akan membuat layar Quotation kosong tanpa sebab.
   if (kind && (documentEmailKinds as readonly string[]).includes(kind)) {
-    clauses.push("document_kind=?");
-    args.push(kind);
+    penjaga(user, "view", kind as DocumentEmailKind);
+  } else if (!bolehLihat.length) {
+    throw new ApiError(
+      403,
+      "FORBIDDEN",
+      "Peran Anda tidak memiliki akses ke template surat dokumen.",
+    );
   }
+  const terpilih =
+    kind && (documentEmailKinds as readonly string[]).includes(kind)
+      ? [kind]
+      : bolehLihat;
   const hasil = await client.execute({
     sql: `SELECT * FROM document_email_templates
-      WHERE ${clauses.join(" AND ")} ORDER BY document_kind, name`,
-    args,
+      WHERE deleted_at IS NULL
+        AND document_kind IN (${terpilih.map(() => "?").join(",")})
+      ORDER BY document_kind, name`,
+    args: terpilih,
   });
   return ok(
     {
@@ -118,6 +162,13 @@ async function listTemplates(request: Request, user: AuthUser) {
         senderPhone: "",
       },
       placeholders: documentEmailPlaceholders,
+      // Supaya layar tahu tab mana yang pantas ditampilkan tanpa menebak dari
+      // peran: server yang menjawab, karena server pula yang menegakkannya.
+      viewableKinds: bolehLihat,
+      manageableKinds: jenisYangBoleh(user, "manage"),
+      // Kategori penerima per jenis, supaya layar mengelompokkan tabnya
+      // ("Surat ke klien" / "Surat ke vendor") tanpa memetakannya sendiri.
+      audience: documentEmailAudience,
     },
     200,
     { "Cache-Control": "no-store" },
@@ -126,6 +177,7 @@ async function listTemplates(request: Request, user: AuthUser) {
 
 async function createTemplate(request: Request, user: AuthUser) {
   const input = templateSchema.parse(await jsonBody(request));
+  penjaga(user, "manage", input.documentKind);
   const { client } = await getDatabase();
   const id = randomUUID();
   const timestamp = new Date().toISOString();
@@ -159,7 +211,11 @@ async function createTemplate(request: Request, user: AuthUser) {
 async function patchTemplate(request: Request, id: string, user: AuthUser) {
   const input = templateSchema.partial().parse(await jsonBody(request));
   const { client } = await getDatabase();
-  await loadTemplate(client, id);
+  const sekarang = await loadTemplate(client, id);
+  // Jenis LAMA dan jenis BARU dua-duanya dijaga: memindahkan template dari
+  // SPK ke Invoice berarti menulis di dua wilayah izin sekaligus.
+  penjaga(user, "manage", String(sekarang.document_kind) as DocumentEmailKind);
+  if (input.documentKind) penjaga(user, "manage", input.documentKind);
   const peta: Record<string, string> = {
     documentKind: "document_kind",
     name: "name",
@@ -196,7 +252,8 @@ async function patchTemplate(request: Request, id: string, user: AuthUser) {
 
 async function deleteTemplate(request: Request, id: string, user: AuthUser) {
   const { client } = await getDatabase();
-  await loadTemplate(client, id);
+  const sekarang = await loadTemplate(client, id);
+  penjaga(user, "manage", String(sekarang.document_kind) as DocumentEmailKind);
   // Soft delete: riwayat pengiriman menunjuk ke template ini lewat template_id,
   // dan menghapusnya keras membuat catatan lama kehilangan nama suratnya.
   await client.execute({
@@ -260,8 +317,8 @@ export async function dispatchDocumentEmailTemplateApi(
     throw new ApiError(404, "NOT_FOUND", "Endpoint template dokumen tidak ditemukan.");
   }
 
-  penjaga(user, request.method === "GET" ? "view" : "manage");
-
+  // Tidak ada penjaga tunggal di sini lagi: tiap cabang menjaga dirinya sendiri
+  // sesuai jenis dokumen yang disentuhnya.
   if (!id) {
     if (request.method === "GET") return listTemplates(request, user);
     if (request.method === "POST") return createTemplate(request, user);
@@ -269,7 +326,9 @@ export async function dispatchDocumentEmailTemplateApi(
   if (id) {
     if (request.method === "GET") {
       const { client } = await getDatabase();
-      return ok(mapTemplate(await loadTemplate(client, id)));
+      const row = await loadTemplate(client, id);
+      penjaga(user, "view", String(row.document_kind) as DocumentEmailKind);
+      return ok(mapTemplate(row));
     }
     if (request.method === "PATCH" || request.method === "PUT") {
       return patchTemplate(request, id, user);

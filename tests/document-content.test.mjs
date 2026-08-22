@@ -809,3 +809,11 @@ test("the English edition carries the same audited flows", async () => {
   assert.match(manual.flat, /all use the same window: 14 days/);
   assert.match(manual.flat, /Chapters 3 to 16/);
 });
+
+test("the manual says where document templates live and whose permission governs them", async () => {
+  await loginAsAdmin();
+  const manual = await pdfText("/api/help/sop.pdf?language=id");
+  assert.match(manual.flat, /Template SPK dan PO dikelola di Procurement & Vendor/);
+  assert.match(manual.flat, /Quotation dan Invoice di Quotation & Invoice/);
+  assert.match(manual.flat, /Finance tidak lagi perlu izin Procurement/);
+});

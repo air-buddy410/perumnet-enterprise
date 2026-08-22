@@ -9,18 +9,21 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ---
 
-## 🟢 Tidak ada pekerjaan layar yang tersisa — 22 Agustus 2026
+## 🔴 Yang sedang menunggumu — T-23, pintu kedua template surat
 
-**T-20, T-21, dan T-22 sudah kamu kerjakan** (`f32fdca`): bagan alur tampil di
-Pusat Bantuan dari `/api/help/alur.png` beserta daftar fasenya dari
-`shared/alur-aplikasi.ts`; tombol **Jadikan proyek**, lencana proyek, dan
-dropdown status yang mengikuti tabel transisi ada di Calon Klien; termin
-wajib, `payableForTerm`, `lockedAmount`, pembatasan perlakuan Withhold, dan
-empat belas pesan galat baru sudah masuk. Semuanya di `app/**` — batas
-wilayah terjaga.
+Pemilik menemukan ini saat menguji: ia membuat template "Mengirim Dokumen
+Quotation" di **Calon Klien**, lalu heran template itu tidak muncul di dialog
+Kirim Quotation. Memang dua sistem berbeda — dan itu benar — tetapi pengelola
+template dokumen hanya punya SATU pintu, di Procurement & Vendor. Orang yang
+mengirim quotation bekerja di layar Quotation & Invoice dan tidak akan pernah
+menemukannya di sana.
 
-Kalau ada aturan yang terasa aneh saat dipakai, tulis di
-`docs/PERMINTAAN-FRONTEND-KE-BACKEND.md`; sumber kebenarannya tetap server.
+Sisi server sudah saya kerjakan (commit `template surat: izin per jenis`):
+izin kini mengikuti JENIS dokumen, daftar disaring per izin, dan responsnya
+membawa `viewableKinds`, `manageableKinds`, serta `audience`. Yang tersisa
+layarnya — perinciannya di bagian **T-23** di bawah.
+
+T-20, T-21, dan T-22 sudah selesai (`f32fdca`).
 
 ---
 
@@ -195,6 +198,7 @@ Perinciannya di bagian masing-masing di bawah.
 | **T-20** | Bagan alur di Pusat Bantuan | ✅ selesai (`f32fdca`) |
 | **T-21** | Tombol Jadikan proyek di Calon Klien | ✅ selesai (`f32fdca`) |
 | **T-22** | Layar & Pusat Bantuan menyesuaikan aturan hasil audit | ✅ selesai (`f32fdca`) |
+| **T-23** | **Pintu kedua pengelola template surat di Quotation & Invoice** | **belum mulai** |
 
 T-1 sampai T-18a sudah selesai; catatannya ada di §Selesai. Semua layar sudah
 ada di `main`, termasuk editor kaya T-17 yang sempat tertinggal belum
@@ -891,6 +895,68 @@ Kode galat tambahan di luar yang sudah disebut T-16:
 - **Unggah untuk dokumen resminya.** Sama seperti T-16 — hanya lampiran
   tambahan.
 - **Pilihan edisi dokumen.** Jalur email tidak menerimanya sama sekali.
+
+### T-23. Pengelola template surat punya pintu di Quotation & Invoice
+
+**Masalahnya bukan datanya, melainkan letaknya.** Template dokumen sudah
+dipisah per jenis (`spk` / `quotation` / `invoice`) dengan penanda dan izin
+sendiri-sendiri. Yang keliru: pengelolanya cuma ada sebagai tab di Procurement
+& Vendor, padahal quotation dan invoice dikerjakan di layar lain. **Jangan
+bikin tabel atau komponen kedua** — pakai ulang `DocumentTemplateManager` yang
+sudah ada.
+
+#### Yang berubah di server (sudah jadi, tinggal dipakai)
+
+`GET /api/document-email-templates` sekarang memulangkan tiga field tambahan:
+
+```json
+{ "items": [...], "defaults": {...}, "placeholders": {...},
+  "viewableKinds":   ["quotation", "invoice"],
+  "manageableKinds": ["quotation", "invoice"],
+  "audience": { "quotation": "klien", "invoice": "klien", "spk": "vendor" } }
+```
+
+- **Daftarnya disaring, bukan ditolak.** Akun yang hanya punya izin Quotation &
+  Invoice mendapat template klien saja; template SPK tidak ikut terkirim dan
+  tidak memicu 403. Jadi layar tidak perlu menebak-nebak dari peran.
+- **Izin mengikuti jenis**: `spk` → Procurement & Vendor, `quotation`/`invoice`
+  → Quotation & Invoice. Menyentuh jenis yang tidak boleh → `403 FORBIDDEN`
+  dengan `details.documentKind` dan `details.module`.
+- **Kategori penerima** ada di `shared/document-email.ts`:
+  `documentEmailAudience` dan `documentEmailAudienceLabels`
+  ("Surat ke klien" / "Surat ke vendor"). Template calon klien **bukan** bagian
+  dari sini — ia sistem terpisah di Calon Klien, dan memang harus terpisah.
+
+#### Yang perlu dikerjakan
+
+1. **Tab "Template surat" di Quotation & Invoice** (`billing-view.tsx`),
+   memakai `DocumentTemplateManager` dengan jenis yang disaring ke
+   `["quotation", "invoice"]`. Tab yang sudah ada di
+   `procurement-v2-view.tsx` disaring ke `["spk"]`.
+   Komponennya perlu prop baru, misalnya `kinds?: DocumentEmailKind[]` —
+   tanpa prop itu perilakunya seperti sekarang (semua yang boleh).
+2. **Sembunyikan tab yang tidak berizin.** Pakai `viewableKinds` dari respons,
+   bukan `canAccess` yang dihitung ulang di layar: server yang menegakkan,
+   server pula yang menjawab. Tombol simpan/hapus mengikuti `manageableKinds`.
+3. **Judul kelompok** memakai `documentEmailAudienceLabels` — "Surat ke klien"
+   di Billing, "Surat ke vendor" di Procurement. Ini yang diminta pemilik:
+   supaya sekali lihat ketahuan surat ini untuk siapa.
+4. **Tombol "Buat template" di dialog Kirim.** Saat daftarnya kosong,
+   `document-email-dialog.tsx` sekarang hanya menulis "Buat template dokumen
+   terlebih dahulu" — jalan buntu. Beri tombol yang membawa pengguna ke
+   pengelolanya (tab di layar yang sama), dengan jenis dokumen sudah terpilih.
+
+#### Yang TIDAK berubah
+
+Template **Calon Klien** tetap di tempatnya dan tetap sistem sendiri:
+penerimanya belum jadi klien, penandanya berbeda (`{{nama}}`, `{{perusahaan}}`,
+`{{segmen}}`), ada aturan opt-out dan jeda kirim, dan tidak ada dokumen resmi
+yang dilampirkan. Menyatukannya berarti template perkenalan bisa terpilih untuk
+invoice, lalu `{{jatuh_tempo}}` tidak pernah terisi.
+
+**Kirim BAST lewat email belum ada** dan diputuskan pemilik belum diperlukan
+(22 Agustus 2026). Kalau kelak dibutuhkan, itu jenis dokumen baru di server
+lebih dulu, bukan template yang dikarang di layar.
 
 ### ✅ T-20. Bagan alur aplikasi di Pusat Bantuan — SELESAI 22 Agustus 2026
 

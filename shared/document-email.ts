@@ -19,6 +19,43 @@ export const documentEmailKindLabels: Record<
   spk: { id: "SPK / PO", en: "Work order / PO" },
 };
 
+// ── Kategori penerima ────────────────────────────────────────────────
+//
+// Surat keluar aplikasi ini punya TIGA penerima yang berbeda sifatnya, dan
+// itulah pengelompokan yang masuk akal di layar — bukan "semua template" dalam
+// satu daftar panjang:
+//
+//   calon-klien : orang yang belum jadi klien. Template & aturannya terpisah
+//                 sama sekali (cms_prospect_templates): ada opt-out, ada jeda
+//                 kirim, penandanya {{nama}}/{{perusahaan}}/{{segmen}}, dan
+//                 tidak ada dokumen resmi yang dilampirkan.
+//   klien       : Quotation dan Invoice. Izinnya Quotation & Invoice.
+//   vendor      : SPK dan PO. Izinnya Procurement & Vendor.
+//
+// Dua yang terakhir hidup di tabel yang sama (document_email_templates) karena
+// bentuk suratnya sama — yang membedakan penanda dan izinnya. `calon-klien`
+// sengaja TIDAK dilebur ke sini: menyatukannya berarti template perkenalan
+// bisa terpilih untuk invoice, lalu {{jatuh_tempo}} tidak pernah terisi.
+
+export type DocumentEmailAudience = "klien" | "vendor";
+
+export const documentEmailAudience: Record<
+  DocumentEmailKind,
+  DocumentEmailAudience
+> = {
+  quotation: "klien",
+  invoice: "klien",
+  spk: "vendor",
+};
+
+export const documentEmailAudienceLabels: Record<
+  DocumentEmailAudience,
+  { id: string; en: string }
+> = {
+  klien: { id: "Surat ke klien", en: "Letters to clients" },
+  vendor: { id: "Surat ke vendor", en: "Letters to vendors" },
+};
+
 // ── Batas lampiran ───────────────────────────────────────────────────
 //
 // Server SMTP mengizinkan 100 MB, jadi bukan ia yang mengikat.
