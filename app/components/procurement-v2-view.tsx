@@ -15,6 +15,7 @@ import {
   FileText,
   Filter,
   LibraryBig,
+  ListChecks,
   Mail,
   PackageCheck,
   Pencil,
@@ -323,6 +324,12 @@ export function ProcurementViewV2({
       ? sum + line.quantity * line.agreedUnitCost
       : sum;
   }, 0);
+  const selectedLineCount = compatibleItems.reduce(
+    (count, item) => count + (draftLines[item.id]?.selected ? 1 : 0),
+    0,
+  );
+  const allLinesSelected =
+    compatibleItems.length > 0 && selectedLineCount === compatibleItems.length;
 
   function openVendorForm(vendor?: Vendor) {
     setEditingVendor(vendor ?? null);
@@ -502,6 +509,22 @@ export function ProcurementViewV2({
     setOrderStart(order.startDate ?? "");
     setOrderEnd(order.endDate ?? "");
     setShowOrder(true);
+  }
+
+  function toggleAllDraftLines() {
+    const nextSelected = !allLinesSelected;
+    setDraftLines((current) => {
+      const next = { ...current };
+      compatibleItems.forEach((item) => {
+        const line = current[item.id] ?? {
+          selected: false,
+          quantity: item.quantity,
+          agreedUnitCost: item.costPrice,
+        };
+        next[item.id] = { ...line, selected: nextSelected };
+      });
+      return next;
+    });
   }
 
   async function saveOrder(event: FormEvent) {
@@ -1107,7 +1130,89 @@ export function ProcurementViewV2({
         <label className="field"><span>{id ? "Jenis dokumen" : "Document type"}</span><select value={documentType} disabled={Boolean(editingOrder)} onChange={(event) => { setDocumentType(event.target.value as typeof documentType); setDraftLines({}); }}><option>SPK</option><option>PO</option></select></label>
         <label className="field"><span>Vendor</span><select required value={orderVendorId} onChange={(event) => setOrderVendorId(event.target.value)}><option value="">{id ? "Pilih vendor" : "Choose vendor"}</option>{vendors.filter((vendor) => vendor.status === "Aktif" && (vendor.vendorType === "Hybrid" || (documentType === "SPK" ? vendor.vendorType !== "Supplier" : vendor.vendorType !== "Jasa"))).map((vendor) => <option value={vendor.id} key={vendor.id}>{vendor.name}</option>)}</select></label>
         <label className="field full"><span>{id ? "Quotation diterima" : "Accepted Quotation"}</span><select required value={quotationId} onChange={(event) => { setQuotationId(event.target.value); setDraftLines({}); }}><option value="">{id ? "Pilih Quotation" : "Choose Quotation"}</option>{acceptedScopes.map((scope) => <option value={scope.quotation?.id} key={scope.id}>{scope.quotation?.number} · {scope.kind} · {scope.title}</option>)}</select></label>
-        <div className="field full procurement-line-picker"><span>{id ? "Item BoQ yang dialokasikan" : "Allocated BoQ items"}</span>{compatibleItems.map((item) => { const line = draftLines[item.id] ?? { selected: false, quantity: item.quantity, agreedUnitCost: item.costPrice }; return <div className="procurement-line" key={item.id}><label><input type="checkbox" checked={line.selected} onChange={() => setDraftLines((current) => ({ ...current, [item.id]: { ...line, selected: !line.selected } }))} /><span><strong>{item.description}</strong><small>{item.category} · tersedia {item.quantity} {item.unit}</small></span></label><input aria-label={`${item.description} quantity`} type="number" min="1" max={item.quantity} value={line.quantity} disabled={!line.selected} onChange={(event) => setDraftLines((current) => ({ ...current, [item.id]: { ...line, quantity: Number(event.target.value) } }))} /><input aria-label={`${item.description} vendor price`} type="number" min="0" value={line.agreedUnitCost} disabled={!line.selected} onChange={(event) => setDraftLines((current) => ({ ...current, [item.id]: { ...line, agreedUnitCost: Number(event.target.value) } }))} /></div>; })}{quotationId && !compatibleItems.length && <small>{id ? "Tidak ada item yang sesuai dengan jenis dokumen ini." : "No items match this document type."}</small>}</div>
+        <div className="field full procurement-line-picker">
+          <div className="procurement-line-picker-head">
+            <div className="procurement-line-picker-copy">
+              <span className="procurement-line-picker-title">{id ? "Item BoQ yang dialokasikan" : "Allocated BoQ items"}</span>
+              <small>{id ? "Pilih item yang masuk ke SPK/PO, lalu sesuaikan qty dan harga vendor." : "Select items for this commitment, then adjust quantity and vendor price."}</small>
+            </div>
+            {compatibleItems.length > 0 && (
+              <button
+                className="button subtle small procurement-select-all"
+                type="button"
+                data-testid="toggle-all-procurement-items"
+                aria-pressed={allLinesSelected}
+                onClick={toggleAllDraftLines}
+              >
+                <ListChecks size={15} /> {allLinesSelected ? (id ? "Batal pilih semua" : "Clear selection") : (id ? "Pilih semua" : "Select all")}
+              </button>
+            )}
+          </div>
+          {compatibleItems.length > 0 && (
+            <div className="procurement-line-summary" aria-live="polite">
+              <span><strong>{selectedLineCount}</strong> {id ? "dari" : "of"} <strong>{compatibleItems.length}</strong> {id ? "item dipilih" : "items selected"}</span>
+              <span>{id ? "Input aktif setelah item dipilih" : "Inputs activate after an item is selected"}</span>
+            </div>
+          )}
+          {compatibleItems.length > 0 && (
+            <div className="procurement-line-grid-head" aria-hidden="true">
+              <span>{id ? "Item BoQ" : "BoQ item"}</span>
+              <span>{id ? "Qty" : "Qty"}</span>
+              <span>{id ? "Harga vendor / unit" : "Vendor price / unit"}</span>
+            </div>
+          )}
+          {compatibleItems.map((item) => {
+            const line = draftLines[item.id] ?? { selected: false, quantity: item.quantity, agreedUnitCost: item.costPrice };
+            return (
+              <div className={`procurement-line${line.selected ? " selected" : ""}`} key={item.id}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={line.selected}
+                    aria-label={`${id ? "Pilih" : "Select"} ${item.description}`}
+                    onChange={() => setDraftLines((current) => {
+                      const currentLine = current[item.id] ?? { selected: false, quantity: item.quantity, agreedUnitCost: item.costPrice };
+                      return { ...current, [item.id]: { ...currentLine, selected: !currentLine.selected } };
+                    })}
+                  />
+                  <span>
+                    <strong>{item.description}</strong>
+                    <small>{item.category} · {id ? "tersedia" : "available"} {item.quantity} {item.unit}</small>
+                  </span>
+                </label>
+                <input
+                  aria-label={`${item.description} ${id ? "jumlah" : "quantity"}`}
+                  type="number"
+                  min="1"
+                  max={item.quantity}
+                  value={line.quantity}
+                  disabled={!line.selected}
+                  onChange={(event) => setDraftLines((current) => {
+                    const currentLine = current[item.id] ?? { selected: false, quantity: item.quantity, agreedUnitCost: item.costPrice };
+                    return { ...current, [item.id]: { ...currentLine, quantity: Number(event.target.value) } };
+                  })}
+                />
+                <input
+                  aria-label={`${item.description} ${id ? "harga vendor per unit" : "vendor price per unit"}`}
+                  type="number"
+                  min="0"
+                  value={line.agreedUnitCost}
+                  disabled={!line.selected}
+                  onChange={(event) => setDraftLines((current) => {
+                    const currentLine = current[item.id] ?? { selected: false, quantity: item.quantity, agreedUnitCost: item.costPrice };
+                    return { ...current, [item.id]: { ...currentLine, agreedUnitCost: Number(event.target.value) } };
+                  })}
+                />
+              </div>
+            );
+          })}
+          {!compatibleItems.length && (
+            <div className="procurement-line-empty">
+              <FileText size={18} />
+              <span>{quotationId ? (id ? "Tidak ada item yang sesuai dengan jenis dokumen ini." : "No items match this document type.") : (id ? "Pilih Quotation diterima untuk melihat item BoQ." : "Choose an accepted Quotation to see BoQ items.")}</span>
+            </div>
+          )}
+        </div>
         <label className="field"><span>{id ? "DP (%)" : "Down payment (%)"}</span><input type="number" min="0" max="99" value={dpPercentage} onChange={(event) => setDpPercentage(Number(event.target.value))} /></label>
         <div className="field order-total-preview"><span>{id ? "Nilai komitmen" : "Committed value"}</span><strong>{formatCurrency(orderCost, language)}</strong></div>
         <label className="field"><span>{id ? "Mulai" : "Start"}</span><input type="date" value={orderStart} onChange={(event) => setOrderStart(event.target.value)} /></label>
