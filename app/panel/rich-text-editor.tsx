@@ -490,11 +490,18 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
   function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
     event.preventDefault();
     const plainText = event.clipboardData.getData("text/plain");
-    if (plainText) insertText(plainText);
+    if (plainText) {
+      saveSelection();
+      insertText(plainText);
+    }
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (disabled) return;
+    // `selectionchange` can arrive after keydown. Simpan caret yang sedang
+    // aktif dulu supaya Tab pertama pada isi contoh tidak memakai bookmark
+    // lama dari awal editor dan meloncat ke atas.
+    saveSelection();
 
     const isTab = event.key.toLowerCase() === TAB_KEY;
     if (event.key === "Escape") {
