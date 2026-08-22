@@ -16,6 +16,7 @@ import { writeAuditLog } from "../audit";
 import { authProviderMode, verifyMailserverPassword } from "../mail-auth";
 import { listBastDeliveries, previewBastEmail, sendBastEmail } from "./bast-email";
 import { handleFinanceEvidence } from "./finance-evidence-router";
+import { handleDocumentLibrary, handleProjectDocuments } from "./project-document-router";
 import { ledgerEvidenceKey } from "../finance-evidence";
 import {
   listClientDocumentDeliveries,
@@ -1614,44 +1615,11 @@ async function handleProjects(request: Request, path: string[], user: AuthUser) 
     }
   }
 
+  // Foto & berkas proyek: unggah banyak, thumbnail, keterangan, hapus —
+  // dipindah ke modulnya sendiri (22 Agu 2026). Gerbang manage/role untuk
+  // tulisan tetap dari dispatchApi; cakupan proyek diperiksa di dalam.
   if (projectId && child === "documents") {
-    await assertProjectAccess(user, projectId);
-    if (request.method === "GET") {
-      const result = await client.execute({
-        sql: "SELECT id,name,mime_type,size,uploader_name,created_at,storage_url FROM project_documents WHERE project_id = ? ORDER BY created_at DESC",
-        args: [projectId],
-      });
-      return ok(result.rows.map((row) => ({
-        id: String(row.id),
-        name: String(row.name),
-        type: String(row.mime_type).startsWith("image/") ? "image" : "file",
-        mimeType: String(row.mime_type),
-        size: asNumber(row.size),
-        date: localizedApiDate(row.created_at, user.preferredLanguage),
-        createdAt: String(row.created_at),
-        uploader: String(row.uploader_name),
-        preview:
-          row.storage_url && /^https?:\/\//.test(String(row.storage_url))
-            ? row.storage_url
-            : applicationPath(`/api/documents/${row.id}/content`),
-      })));
-    }
-    if (request.method === "POST") {
-      const form = await request.formData();
-      const file = form.get("file");
-      if (!(file instanceof File)) throw new ApiError(422, "FILE_REQUIRED", "Pilih file yang akan diunggah.");
-      if (file.size > 5 * 1024 * 1024) throw new ApiError(413, "FILE_TOO_LARGE", "Ukuran file maksimal 5 MB.");
-      const allowed = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
-      if (!allowed.includes(file.type)) throw new ApiError(415, "UNSUPPORTED_FILE", "Format yang didukung: JPG, PNG, WebP, dan PDF.");
-      const id = randomUUID();
-      const stored = await storeProjectFile(id, file.type, await file.arrayBuffer());
-      await client.execute({
-        sql: "INSERT INTO project_documents (id,project_id,name,mime_type,size,storage_url,content_base64,uploaded_by,uploader_name,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        args: [id, projectId, file.name.slice(0, 240), file.type, file.size, stored.storageUrl, stored.contentBase64, user.id, user.name, now()],
-      });
-      await writeAuditLog(client, request, user, "upload", "project_document", id, { projectId, name: file.name, size: file.size });
-      return created({ id, name: file.name, type: file.type.startsWith("image/") ? "image" : "file", date: "Baru saja", uploader: user.name, preview: applicationPath(`/api/documents/${id}/content`) });
-    }
+    return handleProjectDocuments(request, path, user);
   }
 
   if (projectId && child === "quotation.pdf" && request.method === "GET") {
@@ -6688,37 +6656,6 @@ async function handleNotifications(
   throw new ApiError(404, "NOT_FOUND", "Endpoint notifikasi tidak ditemukan.");
 }
 
-async function handleDocuments(request: Request, path: string[], user: AuthUser) {
-  if (request.method !== "GET" || path[2] !== "content") throw new ApiError(404, "NOT_FOUND", "Dokumen tidak ditemukan.");
-  const row = await ensureExists(
-    "SELECT project_id,name,mime_type,storage_url,content_base64 FROM project_documents WHERE id=?",
-    [path[1]],
-    "Dokumen tidak ditemukan.",
-  );
-  await assertProjectAccess(user, String(row.project_id));
-  if (row.storage_url && /^https?:\/\//.test(String(row.storage_url))) {
-    return Response.redirect(String(row.storage_url));
-  }
-  const stored = await readProjectFile(row.storage_url ? String(row.storage_url) : null);
-  if (stored) {
-    return new Response(stored.content, {
-      headers: {
-        "Content-Type": stored.contentType ?? String(row.mime_type),
-        "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(String(row.name))}`,
-        "Cache-Control": "private, max-age=300",
-      },
-    });
-  }
-  if (!row.content_base64) throw new ApiError(404, "FILE_MISSING", "Isi dokumen tidak tersedia.");
-  return new Response(Buffer.from(String(row.content_base64), "base64"), {
-    headers: {
-      "Content-Type": String(row.mime_type),
-      "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(String(row.name))}`,
-      "Cache-Control": "private, max-age=300",
-    },
-  });
-}
-
 async function handleAudit(request: Request, user: AuthUser) {
   assertAccess(user, "users", "view");
   if (request.method !== "GET") throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
@@ -6892,7 +6829,7 @@ export async function dispatchApi(request: Request, path: string[]) {
   if (resource === "profile") return handleProfile(request, path, user);
   if (resource === "settings") return handleSettings(request, user);
   if (resource === "notifications") return handleNotifications(request, path, user);
-  if (resource === "documents") return handleDocuments(request, path, user);
+  if (resource === "documents") return handleDocumentLibrary(request, path, user);
   if (resource === "audit-logs") return handleAudit(request, user);
   if (resource === "search") return handleSearch(request, user);
   if (resource === "help" && path[1] === "alur.png") {
