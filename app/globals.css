@@ -5537,6 +5537,89 @@ h3 {
   font-size: 8px;
 }
 
+.company-treasury-panel {
+  overflow: hidden;
+}
+
+.company-treasury-panel > .panel-head {
+  align-items: flex-start;
+}
+
+.company-treasury-panel > .panel-head p {
+  max-width: 720px;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.company-treasury-balance {
+  display: grid;
+  min-width: 190px;
+  gap: 5px;
+  border: 1px solid #b7ddd7;
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: linear-gradient(145deg, #fff, var(--teal-pale));
+  text-align: right;
+}
+
+.company-treasury-balance span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.company-treasury-balance strong {
+  color: var(--teal-dark);
+  font-family: "Plus Jakarta Sans", sans-serif;
+  font-size: 19px;
+  letter-spacing: -.03em;
+}
+
+.company-treasury-list {
+  display: grid;
+  gap: 9px;
+  padding: 0 20px 20px;
+}
+
+.company-treasury-entry {
+  display: grid;
+  grid-template-columns: auto minmax(170px, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #e1ebeb;
+  border-radius: 12px;
+  background: #fbfdfd;
+}
+
+.company-treasury-entry.reversed {
+  opacity: .68;
+}
+
+.company-treasury-entry > div {
+  min-width: 0;
+}
+
+.company-treasury-entry > div strong,
+.company-treasury-entry > div small {
+  display: block;
+}
+
+.company-treasury-entry > div strong {
+  overflow: hidden;
+  color: var(--navy);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.company-treasury-entry > div small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
 .finance-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, .3fr);
@@ -6024,6 +6107,26 @@ h3 {
 
   .profit-share-row > .table-row-actions {
     justify-content: flex-start;
+  }
+
+  .company-treasury-panel > .panel-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .company-treasury-balance {
+    width: 100%;
+    text-align: left;
+  }
+
+  .company-treasury-entry {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .company-treasury-entry > strong,
+  .company-treasury-entry > .status-badge {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .help-support {

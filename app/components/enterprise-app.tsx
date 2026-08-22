@@ -489,6 +489,7 @@ export function EnterpriseApp() {
               canManage={canManage("finance")}
               isAdmin={user.role === "Admin"}
               canUseBanking={user.role === "Admin" || user.role === "Finance"}
+              canViewMargin={canUse("margin")}
               canConfigureBanking={
                 user.role === "Admin" && canManage("finance")
               }

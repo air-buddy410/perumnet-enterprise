@@ -47,6 +47,7 @@ interface FinanceViewProps {
   canManage: boolean;
   isAdmin: boolean;
   canUseBanking: boolean;
+  canViewMargin: boolean;
   canConfigureBanking: boolean;
   canApproveProfitShares: boolean;
   canConfigureTax: boolean;
@@ -64,6 +65,23 @@ interface FinanceSummary {
   netCash: number;
   cashRatio: number;
   unreconciled: UnreconciledTotals;
+}
+
+interface CompanyTreasuryEntry {
+  id: string;
+  projectId: string | null;
+  projectCode: string | null;
+  projectName: string | null;
+  amount: number;
+  date: string;
+  shareId: string;
+  reversed: boolean;
+  description: string;
+}
+
+interface CompanyTreasury {
+  balance: number;
+  entries: CompanyTreasuryEntry[];
 }
 
 const transactionCategories = [
@@ -182,6 +200,7 @@ export function FinanceView({
   canManage,
   isAdmin,
   canUseBanking,
+  canViewMargin,
   canConfigureBanking,
   canApproveProfitShares,
   canConfigureTax,
@@ -196,6 +215,8 @@ export function FinanceView({
   const [serverToday, setServerToday] = useState("");
   const [periodMonths, setPeriodMonths] = useState<3 | 6 | 12>(6);
   const [bankBalance, setBankBalance] = useState(0);
+  const [companyTreasury, setCompanyTreasury] = useState<CompanyTreasury>({ balance: 0, entries: [] });
+  const [companyTreasuryLoading, setCompanyTreasuryLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<"Semua" | Transaction["type"]>("Semua");
   const [filterOpen, setFilterOpen] = useState(false);
@@ -286,9 +307,29 @@ export function FinanceView({
     }
   }, [financeQuery, language, notify, periodWindow]);
 
+  const loadCompanyTreasury = useCallback(async () => {
+    if (!canViewMargin) {
+      setCompanyTreasury({ balance: 0, entries: [] });
+      return;
+    }
+    setCompanyTreasuryLoading(true);
+    try {
+      const data = await api<CompanyTreasury>("/api/finance/company-treasury");
+      setCompanyTreasury({ balance: data.balance ?? 0, entries: data.entries ?? [] });
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setCompanyTreasuryLoading(false);
+    }
+  }, [canViewMargin, language, notify]);
+
   useEffect(() => {
     void Promise.resolve().then(loadSummary);
   }, [loadSummary]);
+
+  useEffect(() => {
+    void Promise.resolve().then(loadCompanyTreasury);
+  }, [loadCompanyTreasury]);
 
   const periodTransactions = useMemo(
     () =>
@@ -674,6 +715,38 @@ export function FinanceView({
           canApprove={canApproveProfitShares}
           serverToday={serverToday}
         />
+      ) : null}
+
+      {canViewMargin ? (
+        <section className="panel company-treasury-panel" data-testid="company-treasury-panel">
+          <div className="panel-head">
+            <div>
+              <span className="eyebrow">{id ? "KAS PERUSAHAAN" : "COMPANY TREASURY"}</span>
+              <h2>{id ? "Saldo laba perusahaan" : "Company profit balance"}</h2>
+              <p>{id ? "Alokasi laba yang sudah dipindahkan dari proyek. Angka ini terpisah dari kas masuk dan arus kas bersih." : "Profit allocations transferred from projects. This balance stays separate from cash inflow and net cash flow."}</p>
+            </div>
+            <div className="company-treasury-balance">
+              <span>{id ? "Saldo saat ini" : "Current balance"}</span>
+              <strong>{companyTreasuryLoading ? "…" : formatCurrency(companyTreasury.balance, language)}</strong>
+            </div>
+          </div>
+          <div className="company-treasury-list">
+            {companyTreasury.entries.slice(0, 6).map((entry) => (
+              <article className={`company-treasury-entry ${entry.reversed ? "reversed" : ""}`} key={entry.id || `${entry.shareId}-${entry.date}`}>
+                <span className={`metric-icon ${entry.reversed ? "orange" : "teal"}`}><Landmark size={17} /></span>
+                <div>
+                  <strong>{entry.projectName || entry.projectCode || (id ? "Alokasi perusahaan" : "Company allocation")}</strong>
+                  <small>{entry.projectCode ? `${entry.projectCode} · ` : ""}{localizedDate(language, entry.date)}{entry.description ? ` · ${entry.description}` : ""}</small>
+                </div>
+                <strong className={entry.reversed ? "amount-expense" : "amount-income"}>{entry.reversed ? "−" : "+"}{formatCurrency(entry.amount, language)}</strong>
+                <span className={`status-badge ${entry.reversed ? "neutral" : "success"}`}>{entry.reversed ? (id ? "Dibalik" : "Reversed") : (id ? "Masuk" : "Received")}</span>
+              </article>
+            ))}
+            {!companyTreasuryLoading && !companyTreasury.entries.length ? (
+              <div className="empty-state compact"><Landmark size={22} /><span>{id ? "Belum ada alokasi ke Kas Perusahaan." : "No company treasury allocations yet."}</span></div>
+            ) : null}
+          </div>
+        </section>
       ) : null}
 
       <section className="finance-layout">

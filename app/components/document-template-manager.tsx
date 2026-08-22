@@ -273,7 +273,11 @@ export function DocumentTemplateManager({
   const canCreate = canManage && manageableVisibleKinds.length > 0;
   const audience = documentEmailAudience[selectedKind];
   const audienceLabel = documentEmailAudienceLabels[audience][id ? "id" : "en"];
-  const permissionLabel = audience === "vendor" ? "Procurement & Vendor" : "Quotation & Invoice";
+  const permissionLabel = selectedKind === "bast"
+    ? "BAST Digital"
+    : audience === "vendor"
+      ? "Procurement & Vendor"
+      : "Quotation & Invoice";
 
   function confirmDiscard() {
     if (!dirtyRef.current) return true;

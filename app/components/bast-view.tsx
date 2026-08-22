@@ -7,6 +7,7 @@ import {
   Eye,
   FileCheck2,
   LockKeyhole,
+  Mail,
   PenLine,
   Plus,
   Save,
@@ -23,6 +24,8 @@ import { appPath } from "../paths";
 import { SignaturePad } from "./signature-pad";
 import { CommercialPackageSwitcher } from "./commercial-package-switcher";
 import { DocumentPreviewModal } from "./document-preview-modal";
+import { DocumentEmailDialog, type DocumentEmailTarget } from "./document-email-dialog";
+import { DocumentTemplateManager } from "./document-template-manager";
 
 interface BastViewProps {
   language: AppLanguage;
@@ -103,10 +106,13 @@ export function BastView({
   const [bastStatus, setBastStatus] = useState<"Draft" | "Final">("Draft");
   const [bastId, setBastId] = useState("");
   const [bastNumber, setBastNumber] = useState("");
+  const [emailTarget, setEmailTarget] = useState<DocumentEmailTarget | null>(null);
+  const [activeTab, setActiveTab] = useState<"bast" | "templates">("bast");
   const [validationCompleted, setValidationCompleted] = useState(false);
   const [loading, setLoading] = useState(true);
   const [packageId, setPackageId] = useState("");
   const [finalizedAt, setFinalizedAt] = useState<string | null>(null);
+  const [revokedAt, setRevokedAt] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [showSealSettings, setShowSealSettings] = useState(false);
   const [sealEnabled, setSealEnabled] = useState(false);
@@ -192,8 +198,16 @@ export function BastView({
           setEngineerSignature(record.engineerSignature);
           setBastStatus(record.status);
           setFinalizedAt(record.finalizedAt ?? null);
+          setRevokedAt(record.revokedAt ?? null);
           return;
         }
+        setBastId("");
+        setBastNumber("");
+        setBastStatus("Draft");
+        setFinalizedAt(null);
+        setRevokedAt(null);
+        setClientSignature("");
+        setEngineerSignature("");
         setClientName(projectData.client);
         setClientRole(id ? "Perwakilan Klien" : "Client Representative");
         setNotes(
@@ -308,6 +322,7 @@ export function BastView({
         id = record.id;
         number = record.number;
         setFinalizedAt(record.finalizedAt ?? null);
+        setRevokedAt(record.revokedAt ?? null);
         const updatedProject = await api<Project>(
           `/api/projects/${encodeURIComponent(projectId)}`,
         );
@@ -332,12 +347,29 @@ export function BastView({
       setBastId("");
       setBastNumber("");
       setBastStatus("Draft");
+      setFinalizedAt(null);
+      setRevokedAt(null);
       setClientSignature("");
       setEngineerSignature("");
       notify(language === "id" ? "BAST berhasil dihapus." : "The handover was deleted.");
     } catch (error) {
       notify(messageOf(error, language));
     }
+  }
+
+  function openBastEmail() {
+    if (!bastId || !project) {
+      notify(id ? "Konteks BAST belum selesai dimuat." : "The handover context has not finished loading.");
+      return;
+    }
+    setEmailTarget({
+      kind: "bast",
+      id: bastId,
+      number: bastNumber,
+      projectName: project.name,
+      recipientName: project.clientContactName?.trim() || project.client,
+      recipientEmail: project.clientEmail,
+    });
   }
 
   async function saveSealSettings(event: FormEvent<HTMLFormElement>) {
@@ -380,6 +412,7 @@ export function BastView({
 
   const signaturesComplete = Boolean(clientSignature && engineerSignature);
   const isFinal = Boolean(finalizedAt);
+  const canEmail = Boolean(bastId && isFinal && !revokedAt);
   const canEdit = canManage && !isFinal;
 
   if (loading) {
@@ -398,12 +431,36 @@ export function BastView({
 
   if (!validationCompleted && !bastId) {
     return (
-      <section className="panel empty-state validation-required-state" data-testid="bast-validation-gate">
-        <ShieldCheck size={36} />
-        <h2>{id ? "BAST belum dapat diterbitkan" : "Handover cannot be issued yet"}</h2>
-        <p>{id ? "Selesaikan checklist pengujian seluruh Perangkat dan Material dari BoQ terlebih dahulu." : "Complete the test checklist for every Device and Material from the BoQ first."}</p>
-        <button className="button primary" type="button" onClick={() => navigate("validation")}><FileCheck2 size={16} /> {id ? "Buka form validasi" : "Open validation form"}</button>
-      </section>
+      <div className="page-stack" data-testid="bast-view">
+        <section className="page-title-row">
+          <div>
+            <span className="eyebrow">{id ? "SERAH TERIMA DIGITAL" : "DIGITAL HANDOVER"}</span>
+            <h1>{id ? "BAST Digital" : "Digital Handover"}</h1>
+            <p>{project ? `${project.code} · ${project.name}` : (id ? "Memuat konteks proyek..." : "Loading project context...")}</p>
+          </div>
+          <div className="title-actions">
+            <CommercialPackageSwitcher projectId={projectId} language={language} canManage={canManage} value={packageId} onChange={selectPackage} notify={notify} />
+          </div>
+        </section>
+        <div className="module-tabs" role="tablist" aria-label={id ? "BAST Digital" : "Digital handover"}>
+          <button role="tab" aria-selected={activeTab === "bast"} className={activeTab === "bast" ? "active" : ""} type="button" onClick={() => setActiveTab("bast")}>
+            <FileCheck2 size={17} /> BAST Digital
+          </button>
+          <button role="tab" aria-selected={activeTab === "templates"} className={activeTab === "templates" ? "active" : ""} type="button" onClick={() => setActiveTab("templates")}>
+            <Mail size={17} /> {id ? "Template surat" : "Letter templates"}
+          </button>
+        </div>
+        {activeTab === "templates" ? (
+          <DocumentTemplateManager language={language} canManage={canManage} notify={notify} kinds={["bast"]} initialKind="bast" />
+        ) : (
+          <section className="panel empty-state validation-required-state" data-testid="bast-validation-gate">
+            <ShieldCheck size={36} />
+            <h2>{id ? "BAST belum dapat diterbitkan" : "Handover cannot be issued yet"}</h2>
+            <p>{id ? "Selesaikan checklist pengujian seluruh Perangkat dan Material dari BoQ terlebih dahulu." : "Complete the test checklist for every Device and Material from the BoQ first."}</p>
+            <button className="button primary" type="button" onClick={() => navigate("validation")}><FileCheck2 size={16} /> {id ? "Buka form validasi" : "Open validation form"}</button>
+          </section>
+        )}
+      </div>
     );
   }
 
@@ -422,6 +479,7 @@ export function BastView({
         <div className="title-actions">
           <CommercialPackageSwitcher projectId={projectId} language={language} canManage={canManage} value={packageId} onChange={selectPackage} notify={notify} />
           {isAdmin && <button className="button secondary" type="button" onClick={() => setShowSealSettings(true)}><Stamp size={16} /> {id ? "Pengaturan cap" : "Seal settings"}</button>}
+          {canEmail && <button className="button secondary" type="button" onClick={openBastEmail}><Mail size={16} /> {id ? "Kirim Email" : "Email client"}</button>}
           {canEdit && (
             <button className="button secondary" type="button" onClick={saveBast}>
               <Save size={16} /> {id ? "Simpan draft" : "Save draft"}
@@ -439,6 +497,19 @@ export function BastView({
         </div>
       </section>
 
+      <div className="module-tabs" role="tablist" aria-label={id ? "BAST Digital" : "Digital handover"}>
+        <button role="tab" aria-selected={activeTab === "bast"} className={activeTab === "bast" ? "active" : ""} type="button" onClick={() => setActiveTab("bast")}>
+          <FileCheck2 size={17} /> BAST Digital
+        </button>
+        <button role="tab" aria-selected={activeTab === "templates"} className={activeTab === "templates" ? "active" : ""} type="button" onClick={() => setActiveTab("templates")}>
+          <Mail size={17} /> {id ? "Template surat" : "Letter templates"}
+        </button>
+      </div>
+
+      {activeTab === "templates" ? (
+        <DocumentTemplateManager language={language} canManage={canManage} notify={notify} kinds={["bast"]} initialKind="bast" />
+      ) : (
+        <>
       <section className="bast-stepper" aria-label={id ? "Tahapan BAST" : "Handover stages"}>
         <div className="done"><span><Check size={15} /></span><div><strong>{id ? "Data proyek" : "Project data"}</strong><small>{id ? "Sinkron" : "Synced"}</small></div></div>
         <div className="line done" />
@@ -549,6 +620,18 @@ export function BastView({
           <section className="security-note"><ShieldCheck size={20} /><div><strong>{id ? "Dokumen terlindungi" : "Protected document"}</strong><span>{id ? "Tanda tangan disimpan sebagai bagian dari BAST proyek." : "Signatures are stored as part of the project handover."}</span></div></section>
         </aside>
       </section>
+        </>
+      )}
+      {emailTarget && <DocumentEmailDialog
+        target={emailTarget}
+        language={language}
+        canManage={canManage}
+        canViewHistory
+        onClose={() => setEmailTarget(null)}
+        onOpenRecipient={() => { setEmailTarget(null); navigate("project"); }}
+        onOpenTemplateManager={() => { setEmailTarget(null); setActiveTab("templates"); }}
+        onSent={async () => undefined}
+      />}
       <DocumentPreviewModal open={previewOpen} url={bastId ? `/api/bast/${bastId}/pdf` : ""} title={bastNumber || "BAST"} filename={`${(bastNumber || "BAST-PerumNet").replaceAll("/", "-")}.pdf`} onClose={() => setPreviewOpen(false)} />
       {showSealSettings && (
         <div className="modal-backdrop" onMouseDown={() => setShowSealSettings(false)}>

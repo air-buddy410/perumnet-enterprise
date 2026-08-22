@@ -3,13 +3,14 @@
 import {
   CheckCircle2,
   CircleDollarSign,
+  Landmark,
   Plus,
   ShieldCheck,
   Trash2,
   UsersRound,
   X,
 } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, ApiClientError, messageOf } from "../api-client";
 import { formatCurrency, Project } from "../data";
 import { type AppLanguage } from "../i18n";
@@ -17,6 +18,7 @@ import { type AppLanguage } from "../i18n";
 interface ProfitAllocation {
   id: string;
   projectId: string;
+  recipientKind: "person" | "company";
   recipientName: string;
   percentage: number;
   amount: number;
@@ -40,6 +42,8 @@ interface ProfitSummary {
   lockedAmount: number;
   paidAmount: number;
   retainedProfit: number;
+  unallocatedPercentage: number;
+  companyShare: ProfitAllocation | null;
   allocations: ProfitAllocation[];
 }
 
@@ -52,7 +56,14 @@ interface ProfitSharingPanelProps {
   serverToday: string;
 }
 
-function statusLabel(language: AppLanguage, status: ProfitAllocation["status"]) {
+function statusLabel(
+  language: AppLanguage,
+  status: ProfitAllocation["status"],
+  recipientKind: ProfitAllocation["recipientKind"],
+) {
+  if (status === "Paid" && recipientKind === "company") {
+    return language === "id" ? "Dipindahkan" : "Transferred";
+  }
   if (language === "en") return status;
   return {
     Draft: "Draft",
@@ -102,10 +113,9 @@ export function ProfitSharingPanel({
     return () => window.clearTimeout(update);
   }, [language, load, notify]);
 
-  const remainingPercentage = useMemo(
-    () => Math.max(0, 100 - (summary?.allocatedPercentage ?? 0)),
-    [summary?.allocatedPercentage],
-  );
+  // The server owns this value so a concurrent allocation cannot make the
+  // button create a percentage above 100%.
+  const remainingPercentage = summary?.unallocatedPercentage ?? 0;
 
   async function createAllocation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -130,6 +140,30 @@ export function ProfitSharingPanel({
         id
           ? "Draft pembagian keuntungan ditambahkan. Admin harus menyetujuinya sebelum pembayaran."
           : "Profit-share draft added. An Admin must approve it before payment.",
+      );
+    } catch (error) {
+      notify(messageOf(error, language));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function allocateCompanyRemainder() {
+    if (!projectId || !summary || summary.companyShare || summary.unallocatedPercentage <= 0) return;
+    setBusy(true);
+    try {
+      await api("/api/profit-shares", {
+        method: "POST",
+        body: JSON.stringify({
+          projectId,
+          recipientKind: "company",
+        }),
+      });
+      await load();
+      notify(
+        id
+          ? "Sisa laba dialokasikan ke Kas Perusahaan sebagai draft. Admin harus menyetujuinya sebelum dipindahkan."
+          : "The remaining profit was allocated to Company Treasury as a draft. An Admin must approve it before transfer.",
       );
     } catch (error) {
       notify(messageOf(error, language));
@@ -210,8 +244,12 @@ export function ProfitSharingPanel({
       setPaidDate("");
       notify(
         id
-          ? "Pembayaran bagi hasil dicatat sebagai kas keluar proyek."
-          : "The profit-share payment was recorded as a project cash outflow.",
+          ? paying.recipientKind === "company"
+            ? "Alokasi dipindahkan ke Kas Perusahaan dan dicatat pada riwayat kas perusahaan."
+            : "Pembayaran bagi hasil dicatat sebagai kas keluar proyek."
+          : paying.recipientKind === "company"
+            ? "The allocation was transferred to Company Treasury and added to its history."
+            : "The profit-share payment was recorded as a project cash outflow.",
       );
     } catch (error) {
       notify(messageOf(error, language));
@@ -256,6 +294,15 @@ export function ProfitSharingPanel({
               onClick={() => setShowForm(true)}
             >
               <Plus size={15} /> {id ? "Tambah penerima" : "Add recipient"}
+            </button>
+            <button
+              className="button secondary small"
+              type="button"
+              disabled={!projectId || remainingPercentage <= 0 || Boolean(summary?.companyShare) || busy}
+              onClick={() => void allocateCompanyRemainder()}
+              title={id ? "Server akan memakai seluruh sisa persentase yang tersedia." : "The server will use the entire remaining percentage."}
+            >
+              <Landmark size={15} /> {id ? "Alokasikan sisa ke kas perusahaan" : "Allocate remainder to company"}
             </button>
           </div>
         </div>
@@ -330,11 +377,11 @@ export function ProfitSharingPanel({
                   className={`profit-share-row ${allocation.status.toLowerCase()}`}
                   key={allocation.id}
                 >
-                  <span className="metric-icon teal">
-                    <UsersRound size={17} />
+                  <span className={`metric-icon ${allocation.recipientKind === "company" ? "blue" : "teal"}`}>
+                    {allocation.recipientKind === "company" ? <Landmark size={17} /> : <UsersRound size={17} />}
                   </span>
                   <div>
-                    <strong>{allocation.recipientName}</strong>
+                    <strong>{allocation.recipientKind === "company" ? (id ? "Kas Perusahaan" : "Company Treasury") : allocation.recipientName}</strong>
                     <small>
                       {allocation.percentage.toFixed(2)}% ·{" "}
                       {allocation.notes ||
@@ -343,7 +390,7 @@ export function ProfitSharingPanel({
                   </div>
                   <strong>{formatCurrency(allocation.amount, language)}</strong>
                   <span className={`status-badge ${allocation.status === "Paid" ? "success" : allocation.status === "Approved" ? "info" : allocation.status === "Void" ? "neutral" : "warning"}`}>
-                    {statusLabel(language, allocation.status)}
+                    {statusLabel(language, allocation.status, allocation.recipientKind)}
                   </span>
                   <div className="table-row-actions">
                     {allocation.status === "Draft" && canApprove ? (
@@ -366,7 +413,7 @@ export function ProfitSharingPanel({
                           setPaidDate(serverToday);
                         }}
                       >
-                        <CircleDollarSign size={14} /> {id ? "Bayar" : "Pay"}
+                        <CircleDollarSign size={14} /> {allocation.recipientKind === "company" ? (id ? "Pindahkan ke kas perusahaan" : "Transfer to company treasury") : (id ? "Bayar" : "Pay")}
                       </button>
                     ) : null}
                     {allocation.status === "Draft" ? (
@@ -434,13 +481,13 @@ export function ProfitSharingPanel({
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setPaying(null)}>
           <section className="modal-card" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <div><span className="eyebrow">{id ? "PEMBAYARAN BAGI HASIL" : "PROFIT-SHARE PAYMENT"}</span><h2>{paying.recipientName}</h2></div>
+              <div><span className="eyebrow">{paying.recipientKind === "company" ? (id ? "PEMINDAHAN KE KAS PERUSAHAAN" : "COMPANY TREASURY TRANSFER") : (id ? "PEMBAYARAN BAGI HASIL" : "PROFIT-SHARE PAYMENT")}</span><h2>{paying.recipientKind === "company" ? (id ? "Kas Perusahaan" : "Company Treasury") : paying.recipientName}</h2></div>
               <button className="icon-button" type="button" onClick={() => setPaying(null)}><X size={18} /></button>
             </div>
             <form className="form-grid" onSubmit={pay}>
-              <div className="statement-guidance full"><CheckCircle2 size={18} /><span><strong>{formatCurrency(paying.amount, language)}</strong><small>{id ? "Pembayaran akan masuk sebagai kas keluar proyek dan menunggu rekonsiliasi mutasi bank." : "The payment becomes a project cash outflow and waits for bank reconciliation."}</small></span></div>
+              <div className="statement-guidance full"><CheckCircle2 size={18} /><span><strong>{formatCurrency(paying.amount, language)}</strong><small>{paying.recipientKind === "company" ? (id ? "Nominal dipindahkan ke saldo Kas Perusahaan tanpa menambah kas bersih perusahaan." : "The amount moves to Company Treasury without increasing company net cash.") : (id ? "Pembayaran akan masuk sebagai kas keluar proyek dan menunggu rekonsiliasi mutasi bank." : "The payment becomes a project cash outflow and waits for bank reconciliation.")}</small></span></div>
               <label className="field full"><span>{id ? "Tanggal pembayaran" : "Payment date"}</span><input type="date" required value={paidDate} onChange={(event) => setPaidDate(event.target.value)} /></label>
-              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setPaying(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit" disabled={busy}><CircleDollarSign size={15} /> {id ? "Catat pembayaran" : "Record payment"}</button></div>
+              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setPaying(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit" disabled={busy}><CircleDollarSign size={15} /> {paying.recipientKind === "company" ? (id ? "Pindahkan dana" : "Transfer funds") : (id ? "Catat pembayaran" : "Record payment")}</button></div>
             </form>
           </section>
         </div>

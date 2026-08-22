@@ -153,7 +153,9 @@ function endpointFor(target: DocumentEmailTarget, action: string) {
     ? "procurement-orders"
     : target.kind === "quotation"
       ? "quotations"
-      : "invoices";
+      : target.kind === "invoice"
+        ? "invoices"
+        : "bast";
   return `/api/${resource}/${encodeURIComponent(target.id)}/${action}`;
 }
 
@@ -167,6 +169,44 @@ function errorFor(error: unknown, language: AppLanguage, target: DocumentEmailTa
       ? details.projectName
       : target.recipientName || (isVendor ? "vendor" : "klien");
   const filename = typeof details.filename === "string" ? details.filename : "berkas";
+  const permissionModule = isVendor
+    ? "Procurement"
+    : target.kind === "bast"
+      ? "BAST Digital"
+      : "Billing";
+
+  if (code === "BAST_NOT_FINAL") {
+    return {
+      code,
+      message: language === "id"
+        ? "BAST belum final dan belum dapat dikirim. Finalkan dokumen terlebih dahulu."
+        : "The handover is not final and cannot be sent yet. Finalize it first.",
+    };
+  }
+  if (code === "BAST_REVOKED") {
+    return {
+      code,
+      message: language === "id"
+        ? "BAST ini sudah dicabut sehingga tidak dapat dikirim."
+        : "This handover has been revoked and cannot be sent.",
+    };
+  }
+  if (code === "BAST_ARCHIVE_MISMATCH") {
+    return {
+      code,
+      message: language === "id"
+        ? "Arsip final BAST tidak cocok dengan sidik dokumen. Hubungi Admin untuk pemeriksaan."
+        : "The final handover archive does not match its recorded fingerprint. Ask an Admin to investigate.",
+    };
+  }
+  if (code === "TEMPLATE_KIND_MISMATCH") {
+    return {
+      code,
+      message: language === "id"
+        ? "Template yang dipilih bukan template BAST. Pilih template surat BAST."
+        : "The selected template is not a handover template. Choose a BAST letter template.",
+    };
+  }
 
   if (code === "VENDOR_EMAIL_MISSING" || code === "CLIENT_EMAIL_MISSING") {
     return {
@@ -238,10 +278,10 @@ function errorFor(error: unknown, language: AppLanguage, target: DocumentEmailTa
       message: language === "id"
         ? isVendor
           ? "Izin Kelola pada Procurement diperlukan untuk mengirim dokumen ke vendor."
-          : "Izin Kelola pada Billing diperlukan untuk mengirim dokumen ke klien."
+          : `Izin Kelola pada ${permissionModule} diperlukan untuk mengirim dokumen ke klien.`
         : isVendor
           ? "Procurement Manage permission is required to email the vendor."
-          : "Billing Manage permission is required to email the client.",
+          : `${permissionModule} Manage permission is required to email the client.`,
     };
   }
   return { code, message: messageOf(error, language) };
