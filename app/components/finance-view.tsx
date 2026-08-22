@@ -3,11 +3,13 @@
 import {
   ArrowDownRight,
   ArrowUpRight,
+  Archive,
   BarChart3,
   CalendarRange,
   ChevronDown,
   CircleDollarSign,
   Download,
+  FileCheck2,
   Filter,
   Landmark,
   Plus,
@@ -36,8 +38,10 @@ import {
 } from "../data";
 import { type AppLanguage, localizedDate, localizedLabel } from "../i18n";
 import { BankingPanel } from "./banking-panel";
+import { FinanceEvidenceView } from "./finance-evidence-view";
 import { ProfitSharingPanel } from "./profit-sharing-panel";
 import { TaxPanel } from "./tax-panel";
+import type { FinanceEvidenceKind } from "@/shared/finance-evidence";
 
 interface FinanceViewProps {
   language: AppLanguage;
@@ -51,6 +55,7 @@ interface FinanceViewProps {
   canConfigureBanking: boolean;
   canApproveProfitShares: boolean;
   canConfigureTax: boolean;
+  canManageEvidenceKind: (kind: FinanceEvidenceKind) => boolean;
 }
 
 interface UnreconciledTotals {
@@ -204,6 +209,7 @@ export function FinanceView({
   canConfigureBanking,
   canApproveProfitShares,
   canConfigureTax,
+  canManageEvidenceKind,
 }: FinanceViewProps) {
   const id = language === "id";
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -220,6 +226,9 @@ export function FinanceView({
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<"Semua" | Transaction["type"]>("Semua");
   const [filterOpen, setFilterOpen] = useState(false);
+  const [financeSection, setFinanceSection] = useState<"overview" | "evidence">("overview");
+  const [evidenceInitialQuery, setEvidenceInitialQuery] = useState("");
+  const [evidenceInitialKind, setEvidenceInitialKind] = useState<FinanceEvidenceKind | undefined>(undefined);
   const [showTransactionForm, setShowTransactionForm] = useState(false);
   const [transactionType, setTransactionType] = useState<Transaction["type"]>("Pemasukan");
   const [transactionProjectId, setTransactionProjectId] = useState(projectId ?? "");
@@ -473,6 +482,13 @@ export function FinanceView({
     setTransactionCategory(type === "Pemasukan" ? "Penjualan" : "Operasional");
   }
 
+  function openEvidenceForTransaction(transaction: Transaction) {
+    if (!transaction.evidence) return;
+    setEvidenceInitialQuery(transaction.description || transaction.evidence.evidenceId);
+    setEvidenceInitialKind(transaction.evidence.kind as FinanceEvidenceKind);
+    setFinanceSection("evidence");
+  }
+
   async function addTransaction(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!description.trim() || amount <= 0 || !transactionDate) return;
@@ -588,6 +604,13 @@ export function FinanceView({
           ) : null}
         </div>
       </section>
+
+      <div className="finance-section-tabs" role="tablist" aria-label={id ? "Bagian pembukuan" : "Finance sections"}>
+        <button className={financeSection === "overview" ? "active" : ""} type="button" role="tab" aria-selected={financeSection === "overview"} onClick={() => setFinanceSection("overview")}><WalletCards size={15} /> {id ? "Ringkasan & transaksi" : "Overview & transactions"}</button>
+        <button className={financeSection === "evidence" ? "active" : ""} type="button" role="tab" aria-selected={financeSection === "evidence"} onClick={() => setFinanceSection("evidence")}><Archive size={15} /> {id ? "Arsip Bukti" : "Evidence archive"}</button>
+      </div>
+
+      {financeSection === "evidence" ? <FinanceEvidenceView key={`${evidenceInitialKind ?? "all"}-${evidenceInitialQuery}`} language={language} notify={notify} projects={projects} initialProjectId={projectId} initialQuery={evidenceInitialQuery} initialKind={evidenceInitialKind} canManageEvidenceKind={canManageEvidenceKind} /> : <>
 
       <section className="finance-kpi-grid">
         <article className="finance-kpi income">
@@ -949,6 +972,7 @@ export function FinanceView({
                               : "Unreconciled — not counted as cash"}
                           </span>
                         )}
+                        {transaction.evidence ? <button className="transaction-evidence-link" type="button" onClick={() => openEvidenceForTransaction(transaction)}><FileCheck2 size={12} /> {id ? "Lihat bukti" : "View evidence"}</button> : null}
                       </div>
                     </div>
                   </td>
@@ -1141,6 +1165,7 @@ export function FinanceView({
           </section>
         </div>
       ) : null}
+      </>}
     </div>
   );
 }

@@ -8,12 +8,11 @@ import {
   CheckCircle2,
   Circle,
   Clock3,
-  FileImage,
   FileText,
+  LoaderCircle,
   LayoutList,
   ListChecks,
   MapPin,
-  Paperclip,
   Plus,
   ReceiptText,
   Trash2,
@@ -25,6 +24,7 @@ import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } fro
 import { api, messageOf } from "../api-client";
 import { Project, ViewKey } from "../data";
 import { type AppLanguage, localizedDate, localizedLabel } from "../i18n";
+import { DocumentGallery, type ProjectDocumentAsset } from "./document-gallery";
 
 interface ProjectViewProps {
   language: AppLanguage;
@@ -62,15 +62,6 @@ interface ProjectTask {
   endDate?: string;
 }
 
-interface ProjectDocument {
-  id: string;
-  name: string;
-  type: "image" | "file";
-  date: string;
-  uploader: string;
-  preview?: string;
-}
-
 interface ProcurementSummary {
   budgetBoq: number;
   committedVendorCost: number;
@@ -78,6 +69,35 @@ interface ProcurementSummary {
   paid: number;
   outstanding: number;
   variance: number;
+}
+
+interface DocumentUploadIssue {
+  name: string;
+  code: string;
+  message: string;
+}
+
+const DOCUMENT_UPLOAD_MAX_FILES = 10;
+const DOCUMENT_UPLOAD_MAX_BATCH_BYTES = 25 * 1024 * 1024;
+
+function splitDocumentUploadBatches(files: File[]) {
+  const batches: File[][] = [];
+  let current: File[] = [];
+  let currentBytes = 0;
+  for (const file of files) {
+    if (
+      current.length > 0 &&
+      (current.length >= DOCUMENT_UPLOAD_MAX_FILES || currentBytes + file.size > DOCUMENT_UPLOAD_MAX_BATCH_BYTES)
+    ) {
+      batches.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(file);
+    currentBytes += file.size;
+  }
+  if (current.length) batches.push(current);
+  return batches;
 }
 
 function taskStatusClass(status: ProjectTask["status"]) {
@@ -99,7 +119,10 @@ export function ProjectView({
 }: ProjectViewProps) {
   const id = language === "id";
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
-  const [documents, setDocuments] = useState<ProjectDocument[]>([]);
+  const [documents, setDocuments] = useState<ProjectDocumentAsset[]>([]);
+  const [documentCaption, setDocumentCaption] = useState("");
+  const [documentUploadIssues, setDocumentUploadIssues] = useState<DocumentUploadIssue[]>([]);
+  const [documentUploadBusy, setDocumentUploadBusy] = useState(false);
   const [viewMode, setViewMode] = useState<"timeline" | "tasks">("timeline");
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [taskName, setTaskName] = useState("");
@@ -130,7 +153,7 @@ export function ProjectView({
 
   const refreshDocuments = useCallback(async () => {
     try {
-      setDocuments(await api<ProjectDocument[]>(`/api/projects/${projectId}/documents`));
+      setDocuments(await api<ProjectDocumentAsset[]>(`/api/projects/${projectId}/documents`));
     } catch (error) {
       notify(messageOf(error));
     }
@@ -227,22 +250,75 @@ export function ProjectView({
     }
   }
 
-  async function uploadDocument(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const form = new FormData();
-    form.set("file", file);
+  async function uploadDocuments(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length || documentUploadBusy) return;
+    const batches = splitDocumentUploadBatches(files);
+    const uploaded: ProjectDocumentAsset[] = [];
+    const skipped: DocumentUploadIssue[] = [];
+    setDocumentUploadBusy(true);
+    setDocumentUploadIssues([]);
     try {
-      const document = await api<ProjectDocument>(`/api/projects/${projectId}/documents`, {
-        method: "POST",
-        body: form,
-      });
-      setDocuments((current) => [document, ...current]);
-      notify(id ? "Dokumentasi berhasil ditambahkan ke proyek." : "Documentation was added to the project.");
+      for (const batch of batches) {
+        const form = new FormData();
+        batch.forEach((file) => form.append("files", file));
+        if (documentCaption.trim()) form.set("caption", documentCaption.trim());
+        try {
+          const result = await api<{ uploaded: ProjectDocumentAsset[]; skipped: DocumentUploadIssue[] }>(`/api/projects/${projectId}/documents`, {
+            method: "POST",
+            body: form,
+          });
+          uploaded.push(...(result.uploaded ?? []));
+          skipped.push(...(result.skipped ?? []));
+        } catch (error) {
+          const message = messageOf(error, language);
+          skipped.push(...batch.map((file) => ({ name: file.name, code: "UPLOAD_FAILED", message })));
+        }
+      }
+      if (uploaded.length) {
+        setDocuments((current) => {
+          const known = new Set(uploaded.map((item) => item.id));
+          return [...uploaded, ...current.filter((item) => !known.has(item.id))];
+        });
+      }
+      setDocumentUploadIssues(skipped);
+      if (uploaded.length && !skipped.length) {
+        notify(id ? `${uploaded.length} dokumentasi berhasil diunggah.` : `${uploaded.length} documents uploaded successfully.`);
+      } else if (uploaded.length) {
+        notify(id ? `${uploaded.length} dokumentasi berhasil; sebagian file perlu diperiksa.` : `${uploaded.length} documents uploaded; review the skipped files.`);
+      } else if (skipped.length) {
+        notify(id ? "Tidak ada file yang berhasil diunggah. Periksa alasan di bawah." : "No files were uploaded. Review the reasons below.");
+      }
     } catch (error) {
       notify(messageOf(error, language));
     } finally {
+      setDocumentUploadBusy(false);
       event.target.value = "";
+    }
+  }
+
+  async function updateDocumentCaption(document: ProjectDocumentAsset, caption: string) {
+    try {
+      const updated = await api<ProjectDocumentAsset>(`/api/projects/${projectId}/documents/${document.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ caption: caption || null }),
+      });
+      setDocuments((current) => current.map((item) => item.id === updated.id ? updated : item));
+      notify(id ? "Keterangan dokumentasi diperbarui." : "Document caption updated.");
+    } catch (error) {
+      notify(messageOf(error, language));
+      throw error;
+    }
+  }
+
+  async function deleteDocument(document: ProjectDocumentAsset) {
+    try {
+      await api(`/api/projects/${projectId}/documents/${document.id}`, { method: "DELETE" });
+      setDocuments((current) => current.filter((item) => item.id !== document.id));
+      notify(id ? "Dokumentasi dihapus." : "Documentation deleted.");
+    } catch (error) {
+      notify(messageOf(error, language));
+      throw error;
     }
   }
 
@@ -542,42 +618,40 @@ export function ProjectView({
 
       <section className="documentation-layout">
         <div className="panel documentation-panel">
-          <div className="panel-head">
+          <div className="panel-head documentation-head">
             <div>
               <span className="eyebrow">{id ? "DOKUMENTASI LAPANGAN" : "FIELD DOCUMENTATION"}</span>
               <h2>{id ? "Foto & file proyek" : "Project photos & files"}</h2>
+              <p className="panel-description">{id ? "Unggah hingga 10 file per batch. Tambahkan keterangan agar foto mudah ditemukan kembali." : "Upload up to 10 files per batch. Add a caption so photos remain easy to find."}</p>
             </div>
             {canManage && (
-              <label className="button primary small file-upload-button">
-                <UploadCloud size={15} /> {id ? "Unggah file" : "Upload file"}
-                <input type="file" accept="image/*,.pdf" onChange={uploadDocument} />
-              </label>
+              <div className="documentation-upload-controls">
+                <label className="field document-caption-field">
+                  <span>{id ? "Keterangan untuk semua file" : "Caption for all files"}</span>
+                  <input value={documentCaption} maxLength={500} onChange={(event) => setDocumentCaption(event.target.value)} placeholder={id ? "Contoh: Instalasi lantai 2" : "Example: Second-floor installation"} disabled={documentUploadBusy} />
+                </label>
+                <label className={`button primary small file-upload-button ${documentUploadBusy ? "is-loading" : ""}`}>
+                  {documentUploadBusy ? <LoaderCircle className="spin" size={15} /> : <UploadCloud size={15} />} {documentUploadBusy ? (id ? "Mengunggah..." : "Uploading...") : (id ? "Unggah banyak" : "Upload multiple")}
+                  <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple onChange={uploadDocuments} disabled={documentUploadBusy} />
+                </label>
+              </div>
             )}
           </div>
-          <div className="document-grid">
-            {documents.map((document, index) => (
-              <article className="field-document-card" key={document.id}>
-                <div className={`document-thumb variant-${index % 3}`}>
-                  {document.preview ? (
-                    // User-selected local preview; native img avoids Next Image blob URL constraints.
-                    <img src={document.preview} alt={document.name} />
-                  ) : document.type === "image" ? (
-                    <><Camera size={30} /><span>Dokumentasi {index + 1}</span></>
-                  ) : (
-                    <><FileText size={30} /><span>PDF</span></>
-                  )}
-                  <span className="document-type-icon">
-                    {document.type === "image" ? <FileImage size={14} /> : <Paperclip size={14} />}
-                  </span>
-                </div>
-                <div className="field-document-copy">
-                  <strong>{document.name}</strong>
-                  <span>{document.uploader}</span>
-                  <small>{document.date}</small>
-                </div>
-              </article>
-            ))}
-          </div>
+          {documentUploadIssues.length ? (
+            <div className="document-upload-issues" role="status">
+              <strong>{id ? "File yang perlu diperiksa" : "Files to review"}</strong>
+              <ul>{documentUploadIssues.map((issue, index) => <li key={`${issue.name}-${issue.code}-${index}`}><span>{issue.name}</span><small>{issue.code} · {issue.message}</small></li>)}</ul>
+            </div>
+          ) : null}
+          <DocumentGallery
+            documents={documents}
+            language={language}
+            canManage={canManage}
+            onUpdateCaption={updateDocumentCaption}
+            onDelete={deleteDocument}
+            emptyTitle={id ? "Belum ada dokumentasi" : "No documentation yet"}
+            emptyDescription={id ? "Unggah foto atau file pertama untuk mulai membangun riwayat proyek." : "Upload the first photo or file to build the project history."}
+          />
         </div>
 
         <aside className="panel project-activity-panel">

@@ -13,6 +13,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  Images,
   PackageSearch,
   LibraryBig,
   PanelLeftClose,
@@ -27,6 +28,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { canAccess, type AccessModule } from "@/shared/access";
+import { financeEvidenceModule, type FinanceEvidenceKind } from "@/shared/finance-evidence";
 import { api, SessionUser } from "../api-client";
 import { Project, ViewKey } from "../data";
 import { AppLanguage, translate } from "../i18n";
@@ -38,6 +40,7 @@ import { BoqView } from "./boq-view";
 import { CatalogView } from "./catalog-view";
 import { DashboardView } from "./dashboard-view";
 import { FinanceView } from "./finance-view";
+import { GalleryView } from "./gallery-view";
 import { ProjectExpenseView } from "./project-expense-view";
 import { HelpView } from "./help-view";
 import { ProcurementViewV2 as ProcurementView } from "./procurement-v2-view";
@@ -53,7 +56,7 @@ import { WorkspaceSwitcher } from "./workspace-switcher";
 
 interface NavigationItem {
   id: ViewKey;
-  labelKey: "dashboard" | "projects" | "expenses" | "boq" | "catalog" | "billing" | "procurement" | "validation" | "bast" | "finance" | "prospects" | "users";
+  labelKey: "dashboard" | "projects" | "gallery" | "expenses" | "boq" | "catalog" | "billing" | "procurement" | "validation" | "bast" | "finance" | "prospects" | "users";
   module: AccessModule;
   icon: typeof LayoutDashboard;
   badge?: string;
@@ -75,6 +78,7 @@ const mainNavigation: NavigationItem[] = [
 ];
 
 const operationsNavigation: NavigationItem[] = [
+  { id: "gallery", labelKey: "gallery", module: "projects", icon: Images },
   { id: "expenses", labelKey: "expenses", module: "expenses", icon: ReceiptText },
   { id: "procurement", labelKey: "procurement", module: "procurement", icon: PackageSearch },
   { id: "validation", labelKey: "validation", module: "bast", icon: ClipboardCheck },
@@ -93,6 +97,7 @@ function viewMeta(language: AppLanguage, view: ViewKey) {
   const meta: Record<ViewKey, { title: string; subtitle: string }> = {
     dashboard: { title: "Dashboard", subtitle: id ? "Pusat kendali operasional" : "Operations control center" },
     project: { title: translate(language, "projects"), subtitle: id ? "Jadwal, tugas, dan dokumentasi" : "Schedules, tasks, and documentation" },
+    gallery: { title: translate(language, "gallery"), subtitle: id ? "Foto dan file lintas proyek" : "Photos and files across projects" },
     expenses: { title: translate(language, "expenses"), subtitle: id ? "Nota, uang muka, dan reimbursement proyek" : "Project receipts, advances, and reimbursements" },
     boq: { title: "BoQ Generator", subtitle: id ? "Kalkulasi kebutuhan dan margin" : "Requirements and margin calculation" },
     catalog: { title: translate(language, "catalog"), subtitle: id ? "Kategori, merek, item, dan standar harga" : "Categories, brands, items, and standard pricing" },
@@ -473,6 +478,7 @@ export function EnterpriseApp() {
           ) : null}
           {currentView === "dashboard" && canUse("dashboard") && <DashboardView language={language} navigate={navigate} notify={notify} selectedProjectId={selectedProjectId} userName={user.name} canManage={canManage("projects")} canUseBoq={canUse("boq")} canUseBilling={canUse("billing")} onSelectProject={selectProject} onProjectCreated={projectCreated} />}
           {currentView === "project" && canUse("projects") && (activeProjectId ? <ProjectView key={activeProjectId} language={language} navigate={navigate} notify={notify} projectId={activeProjectId} project={projects.find((item) => item.id === activeProjectId)} canManage={canManage("projects")} canDelete={user.role === "Admin"} canManageAccess={user.role === "Admin"} onProjectDeleted={projectDeleted} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
+          {currentView === "gallery" && canUse("projects") && <GalleryView language={language} notify={notify} projects={projects} />}
           {currentView === "expenses" && canUse("expenses") && (activeProjectId || ["Admin", "Finance"].includes(user.role) ? <ProjectExpenseView language={language} notify={notify} projectId={activeProjectId || undefined} projects={projects} userId={user.id} userRole={user.role} canCreate={canManage("expenses")} canReview={["Admin", "Finance"].includes(user.role) && canManage("finance")} canExport={canUse("finance")} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "boq" && canUse("boq") && (activeProjectId ? <BoqView language={language} navigate={navigate} notify={notify} projectId={activeProjectId} canManage={canManage("boq")} canManageCatalog={["Admin", "Finance"].includes(user.role)} /> : ["Admin", "Finance"].includes(user.role) && canManage("boq") ? <StandaloneBoqView language={language} notify={notify} projects={projects} /> : <ProjectContextEmpty language={language} onDashboard={() => navigate("dashboard")} />)}
           {currentView === "catalog" && canUse("boq") && ["Admin", "Finance"].includes(user.role) && <CatalogView language={language} notify={notify} />}
@@ -501,6 +507,7 @@ export function EnterpriseApp() {
                 canManage("finance") &&
                 canManage("settings")
               }
+              canManageEvidenceKind={(kind: FinanceEvidenceKind) => canManage(financeEvidenceModule[kind])}
             />
           )}
           {currentView === "prospects" && canUse("prospects") && <ProspectsEditor canManage={canManage("prospects")} canManageProjects={canManage("projects")} onProjectOpen={(projectId) => { selectProject(projectId); navigate("project"); void api<Project>("/api/projects/" + encodeURIComponent(projectId)).then(projectCreated).catch(() => undefined); }} />}

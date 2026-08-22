@@ -4,6 +4,7 @@ export type ViewKey =
   | "catalog"
   | "billing"
   | "project"
+  | "gallery"
   | "expenses"
   | "procurement"
   | "validation"
@@ -364,6 +365,7 @@ export interface Transaction {
   source: string;
   category: string;
   categoryKey?: string;
+  evidence?: { kind: string; evidenceId: string };
   editable?: boolean;
   // False while an imported bank mutasi is still unreconciled: show the row, but
   // never add it to a cash total — it usually duplicates a source-document
