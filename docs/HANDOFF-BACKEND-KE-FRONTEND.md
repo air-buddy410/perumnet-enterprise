@@ -9,7 +9,54 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ---
 
-## ✅ Tidak ada tugas frontend yang tertunda
+## 🔴 Yang sedang menunggumu
+
+### T-27 — Editor "Isi surat" di Calon Klien tidak bisa diketik sama sekali (BUG, prioritas)
+
+Dilaporkan pemilik 22 Agustus 2026 saat menguji. Klik di kotak isi surat pada
+**Calon Klien → template outreach** tidak memunculkan kursor dan tidak ada satu
+huruf pun masuk. Kotaknya TIDAK terlihat terkunci — warnanya normal, toolbarnya
+aktif. Bukan soal izin.
+
+**Sebabnya: editor itu dibungkus `<label>`.**
+
+`Field` (`app/panel/prospects-editor.tsx:427-441`) merender `<label>`, dan satu
+pemakaiannya membungkus komponen, bukan input:
+
+```tsx
+<Field label="Isi surat" required wide hint="…">
+  <RichTextEditor … />
+</Field>
+```
+
+`RichTextEditor` menaruh toolbar lebih dulu (`rich-text-editor.tsx:489`), dan
+toolbar itu berisi `<button>` dan `<select>` — keduanya elemen labelable.
+Sebuah `<label>` tanpa atribut `for` mengambil **elemen labelable pertama di
+dalamnya** sebagai kontrol yang ia wakili. Jadi klik di permukaan tulis
+diperlakukan sebagai klik pada label: fokus dilempar ke tombol toolbar pertama,
+dan caret tidak pernah mendarat di `contentEditable`. Persis gejalanya.
+
+**Kenapa di Template surat dokumen tidak rusak:** di sana pembungkusnya `<div
+className={\`field \${styles.full}\`}>` (`document-template-manager.tsx:530`),
+bukan `<label>`. Editornya sendiri sama persis — jangan ikut diubah.
+
+**Perbaikan yang saya sarankan:** beri `Field` prop `as?: "label" | "div"`
+dengan bawaan `"label"`, lalu pakai `as="div"` HANYA untuk field "Isi surat".
+Tiga puluh `Field` lain membungkus `<input>`/`<select>` biasa — di sana
+`<label>` justru yang benar dan harus tetap. Saya sudah periksa: hanya "Isi
+surat" yang membungkus komponen.
+
+Karena bungkusnya tidak lagi `<label>`, sambungkan kaptionnya lewat `id` +
+`aria-labelledby`, atau setidaknya perbaiki `aria-label` permukaan tulis di
+`rich-text-editor.tsx:538` — sekarang ia memakai `labels.toolbar` ("Toolbar"),
+yang menyesatkan pembaca layar untuk sebuah kotak isian.
+
+Tolong uji juga dengan mengetik di kotak yang sama pada **Template surat
+dokumen**, untuk memastikan perbaikannya tidak menyentuh yang sudah jalan.
+
+---
+
+## ✅ Sudah selesai
 
 **T-24, T-25, dan T-26 sudah selesai** (`7b8cd6b`), dan sudah berjalan di demo
 maupun produksi bersama backend-nya (`7b8cd6b`, 370 tes lulus). Kontraknya
