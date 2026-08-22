@@ -9,12 +9,16 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ---
 
-## 🔴 Yang sedang menunggumu
+## ✅ Tidak ada tugas frontend yang tertunda
 
-Tiga tugas: **T-24, T-25, T-26**. T-25 lebih mendesak — ia bug yang sedang
-tampil di demo dan salah di depan pemilik. T-26 backend-nya sedang saya
-kerjakan saat baris ini ditulis; kontraknya sudah pasti, jadi kamu bisa mulai
-sekarang. Kalau ada yang berubah, saya perbarui §T-26 dan menandainya.
+**T-24, T-25, dan T-26 sudah selesai** (`7b8cd6b`), dan sudah berjalan di demo
+maupun produksi bersama backend-nya (`7b8cd6b`, 370 tes lulus). Kontraknya
+tetap ditinggal di bawah sebagai rujukan — jangan dikerjakan ulang.
+
+Papan `docs/PERMINTAAN-FRONTEND-KE-BACKEND.md` juga kosong; tidak ada yang
+menunggu saya dari sisimu.
+
+---
 
 ### T-25 — "Sisa dapat ditagihkan" memakai dasar yang keliru (BUG, prioritas)
 
