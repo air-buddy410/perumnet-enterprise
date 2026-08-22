@@ -9,80 +9,31 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ---
 
-## ⚠️ Luna, baca ini dulu — saya menyentuh berkasmu
+## 🔴 Yang sedang menunggumu
 
-**22 Agustus 2026.** Tidak ada tugas baru yang menunggumu. Tapi ada satu hal
-yang wajib kamu tahu sebelum menyentuh editor surat lagi.
+**22 Agustus 2026, sore.** Tiga tugas baru dari pemilik, dan kamu **bisa mulai
+sekarang** tanpa menunggu saya: kontraknya sudah dikunci di rencana yang
+disetujui pemilik, dan kode server sedang saya tulis mengikuti kontrak itu —
+bukan sebaliknya. Kalau ada yang terpaksa berubah, saya tulis blok "PERUBAHAN"
+di kepala bagian tugasnya dan menyebut tanggalnya.
 
-### Saya mengubah dua berkas di wilayahmu (`d9377c2`)
-
-`app/panel/rich-text-editor.tsx` dan `app/panel/prospects-editor.tsx`.
-
-Bukan karena saya merasa berhak — pemilik sedang menguji, menemukan dua bug
-yang menghalanginya, dan meminta saya langsung mengerjakannya daripada
-menunggu. Saya batasi perubahannya pada penyebabnya saja. Ini yang berubah:
-
-| # | Perubahan | Kenapa |
+| Tugas | Layar | Status backend |
 |---|---|---|
-| 1 | `Field` dapat prop `as`; **hanya** field "Isi surat" memakai `as="div"` | Sebagai `<label>`, kotak isi surat **tidak bisa diketik sama sekali**. `<label>` tanpa `for` meneruskan klik ke elemen labelable pertama di dalamnya — dan toolbar editor berisi `<button>` serta `<select>`. Caret tidak pernah mendarat. Tiga puluh field lain tetap `<label>`; di sana perilaku itu justru yang benar. |
-| 2 | Keempat `focus()` memakai `preventScroll` | `focus()` menggulir elemennya ke pandangan. Satu ketukan Tab melewati tiga pemanggilan berturut, dan tampilan melompat naik di tengah orang mengetik. |
-| 3 | **Tab kembali jadi pindah kolom; indentasi ke `Ctrl/Cmd + ]`** | Ini **membatalkan fiturmu dari `b492ec5`** — tolong dibaca bagian di bawah. |
-| 4 | `aria-label` permukaan tulis tidak lagi `labels.toolbar` | Ia mengumumkan dirinya sebagai "Toolbar" kepada pembaca layar. |
+| **T-29** Arsip Bukti di Pembukuan | `finance-view.tsx` (tab/section baru) | endpoint sudah kompil, sedang diuji — kontrak di §T-29 |
+| **T-30** Foto proyek: unggah banyak, keterangan, galeri per proyek | `project-view.tsx` | kontrak pasti, kode menyusul hari ini — §T-30 |
+| **T-31** Galeri Proyek lintas proyek | `ViewKey` baru `gallery` | kontrak pasti, kode menyusul hari ini — §T-31 |
 
-### Soal nomor 3 — ini keputusan yang membatalkan pekerjaanmu
+Urutan yang saya sarankan: **T-30 dulu** (paling banyak dipakai PM sehari-hari),
+lalu T-29, lalu T-31. Ketiga kontrak lengkap ada di bagian bawah berkas ini.
 
-Kotak isi surat duduk di tengah form: Nama template → Bahasa → Subjek → Isi
-surat. Tab adalah cara orang berpindah kolom. Sejak `b492ec5` Tab menyisipkan
-indentasi, jadi **satu-satunya jalan keluar dari kotak itu tinggal tetikus** —
-pengguna papan ketik dan pembaca layar terjebak di dalamnya. Pemilik sendiri
-menemukan bug gulir itu justru karena menekan Tab untuk pindah kolom.
+Konteks singkat supaya kamu tahu kenapa: sampai hari ini **tujuh jenis bukti
+yang diunggah orang tidak pernah bisa dibuka dari mana pun** — bukti transfer
+invoice, bukti bayar vendor, bukti setor pajak, tanda terima quotation.
+Diunggah, disimpan, hanya namanya yang pernah tampil. T-29 adalah layar
+pertama yang bisa membukanya. Dan foto proyek sekarang diunggah satu-satu tanpa
+thumbnail: galeri 50 foto memuat 250 MB. T-30/T-31 memperbaiki keduanya.
 
-Satu hal lagi yang perlu kamu tahu: **pasangan Shift+Tab-mu tidak pernah
-bekerja.** `execCommand("outdent")` bertindak pada blockquote dan daftar, bukan
-pada spasi-tanpa-putus (`\u00a0`) yang disisipkan indentasinya. Jadi Shift+Tab
-tidak pernah membatalkan apa pun; Backspace yang membatalkannya. Karena itu
-saya tidak membawanya ke pintasan baru.
-
-Kalau kamu punya pertimbangan lain soal Tab, silakan ubah — itu wilayahmu dan
-saya cuma menambal. **Yang tidak boleh kembali cuma satu: Tab yang menyandera
-fokus sehingga tidak ada jalan keluar lewat papan ketik.**
-
-### Penjaganya
-
-`tests/editor-surat.test.mjs` — empat pemeriksaan sumber (tidak ada peramban
-di suite ini, dan kedua bug ini soal DOM). Keempatnya sudah dibuktikan **gagal**
-pada kode `b492ec5` dan lulus sesudahnya. Kalau kamu mengubah editor dan salah
-satunya merah, bacalah pesannya dulu — ia menyebutkan bug mana yang kembali.
-
----
-
-## Yang saya kerjakan hari ini, supaya kamu tahu keadaan kodenya
-
-Semua sudah berjalan di demo **dan** produksi (`d9377c2`, 374 tes lulus).
-
-| Commit | Isi |
-|---|---|
-| `f714796` | **BAST bisa dikirim ke klien.** Jenis dokumen keempat (`bast`). Lampirannya **arsip final, bukan render baru** — lihat §T-24. |
-| `6698525` | **Alokasi sisa laba ke kas perusahaan.** Dua kaki; kas bersih tidak bergerak. Lihat §T-26. |
-| `d9377c2` | Perbaikan editor di atas. |
-| `c328a0b`, `9902287` | Izin template per jenis dokumen; detail prospek satu bentuk untuk semua jalur. |
-
-Tiga hal dari situ yang menyentuh layar dan mudah keliru kalau tidak tahu:
-
-1. **Jangan menawarkan "render ulang" atau "lampirkan versi terbaru" di dialog
-   kirim BAST.** Byte-nya harus sama persis dengan yang sidiknya sudah
-   tercatat, atau halaman verifikasi klien menyatakan dokumennya tidak sah.
-2. **Jangan menjumlahkan `companyTreasury.balance` ke total kas masuk.**
-   Kaki masuknya sengaja tidak dihitung sebagai pemasukan di server; menambahkan
-   di layar akan menghitungnya dua kali.
-3. `GET /api/document-email-templates` memulangkan `viewableKinds`,
-   `manageableKinds`, dan `audience` — pakai itu, jangan menebak dari peran.
-
-Papan `docs/PERMINTAAN-FRONTEND-KE-BACKEND.md` kosong; tidak ada yang menunggu
-saya dari sisimu.
-
-Kontrak T-24/T-25/T-26 tetap ditinggal di bawah sebagai rujukan — ketiganya
-sudah kamu kerjakan di `7b8cd6b`, jangan diulang.
+Soal editor surat (T-27/T-28) sudah selesai — arsipnya di bawah.
 
 ---
 
@@ -1626,3 +1577,210 @@ penanganan di server ini hindari.
 | `NOTHING_LEFT_TO_ALLOCATE` | 409 | `percentage` dikosongkan tapi 100% sudah teralokasi. Matikan tombolnya saat `unallocatedPercentage === 0`. |
 | `PROFIT_SHARE_EXCEEDS_100_PERCENT` | 409 | Sama seperti sebelumnya. |
 | `NO_DISTRIBUTABLE_PROFIT` | 409 | Sama seperti sebelumnya, saat menyetujui. |
+
+
+---
+
+### T-29 — Arsip Bukti di Pembukuan (kontrak backend)
+
+- **Dipakai untuk:** tab/section **"Arsip Bukti"** di layar Pembukuan
+  (`finance-view.tsx`). Satu daftar berhalaman untuk SEMUA yang bergerak uang
+  plus bukti kontrak, dengan tombol buka bukti dan tombol lampirkan bukti.
+- **Izin:** membuka = `finance` view (gerbang resource `finance` sudah
+  menjaganya). Tiap baris hanya muncul bila akun punya `view` pada modul
+  jenisnya — `summary.kinds` memberitahumu jenis mana yang boleh dilihat
+  akun ini; **bangun filter jenis dari situ, jangan dari peran.** Melampirkan
+  dan menghapus = `finance` manage + `manage` pada modul jenisnya →
+  **PM/Engineer tidak bisa melampirkan bukti** (disengaja: bukti keuangan
+  urusan Finance). Sembunyikan tombol lampir untuk mereka; server tetap
+  menolak 403 kalau dipaksa.
+
+**Endpoint**
+
+| Metode | Endpoint | Badan | Balasan |
+|---|---|---|---|
+| GET | `/api/finance/evidence?q=&from=&to=&projectId=&kind=&direction=&proof=&page=&pageSize=` | — | `{ items[], page, pageSize, total, summary }` (bentuk di bawah) |
+| GET | `/api/finance/evidence/:kind/:evidenceId/file` | — | byte bukti yang tersimpan di catatannya (hanya 4 jenis, lihat `proof.legacy[].url`) |
+| POST | `/api/finance/evidence/:kind/:evidenceId/attachments` | `FormData`: `files` (1–5, PDF/PNG/JPEG/WebP ≤10 MB), `note?` (≤300) | 201 `{ items: [attachment…] }` |
+| GET | `/api/finance/evidence/attachments/:attachmentId/file` | — | byte lampiran |
+| DELETE | `/api/finance/evidence/attachments/:attachmentId` | — | 204 |
+
+Parameter daftar: `q` (mencocokkan judul, pihak, referensi, nomor dokumen,
+kode proyek, DAN **nominal persis** bila `q` angka — "9.150.000" atau
+"Rp 9,150,000" cocok dengan 9150000), `from`/`to` (tanggal `YYYY-MM-DD`),
+`projectId`, `kind` (boleh beberapa: `kind=advance,profit-share`),
+`direction` (`Pemasukan`|`Pengeluaran`), `proof` (`with`|`without`), `page`
+(≥1), `pageSize` (10–100, bawaan 25).
+
+Jenis (`kind`) dan labelnya ada di **`shared/finance-evidence.ts`**
+(`financeEvidenceKinds`, `financeEvidenceKindLabels` dwibahasa,
+`financeEvidenceModule`) — impor dari sana, jangan disalin.
+
+**Bentuk satu item:**
+
+```json
+{
+  "kind": "invoice-payment",
+  "id": "<id baris buku kas>",
+  "evidenceId": "<id pembayaran — kunci lampiran>",
+  "date": "2026-07-05", "amount": 9150000, "direction": "Pemasukan",
+  "reversal": false, "status": "Posted",
+  "project": { "id": "..", "code": "PN-2607-001", "name": ".." },
+  "title": "Pembayaran INV/..", "counterparty": "PT Klien", "reference": "MASUK-1",
+  "document": { "kind": "invoice", "id": "..", "number": "INV/..", "pdfUrl": "/api/invoices/<id>/pdf" },
+  "proof": {
+    "hasProof": true,
+    "legacy": [{ "name": "bukti.png", "mimeType": "image/png",
+                 "url": "/api/finance/evidence/invoice-payment/<evidenceId>/file" }],
+    "attachments": [{ "id": "..", "filename": "..", "mimeType": "..", "byteSize": 1234,
+                      "sha256": "..", "note": null,
+                      "uploadedBy": { "id": "..", "name": ".." }, "createdAt": "..",
+                      "url": "/api/finance/evidence/attachments/<id>/file" }]
+  },
+  "createdAt": ".."
+}
+```
+
+`summary`: `{ byKind: { "<kind>": { total, withoutProof } }, withoutProof,
+kinds: ["<kind yang boleh dilihat akun ini>", …] }` — dihitung atas
+`from/to/projectId` saja (mengabaikan `kind/q/proof`), jadi angka di tab
+tidak berubah saat orang mencari.
+
+**Galat yang perlu ditangani layar:**
+
+| Kode | HTTP | Kapan |
+|---|---|---|
+| `UNKNOWN_EVIDENCE_KIND` | 404 | `kind` di luar daftar — tidak akan terjadi kalau filter dibangun dari `shared/finance-evidence.ts`. |
+| `INVALID_DIRECTION` / `INVALID_PROOF_FILTER` | 422 | Nilai filter salah. |
+| `NOT_FOUND` | 404 | `projectId` di luar cakupan akun, atau bukti/lampiran tidak ada. Sama untuk proyek yang memang tidak ada — jangan bedakan. |
+| `NO_LEGACY_PROOF` | 404 | Catatan ini tidak menyimpan bukti (rute `/file` hanya untuk 4 jenis: invoice-payment, spk-payment, tax-settlement, quotation-acceptance). Jangan tampilkan tombol buka bila `proof.legacy` kosong. |
+| `FILE_REQUIRED` | 422 | `files` kosong. |
+| `ATTACHMENT_TOO_MANY` | 422 | > 5 berkas sekali unggah. |
+| `ATTACHMENT_TOO_LARGE` | 413 | > 10 MB per berkas. `details.filename`. |
+| `INVALID_FILE_CONTENT` | 415 | Isi berkas tidak sesuai tipenya (diperiksa dari byte). |
+| `ATTACHMENT_LIMIT` | 409 | Satu baris bukti sudah 10 lampiran. |
+| `DUPLICATE_ATTACHMENT` | 409 | Berkas yang sama sudah dilampirkan; `details.attachmentId` menunjuk yang ada. |
+| `EVIDENCE_RECONCILED` | 409 | Transaksinya sudah Matched dengan mutasi bank — lampiran tidak bisa dihapus. |
+| `FORBIDDEN` | 403 | Tidak punya izin modul jenis ini, atau mencoba menghapus lampiran orang lain (hanya Admin atau pengunggahnya). |
+
+**Yang perlu kamu tahu, dan tidak terlihat dari API-nya:**
+
+1. **Baris `reversal: true` adalah uang yang sama kembali** (pembatalan).
+   Tampilkan redup, tautkan ke baris asalnya lewat `evidenceId` yang sama,
+   dan **jangan pernah menandainya "tanpa bukti"** — server pun tidak
+   menghitungnya.
+2. `project: null` = baris tingkat perusahaan (mutasi bank, kas perusahaan).
+   Hanya Admin/Finance yang melihatnya.
+3. `proof.legacy[]` adalah bukti yang diunggah bersama catatannya — **hanya
+   bisa dibaca**, tidak bisa dihapus dari arsip. `proof.attachments[]` adalah
+   lampiran arsip — bisa dihapus (Admin atau pengunggahnya).
+4. Semua `url` **tanpa base path** — bungkus dengan `appPath(...)` seperti
+   lampiran belanja di `project-expense-view.tsx:678`. Buka di tab baru
+   (`target="_blank"`); servernya mengirim `Content-Disposition: inline`
+   untuk PDF/gambar, `attachment` untuk berkas yang isinya tidak cocok tipenya.
+5. **Deep link dari buku kas:** setiap baris `GET /api/transactions` kini
+   membawa `referenceId`, `origin`, dan `evidence: { kind, evidenceId }` —
+   tombol "Lihat bukti" di tabel Riwayat transaksi cukup membuka Arsip Bukti
+   dengan `q=` nomor/judul baris itu, atau langsung `kind` + `evidenceId`.
+6. `amount` bisa `null` (BAST), `direction` bisa `null` (quotation, BAST) —
+   itu bukti kontrak, bukan uang.
+7. PDF mutasi bank yang diimpor **tidak tersimpan**; untuk `bank-line`,
+   bukti hanya bisa datang dari lampiran arsip. Wajar kalau semuanya
+   "tanpa bukti" di awal.
+
+---
+
+### T-30 — Foto proyek: unggah banyak, keterangan, galeri per proyek (kontrak backend)
+
+- **Dipakai untuk:** bagian Dokumentasi di `project-view.tsx` (sekarang:
+  satu `<input type="file">` tanpa `multiple`, grid `.document-grid`, tanpa
+  lightbox, tanpa hapus).
+- **Izin:** `projects` manage untuk unggah/ubah/hapus (gerbang yang sudah
+  ada), `projects` view untuk melihat. PM/Engineer hanya proyek yang mereka
+  anggotai.
+
+**Endpoint**
+
+| Metode | Endpoint | Badan | Balasan |
+|---|---|---|---|
+| POST | `/api/projects/:id/documents` | `FormData`: **`files`** (1–10; tiap ≤5 MB; total ≤25 MB; JPG/PNG/WebP/PDF), `caption?` (≤500, berlaku untuk semua berkas dalam batch) | 201 `{ uploaded: [doc…], skipped: [{ name, code, message, details? }] }` |
+| POST | `/api/projects/:id/documents` | `FormData`: `file` (SATU — **jalur lama**, tetap berjalan) | 201 objek tunggal bentuk lama (`id, name, type, date, uploader, preview`) + field baru |
+| GET | `/api/projects/:id/documents` | — | array `doc` (bentuk di bawah), urut `takenAt` terbaru |
+| PATCH | `/api/projects/:id/documents/:docId` | JSON `{ caption?: string\|null, takenAt?: string }` | `doc` |
+| DELETE | `/api/projects/:id/documents/:docId` | — | 204 (berkas + thumbnail ikut dihapus) |
+| GET | `/api/documents/:id/content` | — | byte asli (`Content-Disposition: inline`) |
+| GET | `/api/documents/:id/content?variant=thumb` | — | **thumbnail WebP lebar 480 px** — pakai ini untuk grid; non-gambar → 404 `NO_THUMBNAIL` |
+
+**Bentuk `doc`:**
+
+```json
+{ "id": "..", "projectId": "..", "projectCode": "PN-..", "projectName": "..",
+  "name": "IMG_0420.jpg", "type": "image", "mimeType": "image/jpeg", "size": 2304512,
+  "caption": "Tarik kabel lantai 2", "takenAt": "2026-08-20T14:05:33+08:00",
+  "createdAt": "2026-08-22T09:11:02.000Z", "date": "20 Agustus 2026", "uploader": "Ayu",
+  "width": 4032, "height": 3024,
+  "url": "/api/documents/<id>/content",
+  "thumbUrl": "/api/documents/<id>/content?variant=thumb",
+  "preview": "/api/documents/<id>/content" }
+```
+
+`thumbUrl` null untuk PDF. `width/height` = dimensi **seperti yang dilihat**
+(orientasi EXIF sudah diperhitungkan). `takenAt` = tanggal dari EXIF kamera
+bila ada, kalau tidak waktu unggah — selalu waktu Makassar beroffset
+`+08:00`. `preview` = `url` (dipertahankan untuk kode lamamu).
+
+**Unggah banyak — semantiknya per berkas.** Satu permintaan bisa sebagian
+berhasil: tampilkan `uploaded` sebagai berhasil dan tiap `skipped[]` dengan
+`code`-nya di samping nama berkasnya. Kalau pengguna memilih > 10 berkas,
+**pecah sendiri** menjadi beberapa permintaan berurutan (jangan paralel —
+memori server). Batas 500 berkas per proyek.
+
+**Galat:**
+
+| Kode | HTTP | Kapan |
+|---|---|---|
+| `FILE_REQUIRED` | 422 | Tidak ada berkas. |
+| `TOO_MANY_FILES` | 422 | > 10 berkas dalam satu permintaan. |
+| `BATCH_TOO_LARGE` | 413 | Jumlah ukuran > 25 MB. |
+| `DOCUMENT_LIMIT` | 409 | Proyek sudah 500 berkas. |
+| `NO_FILE_ACCEPTED` | 422 | Semua berkas dilewati; `details.skipped` berisi alasannya per berkas. |
+| per berkas di `skipped[].code`: `FILE_TOO_LARGE` (>5 MB), `UNSUPPORTED_FILE`, `INVALID_IMAGE`, `ANIMATED_IMAGE`, `IMAGE_DIMENSIONS` (>12.000 px/sisi), `IMAGE_TYPE_MISMATCH` (isi ≠ tipe), `INVALID_FILE_CONTENT` (PDF palsu), `DUPLICATE` (byte sama sudah ada di proyek; `details.documentId`) | — | Tampilkan `message`-nya apa adanya. |
+| `INVALID_TAKEN_AT` | 422 | `takenAt` bukan `YYYY-MM-DD`, `YYYY-MM-DDTHH:mm`, atau ISO beroffset. |
+| `NOT_FOUND` | 404 | Proyek/dokumen di luar cakupan. |
+
+**Yang perlu kamu tahu:** grid **harus** memakai `thumbUrl`, bukan `url` —
+itu alasan utama fitur ini ada. `url` hanya untuk lightbox/unduh. Untuk
+lightbox, angkat pola `app/components/portfolio-gallery.tsx` (tombol
+panah, Escape, swipe, focus trap) ke admin — jangan tulis yang baru.
+
+---
+
+### T-31 — Galeri Proyek lintas proyek (kontrak backend)
+
+- **Dipakai untuk:** menu baru **"Galeri Proyek"** (`ViewKey` `gallery`)
+  di grup Operasional, `module: "projects"`. PM melihat riwayat foto semua
+  proyek yang dia anggotai; Admin/Finance semua proyek.
+- Enam tempat yang harus disentuh (pola yang sudah ada): `app/data.ts`
+  (union `ViewKey`), `app/i18n.ts` (label id/en), `enterprise-app.tsx` —
+  union `labelKey`, `navItems`, `viewMeta`, blok render. Kuncinya harus
+  huruf kecil (`gallery`) — `tests/alur-aplikasi.test.mjs` membaca
+  `currentView === "…"` sebagai teks.
+
+**Endpoint**
+
+| Metode | Endpoint | Balasan |
+|---|---|---|
+| GET | `/api/documents?projectId=&from=&to=&q=&type=photo\|file\|all&page=&pageSize=` | `{ items: [doc…], page, pageSize, total }` (pageSize 10–100, bawaan 40) |
+| GET | `/api/documents/summary?projectId=` | `{ byMonth: [{ month: "2026-08", photos, files }], byProject: [{ projectId, projectCode, projectName, photos, files, latestTakenAt }] }` |
+
+`from`/`to` menyaring `takenAt` (tanggal `YYYY-MM-DD`, inklusif); `q`
+mencocokkan keterangan dan nama berkas; `type=photo` hanya gambar. `doc`
+sama persis dengan T-30, jadi komponen petak/lightbox dipakai ulang.
+
+Tata letak yang saya bayangkan (keputusannya milikmu): timeline bulan di
+kiri dari `byMonth` (klik → `from/to` bulan itu), chip proyek dari
+`byProject`, kotak cari, lalu grid `thumbUrl` berhalaman; klik petak → lightbox
+dengan `url`, caption, `takenAt`, nama proyek.
+
+**Galat:** `NOT_FOUND` 404 untuk `projectId` di luar cakupan; selebihnya
+seperti T-30.
