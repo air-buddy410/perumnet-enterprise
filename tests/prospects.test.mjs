@@ -992,3 +992,39 @@ test("format teks biasa tidak ikut berubah oleh penanda", async () => {
   assert.ok(!lihat.data.bodyHtml.includes("<strong>"), "format text ikut ditafsirkan");
   assert.match(lihat.data.bodyHtml, /\*\*khusus\*\*/);
 });
+
+// Bentuk DETAIL prospek harus sama di GET, POST, PATCH, dan convert.
+//
+// Layar detail menaruh respons PATCH langsung ke state-nya lalu merender
+// `outreach.length`. Ketika PATCH memulangkan baris kontaknya saja — tanpa
+// `outreach` — render meledak SESUDAH data tersimpan: pengguna melihat tabnya
+// mati padahal simpanannya berhasil. Ditemukan pemilik pada 22 Agustus 2026
+// saat menyunting calon klien di demo.
+test("GET, POST, PATCH, dan convert memulangkan bentuk detail yang sama", async () => {
+  const dibuat = await tambahProspek({ fullName: "Kontak Bentuk", companyName: "PT Bentuk Sama", location: "Denpasar" });
+  assert.equal(dibuat.status, 201);
+  assert.ok(Array.isArray(dibuat.data.outreach), "POST membawa riwayat outreach");
+
+  const dibaca = await api(`/api/cms/prospects/${dibuat.data.id}`);
+  assert.equal(dibaca.status, 200);
+  assert.ok(Array.isArray(dibaca.data.outreach), "GET membawa riwayat outreach");
+
+  const disunting = await api(`/api/cms/prospects/${dibuat.data.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ jobTitle: "Direktur" }),
+  });
+  assert.equal(disunting.status, 200);
+  assert.equal(disunting.data.jobTitle, "Direktur");
+  assert.ok(Array.isArray(disunting.data.outreach), "PATCH membawa riwayat outreach");
+
+  // Kunci-kunci yang sama persis: satu bentuk, bukan tiga yang mirip.
+  assert.deepEqual(Object.keys(disunting.data).sort(), Object.keys(dibaca.data).sort());
+
+  const hasil = await api(`/api/cms/prospects/${dibuat.data.id}/convert`, {
+    method: "POST",
+    body: JSON.stringify({ status: "Aktif" }),
+  });
+  assert.equal(hasil.status, 201);
+  assert.ok(Array.isArray(hasil.data.prospect.outreach), "convert membawa riwayat outreach");
+  assert.deepEqual(Object.keys(hasil.data.prospect).sort(), Object.keys(dibaca.data).sort());
+});

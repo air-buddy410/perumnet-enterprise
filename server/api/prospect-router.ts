@@ -306,7 +306,7 @@ async function createProspect(request: Request, user: AuthUser) {
     ],
   });
   await writeAuditLog(client, request, user, "prospect_create", "prospect", id);
-  return created(await loadProspect(client, id));
+  return created(await detailProspek(client, id));
 }
 
 async function loadProspect(client: DatabaseClient, id: string) {
@@ -323,8 +323,16 @@ async function loadProspect(client: DatabaseClient, id: string) {
   return mapProspect(row);
 }
 
-async function getProspect(id: string) {
-  const { client } = await getDatabase();
+/**
+ * Bentuk DETAIL prospek: baris kontaknya beserta riwayat suratnya.
+ *
+ * Dipakai GET, PATCH, dan konversi — supaya ketiganya memulangkan bentuk yang
+ * SAMA. Dulu hanya GET yang membawa `outreach`; PATCH dan convert memulangkan
+ * baris kontaknya saja, sehingga layar yang menaruh respons itu ke state
+ * kehilangan riwayatnya dan meledak saat merender `outreach.length`. Data
+ * pengguna tetap tersimpan — yang mati layarnya, sesudah simpan berhasil.
+ */
+async function detailProspek(client: DatabaseClient, id: string) {
   const prospect = await loadProspect(client, id);
   const riwayat = await client.execute({
     sql: `SELECT id,template_id,template_name,recipient,subject,status,scheduled_for,
@@ -333,26 +341,27 @@ async function getProspect(id: string) {
       FROM cms_prospect_outreach WHERE prospect_id=? ORDER BY created_at DESC`,
     args: [id],
   });
-  return ok(
-    {
-      ...prospect,
-      outreach: riwayat.rows.map((row) => ({
-        id: String(row.id),
-        templateId: row.template_id ? String(row.template_id) : null,
-        templateName: String(row.template_name),
-        recipient: String(row.recipient),
-        subject: String(row.subject),
-        status: String(row.status),
-        scheduledFor: String(row.scheduled_for),
-        sentAt: row.sent_at ? String(row.sent_at) : null,
-        failureReason: text(row.failure_reason),
-        createdAt: String(row.created_at),
-        hasBody: Number(row.has_body) === 1,
-      })),
-    },
-    200,
-    { "Cache-Control": "no-store" },
-  );
+  return {
+    ...prospect,
+    outreach: riwayat.rows.map((row) => ({
+      id: String(row.id),
+      templateId: row.template_id ? String(row.template_id) : null,
+      templateName: String(row.template_name),
+      recipient: String(row.recipient),
+      subject: String(row.subject),
+      status: String(row.status),
+      scheduledFor: String(row.scheduled_for),
+      sentAt: row.sent_at ? String(row.sent_at) : null,
+      failureReason: text(row.failure_reason),
+      createdAt: String(row.created_at),
+      hasBody: Number(row.has_body) === 1,
+    })),
+  };
+}
+
+async function getProspect(id: string) {
+  const { client } = await getDatabase();
+  return ok(await detailProspek(client, id), 200, { "Cache-Control": "no-store" });
 }
 
 const kolomKontak: Record<string, string> = {
@@ -410,7 +419,7 @@ async function patchProspect(request: Request, id: string, user: AuthUser) {
     args,
   });
   await writeAuditLog(client, request, user, "prospect_update", "prospect", id);
-  return ok(await loadProspect(client, id));
+  return ok(await detailProspek(client, id));
 }
 
 const convertSchema = z.object({
@@ -540,7 +549,7 @@ async function convertProspect(request: Request, id: string, user: AuthUser) {
       status: input.status,
       prospectId: id,
     },
-    prospect: await loadProspect(client, id),
+    prospect: await detailProspek(client, id),
   });
 }
 
