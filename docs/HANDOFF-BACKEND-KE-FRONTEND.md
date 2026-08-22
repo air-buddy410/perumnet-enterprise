@@ -11,17 +11,43 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ## 🔴 Yang sedang menunggumu
 
-**22 Agustus 2026, sore.** Tiga tugas baru dari pemilik, dan kamu **bisa mulai
-sekarang** tanpa menunggu saya: kontraknya sudah dikunci di rencana yang
-disetujui pemilik, dan kode server sedang saya tulis mengikuti kontrak itu —
-bukan sebaliknya. Kalau ada yang terpaksa berubah, saya tulis blok "PERUBAHAN"
-di kepala bagian tugasnya dan menyebut tanggalnya.
+### T-32 — Pusat Bantuan: tiga fitur baru belum ada panduannya di aplikasi
 
-| Tugas | Layar | Status backend |
+`40fc019` milikmu menyelesaikan T-29/T-30/T-31 dengan baik — dan ketiganya
+**sudah berjalan di demo dan produksi** bersama backend-nya (`2e50f61`).
+Terima kasih; pemilik menanyakannya malam ini.
+
+Yang tertinggal: **`app/components/help-view.tsx` belum tahu ketiga fitur
+itu ada.** Panduan PDF-nya sudah saya naikkan ke **edisi 2.3** dengan dua bab
+baru, dan Pusat Bantuan di aplikasi harus mencerminkannya — seperti T-22 dulu.
+
+**Sumber teksnya, jangan dikarang:** `server/api/sop-pdf-content.ts`
+
+| Bab PDF | Konstanta | Isi yang perlu masuk Pusat Bantuan |
 |---|---|---|
-| **T-29** Arsip Bukti di Pembukuan | `finance-view.tsx` (tab/section baru) | **selesai & ter-deploy** — kontrak di §T-29 |
-| **T-30** Foto proyek: unggah banyak, keterangan, galeri per proyek | `project-view.tsx` | **selesai & ter-deploy** — §T-30 |
-| **T-31** Galeri Proyek lintas proyek | `ViewKey` baru `gallery` | **selesai & ter-deploy** — §T-31 |
+| 4 · Dokumentasi foto dan berkas proyek | `chapterProjectMedia` | langkah unggah banyak (maks 10 berkas, 5 MB/berkas, 25 MB/unggahan, 500/proyek), hasil per berkas, tanggal dari EXIF & kenapa foto WhatsApp memakai waktu unggah, galeri thumbnail, menu Galeri Proyek, catatan "isi yang diperiksa, bukan namanya", tiga jebakan |
+| 14 · Arsip bukti keuangan | `chapterEvidence` | apa yang masuk arsip (tabel jenis → asal bukti), siapa boleh apa, cara cari/saring/lampirkan, catatan "pembatalan tampil sebagai baris sendiri", blok terkunci soal hapus & rekonsiliasi |
+| 22 · Pesan kesalahan | `chapterMessages` (7 baris baru, mulai dari "Tipe file tidak sesuai dengan isi gambarnya") | `IMAGE_TYPE_MISMATCH`, `DUPLICATE`, `TOO_MANY_FILES` / `DOCUMENT_LIMIT` / `NO_FILE_ACCEPTED`, `DUPLICATE_ATTACHMENT`, `EVIDENCE_RECONCILED`, `NO_LEGACY_PROOF` |
+
+Semua string di sana sudah dwibahasa `[id, en]` — pakai keduanya.
+
+Juga di Pusat Bantuan: daftar menu/layar harus menyebut **Galeri Proyek**
+(menu baru di Operasional), dan bagian Pembukuan menyebut section **Arsip
+Bukti**. Glosarium: tambahkan "Thumbnail", "EXIF", dan "Bukti legacy" (bukti
+yang diunggah bersama catatannya, hanya bisa dibaca dari arsip) bila Pusat
+Bantuan punya glosarium.
+
+Uji: kata kunci "thumbnail", "EXIF", "arsip bukti", "tanpa bukti" harus
+ditemukan pencarian Pusat Bantuan.
+
+---
+
+| Tugas | Layar | Status |
+|---|---|---|
+| **T-29** Arsip Bukti di Pembukuan | `finance-evidence-view.tsx` | ✅ selesai (`40fc019`), ter-deploy |
+| **T-30** Foto proyek: unggah banyak, keterangan, galeri per proyek | `project-view.tsx`, `document-gallery.tsx` | ✅ selesai (`40fc019`), ter-deploy |
+| **T-31** Galeri Proyek lintas proyek | `gallery-view.tsx` | ✅ selesai (`40fc019`), ter-deploy |
+| **T-32** Pusat Bantuan untuk ketiganya | `help-view.tsx` | 🔴 menunggumu |
 
 Urutan yang saya sarankan: **T-30 dulu** (paling banyak dipakai PM sehari-hari),
 lalu T-29, lalu T-31. Ketiga kontrak lengkap ada di bagian bawah berkas ini —
