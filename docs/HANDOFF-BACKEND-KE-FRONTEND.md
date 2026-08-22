@@ -9,22 +9,18 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ---
 
-## 🔴 Yang sedang menunggumu — T-20, T-21, T-22 (22 Agustus 2026)
+## 🟢 Tidak ada pekerjaan layar yang tersisa — 22 Agustus 2026
 
-Audit logika bisnis /admin selesai di sisi backend (commit `audit /admin`):
-alur **deal → proyek** yang sebelumnya tidak ada sekarang ada, sebelas aturan
-uang diperbaiki, dan ada **bagan alur aplikasi** yang dirender server sebagai
-PNG. Tiga tugas layar lahir darinya — urutan prioritas:
+**T-20, T-21, dan T-22 sudah kamu kerjakan** (`f32fdca`): bagan alur tampil di
+Pusat Bantuan dari `/api/help/alur.png` beserta daftar fasenya dari
+`shared/alur-aplikasi.ts`; tombol **Jadikan proyek**, lencana proyek, dan
+dropdown status yang mengikuti tabel transisi ada di Calon Klien; termin
+wajib, `payableForTerm`, `lockedAmount`, pembatasan perlakuan Withhold, dan
+empat belas pesan galat baru sudah masuk. Semuanya di `app/**` — batas
+wilayah terjaga.
 
-| | Tugas | Berkas |
-|---|---|---|
-| **T-20** | Sematkan bagan alur di Pusat Bantuan — satu `<img>` + daftar langkah dari data bersama | `app/components/help-view.tsx` |
-| **T-21** | Tombol **Jadikan proyek** di Calon Klien + lencana proyek + dropdown status mengikuti tabel transisi | `app/panel/prospects-editor.tsx` (atau komponen detail prospek) |
-| **T-22** | Pusat Bantuan & layar menyesuaikan aturan yang berubah (termin wajib, laba terkunci, jendela bank 14 hari, dll.) | `help-view.tsx`, `procurement-v2-view.tsx`, `profit-sharing-panel.tsx` |
-
-Perinciannya di bagian **T-20 / T-21 / T-22** di bawah. Panduan PDF-nya sudah
-saya tulis (edisi 2.1, bab 2 dibuka dengan bagan) — **ambil naskah dari sana**,
-jangan dikarang ulang, supaya dua rujukan memakai kata yang sama.
+Kalau ada aturan yang terasa aneh saat dipakai, tulis di
+`docs/PERMINTAAN-FRONTEND-KE-BACKEND.md`; sumber kebenarannya tetap server.
 
 ---
 
@@ -196,9 +192,9 @@ Perinciannya di bagian masing-masing di bawah.
 | **T-18b** | Alamat email klien di form proyek | ✅ selesai (`project-view.tsx`) |
 | **T-18c** | Kirim dari Quotation dan Invoice | ✅ selesai |
 | **T-19** | Pusat Bantuan memuat fitur kirim dokumen | ✅ selesai (`help-view.tsx`, `94b1e0d`) |
-| **T-20** | **Bagan alur di Pusat Bantuan** | **belum mulai** |
-| **T-21** | **Tombol Jadikan proyek di Calon Klien** | **belum mulai** |
-| **T-22** | **Layar & Pusat Bantuan menyesuaikan aturan hasil audit** | **belum mulai** |
+| **T-20** | Bagan alur di Pusat Bantuan | ✅ selesai (`f32fdca`) |
+| **T-21** | Tombol Jadikan proyek di Calon Klien | ✅ selesai (`f32fdca`) |
+| **T-22** | Layar & Pusat Bantuan menyesuaikan aturan hasil audit | ✅ selesai (`f32fdca`) |
 
 T-1 sampai T-18a sudah selesai; catatannya ada di §Selesai. Semua layar sudah
 ada di `main`, termasuk editor kaya T-17 yang sempat tertinggal belum
@@ -896,7 +892,7 @@ Kode galat tambahan di luar yang sudah disebut T-16:
   tambahan.
 - **Pilihan edisi dokumen.** Jalur email tidak menerimanya sama sekali.
 
-### T-20. Bagan alur aplikasi di Pusat Bantuan
+### ✅ T-20. Bagan alur aplikasi di Pusat Bantuan — SELESAI 22 Agustus 2026
 
 **Endpoint:** `GET /api/help/alur.png?language=id|en` — di balik sesi, memulangkan
 `image/png` 2800 px lebar (rasio ±1 : 1,32), `Cache-Control: private,
@@ -918,7 +914,7 @@ langkah, 4 keputusan), `semuaLangkah()`, dan tipe-tipenya. Setiap langkah punya
    dicari oleh kotak pencarian yang sudah ada dan terbaca pembaca layar.
 3. Jangan menggambar ulang bagannya dengan CSS/SVG — satu sumber gambar.
 
-### T-21. Tombol "Jadikan proyek" di Calon Klien
+### ✅ T-21. Tombol "Jadikan proyek" di Calon Klien — SELESAI 22 Agustus 2026
 
 **Endpoint:** `POST /api/cms/prospects/:id/convert` → `201 { project, prospect }`.
 
@@ -955,7 +951,7 @@ Yang dibawa otomatis: `companyName → client`, `fullName → clientContactName`
    `shared/prospects.ts` — pilihan di luar tabel tidak ditawarkan. Server tetap
    menegakkannya.
 
-### T-22. Layar & Pusat Bantuan menyesuaikan aturan hasil audit
+### ✅ T-22. Layar & Pusat Bantuan menyesuaikan aturan hasil audit — SELESAI 22 Agustus 2026
 
 Aturan yang berubah (semuanya sudah ditegakkan server dan ditulis di panduan
 PDF edisi 2.1 — ambil teksnya dari bab yang disebut):
