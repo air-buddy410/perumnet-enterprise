@@ -3,7 +3,7 @@ import "server-only";
 import { createClient, type Client, type InStatement } from "@libsql/client";
 import { Pool } from "pg";
 import { getCloudflareEnvironment, type D1DatabaseLike } from "../cloudflare";
-import { isProductionRuntime } from "../runtime-env";
+import { assertModeSesuaiBangunan, isProductionRuntime } from "../runtime-env";
 import { initializeDatabase } from "./initialize";
 
 export interface QueryResult {
@@ -233,6 +233,13 @@ function postgresAdapter(pool: Pool): DatabaseClient {
 }
 
 async function createDatabaseState(): Promise<DatabaseState> {
+  // Sebelum apa pun menyentuh basis data: bangunan dan lingkungannya harus
+  // sepakat. Lihat alasannya di assertModeSesuaiBangunan.
+  assertModeSesuaiBangunan({
+    buildDemo: process.env.NEXT_PUBLIC_DEMO_MODE === "true",
+    appMode: process.env.APP_MODE,
+    isProduction: isProductionRuntime(),
+  });
   const demoMode = process.env.APP_MODE === "demo";
   const postgresUrl = demoMode
     ? process.env.DEMO_DATABASE_URL

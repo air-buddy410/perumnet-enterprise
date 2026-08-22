@@ -18,6 +18,30 @@
 //
 //   RELEASE=2fe93bb pm2 start deploy/ecosystem.config.cjs --only perumnet-enterprise-admin
 //   RELEASE=2fe93bb pm2 start deploy/ecosystem.config.cjs --only perumnet-enterprise-demo
+//
+// JANGAN menyalakan pm2 dari shell yang pernah menjalankan
+// `set -a; . ./.env.production`.
+//
+// Berkas ini sengaja TIDAK menyetel APP_URL, APP_MODE, atau DATABASE_URL:
+// masing-masing app membacanya sendiri dari `.env.production` di `cwd`-nya.
+// Tetapi variabel yang sudah ada di lingkungan MENANG atas berkas .env, dan pm2
+// meneruskan seluruh lingkungan shell pemanggil ke keempat proses.
+//
+// 22 Agustus 2026 satu perintah deploy membangun kedua lingkungan dengan
+// `set -a; . ./.env.production` di dalam SATU shell, lalu menyalakan pm2 dari
+// shell itu juga. Nilai produksi menang, dan proses DEMO naik dengan APP_MODE
+// serta DATABASE_URL produksi — situs demo memegang basis data produksi.
+// Yang menahannya cuma kebetulan: APP_URL ikut tertimpa sehingga login ditolak
+// karena origin, dan gejalanya terbaca sebagai "tidak bisa login".
+//
+// Bangun di dalam SUBSHELL, satu per lingkungan, supaya env-nya tidak pernah
+// bocor keluar:
+//
+//   ( cd $DEMO && set -a; . ./.env.production; set +a; npm run build )
+//   ( cd $PRODUKSI && set -a; . ./.env.production; set +a; npm run build )
+//
+// lalu salakan pm2 dari shell yang bersih. `assertModeSesuaiBangunan`
+// (server/runtime-env.ts) sekarang menolak naik kalau ini terulang.
 
 const RELEASE = process.env.RELEASE;
 if (!RELEASE) {

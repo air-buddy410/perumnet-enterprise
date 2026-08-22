@@ -33,3 +33,48 @@ export function runtimeNodeEnv() {
 export function isProductionRuntime() {
   return runtimeNodeEnv() === "production";
 }
+
+/**
+ * Menolak menjalankan bangunan demo sebagai produksi, atau sebaliknya.
+ *
+ * `NEXT_PUBLIC_DEMO_MODE` DIINLINE Next saat build — nilainya menyatakan
+ * "bangunan ini dibuat untuk lingkungan yang mana". `APP_MODE` dibaca saat
+ * proses berjalan. Selama keduanya sepakat, tidak ada yang perlu diperiksa.
+ *
+ * Yang terjadi 22 Agustus 2026: perintah deploy menjalankan
+ * `set -a; . ./.env.production` untuk KEDUA lingkungan di dalam satu shell,
+ * lalu menyalakan pm2 dari shell yang sama. Variabel produksi menang, dan pm2
+ * meneruskannya ke keempat proses. Proses demo naik dengan `APP_MODE` produksi,
+ * jadi `createDatabaseState` memilih `DATABASE_URL` — situs demo memegang
+ * BASIS DATA PRODUKSI.
+ *
+ * Tidak ada satu pun penjaga yang berbunyi. Penjaga yang sudah ada hanya
+ * membandingkan DEMO_DATABASE_URL dengan DATABASE_URL, dan pertanyaan itu tidak
+ * pernah ditanyakan karena aplikasinya sudah tidak merasa dirinya demo lagi.
+ * Yang menahannya justru kebetulan: `APP_URL` ikut tertimpa, sehingga login
+ * ditolak karena origin — dan pemilik melaporkannya sebagai bug login.
+ *
+ * Aplikasi tidak bisa menebak dirinya "seharusnya" demo, tetapi BANGUNANNYA
+ * tahu. Ketidakcocokan keduanya berarti env bocor lintas lingkungan, dan satu
+ * arah dari ketidakcocokan itu berarti data produksi sedang terbuka lewat pintu
+ * yang mengaku demo. Lebih baik mati dengan berisik.
+ *
+ * Hanya berlaku di runtime produksi: `next dev` di laptop memang berjalan tanpa
+ * APP_MODE dan tanpa bangunan demo.
+ */
+export function assertModeSesuaiBangunan(opts: {
+  /** Nilai `NEXT_PUBLIC_DEMO_MODE` yang tertanam saat build. */
+  buildDemo: boolean;
+  /** `APP_MODE` yang dibaca saat proses berjalan. */
+  appMode: string | undefined;
+  isProduction: boolean;
+}) {
+  if (!opts.isProduction) return;
+  const runtimeDemo = opts.appMode === "demo";
+  if (opts.buildDemo === runtimeDemo) return;
+  throw new Error(
+    opts.buildDemo
+      ? "Bangunan demo dijalankan tanpa APP_MODE=demo. Aplikasi ini akan memakai DATABASE_URL produksi. Hampir selalu ini berarti env produksi bocor ke proses demo — periksa perintah pm2 start, dan jangan pernah `source` dua berkas .env di shell yang sama."
+      : "Bangunan produksi dijalankan dengan APP_MODE=demo. Layarnya tidak akan menandai dirinya sebagai demo, sehingga data demo bisa dikira data sungguhan.",
+  );
+}

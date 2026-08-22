@@ -14,7 +14,7 @@ import { spawn } from "node:child_process";
 import { existsSync, rmSync, unlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { after, before, test } from "node:test";
-import { runtimeNodeEnv } from "../server/runtime-env.ts";
+import { assertModeSesuaiBangunan, runtimeNodeEnv } from "../server/runtime-env.ts";
 
 let server;
 let baseUrl;
@@ -166,4 +166,41 @@ test("the production CSP drops the development eval allowance", async () => {
   assert.match(csp, /frame-ancestors 'none'/);
   assert.doesNotMatch(csp, /'unsafe-eval'/);
   assert.equal(response.headers.get("x-frame-options"), "DENY");
+});
+
+// Kebocoran env lintas lingkungan, 22 Agustus 2026. Satu perintah deploy
+// menjalankan `set -a; . ./.env.production` untuk DEMO lalu PRODUKSI di dalam
+// satu shell, dan menyalakan pm2 dari shell yang sama. Variabel produksi
+// menang; pm2 meneruskannya ke keempat proses. Situs demo naik dengan APP_MODE
+// produksi dan memegang DATABASE_URL produksi.
+//
+// Tidak ada penjaga yang berbunyi: yang sudah ada hanya membandingkan
+// DEMO_DATABASE_URL dengan DATABASE_URL, dan pertanyaan itu tidak pernah
+// ditanyakan karena aplikasinya sudah tidak merasa dirinya demo. Yang
+// menahannya cuma kebetulan — APP_URL ikut tertimpa, jadi login ditolak karena
+// origin, dan gejalanya terbaca sebagai "tidak bisa login".
+test("bangunan demo menolak berjalan tanpa APP_MODE=demo", () => {
+  assert.throws(
+    () => assertModeSesuaiBangunan({ buildDemo: true, appMode: undefined, isProduction: true }),
+    /DATABASE_URL produksi/,
+    "bangunan demo dengan APP_MODE kosong harus menolak naik",
+  );
+  assert.throws(
+    () => assertModeSesuaiBangunan({ buildDemo: true, appMode: "production", isProduction: true }),
+    /env produksi bocor/,
+  );
+});
+
+test("bangunan produksi menolak berjalan sebagai demo", () => {
+  assert.throws(
+    () => assertModeSesuaiBangunan({ buildDemo: false, appMode: "demo", isProduction: true }),
+    /tidak akan menandai dirinya sebagai demo/,
+  );
+});
+
+test("pasangan yang cocok, dan laptop, tidak diganggu", () => {
+  assertModeSesuaiBangunan({ buildDemo: true, appMode: "demo", isProduction: true });
+  assertModeSesuaiBangunan({ buildDemo: false, appMode: undefined, isProduction: true });
+  // `next dev` di laptop memang berjalan tanpa APP_MODE dan tanpa bangunan demo.
+  assertModeSesuaiBangunan({ buildDemo: true, appMode: undefined, isProduction: false });
 });
