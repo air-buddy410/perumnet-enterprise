@@ -2,11 +2,16 @@
 
 import {
   Check,
+  CheckCheck,
   CheckCircle2,
   ClipboardCheck,
+  CircleDashed,
   Download,
   Eye,
   FileCheck2,
+  ListFilter,
+  LoaderCircle,
+  NotebookPen,
   Save,
   ShieldCheck,
 } from "lucide-react";
@@ -55,6 +60,13 @@ interface ValidationViewProps {
   navigate: (view: ViewKey) => void;
 }
 
+const VALIDATION_CATEGORIES: ValidationItem["category"][] = ["Perangkat", "Material"];
+
+function readableItemDescription(description: string) {
+  const parts = description.split(/\s+—\s+|\s+-\s+/).map((part) => part.trim());
+  return parts.length === 2 && parts[0] === parts[1] ? parts[0] : description;
+}
+
 export function ValidationView({
   projectId,
   language,
@@ -69,6 +81,7 @@ export function ValidationView({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [packageId, setPackageId] = useState("");
+  const [itemFilter, setItemFilter] = useState<"all" | "open" | "checked">("all");
   const [previewOpen, setPreviewOpen] = useState(false);
   const selectPackage = useCallback((nextPackageId: string, packages: CommercialPackage[]) => {
     void packages;
@@ -134,19 +147,35 @@ export function ValidationView({
   const checkedCount = items.filter((item) => item.checked).length;
   const allChecked = items.length > 0 && checkedCount === items.length;
   const progress = items.length ? Math.round((checkedCount / items.length) * 100) : 0;
+  const remainingCount = Math.max(0, items.length - checkedCount);
   const completed = validation?.status === "Completed";
 
-  const grouped = useMemo(
-    () => ["Perangkat", "Material"].map((category) => ({
-      category,
-      items: items.filter((item) => item.category === category),
-    })).filter((group) => group.items.length),
+  const categoryStats = useMemo(
+    () => VALIDATION_CATEGORIES.map((category) => {
+      const categoryItems = items.filter((item) => item.category === category);
+      return {
+        category,
+        allItems: categoryItems,
+        total: categoryItems.length,
+        checked: categoryItems.filter((item) => item.checked).length,
+      };
+    }).filter((group) => group.total),
     [items],
   );
+
+  const grouped = useMemo(() => categoryStats.map((group) => ({
+    ...group,
+    items: group.allItems.filter((item) => itemFilter === "all" || (itemFilter === "checked" ? item.checked : !item.checked)),
+  })).filter((group) => group.items.length), [categoryStats, itemFilter]);
 
   function updateItem(itemId: string, values: Partial<ValidationItem>) {
     if (!canManage || completed) return;
     setItems((current) => current.map((item) => item.id === itemId ? { ...item, ...values } : item));
+  }
+
+  function setAllItemsChecked(checked: boolean) {
+    if (!canManage || completed) return;
+    setItems((current) => current.map((item) => ({ ...item, checked })));
   }
 
   async function save(status: "Draft" | "Completed") {
@@ -199,22 +228,36 @@ export function ValidationView({
     );
   }
 
+  const filterOptions = [
+    { key: "all" as const, label: id ? "Semua" : "All", count: items.length },
+    { key: "open" as const, label: id ? "Belum dicek" : "Open", count: remainingCount },
+    { key: "checked" as const, label: id ? "Selesai" : "Checked", count: checkedCount },
+  ];
+
   return (
     <div className="page-stack validation-view" data-testid="validation-view">
       <section className="project-hero validation-hero">
-        <div className="project-hero-main">
+        <div className="project-hero-main validation-hero-main">
           <div className="project-hero-badges">
             <span className={`status-badge ${completed ? "success" : "warning"}`}><span className="badge-dot" /> {completed ? id ? "Selesai" : "Completed" : "Draft"}</span>
             <span className="project-code">{validation?.number ?? (id ? "Belum diterbitkan" : "Not issued")}</span>
           </div>
           <h1>{id ? "Validasi Perangkat & Material" : "Device & Material Validation"}</h1>
           <p>{validation?.project} · {validation?.client}</p>
+          <div className="validation-context">
+            <span><ClipboardCheck size={14} /> {validation?.location || (id ? "Lokasi belum diisi" : "Location not set")}</span>
+            <span><FileCheck2 size={14} /> {items.length} {id ? "item dari BoQ" : "BoQ items"}</span>
+          </div>
         </div>
-        <div className="project-hero-progress">
+        <div className="validation-progress-card">
           <div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}>
             <span><strong>{progress}%</strong><small>{id ? "divalidasi" : "validated"}</small></span>
           </div>
-          <div><strong>{checkedCount} / {items.length} {id ? "item" : "items"}</strong><span>{validation?.location}</span></div>
+          <div className="validation-progress-copy">
+            <strong>{checkedCount} / {items.length} {id ? "item selesai" : "items complete"}</strong>
+            <span>{remainingCount ? `${remainingCount} ${id ? "item masih perlu dicek" : "items still need review"}` : (id ? "Semua item sudah dicek" : "Every item is checked")}</span>
+            <div className="validation-progress-track" aria-hidden="true"><span style={{ width: `${progress}%` }} /></div>
+          </div>
         </div>
         <CommercialPackageSwitcher projectId={projectId} language={language} canManage={canManage} value={packageId} onChange={selectPackage} notify={notify} />
       </section>
@@ -232,35 +275,65 @@ export function ValidationView({
         {completed && <button className="button primary" type="button" onClick={() => navigate("bast")}>{id ? "Buka BAST" : "Open Handover"}</button>}
       </section>
 
+      <section className="validation-control-bar" aria-label={id ? "Kontrol checklist" : "Checklist controls"}>
+        <div className="validation-control-summary">
+          <span className="validation-control-icon"><ListFilter size={18} /></span>
+          <div><strong>{id ? "Checklist lapangan" : "Field checklist"}</strong><span>{remainingCount ? `${remainingCount} ${id ? "item perlu perhatian" : "items need attention"}` : (id ? "Semua item siap disimpan" : "All items are ready to save")}</span></div>
+        </div>
+        <div className="validation-filter" role="group" aria-label={id ? "Saring item checklist" : "Filter checklist items"}>
+          {filterOptions.map((filter) => (
+            <button key={filter.key} type="button" className={itemFilter === filter.key ? "active" : ""} aria-pressed={itemFilter === filter.key} onClick={() => setItemFilter(filter.key)}>
+              <span>{filter.label}</span><strong>{filter.count}</strong>
+            </button>
+          ))}
+        </div>
+        {canManage && !completed && (
+          <div className="validation-bulk-actions">
+            <button className="button subtle small" type="button" disabled={saving || !items.length} onClick={() => setAllItemsChecked(!allChecked)}>
+              {allChecked ? <CircleDashed size={15} /> : <CheckCheck size={15} />} {allChecked ? (id ? "Kosongkan semua" : "Clear all") : (id ? "Tandai semua" : "Check all")}
+            </button>
+            <button className="button secondary small" disabled={saving} type="button" onClick={() => save("Draft")}>
+              {saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />} {id ? "Simpan draft" : "Save draft"}
+            </button>
+            <button className="button primary small" disabled={saving || !allChecked} type="button" onClick={() => save("Completed")}>
+              <CheckCircle2 size={15} /> {id ? "Selesaikan" : "Complete"}
+            </button>
+          </div>
+        )}
+      </section>
+
       <section className="panel validation-panel">
-        <div className="panel-head">
-          <div><span className="eyebrow">{id ? "CHECKLIST PENGUJIAN" : "TEST CHECKLIST"}</span><h2>{id ? "Item dari BoQ" : "Items from BoQ"}</h2></div>
-          <span className="status-badge info"><ClipboardCheck size={14} /> {checkedCount}/{items.length}</span>
+        <div className="panel-head validation-panel-head">
+          <div><span className="eyebrow">{id ? "CHECKLIST PENGUJIAN" : "TEST CHECKLIST"}</span><h2>{id ? "Periksa perangkat & material" : "Inspect devices & materials"}<small>{id ? "Centang setelah item diuji di lapangan. Catatan bisa diisi per item." : "Check each item after on-site inspection. Add a note when useful."}</small></h2></div>
+          <div className="validation-panel-count"><ClipboardCheck size={16} /><strong>{checkedCount}/{items.length}</strong><span>{id ? "selesai" : "complete"}</span></div>
         </div>
         {!items.length ? (
           <div className="empty-state compact"><FileCheck2 size={28} /><p>{id ? "BoQ belum memiliki kategori Perangkat atau Material." : "The BoQ has no Device or Material items."}</p></div>
+        ) : !grouped.length ? (
+          <div className="validation-filter-empty"><CircleDashed size={25} /><strong>{itemFilter === "checked" ? (id ? "Belum ada item selesai" : "No checked items yet") : (id ? "Semua item sudah selesai" : "All items are complete")}</strong><span>{id ? "Pilih filter lain untuk melihat item yang tersedia." : "Choose another filter to see the available items."}</span></div>
         ) : grouped.map((group) => (
-          <div className="validation-group" key={group.category}>
-            <h3>{language === "en" && group.category === "Perangkat" ? "Devices" : group.category}</h3>
+          <section className="validation-group" key={group.category}>
+            <div className="validation-group-head">
+              <div><span className="validation-group-kicker">{group.category === "Perangkat" ? (id ? "PERANGKAT" : "DEVICES") : (id ? "MATERIAL" : "MATERIALS")}</span><h3>{group.category === "Perangkat" ? (id ? "Perangkat" : "Devices") : (id ? "Material" : "Materials")}</h3></div>
+              <span className="validation-group-progress"><strong>{group.checked}/{group.total}</strong> {id ? "selesai" : "complete"}</span>
+            </div>
             <div className="validation-list">
               {group.items.map((item) => (
                 <article className={`validation-row ${item.checked ? "checked" : ""}`} key={item.id}>
-                  <label className="validation-check">
+                  <label className="validation-check" aria-label={id ? `Tandai ${readableItemDescription(item.description)}` : `Mark ${readableItemDescription(item.description)}`}>
                     <input type="checkbox" checked={item.checked} disabled={!canManage || completed} onChange={(event) => updateItem(item.id, { checked: event.target.checked })} />
                     <span>{item.checked && <Check size={16} />}</span>
                   </label>
-                  <div className="validation-item-copy"><strong>{item.description}</strong><span>{item.quantity} {localizedLabel(language, item.unit)} · {localizedLabel(language, item.category)}</span></div>
-                  <input aria-label={id ? `Catatan ${item.description}` : `Notes for ${item.description}`} disabled={!canManage || completed} value={item.notes} onChange={(event) => updateItem(item.id, { notes: event.target.value })} placeholder={id ? "Catatan pengujian (opsional)" : "Test notes (optional)"} />
+                  <div className="validation-item-copy"><div className="validation-item-title"><strong>{readableItemDescription(item.description)}</strong>{item.checked && <span className="validation-item-status"><Check size={12} /> {id ? "Sudah dicek" : "Checked"}</span>}</div><span className="validation-item-meta">{item.quantity} {localizedLabel(language, item.unit)}</span></div>
+                  <label className="validation-note-field"><span><NotebookPen size={13} /> {id ? "Catatan pengujian" : "Test note"}</span><input aria-label={id ? `Catatan ${readableItemDescription(item.description)}` : `Notes for ${readableItemDescription(item.description)}`} disabled={!canManage || completed} value={item.notes} onChange={(event) => updateItem(item.id, { notes: event.target.value })} placeholder={id ? "Tambahkan catatan bila perlu" : "Add a note if useful"} /></label>
                 </article>
               ))}
             </div>
-          </div>
+          </section>
         ))}
-        <label className="field full validation-notes"><span>{id ? "Catatan umum validasi" : "General validation notes"}</span><textarea rows={3} disabled={!canManage || completed} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder={id ? "Kondisi lokasi, hasil pengujian, atau tindak lanjut..." : "Site condition, test results, or follow-up..."} /></label>
+        <label className="field full validation-notes"><span>{id ? "Catatan umum validasi" : "General validation notes"}<small>{id ? "Opsional · kondisi lokasi, hasil pengujian, atau tindak lanjut" : "Optional · site condition, test results, or follow-up"}</small></span><textarea rows={3} disabled={!canManage || completed} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder={id ? "Tulis ringkasan hasil pemeriksaan..." : "Summarize the inspection results..."} /></label>
         <div className="validation-actions">
-          {canManage && !completed && <button className="button secondary" disabled={saving} type="button" onClick={() => save("Draft")}><Save size={16} /> {id ? "Simpan draft" : "Save draft"}</button>}
-          {canManage && !completed && <button className="button primary" disabled={saving || !allChecked} type="button" onClick={() => save("Completed")}><CheckCircle2 size={16} /> {id ? "Selesaikan validasi" : "Complete validation"}</button>}
-          {validation?.id && <button className="icon-button" type="button" aria-label={id ? "Pratinjau validasi" : "Preview validation"} onClick={() => setPreviewOpen(true)}><Eye size={17} /></button>}
+          {validation?.id && <button className="button secondary" type="button" onClick={() => setPreviewOpen(true)}><Eye size={16} /> {id ? "Pratinjau" : "Preview"}</button>}
           {validation?.id && <button className="button secondary" type="button" onClick={downloadPdf}><Download size={16} /> {id ? "Unduh PDF" : "Download PDF"}</button>}
         </div>
       </section>
