@@ -70,6 +70,7 @@ const CSS_FONT_SIZE_ALIASES: Record<string, string> = {
   "xx-large": "32px",
 };
 const PARAGRAPH_INDENT = "\u00a0\u00a0\u00a0\u00a0";
+const TAB_KEY = "tab";
 
 /**
  * `focus()` secara bawaan MENGGULIR elemennya ke dalam pandangan.
@@ -115,7 +116,7 @@ const copy = {
     surface: "Isi surat",
     placeholder: "Tulis isi surat di sini…",
     help: "Editor visual menyimpan HTML aman. Toolbar mendukung paragraf, judul, ukuran dan keluarga font, alignment, daftar, kutipan, tautan, warna, serta undo/redo.",
-    tabIndent: "Ctrl/Cmd + ] menambah indentasi paragraf; Tab tetap berpindah ke kolom berikutnya.",
+    tabIndent: "Tab menambah indentasi paragraf; Shift+Tab menguranginya. Esc lalu Tab pindah ke kolom berikutnya.",
     linkPrompt: "Masukkan URL tautan (http, https, atau mailto)",
     linkSelection: "Pilih teks terlebih dahulu untuk dijadikan tautan.",
     invalidLink: "Gunakan tautan http, https, atau mailto.",
@@ -148,7 +149,7 @@ const copy = {
     surface: "Letter body",
     placeholder: "Write the letter here…",
     help: "The visual editor stores safe HTML. The toolbar supports paragraphs, headings, font family and size, alignment, lists, quotes, links, color, and undo/redo.",
-    tabIndent: "Ctrl/Cmd + ] indents the paragraph; Tab still moves to the next field.",
+    tabIndent: "Tab indents the paragraph; Shift+Tab reduces it. Press Esc, then Tab to move to the next field.",
     linkPrompt: "Enter a link URL (http, https, or mailto)",
     linkSelection: "Select text first to turn it into a link.",
     invalidLink: "Use an http, https, or mailto link.",
@@ -352,6 +353,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
 ) {
   const editorRef = useRef<HTMLDivElement>(null);
   const savedSelectionRef = useRef<SelectionBookmark | null>(null);
+  const allowTabNavigationRef = useRef(false);
   const lastEmittedRef = useRef({ value: "", format: "" as RichTextFormat | "" });
   const labels = copy[language];
 
@@ -442,6 +444,44 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     emitHtml();
   }, [disabled, emitHtml, restoreSelection]);
 
+  const removeParagraphIndent = useCallback(() => {
+    if (disabled || !editorRef.current) return;
+    restoreSelection();
+
+    const editor = editorRef.current;
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return;
+
+    const activeRange = selection.getRangeAt(0);
+    let block: HTMLElement | null = activeRange.startContainer.nodeType === 1
+      ? activeRange.startContainer as HTMLElement
+      : activeRange.startContainer.parentElement;
+    while (block && block !== editor && !BLOCK_TAGS.has(block.tagName.toLowerCase())) {
+      block = block.parentElement;
+    }
+    if (!block || block === editor || !block.textContent?.startsWith(PARAGRAPH_INDENT)) return;
+
+    const startOffset = textOffset(block, activeRange.startContainer, activeRange.startOffset);
+    const endOffset = block.contains(activeRange.endContainer)
+      ? textOffset(block, activeRange.endContainer, activeRange.endOffset)
+      : startOffset;
+    const prefixRange = document.createRange();
+    const prefixStart = textPosition(block, 0);
+    const prefixEnd = textPosition(block, PARAGRAPH_INDENT.length);
+    prefixRange.setStart(prefixStart.node, prefixStart.offset);
+    prefixRange.setEnd(prefixEnd.node, prefixEnd.offset);
+    prefixRange.deleteContents();
+
+    const nextRange = document.createRange();
+    const nextStart = textPosition(block, Math.max(0, startOffset - PARAGRAPH_INDENT.length));
+    const nextEnd = textPosition(block, Math.max(0, endOffset - PARAGRAPH_INDENT.length));
+    nextRange.setStart(nextStart.node, nextStart.offset);
+    nextRange.setEnd(nextEnd.node, nextEnd.offset);
+    selection.removeAllRanges();
+    selection.addRange(nextRange);
+    emitHtml();
+  }, [disabled, emitHtml, restoreSelection]);
+
   useImperativeHandle(ref, () => ({
     focus: () => editorRef.current?.focus(FOCUS_TANPA_GULIR),
     insertPlaceholder: insertText,
@@ -453,21 +493,26 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     if (plainText) insertText(plainText);
   }
 
-  // Tab TIDAK disandera di sini, dan itu disengaja.
-  //
-  // Kotak ini duduk di tengah form: Nama template → Bahasa → Subjek → Isi
-  // surat. Tab adalah cara orang berpindah kolom. Ketika ia dipakai untuk
-  // indentasi, satu-satunya jalan keluar dari kotak ini tinggal tetikus —
-  // pengguna papan ketik dan pembaca layar terjebak di dalamnya, dan pemilik
-  // sendiri menemukannya dengan menekan Tab untuk pindah kolom.
-  //
-  // Indentasi pindah ke Ctrl/Cmd + ], pintasan yang tidak bertabrakan dengan
-  // apa pun. Pasangan Shift+Tab yang dulu memanggil `outdent` sengaja tidak
-  // dibawa: `execCommand("outdent")` bekerja pada blockquote dan daftar, bukan
-  // pada spasi-tanpa-putus yang disisipkan indentasi ini, jadi ia tidak pernah
-  // benar-benar membatalkannya. Backspace yang membatalkannya.
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (disabled) return;
+
+    const isTab = event.key.toLowerCase() === TAB_KEY;
+    if (event.key === "Escape") {
+      allowTabNavigationRef.current = true;
+      return;
+    }
+    if (!isTab) allowTabNavigationRef.current = false;
+    if (isTab && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      if (allowTabNavigationRef.current) {
+        allowTabNavigationRef.current = false;
+        return;
+      }
+      event.preventDefault();
+      if (event.shiftKey) removeParagraphIndent();
+      else insertText(PARAGRAPH_INDENT);
+      return;
+    }
+
     if (!(event.metaKey || event.ctrlKey)) return;
     if (event.key === "]") {
       event.preventDefault();
@@ -569,7 +614,10 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
       onInput={emitHtml}
       onPaste={handlePaste}
       onKeyDown={handleKeyDown}
-      onBlur={saveSelection}
+      onBlur={() => {
+        allowTabNavigationRef.current = false;
+        saveSelection();
+      }}
     />
     <small className={styles.richTextHelp}>{labels.help} {labels.tabIndent} {format !== "html" ? (language === "id" ? "Template lama akan beralih ke editor visual saat mulai diedit." : "Legacy templates switch to the visual editor when you start editing.") : ""}</small>
   </div>;
