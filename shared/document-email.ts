@@ -1,13 +1,30 @@
 // Kontrak pengiriman dokumen lewat email — dipakai server DAN layar.
 //
-// Dokumen resminya (quotation, invoice, SPK/PO) TIDAK diunggah: aplikasi sudah
-// membuatnya sendiri dan merendernya saat tombol Kirim ditekan. Meminta orang
-// mengunduh lalu mengunggah ulang bukan cuma kerja dua kali — berkas yang
+// Dokumen resminya TIDAK PERNAH diunggah: aplikasi sudah memilikinya. Meminta
+// orang mengunduh lalu mengunggah ulang bukan cuma kerja dua kali — berkas yang
 // diunggah bisa versi lama sementara datanya sudah berubah, dan tidak ada yang
 // memberi tahu. Unggahan di sini HANYA untuk lampiran tambahan: company
 // profile, spesifikasi teknis, foto lokasi.
+//
+// Dari mana byte-nya diambil berbeda per jenis, dan bedanya penting:
+//
+//   quotation, invoice, spk : DIRENDER saat tombol Kirim ditekan. Dokumennya
+//                             masih hidup — nilainya bisa berubah sampai detik
+//                             terakhir, jadi yang benar adalah yang terbaru.
+//   bast                    : DIAMBIL dari arsip final. BAST yang sudah
+//                             ditandatangani punya sidik SHA-256 yang tercatat
+//                             dan halaman verifikasi publik yang memajangnya.
+//                             Render ulang menghasilkan byte yang berbeda,
+//                             jadi sidiknya tidak akan cocok — dan surat yang
+//                             seharusnya menjadi BUKTI justru membawa dokumen
+//                             yang tidak bisa dibuktikan.
 
-export const documentEmailKinds = ["quotation", "invoice", "spk"] as const;
+export const documentEmailKinds = [
+  "quotation",
+  "invoice",
+  "spk",
+  "bast",
+] as const;
 export type DocumentEmailKind = (typeof documentEmailKinds)[number];
 
 export const documentEmailKindLabels: Record<
@@ -17,6 +34,7 @@ export const documentEmailKindLabels: Record<
   quotation: { id: "Penawaran", en: "Quotation" },
   invoice: { id: "Invoice", en: "Invoice" },
   spk: { id: "SPK / PO", en: "Work order / PO" },
+  bast: { id: "BAST", en: "Handover" },
 };
 
 // ── Kategori penerima ────────────────────────────────────────────────
@@ -29,7 +47,8 @@ export const documentEmailKindLabels: Record<
 //                 sama sekali (cms_prospect_templates): ada opt-out, ada jeda
 //                 kirim, penandanya {{nama}}/{{perusahaan}}/{{segmen}}, dan
 //                 tidak ada dokumen resmi yang dilampirkan.
-//   klien       : Quotation dan Invoice. Izinnya Quotation & Invoice.
+//   klien       : Quotation, Invoice, dan BAST. Izinnya Quotation & Invoice
+//                 untuk dua yang pertama, BAST Digital untuk yang terakhir.
 //   vendor      : SPK dan PO. Izinnya Procurement & Vendor.
 //
 // Dua yang terakhir hidup di tabel yang sama (document_email_templates) karena
@@ -46,6 +65,7 @@ export const documentEmailAudience: Record<
   quotation: "klien",
   invoice: "klien",
   spk: "vendor",
+  bast: "klien",
 };
 
 export const documentEmailAudienceLabels: Record<
@@ -130,6 +150,20 @@ export const documentEmailPlaceholders: Record<
   quotation: ["nomor", "klien", "proyek", "nilai", "berlaku_sampai"],
   invoice: ["nomor", "klien", "proyek", "nilai", "jatuh_tempo", "sisa"],
   spk: ["nomor", "vendor", "proyek", "nilai", "mulai", "selesai"],
+  // BAST tidak punya nilai uang, dan sengaja tidak dikarang dari quotation:
+  // surat ini adalah bukti serah terima, bukan tagihan. Yang dibawanya justru
+  // dua hal yang membuatnya BISA DIBUKTIKAN — sidik SHA-256 arsip final dan
+  // tautan halaman verifikasi publik, sama persis dengan yang tercetak di QR
+  // pada PDF-nya.
+  bast: [
+    "nomor",
+    "klien",
+    "proyek",
+    "paket",
+    "tanggal_serah_terima",
+    "sidik_dokumen",
+    "tautan_verifikasi",
+  ],
 };
 
 export const documentEmailPlaceholderHints: Record<
@@ -146,6 +180,16 @@ export const documentEmailPlaceholderHints: Record<
   sisa: { id: "Sisa tagihan", en: "Outstanding balance" },
   mulai: { id: "Tanggal mulai", en: "Start date" },
   selesai: { id: "Tanggal selesai", en: "End date" },
+  paket: { id: "Paket pekerjaan", en: "Work package" },
+  tanggal_serah_terima: { id: "Tanggal serah terima", en: "Handover date" },
+  sidik_dokumen: {
+    id: "Sidik digital arsip (SHA-256)",
+    en: "Archive fingerprint (SHA-256)",
+  },
+  tautan_verifikasi: {
+    id: "Tautan verifikasi publik",
+    en: "Public verification link",
+  },
 };
 
 /** `{{ nomor }}` maupun `{{nomor}}`. Sama dengan pola surat prospek. */

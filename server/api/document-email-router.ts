@@ -13,6 +13,7 @@ import {
   type DocumentEmailKind,
 } from "../../shared/document-email";
 import { letterBodyFormats } from "../../shared/email-delivery";
+import { previewBastEmailWithTemplate } from "./bast-email";
 import { previewClientDocumentEmailWithTemplate } from "./client-document-email";
 import { ApiError, created, jsonBody, noContent, ok } from "./errors";
 import { previewSpkEmailWithTemplate } from "./procurement-router";
@@ -22,8 +23,9 @@ import { previewSpkEmailWithTemplate } from "./procurement-router";
  *
  * Penjaganya PER JENIS DOKUMEN, bukan satu modul untuk semuanya: template SPK
  * mengikuti izin Procurement & Vendor, template Quotation dan Invoice
- * mengikuti izin Quotation & Invoice — sama dengan yang boleh MENGIRIM
- * dokumennya. Sampai 22 Agustus 2026 semuanya menuntut izin Procurement,
+ * mengikuti izin Quotation & Invoice, template BAST mengikuti izin BAST
+ * Digital — sama dengan yang boleh MENGIRIM dokumennya. Sampai 22 Agustus 2026
+ * semuanya menuntut izin Procurement,
  * sehingga Finance yang izin Procurement-nya dicabut tidak bisa membuat
  * template invoice sekalipun ia yang menagih.
  *
@@ -57,16 +59,25 @@ const previewSchema = z.object({
 });
 
 /** Jenis dokumen → modul izin yang menaunginya. */
-const MODUL_PER_JENIS: Record<DocumentEmailKind, "procurement" | "billing"> = {
+const MODUL_PER_JENIS: Record<
+  DocumentEmailKind,
+  "procurement" | "billing" | "bast"
+> = {
   spk: "procurement",
   quotation: "billing",
   invoice: "billing",
+  // BAST ikut modulnya sendiri, bukan Billing. Yang menandatangani dan
+  // memfinalisasi serah terima adalah orang lapangan; yang menagih adalah
+  // Finance. Menaruh surat BAST di bawah Billing berarti PM yang baru saja
+  // memfinalisasi dokumennya tidak bisa mengirimkannya.
+  bast: "bast",
 };
 
 const LABEL_JENIS: Record<DocumentEmailKind, string> = {
   spk: "SPK/PO",
   quotation: "Quotation",
   invoice: "Invoice",
+  bast: "BAST",
 };
 
 function penjaga(
@@ -287,6 +298,9 @@ async function previewTemplate(request: Request, templateId: string, user: AuthU
   const { client } = await getDatabase();
   if (input.documentType === "spk") {
     return previewSpkEmailWithTemplate(client, user, input.documentId, templateId);
+  }
+  if (input.documentType === "bast") {
+    return previewBastEmailWithTemplate(client, user, input.documentId, templateId);
   }
   return previewClientDocumentEmailWithTemplate(
     client,

@@ -71,6 +71,7 @@ const emptyPlaceholders: Record<DocumentEmailKind, string[]> = {
   quotation: [],
   invoice: [],
   spk: [],
+  bast: [],
 };
 
 function emptyForm(

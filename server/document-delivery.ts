@@ -8,7 +8,7 @@ import {
   type PreparedAttachment,
 } from "./attachments";
 import type { DatabaseClient } from "./db/client";
-import { renderDokumenLampiran, susunUntukDokumen } from "./document-letter";
+import { lampiranDokumen, susunUntukDokumen } from "./document-letter";
 import { sendEmailDelivery } from "./email";
 import { alamatBalasan, type Penandatangan } from "./letter";
 import { storeUploadedFile } from "./storage";
@@ -17,9 +17,9 @@ import type { DocumentEmailKind } from "../shared/document-email";
 /**
  * Mengirim satu dokumen resmi lewat email, dan mencatatnya.
  *
- * Dipakai SPK/PO hari ini; quotation dan invoice memakai fungsi yang sama nanti.
- * Yang berbeda per jenis dokumen hanya penerima dan placeholder-nya — keduanya
- * disiapkan pemanggil.
+ * Dipakai SPK/PO, quotation, invoice, dan BAST. Yang berbeda per jenis dokumen
+ * hanya penerima dan placeholder-nya — keduanya disiapkan pemanggil. Dari mana
+ * byte lampirannya datang ditentukan `lampiranDokumen`, bukan di sini.
  */
 
 export interface KirimDokumenInput {
@@ -55,7 +55,8 @@ export async function susunKiriman(
   client: DatabaseClient,
   input: Omit<KirimDokumenInput, "tambahan"> & { tambahan?: PreparedAttachment[] },
 ) {
-  const dokumen = await renderDokumenLampiran(
+  const dokumen = await lampiranDokumen(
+    client,
     input.kind,
     input.documentId,
     input.language,

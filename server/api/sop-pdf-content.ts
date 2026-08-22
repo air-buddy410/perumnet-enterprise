@@ -1112,8 +1112,8 @@ export const chapterDocumentEmail: Chapter = {
     {
       kind: "lead",
       text: [
-        "SPK dan PO dapat dikirim ke vendor, Quotation dan Invoice ke klien, langsung dari dokumennya. Surat pengantarnya disusun server dari template yang Anda simpan, dan PDF resminya dilampirkan aplikasi — bukan berkas yang diunggah ulang seseorang. Yang Anda lihat di pratinjau memang persis yang diterima penerima.",
-        "An SPK or PO can be sent to the vendor, and a quotation or invoice to the client, straight from the document itself. The covering letter is composed on the server from a template you saved, and the official PDF is attached by the application rather than re-uploaded by hand. What the preview shows is exactly what the recipient receives.",
+        "SPK dan PO dapat dikirim ke vendor; Quotation, Invoice, dan BAST ke klien — langsung dari dokumennya. Surat pengantarnya disusun server dari template yang Anda simpan, dan PDF resminya dilampirkan aplikasi, bukan berkas yang diunggah ulang seseorang. Yang Anda lihat di pratinjau memang persis yang diterima penerima.",
+        "An SPK or PO can be sent to the vendor; a quotation, invoice, or handover certificate to the client — straight from the document itself. The covering letter is composed on the server from a template you saved, and the official PDF is attached by the application rather than re-uploaded by hand. What the preview shows is exactly what the recipient receives.",
       ],
     },
     {
@@ -1122,8 +1122,8 @@ export const chapterDocumentEmail: Chapter = {
         {
           label: ["Siapa yang boleh", "Who may do it"],
           value: [
-            "Mengirim SPK atau PO memerlukan izin Kelola pada Procurement & Vendor. Mengirim Quotation atau Invoice memerlukan izin Kelola pada Quotation & Invoice. Template suratnya dikelola dengan izin Kelola pada Procurement & Vendor; izin Lihat hanya cukup untuk membaca template dan riwayat.",
-            "Sending an SPK or PO requires Manage on Procurement & Vendors. Sending a quotation or invoice requires Manage on Quotations & Invoices. The letter templates are maintained with Manage on Procurement & Vendors; View is only enough to read the templates and the delivery history.",
+            "Mengirim SPK atau PO memerlukan izin Kelola pada Procurement & Vendor. Mengirim Quotation atau Invoice memerlukan izin Kelola pada Quotation & Invoice. Mengirim BAST memerlukan izin Kelola pada BAST Digital — bukan Quotation & Invoice, karena yang menandatangani serah terima adalah orang lapangan, bukan yang menagih. Template tiap jenis mengikuti izin yang sama; izin Lihat hanya cukup untuk membaca template dan riwayat.",
+            "Sending an SPK or PO requires Manage on Procurement & Vendors. Sending a quotation or invoice requires Manage on Quotations & Invoices. Sending a handover certificate requires Manage on Digital Handover — not Quotations & Invoices, because the people who sign a handover are the site team, not the people who bill. Each type's templates follow the same permission; View is only enough to read the templates and the delivery history.",
           ],
         },
         {
@@ -1136,8 +1136,8 @@ export const chapterDocumentEmail: Chapter = {
         {
           label: ["Prasyarat", "Prerequisites"],
           value: [
-            "Mailserver sudah dikonfigurasi; satu template tersimpan untuk jenis dokumen yang bersangkutan; dan alamat penerima sudah terisi — email vendor di master vendor untuk SPK dan PO, atau alamat email klien pada proyek untuk Quotation dan Invoice.",
-            "A configured mail server; one saved template for that document type; and a recipient address already on file — the vendor email in the vendor master for an SPK or PO, or the project's client email for a quotation or invoice.",
+            "Mailserver sudah dikonfigurasi; satu template tersimpan untuk jenis dokumen yang bersangkutan; dan alamat penerima sudah terisi — email vendor di master vendor untuk SPK dan PO, atau alamat email klien pada proyek untuk Quotation, Invoice, dan BAST. Khusus BAST ada satu prasyarat lagi: dokumennya sudah difinalisasi dan belum dicabut.",
+            "A configured mail server; one saved template for that document type; and a recipient address already on file — the vendor email in the vendor master for an SPK or PO, or the project's client email for a quotation, invoice, or handover certificate. A handover certificate carries one further prerequisite: it must already be finalised and not revoked.",
           ],
         },
       ],
@@ -1146,8 +1146,8 @@ export const chapterDocumentEmail: Chapter = {
       kind: "steps",
       items: [
         [
-          "Siapkan templatenya lebih dulu. Buka Procurement & Vendor, tab Template surat, lalu pilih jenis dokumen: SPK, Quotation, atau Invoice. Template dibuat per jenis dan tidak dapat dipakai lintas jenis.",
-          "Prepare the template first. Open Procurement & Vendors, the Letter templates tab, then choose the document type: SPK, Quotation, or Invoice. Templates belong to one type and cannot be used across types.",
+          "Siapkan templatenya lebih dulu. Buka tab Template surat pada modul dokumennya, lalu pilih jenis: SPK, Quotation, Invoice, atau BAST. Template dibuat per jenis dan tidak dapat dipakai lintas jenis.",
+          "Prepare the template first. Open the Letter templates tab on that document's module, then choose the type: SPK, quotation, invoice, or handover certificate. Templates belong to one type and cannot be used across types.",
         ],
         [
           "Tulis subjek dan isi surat. Penanda yang tersedia ditampilkan layar sesuai jenis dokumennya, dan seluruh nilainya diambil dari baris dokumen — tidak ada satu pun yang berasal dari ketikan pengirim.",
@@ -1196,6 +1196,10 @@ export const chapterDocumentEmail: Chapter = {
         [
           "PDF SPK yang dikirim ke vendor adalah edisi vendor, yang tidak pernah memuat kolom Budget — harga modal PerumNet per item. Edisi internal hanya dapat diambil dari dalam aplikasi oleh yang memang sudah boleh membacanya.",
           "The SPK PDF sent to a vendor is the vendor edition, which never carries the Budget column — PerumNet's own cost per item. The internal edition can only be fetched from inside the application by someone already entitled to read it.",
+        ],
+        [
+          "BAST hanya dapat dikirim setelah difinalisasi. Selama masih Draft isinya belum tentu sama dengan yang akhirnya berlaku, dan surat yang sudah masuk kotak masuk klien tidak bisa ditarik kembali. BAST yang sudah dicabut juga ditolak: halaman verifikasinya akan menyatakan dokumen itu tidak aktif.",
+          "A handover certificate can only be sent once it has been finalised. While it is still a draft its contents may yet change, and a letter already in the client's inbox cannot be recalled. A revoked certificate is refused too: its verification page would declare the document inactive.",
         ],
         [
           "Surat yang gagal dicoba ulang otomatis setelah 1, 5, 15, dan 60 menit. Setelah lima percobaan ia berhenti dan tercatat Gagal, bukan dicoba selamanya.",
@@ -1251,17 +1255,32 @@ export const chapterDocumentEmail: Chapter = {
           "Sending an SPK that has not been approved. Only approved documents may go to a vendor, and the preview is refused for the same reason.",
         ],
         [
-          "Melampirkan ulang PDF dokumennya sendiri. Salinan yang diunggah tangan bisa saja versi lama; yang dilampirkan aplikasi selalu dirender dari data terkini.",
-          "Attaching the document's own PDF again by hand. A hand-uploaded copy may be an old version; the one the application attaches is always rendered from the current data.",
+          "Melampirkan ulang PDF dokumennya sendiri. Salinan yang diunggah tangan bisa saja versi lama; yang dilampirkan aplikasi selalu berkas resminya sendiri.",
+          "Attaching the document's own PDF again by hand. A hand-uploaded copy may be an old version; the one the application attaches is always the official file itself.",
         ],
+        [
+          "Mengirim BAST yang masih Draft, lalu memfinalisasinya kemudian. Aplikasi menolak sejak awal — tetapi kalau klien terlanjur menerima berkas lain lewat jalur di luar aplikasi, ia akan memegang dokumen yang sidiknya tidak akan pernah cocok dengan halaman verifikasi.",
+          "Sending a handover certificate while it is still a draft and finalising it afterwards. The application refuses from the outset — but if the client has already received some other file through a channel outside the application, they hold a document whose fingerprint will never match the verification page.",
+        ],
+      ],
+    },
+    {
+      kind: "note",
+      title: [
+        "Lampiran BAST adalah arsipnya, bukan cetakan baru",
+        "A handover attachment is the archive, not a fresh printout",
+      ],
+      text: [
+        "Quotation, Invoice, dan SPK dicetak ulang saat tombol Kirim ditekan — dokumennya masih hidup, jadi yang benar adalah angka terbaru. BAST tidak. Saat difinalisasi, PDF-nya dicetak sekali, disimpan, dan sidik SHA-256-nya dicatat; angka itulah yang dipajang halaman verifikasi publik dan yang ditunjuk QR di dalam PDF-nya. Karena itu surat BAST melampirkan berkas yang tersimpan itu juga, bukan cetakan baru. Cetakan baru akan menghasilkan sidik yang berbeda, dan klien yang membandingkan lampirannya dengan halaman verifikasi akan melihat dua angka yang tidak cocok — lalu menyimpulkan hal yang paling masuk akal: dokumennya palsu. Kalau arsipnya ternyata tidak lagi cocok dengan catatannya, aplikasi menolak mengirim apa pun.",
+        "Quotations, invoices, and work orders are re-rendered when Send is pressed — those documents are still live, so the current figures are the right ones. A handover certificate is not. When it is finalised its PDF is rendered once, stored, and its SHA-256 fingerprint recorded; that is the number the public verification page displays and the QR code inside the PDF points to. The covering letter therefore attaches that stored file, not a new rendering. A new rendering would produce a different fingerprint, and a client comparing the attachment against the verification page would see two numbers that disagree — and draw the obvious conclusion: the document is forged. If the archive no longer matches its record, the application refuses to send anything at all.",
       ],
     },
     {
       kind: "note",
       title: ["Di mana template surat dokumen dikelola", "Where document letter templates live"],
       text: [
-        "Template surat dokumen berbeda dari template surat Calon Klien, dan memang harus berbeda: penerimanya klien atau vendor yang sudah berkontrak, penandanya nomor dokumen dan nilai, dan PDF resminya ikut dilampirkan. Template SPK dan PO dikelola di Procurement & Vendor; template Quotation dan Invoice di Quotation & Invoice. Izinnya mengikuti jenis dokumennya — sejak 22 Agustus 2026 Finance tidak lagi perlu izin Procurement untuk menulis surat pengantar invoice, dan daftar template yang di luar izin disaring, bukan menolak seluruh layar.",
-        "Document letter templates differ from the Prospects letter templates, and they should: the recipient is a client or vendor already under contract, the placeholders are document numbers and amounts, and the official PDF is attached. SPK and PO templates are managed under Procurement & Vendors; Quotation and Invoice templates under Quotations & Invoices. Permissions follow the document type — since 22 August 2026 Finance no longer needs Procurement rights to write an invoice covering letter, and templates outside your permission are filtered out rather than refusing the whole screen.",
+        "Template surat dokumen berbeda dari template surat Calon Klien, dan memang harus berbeda: penerimanya klien atau vendor yang sudah berkontrak, penandanya nomor dokumen dan nilai, dan PDF resminya ikut dilampirkan. Template SPK dan PO dikelola di Procurement & Vendor; template Quotation dan Invoice di Quotation & Invoice; template BAST di BAST Digital. Izinnya mengikuti jenis dokumennya — sejak 22 Agustus 2026 Finance tidak lagi perlu izin Procurement untuk menulis surat pengantar invoice, dan daftar template yang di luar izin disaring, bukan menolak seluruh layar. Finance yang izin BAST-nya hanya Lihat tetap dapat membaca template BAST, tetapi tidak membuatnya.",
+        "Document letter templates differ from the Prospects letter templates, and they should: the recipient is a client or vendor already under contract, the placeholders are document numbers and amounts, and the official PDF is attached. SPK and PO templates are managed under Procurement & Vendors; quotation and invoice templates under Quotations & Invoices; handover templates under Digital Handover. Permissions follow the document type — since 22 August 2026 Finance no longer needs Procurement rights to write an invoice covering letter, and templates outside your permission are filtered out rather than refusing the whole screen. Finance, whose Digital Handover permission is View only, can still read handover templates but not create them.",
       ],
     },
   ],
@@ -1330,6 +1349,10 @@ export const chapterHandover: Chapter = {
           "Tekan Finalkan & unduh PDF. Aplikasi membubuhkan cap perusahaan, mengunci berkasnya, menghitung sidik jari digital SHA-256 atas berkas itu, dan menempelkan QR pemeriksaan keaslian.",
           "Press Finalize & download PDF. The application applies the company seal, locks the file, computes a SHA-256 digital fingerprint of it, and attaches an authenticity QR code.",
         ],
+        [
+          "Terakhir, tekan Kirim Email untuk mengirimkan BAST final itu ke klien sebagai bukti bahwa suratnya ada. Langkah ini hanya tersedia setelah finalisasi, dan yang dilampirkan adalah arsip yang barusan dikunci — berkas yang sama persis, dengan sidik yang sama persis, dengan yang dipajang halaman verifikasinya.",
+          "Finally, press Send Email to deliver that finalised certificate to the client as proof the document exists. This step only appears after finalisation, and what it attaches is the archive just locked — the very same file, with the very same fingerprint, that the verification page displays.",
+        ],
       ],
     },
     {
@@ -1353,6 +1376,17 @@ export const chapterHandover: Chapter = {
       text: [
         "Hanya Admin yang dapat mencabut BAST final, dan alasannya wajib ditulis. Dokumen yang dicabut tidak pernah dihapus: statusnya menjadi Batal, alasan serta waktu pencabutannya tersimpan, dan halaman pemeriksaan QR akan menyatakan dokumen itu sudah tidak berlaku. Karena serah terima itulah yang menutup proyek, pencabutan juga membuka kembali proyeknya: bila setelah pencabutan masih ada paket yang penawarannya diterima klien tetapi belum punya BAST aktif, status proyek kembali menjadi Aktif. Setelah itu tim membuat BAST baru untuk paket dan siklus yang sama; dokumen baru tersebut tercatat sebagai revisi berikutnya (Revisi 2, 3, dan seterusnya), sementara dokumen yang dicabut tetap tersimpan sebagai riwayat.",
         "Only an Admin may revoke a final certificate, and a written reason is mandatory. A revoked document is never deleted: its status becomes Void, the reason and the moment of revocation are stored, and the QR verification page reports the document as no longer valid. Because it is the handover that closes the project, revoking one re-opens it: if any package with a client-accepted quotation is left without an active certificate, the project status returns to Active. The team then creates a new certificate for the same package and cycle; that new document is recorded as the next revision (Revision 2, 3, and so on) while the revoked one is kept as history.",
+      ],
+    },
+    {
+      kind: "note",
+      title: [
+        "Mengirim BAST ke klien sebagai bukti",
+        "Emailing the certificate to the client as proof",
+      ],
+      text: [
+        "BAST yang sudah final dapat dikirim ke alamat email klien pada proyek, lengkap dengan surat pengantar dari template BAST. Penandanya memuat nomor dokumen, nama paket, tanggal serah terima, sidik SHA-256, dan tautan halaman verifikasi — tautan yang sama dengan QR di dalam PDF-nya, sehingga klien yang mengeklik dari email dan yang memindai dari kertas mendarat di halaman yang sama. Yang dilampirkan adalah arsip finalnya, bukan cetakan baru; kalau arsipnya tidak lagi cocok dengan sidik yang tercatat, aplikasi menolak mengirim. BAST yang masih Draft dan yang sudah dicabut sama-sama ditolak. Riwayat pengirimannya tersimpan permanen bersama lampirannya, karena pertanyaan \"kapan BAST ini kita kirim, ke alamat mana\" biasanya muncul bertahun-tahun kemudian, saat ada sengketa.",
+        "A finalised certificate can be emailed to the project's client address with a covering letter drawn from a handover template. Its placeholders carry the document number, the package name, the handover date, the SHA-256 fingerprint, and the verification link — the same link the QR code inside the PDF points to, so a client clicking from the email and one scanning from paper land on the same page. What is attached is the final archive, not a fresh printout; if the archive no longer matches its recorded fingerprint, the application refuses to send. Draft and revoked certificates are both refused. The delivery history is kept permanently along with its attachments, because the question \"when did we send this certificate, and to what address\" usually surfaces years later, during a dispute.",
       ],
     },
     {
@@ -2751,14 +2785,29 @@ export const chapterMessages: Chapter = {
           action: ["Minta Admin membuka Pengguna & Akses dan menyetel modul yang sesuai ke Kelola. Kalau Anda hanya menagih klien, izin Quotation & Invoice sudah cukup — izin Procurement tidak lagi diperlukan.", "Ask an Admin to open Users & Access and set the matching module to Manage. If you only bill clients, Quotations & Invoices is enough — Procurement rights are no longer required."],
         },
         {
-          message: ["Template ini bukan untuk Quotation. / bukan untuk Invoice. / bukan untuk SPK.", "This template is not for quotations. / not for invoices. / not for work orders."],
+          message: ["Template ini bukan untuk Quotation. / bukan untuk Invoice. / bukan untuk SPK. / bukan untuk BAST.", "This template is not for quotations. / not for invoices. / not for work orders. / not for handover certificates."],
           meaning: ["Template surat terikat pada satu jenis dokumen, karena penandanya berbeda per jenis. Template Invoice mengenal jatuh tempo dan sisa tagihan; template SPK mengenal vendor dan tanggal mulai. Menukarnya akan menghasilkan surat dengan penanda yang tidak pernah terisi.", "A letter template belongs to one document type, because the placeholders differ per type. An invoice template knows about due dates and outstanding balances; a work order template knows about vendors and start dates. Swapping them would produce a letter with placeholders that never fill in."],
           action: ["Pesannya menyebut jenis template yang sebenarnya. Buka Procurement & Vendor, tab Template surat, pilih jenis dokumen yang benar, lalu pilih atau buat template di sana.", "The message states what type the template actually is. Open Procurement & Vendors, the Letter templates tab, choose the correct document type, and pick or create a template there."],
         },
         {
           message: ["Proyek ... belum punya alamat email klien. Isi lebih dulu di Manajemen Proyek.", "The named project has no client email address yet. Fill it in under Project Management first."],
-          meaning: ["Quotation dan Invoice dikirim ke alamat email klien yang tersimpan pada proyeknya, bukan yang diketik saat mengirim. Kolom itu baru ada sejak Agustus 2026, jadi proyek yang dibuat sebelumnya belum mengisinya.", "Quotations and invoices go to the client email address stored on the project, not one typed at send time. The field is new as of August 2026, so projects created before that do not have it."],
+          meaning: ["Quotation, Invoice, dan BAST dikirim ke alamat email klien yang tersimpan pada proyeknya, bukan yang diketik saat mengirim. Kolom itu baru ada sejak Agustus 2026, jadi proyek yang dibuat sebelumnya belum mengisinya.", "Quotations, invoices, and handover certificates go to the client email address stored on the project, not one typed at send time. The field is new as of August 2026, so projects created before that do not have it."],
           action: ["Buka proyeknya di Manajemen Proyek, isi alamat email klien beserta nama PIC-nya, lalu ulangi pengiriman. Pesan sejenis tentang alamat tidak valid berarti isinya bukan alamat email yang benar.", "Open the project under Project Management, fill in the client email address and the contact name, then send again. A related message about an invalid address means what is stored is not a well-formed email address."],
+        },
+        {
+          message: ["BAST ini belum difinalisasi. Lengkapi tanda tangan lalu finalisasi lebih dulu.", "This handover certificate has not been finalised yet. Complete the signatures and finalise it first."],
+          meaning: ["Surat BAST adalah bukti bahwa dokumennya sudah sah, jadi hanya dokumen yang sudah sah yang bisa dikirim. Selama masih Draft isinya belum tentu sama dengan yang akhirnya berlaku, dan surat yang sudah masuk kotak masuk klien tidak dapat ditarik kembali.", "A handover letter is proof that the document is valid, so only a valid document may be sent. While it is still a draft its contents may yet change, and a letter already in the client's inbox cannot be recalled."],
+          action: ["Minta perwakilan klien dan wakil PerumNet menandatangani di layar, tekan Finalkan & unduh PDF, lalu kirim. Tombol kirimnya memang baru tersedia sesudah finalisasi.", "Have the client's and PerumNet's representatives sign on screen, press Finalize & download PDF, then send. The send button only becomes available after finalisation."],
+        },
+        {
+          message: ["BAST ini sudah dicabut. Kirim revisi terbarunya.", "This handover certificate has been revoked. Send its latest revision instead."],
+          meaning: ["Dokumen yang dicabut tidak lagi berlaku, dan halaman verifikasinya akan menyatakan demikian kepada siapa pun yang memeriksanya. Mengirimkannya hanya akan membingungkan penerimanya.", "A revoked document is no longer valid, and its verification page says so to anyone who checks. Sending it would only confuse the recipient."],
+          action: ["Buka BAST Digital untuk paket dan siklus yang sama, cari revisi terbaru yang sudah final, lalu kirim yang itu.", "Open Digital Handover for the same package and cycle, find the latest finalised revision, and send that one instead."],
+        },
+        {
+          message: ["Sidik arsip BAST tidak cocok dengan catatannya. Pengiriman dibatalkan.", "The handover archive's fingerprint does not match its record. The delivery was cancelled."],
+          meaning: ["Berkas PDF yang tersimpan tidak lagi sama dengan sidik SHA-256 yang dicatat saat finalisasi. Halaman verifikasi publik akan menyatakan dokumen itu tidak sah, jadi mengirimkannya hanya memindahkan kegagalan ke tangan klien.", "The stored PDF no longer matches the SHA-256 fingerprint recorded at finalisation. The public verification page would declare the document invalid, so sending it would merely hand the failure to the client."],
+          action: ["Ini bukan kesalahan pengguna — hubungi Admin. Arsipnya perlu diperiksa lebih dulu; bila memang rusak, BAST-nya dicabut dan diterbitkan ulang sebagai revisi berikutnya.", "This is not a user error — contact an Admin. The archive has to be examined first; if it is genuinely damaged, the certificate is revoked and re-issued as the next revision."],
         },
         {
           message: ["Vendor ... belum punya alamat email. Isi lebih dulu di Procurement & Vendor — yang boleh mengubahnya Admin atau Finance.", "The named vendor has no email address. Fill it in under Procurement & Vendors — only an Admin or Finance user may change it."],

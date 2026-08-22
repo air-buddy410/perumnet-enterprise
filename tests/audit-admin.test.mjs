@@ -516,9 +516,14 @@ test("T: template quotation/invoice ikut izin Billing, SPK ikut Procurement", as
   const tplSpk = await buat("spk", `Pengantar SPK ${Date.now()}`);
 
   const semua = await json("/api/document-email-templates");
-  assert.deepEqual(semua.viewableKinds.sort(), ["invoice", "quotation", "spk"], "Admin melihat semua jenis");
+  assert.deepEqual(
+    semua.viewableKinds.sort(),
+    ["bast", "invoice", "quotation", "spk"],
+    "Admin melihat semua jenis",
+  );
   assert.equal(semua.audience.quotation, "klien");
   assert.equal(semua.audience.spk, "vendor");
+  assert.equal(semua.audience.bast, "klien");
 
   // Akun Finance khusus: izin Billing penuh, Procurement dicabut.
   const email = `finance.template.${Date.now()}@perumnet.id`;
@@ -547,7 +552,19 @@ test("T: template quotation/invoice ikut izin Billing, SPK ikut Procurement", as
 
   // Boleh mengelola template klien...
   const daftar = await json("/api/document-email-templates");
-  assert.deepEqual(daftar.viewableKinds.sort(), ["invoice", "quotation"], "hanya jenis klien yang terlihat");
+  // BAST ikut terlihat karena Finance memang punya `bast: "view"` sejak awal —
+  // ia perlu membaca serah terima yang ditagihnya. Yang TIDAK ia punya adalah
+  // `manage`, dan itu diuji beberapa baris di bawah: melihat bukan mengubah.
+  assert.deepEqual(
+    daftar.viewableKinds.sort(),
+    ["bast", "invoice", "quotation"],
+    "hanya jenis yang izinnya dimiliki yang terlihat",
+  );
+  assert.deepEqual(
+    daftar.manageableKinds.sort(),
+    ["invoice", "quotation"],
+    "BAST hanya boleh dibaca Finance, tidak dikelola",
+  );
   assert.equal(daftar.items.some((t) => t.id === tplQuotation.id), true, "template quotation terbaca");
   assert.equal(daftar.items.some((t) => t.id === tplSpk.id), false, "template SPK disaring, bukan menolak seluruh daftar");
   const invoiceBaru = await json("/api/document-email-templates", {
@@ -579,6 +596,18 @@ test("T: template quotation/invoice ikut izin Billing, SPK ikut Procurement", as
     body: JSON.stringify({ documentKind: "spk" }),
   });
   assert.equal(pindah.status, 403);
+
+  // Template BAST: boleh dibaca, tidak boleh dibuat. `bast: "view"` bukan
+  // setengah izin yang diam-diam melar menjadi manage.
+  const buatBast = await galat("/api/document-email-templates", {
+    method: "POST",
+    body: JSON.stringify({
+      documentKind: "bast", name: "BAST Terlarang",
+      subject: "BAST {{nomor}}", bodyHtml: "Yth. {{klien}},\n\nTerlampir {{nomor}}.", bodyFormat: "text",
+    }),
+  });
+  assert.equal(buatBast.status, 403);
+  assert.equal(buatBast.details?.module, "bast");
 
   await masuk("admin@perumnet.id");
 });

@@ -83,6 +83,88 @@ CREATE TABLE IF NOT EXISTS cms_prospect_templates (
   deleted_at TEXT
 )`;
 
+/**
+ * document_email_templates & document_deliveries sebelum jenis 'bast' ada —
+ * CHECK-nya hanya mengenal tiga jenis dokumen.
+ *
+ * Anaknya ikut dibuat DENGAN SENGAJA. Melonggarkan CHECK di SQLite menuntut
+ * tabelnya dibangun ulang, dan cara yang paling jelas untuk itu — rename yang
+ * lama, bikin penggantinya — MENULIS ULANG klausa REFERENCES di tabel anak,
+ * meninggalkannya menunjuk nama tabel sementara yang sesudahnya di-drop.
+ * Migrasi dua tabel di atas dua tabel yatim tidak akan pernah memperlihatkan
+ * itu.
+ */
+const TEMPLATE_DOKUMEN_LAMA = `
+CREATE TABLE IF NOT EXISTS document_email_templates (
+  id TEXT PRIMARY KEY,
+  document_kind TEXT NOT NULL CHECK (document_kind IN ('spk', 'quotation', 'invoice')),
+  name TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  body_html TEXT NOT NULL,
+  body_format TEXT NOT NULL DEFAULT 'text'
+    CHECK (body_format IN ('text', 'rich', 'html')),
+  sender_signoff TEXT NOT NULL DEFAULT '',
+  sender_name TEXT NOT NULL DEFAULT '',
+  sender_email TEXT NOT NULL DEFAULT '',
+  sender_phone TEXT NOT NULL DEFAULT '',
+  language TEXT NOT NULL DEFAULT 'id' CHECK (language IN ('id', 'en')),
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+)`;
+
+const PENGIRIMAN_DOKUMEN_LAMA = `
+CREATE TABLE IF NOT EXISTS document_deliveries (
+  id TEXT PRIMARY KEY,
+  document_kind TEXT NOT NULL CHECK (document_kind IN ('spk', 'quotation', 'invoice')),
+  document_id TEXT NOT NULL,
+  document_number TEXT NOT NULL,
+  project_id TEXT,
+  audience TEXT NOT NULL CHECK (audience IN ('vendor', 'client')),
+  vendor_id TEXT,
+  recipient TEXT NOT NULL,
+  recipient_name TEXT NOT NULL DEFAULT '',
+  template_id TEXT REFERENCES document_email_templates(id) ON DELETE SET NULL,
+  template_name TEXT NOT NULL,
+  language TEXT NOT NULL DEFAULT 'id' CHECK (language IN ('id', 'en')),
+  subject TEXT NOT NULL,
+  body_html TEXT,
+  status TEXT NOT NULL DEFAULT 'Queued'
+    CHECK (status IN ('Queued', 'Sent', 'Failed', 'Skipped')),
+  scheduled_for TEXT NOT NULL,
+  sent_at TEXT,
+  failure_reason TEXT,
+  outbox_id TEXT,
+  document_edition TEXT NOT NULL DEFAULT 'vendor'
+    CHECK (document_edition = 'vendor'),
+  created_by TEXT,
+  created_at TEXT NOT NULL
+)`;
+
+const LAMPIRAN_PENGIRIMAN_LAMA = `
+CREATE TABLE IF NOT EXISTS document_delivery_attachments (
+  id TEXT PRIMARY KEY,
+  delivery_id TEXT NOT NULL REFERENCES document_deliveries(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('document', 'extra')),
+  filename TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+  sha256 TEXT NOT NULL,
+  storage_url TEXT,
+  content_base64 TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+)`;
+
+const INDEKS_DOKUMEN_LAMA = [
+  "CREATE INDEX IF NOT EXISTS document_email_templates_kind_idx ON document_email_templates(document_kind, deleted_at, name)",
+  "CREATE INDEX IF NOT EXISTS document_deliveries_document_idx ON document_deliveries(document_kind, document_id, created_at)",
+  "CREATE INDEX IF NOT EXISTS document_deliveries_outbox_idx ON document_deliveries(outbox_id)",
+  "CREATE INDEX IF NOT EXISTS document_deliveries_status_idx ON document_deliveries(status, created_at)",
+  "CREATE INDEX IF NOT EXISTS document_delivery_attachments_delivery_idx ON document_delivery_attachments(delivery_id, sort_order)",
+];
+
 async function freePort() {
   return await new Promise((resolve, reject) => {
     const listener = createServer();
@@ -119,9 +201,37 @@ before(async () => {
   // Database DISIAPKAN LEBIH DULU dengan tabel versi lama, sebelum server
   // pernah menyentuhnya.
   const client = createClient({ url: `file:${databasePath}` });
-  for (const ddl of [TABEL_LAMA, OUTBOX_LAMA, TEMPLATE_LAMA]) {
+  for (const ddl of [
+    TABEL_LAMA,
+    OUTBOX_LAMA,
+    TEMPLATE_LAMA,
+    TEMPLATE_DOKUMEN_LAMA,
+    PENGIRIMAN_DOKUMEN_LAMA,
+    LAMPIRAN_PENGIRIMAN_LAMA,
+  ]) {
     await client.execute(ddl);
   }
+  for (const indeks of INDEKS_DOKUMEN_LAMA) await client.execute(indeks);
+  // Isi lebih dulu: migrasi yang membangun ulang tabel harus MEMBAWA barisnya
+  // ikut pindah, dan tabel kosong tidak akan pernah membuktikan itu.
+  await client.execute(
+    `INSERT INTO document_email_templates
+      (id,document_kind,name,subject,body_html,language,created_at,updated_at)
+      VALUES ('tpl-lama','invoice','Surat invoice','Invoice {{nomor}}','Terlampir.','id','2026-08-01','2026-08-01')`,
+  );
+  await client.execute(
+    `INSERT INTO document_deliveries
+      (id,document_kind,document_id,document_number,audience,recipient,template_id,
+       template_name,subject,status,scheduled_for,created_at)
+      VALUES ('kirim-lama','invoice','inv-1','INV/2026/001','client','klien@contoh.test',
+        'tpl-lama','Surat invoice','Invoice INV/2026/001','Sent','2026-08-01','2026-08-01')`,
+  );
+  await client.execute(
+    `INSERT INTO document_delivery_attachments
+      (id,delivery_id,kind,filename,mime_type,byte_size,sha256,sort_order,created_at)
+      VALUES ('lampiran-lama','kirim-lama','document','INV-2026-001.pdf','application/pdf',
+        1024,'abc',0,'2026-08-01')`,
+  );
   client.close();
 
   server = spawn(
@@ -201,4 +311,113 @@ test("indeks atas kolom baru ikut terbentuk", async () => {
     nama.includes("cms_prospect_outreach_batch_idx"),
     `indeks batch tidak ada. Yang ada: ${nama.join(", ")}`,
   );
+});
+
+test("CHECK document_kind dilonggarkan supaya BAST bisa dikirim", async () => {
+  const client = createClient({ url: `file:${databasePath}` });
+  try {
+    await client.execute(
+      `INSERT INTO document_email_templates
+        (id,document_kind,name,subject,body_html,language,created_at,updated_at)
+        VALUES ('tpl-bast','bast','Surat BAST','BAST {{nomor}}','Terlampir.','id','2026-08-22','2026-08-22')`,
+    );
+    await client.execute(
+      `INSERT INTO document_deliveries
+        (id,document_kind,document_id,document_number,audience,recipient,template_id,
+         template_name,subject,status,scheduled_for,created_at)
+        VALUES ('kirim-bast','bast','bast-1','BAST/2026/001','client','klien@contoh.test',
+          'tpl-bast','Surat BAST','BAST BAST/2026/001','Sent','2026-08-22','2026-08-22')`,
+    );
+  } finally {
+    client.close();
+  }
+});
+
+// `DROP TABLE` menjalankan `DELETE FROM` implisit saat penegakan foreign key
+// menyala — dan di libSQL ia menyala secara bawaan. Tanpa penjagaan, membuang
+// document_deliveries akan MENGHAPUS arsip lampirannya lewat ON DELETE CASCADE
+// dan membuang document_email_templates akan mengosongkan template_id setiap
+// baris riwayat lewat ON DELETE SET NULL — dua arsip yang justru disimpan
+// permanen. Semua langkah migrasinya tetap melaporkan sukses.
+test("membangun ulang tabel tidak menghilangkan barisnya", async () => {
+  const client = createClient({ url: `file:${databasePath}` });
+  const template = await client.execute(
+    "SELECT name FROM document_email_templates WHERE id='tpl-lama'",
+  );
+  const kiriman = await client.execute(
+    "SELECT document_number,template_id FROM document_deliveries WHERE id='kirim-lama'",
+  );
+  const lampiran = await client.execute(
+    "SELECT filename FROM document_delivery_attachments WHERE id='lampiran-lama'",
+  );
+  client.close();
+  assert.equal(String(template.rows[0]?.name ?? ""), "Surat invoice");
+  assert.equal(String(kiriman.rows[0]?.document_number ?? ""), "INV/2026/001");
+  assert.equal(
+    String(lampiran.rows[0]?.filename ?? ""),
+    "INV-2026-001.pdf",
+    "arsip lampiran terhapus oleh ON DELETE CASCADE saat tabel dibangun ulang",
+  );
+  assert.equal(
+    String(kiriman.rows[0]?.template_id ?? ""),
+    "tpl-lama",
+    "template_id riwayat dikosongkan oleh ON DELETE SET NULL saat tabel dibangun ulang",
+  );
+});
+
+// Inilah yang membedakan migrasi ini dari dua migrasi CHECK sebelumnya di
+// initialize.ts. Keduanya memakai `ALTER TABLE ... RENAME TO` pada tabel yang
+// tidak punya anak. Di sini anaknya ada, dan rename akan MENULIS ULANG klausa
+// REFERENCES-nya menjadi nama tabel sementara — yang beberapa baris kemudian
+// di-drop. Skemanya tetap bisa dibaca, insert tetap jalan, dan tidak ada satu
+// pun tes lain yang akan menyadarinya.
+test("klausa REFERENCES tabel anak tidak ikut ditulis ulang", async () => {
+  const client = createClient({ url: `file:${databasePath}` });
+  const ddl = async (nama) => {
+    const r = await client.execute({
+      sql: "SELECT sql FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+      args: [nama],
+    });
+    return String(r.rows[0]?.sql ?? "");
+  };
+  const lampiran = await ddl("document_delivery_attachments");
+  const kiriman = await ddl("document_deliveries");
+  const sisa = await client.execute(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_kind_migration'",
+  );
+  client.close();
+
+  assert.match(
+    lampiran,
+    /REFERENCES\s+"?document_deliveries"?\s*\(/i,
+    `document_delivery_attachments kehilangan induknya: ${lampiran}`,
+  );
+  assert.match(
+    kiriman,
+    /REFERENCES\s+"?document_email_templates"?\s*\(/i,
+    `document_deliveries kehilangan rujukan templatenya: ${kiriman}`,
+  );
+  assert.equal(
+    sisa.rows.length,
+    0,
+    `tabel sementara migrasi tertinggal: ${sisa.rows.map((r) => String(r.name)).join(", ")}`,
+  );
+});
+
+test("indeks kembali setelah tabelnya dibangun ulang", async () => {
+  const client = createClient({ url: `file:${databasePath}` });
+  const r = await client.execute(
+    `SELECT name FROM sqlite_master WHERE type='index'
+      AND tbl_name IN ('document_email_templates','document_deliveries')`,
+  );
+  client.close();
+  const nama = r.rows.map((x) => String(x.name));
+  for (const perlu of [
+    "document_email_templates_kind_idx",
+    "document_deliveries_document_idx",
+    "document_deliveries_outbox_idx",
+    "document_deliveries_status_idx",
+  ]) {
+    assert.ok(nama.includes(perlu), `indeks ${perlu} hilang. Yang ada: ${nama.join(", ")}`);
+  }
 });

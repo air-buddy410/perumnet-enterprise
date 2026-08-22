@@ -13,7 +13,7 @@ type Language = "id" | "en";
 
 // Bumped whenever the manual's structure or coverage changes, so a printed copy
 // can be compared against the edition currently shipping.
-const GUIDE_EDITION = "2.1";
+const GUIDE_EDITION = "2.2";
 
 // Colours reuse the existing PerumNet document palette so the guide sits next to
 // the quotation, invoice, and handover PDFs without looking foreign.

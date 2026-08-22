@@ -9,6 +9,74 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ---
 
+## 🔴 Yang sedang menunggumu
+
+Dua tugas, **T-24 dan T-25**. T-25 lebih mendesak: ia bug yang sedang tampil di
+demo dan salah di depan pemilik.
+
+### T-25 — "Sisa dapat ditagihkan" memakai dasar yang keliru (BUG, prioritas)
+
+`app/components/billing-view.tsx:948` menghitung sisa dari **subtotal sebelum
+diskon**, padahal invoice-nya berdenominasi **grand total**:
+
+```tsx
+formatCurrency(Math.max(0, quotationTotal - invoicedTotal), language)
+//                        ^^^^^^^^^^^^^^ salah
+```
+
+`quotationTotal` (baris 331) adalah `quotation.total` — subtotal pekerjaan,
+yang di baris 872 kamu beri label "Subtotal pekerjaan". Sementara nilai invoice
+dihitung dari `quotationGrossTotal` (baris 644 dan 1019: "Nilai termin dari
+Grand Total"). Membandingkan keduanya membandingkan dua dasar yang berbeda,
+dan selisihnya persis sebesar diskon + pembulatan.
+
+Terlihat di demo pada proyek **PN-2608-004 · Sandy House**, angka sungguhan
+dari database:
+
+| | |
+|---|---|
+| `quotations.total` (subtotal) | 275.766.900 |
+| diskon 10% | −27.576.690 |
+| pembulatan | −90.210 |
+| `quotations.grand_total` | **248.100.000** |
+| invoice (100%, Lunas) | 248.100.000 |
+
+Layar menampilkan **"Sisa dapat ditagihkan Rp 27.666.900 · Dari Rp
+275.766.900"** pada proyek yang sudah ditagih penuh dan dibayar penuh.
+
+Server sudah benar dan tidak perlu diubah:
+`assertInvoiceAmountWithinQuotation` (`server/api/router.ts:3181`) memakai
+`CASE WHEN grand_total>0 THEN grand_total ELSE total END`, jadi invoice
+berikutnya memang akan ditolak — hanya angkanya yang berbohong.
+
+**Perbaikannya:** pakai `quotationGrossTotal` di kedua tempat pada baris 948 —
+nilai sisanya dan keterangan "Dari". Kartu "Subtotal pekerjaan" di baris 872
+tetap memakai `quotationTotal`; itu memang subtotal.
+
+### T-24 — Kirim BAST final ke klien lewat email
+
+Backend sudah siap (lihat §T-24 di bawah untuk kontrak lengkapnya). Yang
+diperlukan di layar **BAST Digital**:
+
+1. Tombol **Kirim Email** pada BAST, **hanya muncul bila `finalizedAt` terisi
+   dan `revokedAt` kosong**. Pada BAST Draft jangan ditampilkan sama sekali —
+   servernya menolak, tapi tombol yang selalu gagal lebih buruk daripada tombol
+   yang tidak ada.
+2. Dialognya bisa memakai `document-email-dialog.tsx` yang sudah ada; jenisnya
+   `bast`, endpointnya `/api/bast/:id/...` (pola sama persis dengan invoice).
+3. Tab **Template surat** untuk jenis `bast` di layar BAST Digital, memakai
+   `document-template-manager.tsx` yang sudah ada dengan `kinds={["bast"]}`.
+   Izinnya modul `bast`, bukan `billing` — server yang menegakkan, dan
+   `manageableKinds` dari `GET /api/document-email-templates` sudah
+   memberitahumu jenis mana yang boleh dikelola akun yang sedang masuk.
+
+**Satu baris di wilayahmu sudah saya sentuh**, maaf: `document-template-manager.tsx:73`
+`emptyPlaceholders` wajib memuat semua kunci `DocumentEmailKind`, jadi
+`bast: []` saya tambahkan — tanpa itu `tsc` gagal dan build tidak jalan. Murni
+kelengkapan tipe, tidak ada keputusan UI di dalamnya.
+
+---
+
 ## ✅ Tidak ada tugas frontend yang tertunda
 
 Pemilik menemukan ini saat menguji: ia membuat template "Mengirim Dokumen
@@ -1221,3 +1289,53 @@ mau menambah tes serupa untuk Pusat Bantuan, silakan, tapi tidak wajib.
   Procurement dibatasi ke `spk`. Tab dan tombol edit mengikuti
   `viewableKinds`/`manageableKinds` dari server, judul kelompok memakai label
   audience, dan empty state dialog Kirim menyediakan tombol **Buat template**.
+
+---
+
+### T-24 — Kirim BAST final ke klien (kontrak backend)
+
+- **Dipakai untuk:** tombol Kirim Email + tab Template surat di layar BAST
+  Digital.
+- **Izin:** modul **`bast`**, bukan `billing`. `manage` untuk mengirim dan
+  mengelola template, `view` untuk membaca riwayat dan template. Finance
+  bawaan punya `bast: "view"` — ia boleh membaca, tidak boleh mengirim.
+
+**Endpoint** (pola identik dengan invoice, jadi `document-email-dialog.tsx`
+bisa dipakai apa adanya):
+
+| Metode | Endpoint | Badan | Balasan |
+|---|---|---|---|
+| POST | `/api/bast/:id/send-email-preview` | JSON `{ templateId }` | `{ subject, bodyHtml, recipient, recipientName, attachments[] }` |
+| POST | `/api/bast/:id/send-email` | `FormData`: `templateId`, `files` (0–5) | `{ deliveryId, recipient, recipientName, status, scheduledFor, attachments[] }` |
+| GET | `/api/bast/:id/deliveries` | — | `{ items: [{ id, recipient, recipientName, subject, status, scheduledFor, sentAt, failureReason, createdAt, createdByName, attachments[] }] }` |
+
+**Template:** jenis baru `bast` di `/api/document-email-templates`
+(`documentKind: "bast"`). `audience.bast === "klien"`.
+
+Penandanya — dari `documentEmailPlaceholders.bast`, dan layar sudah
+membacanya sendiri dari respons `placeholders`:
+
+`nomor`, `klien`, `proyek`, `paket`, `tanggal_serah_terima`, `sidik_dokumen`,
+`tautan_verifikasi`.
+
+Dua yang terakhir sengaja ada: `sidik_dokumen` adalah SHA-256 arsip finalnya
+dan `tautan_verifikasi` adalah tautan yang sama dengan QR di dalam PDF-nya.
+Surat ini gunanya menjadi BUKTI, jadi penerimanya harus bisa memeriksanya
+sendiri.
+
+**Galat yang perlu ditangani layar:**
+
+| Kode | HTTP | Kapan |
+|---|---|---|
+| `BAST_NOT_FINAL` | 409 | BAST masih Draft. Cegah dengan menyembunyikan tombolnya. |
+| `BAST_REVOKED` | 409 | BAST sudah dicabut. Sembunyikan juga. |
+| `TEMPLATE_KIND_MISMATCH` | 422 | Template bukan jenis `bast`. `details.documentKind` menyebut jenis aslinya. |
+| `TEMPLATE_REQUIRED` | 422 | `templateId` kosong. |
+| `CLIENT_EMAIL_MISSING` | 409 | Proyek belum punya `clientEmail`. Pesannya sudah menyebut Manajemen Proyek. |
+| `BAST_ARCHIVE_MISMATCH` | 500 | Arsipnya tidak cocok dengan sidik tercatat. Bukan kesalahan pengguna — tampilkan apa adanya dan sarankan hubungi Admin. |
+
+**Yang perlu kamu tahu, dan tidak terlihat dari API-nya:** lampiran BAST
+adalah **arsip final yang tersimpan**, bukan render baru seperti tiga jenis
+lain. Jangan menawarkan opsi "render ulang" atau "lampirkan versi terbaru" di
+dialognya — byte-nya harus sama persis dengan yang sidiknya sudah dicatat,
+atau halaman verifikasi klien akan menyatakan dokumennya tidak sah.

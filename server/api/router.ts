@@ -14,6 +14,7 @@ import {
 } from "@/shared/access";
 import { writeAuditLog } from "../audit";
 import { authProviderMode, verifyMailserverPassword } from "../mail-auth";
+import { listBastDeliveries, previewBastEmail, sendBastEmail } from "./bast-email";
 import {
   listClientDocumentDeliveries,
   previewClientDocumentEmail,
@@ -5064,6 +5065,32 @@ async function handleBast(request: Request, path: string[], user: AuthUser) {
       });
     }
     return renderBusinessPdf("bast", bastId, user.preferredLanguage);
+  }
+
+  // Mengirim BAST final ke klien sebagai bukti serah terima. Cakupan proyek
+  // ditegakkan di sini seperti seluruh cabang lain di `handleBast`; syarat
+  // "final dan belum dicabut" ada di `bast-email.ts`, bersama pesan yang
+  // menjelaskan apa yang harus dilakukan lebih dulu.
+  if (
+    bastId &&
+    (action === "send-email" || action === "send-email-preview" || action === "deliveries")
+  ) {
+    const bast = await ensureExists(
+      "SELECT project_id FROM basts WHERE id=?",
+      [bastId],
+      "BAST tidak ditemukan.",
+    );
+    await assertProjectAccess(user, String(bast.project_id));
+    if (action === "send-email" && request.method === "POST") {
+      return sendBastEmail(client, request, user, bastId);
+    }
+    if (action === "send-email-preview" && request.method === "POST") {
+      return previewBastEmail(client, request, user, bastId);
+    }
+    if (action === "deliveries" && request.method === "GET") {
+      return listBastDeliveries(client, user, bastId);
+    }
+    throw new ApiError(405, "METHOD_NOT_ALLOWED", "Metode tidak didukung.");
   }
 
   if (bastId && action === "finalize" && request.method === "POST") {

@@ -1,5 +1,5 @@
 // Mengirim dokumen resmi lewat email, dengan PDF-nya sebagai lampiran:
-// SPK/PO ke vendor, quotation dan invoice ke klien.
+// SPK/PO ke vendor; quotation, invoice, dan BAST ke klien.
 //
 // Tes terpenting di berkas ini adalah yang menjaga uang: SPK punya dua edisi,
 // dan yang internal memuat kolom Budget — harga modal PerumNet per item. Yang
@@ -12,6 +12,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, rmSync, unlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { after, before, test } from "node:test";
@@ -268,6 +269,24 @@ before(async () => {
         unit: "paket",
         costPrice: BUDGET_RAHASIA,
         sellingPrice: 12_000_000,
+      }),
+    },
+    201,
+  );
+  // Satu Perangkat, supaya proyek ini bisa melewati Validasi Perangkat —
+  // syarat BAST. Validasi hanya menghitung Perangkat dan Material; BoQ yang
+  // isinya Jasa saja ditolak dengan VALIDATION_ITEMS_REQUIRED.
+  await json(
+    `/api/boq/items?projectId=${project.id}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        category: "Perangkat",
+        description: "Access Point",
+        quantity: 1,
+        unit: "unit",
+        costPrice: 1_500_000,
+        sellingPrice: 3_000_000,
       }),
     },
     201,
@@ -841,4 +860,202 @@ test("aturan dokumen tetap berlaku di jalur pratinjau template", async () => {
   );
   assert.equal(gagal.status, 409);
   assert.equal(gagal.code, "VENDOR_EMAIL_MISSING");
+});
+
+// ── BAST: bukti serah terima ─────────────────────────────────────────────────
+//
+// Tiga jenis pertama DIRENDER saat tombol Kirim ditekan; BAST tidak. BAST final
+// punya sidik SHA-256 yang tercatat dan halaman verifikasi publik yang
+// memajangnya, jadi lampirannya harus ARSIP yang sama — bukan render baru yang
+// kebetulan terlihat sama.
+//
+// Tes intinya karena itu bukan "ada lampiran PDF", melainkan: sidik byte yang
+// benar-benar sampai lewat SMTP sama dengan `pdfHash` di database. Itu persis
+// yang akan dibandingkan klien saat ia membuka tautan verifikasinya, dan
+// satu-satunya tes yang akan gagal kalau suatu hari jalur ini "disederhanakan"
+// kembali menjadi render ulang.
+
+const PNG_1X1 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+test("BAST disiapkan sampai siap difinalisasi", async () => {
+  const validasi = await json(
+    `/api/validations?projectId=${konteks.projectId}`,
+    { method: "POST" },
+    201,
+  );
+  await json(`/api/validations/${validasi.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status: "Completed",
+      notes: "Lulus uji.",
+      items: validasi.items.map((item) => ({ ...item, checked: true })),
+    }),
+  });
+  await json("/api/bast/settings/seal", {
+    method: "PUT",
+    body: JSON.stringify({
+      enabled: true,
+      signerName: "Direktur",
+      signerRole: "Direktur",
+      sealMimeType: "image/png",
+      sealContentBase64: PNG_1X1,
+    }),
+  });
+  const ttd = `data:image/png;base64,${PNG_1X1}`;
+  const bast = await json(
+    "/api/bast",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: konteks.projectId,
+        completionDate: "2026-08-10",
+        notes: "Serah terima uji.",
+        installedItems: [{ name: "Access Point", quantity: "1 unit", status: "Terpasang" }],
+        clientName: "Bapak Klien",
+        clientRole: "Manager",
+        engineerName: "Engineer Uji",
+        engineerRole: "Project Manager",
+        status: "Draft",
+        clientSignature: ttd,
+        engineerSignature: ttd,
+      }),
+    },
+    201,
+  );
+  const template = await json(
+    "/api/document-email-templates",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        documentKind: "bast",
+        name: "Pengantar BAST",
+        subject: "BAST {{nomor}} untuk {{klien}}",
+        bodyHtml:
+          "Yth. {{klien}},\n\nTerlampir {{nomor}} proyek {{proyek}} paket {{paket}}, serah terima {{tanggal_serah_terima}}.\n\nKeaslian dokumen dapat diperiksa di {{tautan_verifikasi}} dengan sidik {{sidik_dokumen}}.",
+        bodyFormat: "text",
+        senderSignoff: "Hormat kami,",
+        senderName: "Admin Uji",
+        senderEmail: "admin.uji@perumnet.id",
+      }),
+    },
+    201,
+  );
+  konteks.bastId = bast.id;
+  konteks.templateBast = template.id;
+  assert.equal(bast.status, "Draft");
+  assert.equal(bast.finalizedAt, null);
+});
+
+test("BAST yang belum difinalisasi TIDAK bisa dikirim", async () => {
+  // Dikuras lebih dulu: membuat BAST dan menyelesaikan validasi ikut
+  // mengantrikan notifikasi ke pemangku proyek. Tanpa ini, hitungan SMTP naik
+  // karena surat lain dan tesnya menuduh jalur yang salah.
+  await jalankanWorker();
+  const sebelumnya = diterimaSmtp.length;
+  const form = new FormData();
+  form.set("templateId", konteks.templateBast);
+  const gagal = await galat(`/api/bast/${konteks.bastId}/send-email`, {
+    method: "POST",
+    body: form,
+  });
+  assert.equal(gagal.status, 409);
+  assert.equal(gagal.code, "BAST_NOT_FINAL");
+  await jalankanWorker();
+  assert.equal(diterimaSmtp.length, sebelumnya, "ada surat yang terlanjur keluar");
+  const riwayat = await json(`/api/bast/${konteks.bastId}/deliveries`);
+  assert.equal(riwayat.items.length, 0, "ada baris riwayat yang terlanjur tertulis");
+});
+
+test("setelah ditandatangani dan difinalisasi, BAST bisa dikirim", async () => {
+  const final = await json(`/api/bast/${konteks.bastId}/finalize`, { method: "POST" });
+  assert.equal(final.status, "Final");
+  assert.ok(final.pdfHash, "finalisasi tidak mencatat sidik dokumen");
+  assert.ok(final.verificationToken, "finalisasi tidak menerbitkan token verifikasi");
+  konteks.bastHash = final.pdfHash;
+  konteks.bastNumber = final.number;
+  konteks.bastToken = final.verificationToken;
+
+  const sebelumnya = diterimaSmtp.length;
+  const form = new FormData();
+  form.set("templateId", konteks.templateBast);
+  const hasil = await json(`/api/bast/${konteks.bastId}/send-email`, {
+    method: "POST",
+    body: form,
+  });
+  assert.equal(hasil.recipient, "klien@contoh.test");
+  assert.equal(hasil.recipientName, "Bapak Klien");
+  await jalankanWorker();
+  assert.ok(diterimaSmtp.length > sebelumnya, "tidak ada surat yang keluar");
+  konteks.pesanBast = diterimaSmtp[diterimaSmtp.length - 1].pesan;
+});
+
+// Inti fiturnya. Kalau lampirannya dirender ulang, byte-nya berbeda dan tes ini
+// gagal — walaupun PDF-nya terlihat identik dan semua tes lain tetap hijau.
+test("sidik lampiran yang benar-benar terkirim sama dengan pdfHash di arsip", async () => {
+  const pdf = pdfDariPesan(konteks.pesanBast);
+  assert.ok(pdf, "tidak ada lampiran PDF");
+  const sidik = createHash("sha256").update(pdf).digest("hex");
+  assert.equal(
+    sidik,
+    konteks.bastHash,
+    "lampiran BAST bukan arsip finalnya — klien yang memeriksa tautan verifikasi akan melihat dua sidik berbeda",
+  );
+});
+
+test("lampirannya byte-per-byte sama dengan arsip yang dilayani /pdf", async () => {
+  const response = await request(`/api/bast/${konteks.bastId}/pdf`);
+  assert.equal(response.status, 200);
+  const arsip = Buffer.from(await response.arrayBuffer());
+  const terkirim = pdfDariPesan(konteks.pesanBast);
+  assert.equal(Buffer.compare(arsip, terkirim), 0, "arsip dan lampiran berbeda");
+});
+
+test("surat memuat nomor, sidik, dan tautan verifikasi yang sama dengan QR-nya", async () => {
+  const riwayat = await json(`/api/bast/${konteks.bastId}/deliveries`);
+  assert.equal(riwayat.items.length, 1);
+  const kiriman = riwayat.items[0];
+  assert.match(kiriman.subject, new RegExp(konteks.bastNumber.replaceAll("/", "\\/")));
+  assert.ok(
+    kiriman.attachments.some((a) => a.generated),
+    "lampiran dokumen tidak tercatat sebagai berkas terbitan aplikasi",
+  );
+  // Isi suratnya dibaca dari pesan SMTP-nya, bukan dari template: yang penting
+  // adalah yang sampai ke klien, sesudah placeholder dirender.
+  const badan = konteks.pesanBast.replace(/=\r\n/g, "").replace(/=3D/g, "=");
+  assert.match(badan, new RegExp(`/verify/bast/${konteks.bastToken}`));
+  assert.match(badan, new RegExp(konteks.bastHash));
+});
+
+// Dijalankan pada BAST yang SUDAH final. Pada yang masih Draft, BAST_NOT_FINAL
+// yang menjawab lebih dulu — dan itu memang urutan yang benar: template yang
+// keliru bisa diganti di dialog yang sama, sedangkan "belum difinalisasi"
+// menuntut pekerjaan lain sama sekali.
+test("template jenis lain ditolak untuk BAST", async () => {
+  const form = new FormData();
+  form.set("templateId", konteks.templateId);
+  const gagal = await galat(`/api/bast/${konteks.bastId}/send-email`, {
+    method: "POST",
+    body: form,
+  });
+  assert.equal(gagal.status, 422);
+  assert.equal(gagal.code, "TEMPLATE_KIND_MISMATCH");
+});
+
+test("BAST yang sudah dicabut tidak bisa dikirim lagi", async () => {
+  await json(`/api/bast/${konteks.bastId}/void`, {
+    method: "POST",
+    body: JSON.stringify({ reason: "Uji pencabutan" }),
+  });
+  const sebelumnya = diterimaSmtp.length;
+  const form = new FormData();
+  form.set("templateId", konteks.templateBast);
+  const gagal = await galat(`/api/bast/${konteks.bastId}/send-email`, {
+    method: "POST",
+    body: form,
+  });
+  assert.equal(gagal.status, 409);
+  assert.equal(gagal.code, "BAST_REVOKED");
+  await jalankanWorker();
+  assert.equal(diterimaSmtp.length, sebelumnya, "ada surat yang terlanjur keluar");
 });

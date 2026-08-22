@@ -786,7 +786,7 @@ test("the English edition of the manual documents it in English too", async () =
 test("the manual carries the audited flows: deal conversion, per-term evidence, withholding on payment, profit cap, bank window, reversal dating", async () => {
   await loginAsAdmin();
   const manual = await pdfText("/api/help/sop.pdf?language=id");
-  assert.match(manual.flat, /Edisi 2\.1/);
+  assert.match(manual.flat, /Edisi 2\.2/);
   assert.match(manual.flat, /Jadikan proyek: dari calon klien ke proyek/);
   // Judul callout dicetak HURUF BESAR; yang dicocokkan kalimat isinya.
   assert.match(manual.flat, /termin wajib dipilih saat mencatat pembayaran vendor/);
@@ -803,7 +803,7 @@ test("the manual carries the audited flows: deal conversion, per-term evidence, 
 test("the English edition carries the same audited flows", async () => {
   await loginAsAdmin("en");
   const manual = await pdfText("/api/help/sop.pdf?language=en");
-  assert.match(manual.flat, /Edition 2\.1/);
+  assert.match(manual.flat, /Edition 2\.2/);
   assert.match(manual.flat, /Convert to project: from prospect to project/);
   assert.match(manual.flat, /Since 21 August 2026 withholding taxes/);
   assert.match(manual.flat, /all use the same window: 14 days/);
@@ -815,5 +815,25 @@ test("the manual says where document templates live and whose permission governs
   const manual = await pdfText("/api/help/sop.pdf?language=id");
   assert.match(manual.flat, /Template SPK dan PO dikelola di Procurement & Vendor/);
   assert.match(manual.flat, /Quotation dan Invoice di Quotation & Invoice/);
+  assert.match(manual.flat, /template BAST di BAST Digital/);
   assert.match(manual.flat, /Finance tidak lagi perlu izin Procurement/);
+});
+
+// Panduan harus menyebut ALASAN lampiran BAST diambil dari arsip, bukan sekadar
+// menyebut fiturnya ada. Ini kalimat yang menjawab pertanyaan "kenapa nomor di
+// email saya beda dengan yang di layar verifikasi" — dan satu-satunya tempat
+// pemakai bisa menemukannya sendiri.
+test("panduan menjelaskan kenapa lampiran BAST adalah arsip, bukan cetakan baru", async () => {
+  await loginAsAdmin();
+  const id = await pdfText("/api/help/sop.pdf?language=id");
+  assert.match(id.flat, /Cetakan baru akan menghasilkan sidik yang berbeda/);
+  assert.match(id.flat, /BAST hanya dapat dikirim setelah difinalisasi/);
+  assert.match(id.flat, /Mengirim BAST memerlukan izin Kelola pada BAST Digital/);
+  assert.match(id.flat, /BAST ini belum difinalisasi/);
+  assert.match(id.flat, /Sidik arsip BAST tidak cocok dengan catatannya/);
+
+  await loginAsAdmin("en");
+  const en = await pdfText("/api/help/sop.pdf?language=en");
+  assert.match(en.flat, /A new rendering would produce a different fingerprint/);
+  assert.match(en.flat, /only be sent once it has been finalised/);
 });

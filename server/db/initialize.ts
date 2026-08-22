@@ -1396,7 +1396,8 @@ CREATE TABLE IF NOT EXISTS document_email_templates (
   id TEXT PRIMARY KEY,
   -- Satu template ditulis untuk SATU jenis dokumen. Memakai template invoice
   -- untuk SPK akan merender {{jatuh_tempo}} mentah di kotak masuk vendor.
-  document_kind TEXT NOT NULL CHECK (document_kind IN ('spk', 'quotation', 'invoice')),
+  document_kind TEXT NOT NULL
+    CHECK (document_kind IN ('spk', 'quotation', 'invoice', 'bast')),
   name TEXT NOT NULL,
   subject TEXT NOT NULL,
   body_html TEXT NOT NULL,
@@ -1424,7 +1425,8 @@ CREATE INDEX IF NOT EXISTS document_email_templates_kind_idx
 -- sengketa — bertahun-tahun kemudian, bukan bulan depan.
 CREATE TABLE IF NOT EXISTS document_deliveries (
   id TEXT PRIMARY KEY,
-  document_kind TEXT NOT NULL CHECK (document_kind IN ('spk', 'quotation', 'invoice')),
+  document_kind TEXT NOT NULL
+    CHECK (document_kind IN ('spk', 'quotation', 'invoice', 'bast')),
   document_id TEXT NOT NULL,
   -- Nomornya DISALIN, bukan di-join. Dokumennya bisa dibatalkan atau dihapus;
   -- riwayatnya harus tetap bisa menyebut nomor yang saat itu dikirim.
@@ -3264,6 +3266,118 @@ async function ensurePortfolioGalleryLimit(client: DatabaseClient) {
 }
 
 /**
+ * Jenis dokumen keempat: 'bast'.
+ *
+ * Sampai 22 Agustus 2026 `document_kind` hanya mengenal SPK, Quotation, dan
+ * Invoice — di DUA tabel: template suratnya dan arsip pengirimannya. BAST final
+ * sekarang bisa dikirim sebagai bukti, jadi keduanya perlu dilonggarkan. Basis
+ * data baru sudah lahir dengan 'bast' di `schemaSql`; yang lahir sebelumnya
+ * diperbaiki di sini. Idempoten: constraint yang sudah mengenal 'bast'
+ * dilewati.
+ *
+ * SQLite tidak bisa mengubah CHECK, jadi tabelnya dibangun ulang — TAPI SENGAJA
+ * TIDAK dengan pola "rename yang lama, bikin penggantinya" seperti dua migrasi
+ * di atas. Pola itu aman di sana karena `basts` dan `cms_portfolio_media` tidak
+ * punya tabel anak. Kedua tabel di sini punya, dan malah saling menunjuk:
+ * `document_delivery_attachments` → `document_deliveries` →
+ * `document_email_templates`.
+ *
+ * `ALTER TABLE … RENAME TO` MENULIS ULANG klausa REFERENCES di tabel anak.
+ * Diuji langsung di libSQL: setelah induknya di-rename lalu di-drop, anaknya
+ * tertinggal menunjuk `REFERENCES "…_migration"(id)` — nama tabel yang sudah
+ * tidak ada, dan sqlite_master tidak akan memperbaikinya sendiri.
+ *
+ * Yang dipakai adalah urutan yang dianjurkan dokumentasi SQLite: bikin tabel
+ * bernama sementara, salin isinya, DROP yang lama, baru rename. Tidak ada tabel
+ * lain yang pernah menunjuk nama sementara itu, jadi tidak ada klausa anak yang
+ * tersentuh. Indeksnya ikut terbuang bersama tabel lama, jadi dibuat ulang dari
+ * DDL-nya sendiri — dibaca dari sqlite_master, bukan ditulis ulang di sini,
+ * supaya indeks yang ditambahkan migrasi lain ikut selamat.
+ */
+const JENIS_DOKUMEN_CHECK = "CHECK (document_kind IN ('spk', 'quotation', 'invoice', 'bast'))";
+
+async function ensureDocumentEmailBastKind(client: DatabaseClient) {
+  for (const table of ["document_email_templates", "document_deliveries"]) {
+    if (client.dialect === "postgres") {
+      // Namanya DICARI, bukan ditebak. `DROP CONSTRAINT IF EXISTS <tebakan>`
+      // yang meleset diikuti `ADD` akan sukses tanpa keluhan — meninggalkan
+      // constraint lama yang masih menolak 'bast', dan kegagalannya baru
+      // terlihat saat ada yang mengirim BAST di produksi.
+      const constraints = await client.execute(
+        `SELECT conname, pg_get_constraintdef(oid) AS definition
+          FROM pg_constraint
+          WHERE conrelid = '${table}'::regclass AND contype = 'c'`,
+      );
+      const jenis = constraints.rows.filter((row) =>
+        /document_kind/i.test(String(row.definition)),
+      );
+      if (jenis.some((row) => /'bast'/i.test(String(row.definition)))) continue;
+      for (const row of jenis) {
+        await client.execute(
+          `ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS "${String(row.conname)}"`,
+        );
+      }
+      await client.execute(
+        `ALTER TABLE ${table}
+          ADD CONSTRAINT ${table}_document_kind_check ${JENIS_DOKUMEN_CHECK}`,
+      );
+      continue;
+    }
+
+    const tabel = await client.execute({
+      sql: "SELECT sql FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+      args: [table],
+    });
+    const tableSql = tabel.rows[0]?.sql ? String(tabel.rows[0].sql) : null;
+    if (!tableSql) continue;
+    const pola = /CHECK\s*\(\s*document_kind\s+IN\s*\([^)]*\)\s*\)/i;
+    const dideklarasikan = tableSql.match(pola);
+    if (!dideklarasikan || /'bast'/i.test(dideklarasikan[0])) continue;
+
+    const indexes = await client.execute({
+      sql: "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+      args: [table],
+    });
+    const sementara = `${table}_kind_migration`;
+    const ddlBaru = tableSql
+      .replace(
+        new RegExp(`CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?"?${table}"?`, "i"),
+        `CREATE TABLE ${sementara}`,
+      )
+      .replace(pola, JENIS_DOKUMEN_CHECK);
+
+    // `DROP TABLE` BUKAN operasi yang sunyi. Kalau penegakan foreign key
+    // menyala — dan di libSQL ia menyala secara bawaan — SQLite menjalankan
+    // `DELETE FROM` implisit lebih dulu, lengkap dengan aksi berantainya.
+    // Membuang `document_deliveries` akan MENGHAPUS seluruh
+    // `document_delivery_attachments` lewat ON DELETE CASCADE, dan membuang
+    // `document_email_templates` akan mengosongkan `template_id` setiap baris
+    // riwayat lewat ON DELETE SET NULL. Dua-duanya arsip yang justru disimpan
+    // permanen atas keputusan pemilik; keduanya akan hilang tanpa satu pun
+    // galat.
+    //
+    // Ini bukan dugaan: tes `skema-tabel-lama` menangkapnya persis begitu —
+    // baris lampirannya lenyap sementara semua langkah migrasi melaporkan
+    // sukses. Mematikan penegakan selama pembangunan ulang adalah langkah
+    // pertama dalam prosedur yang dianjurkan dokumentasi SQLite, bukan jalan
+    // pintas.
+    const sebelumnya = await client.execute("PRAGMA foreign_keys");
+    const nyalaSemula = Number(sebelumnya.rows[0]?.foreign_keys ?? 1) === 1;
+    await client.execute("PRAGMA foreign_keys=OFF");
+    try {
+      await client.execute(`DROP TABLE IF EXISTS ${sementara}`);
+      await client.execute(ddlBaru);
+      await client.execute(`INSERT INTO ${sementara} SELECT * FROM ${table}`);
+      await client.execute(`DROP TABLE ${table}`);
+      await client.execute(`ALTER TABLE ${sementara} RENAME TO ${table}`);
+      for (const row of indexes.rows) await client.execute(String(row.sql));
+    } finally {
+      if (nyalaSemula) await client.execute("PRAGMA foreign_keys=ON");
+    }
+  }
+}
+
+/**
  * Akun darurat untuk mode login mailcow.
  *
  * Saat `AUTH_PROVIDER=MAILSERVER`, kata sandi yang sah adalah kata sandi email
@@ -3370,6 +3484,7 @@ export async function initializeDatabase(client: DatabaseClient) {
   await ensureTransactionOriginColumn(client);
   await ensureProjectCoordinateSchema(client);
   await ensurePortfolioGalleryLimit(client);
+  await ensureDocumentEmailBastKind(client);
   await ensureDocumentCounters(client);
   await ensureAuthHardeningSchema(client);
   await ensureMailserverAuthSchema(client);
