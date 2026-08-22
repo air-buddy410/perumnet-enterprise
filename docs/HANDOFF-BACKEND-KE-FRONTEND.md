@@ -9,33 +9,80 @@ Aturan lengkap: `docs/WORKFLOW-TIM.md`.
 
 ---
 
-## ✅ Tidak ada tugas frontend yang tertunda
+## ⚠️ Luna, baca ini dulu — saya menyentuh berkasmu
 
-**T-27 dan T-28 sudah SAYA kerjakan sendiri** atas permintaan pemilik — dia
-sedang menguji dan terhalang keduanya. Maaf sudah masuk ke wilayahmu; berkas
-yang saya sentuh `app/panel/rich-text-editor.tsx` dan
-`app/panel/prospects-editor.tsx`. Perubahannya kecil dan sengaja saya batasi
-pada penyebabnya saja:
+**22 Agustus 2026.** Tidak ada tugas baru yang menunggumu. Tapi ada satu hal
+yang wajib kamu tahu sebelum menyentuh editor surat lagi.
 
-1. `Field` dapat prop `as`; hanya field "Isi surat" yang memakai `as="div"`.
-   Tiga puluh field lain tetap `<label>` seperti semula.
-2. Keempat `focus()` memakai `preventScroll`.
-3. **Tab dikembalikan ke fungsi pindah kolom, indentasi pindah ke Ctrl/Cmd + ]**
-   — ini keputusan yang mengubah fiturmu dari `b492ec5`, jadi tolong dibaca.
-   Alasannya di komentar `handleKeyDown`. Pasangan Shift+Tab tidak saya bawa:
-   `execCommand("outdent")` bekerja pada blockquote dan daftar, bukan pada
-   spasi-tanpa-putus yang disisipkan indentasi ini, jadi ia tidak pernah
-   benar-benar membatalkannya. Kalau kamu punya alasan lain, silakan ubah —
-   yang tidak boleh kembali cuma Tab yang menyandera fokus.
-4. `aria-label` permukaan tulis tidak lagi memakai label toolbar.
+### Saya mengubah dua berkas di wilayahmu (`d9377c2`)
 
-`tests/editor-surat.test.mjs` menjaga keempatnya sebagai pemeriksaan sumber
-(tidak ada peramban di suite ini). Keempat tes itu sudah dibuktikan GAGAL pada
-kode `b492ec5` dan lulus sesudahnya.
+`app/panel/rich-text-editor.tsx` dan `app/panel/prospects-editor.tsx`.
 
-Kontrak T-24/T-25/T-26 tetap ditinggal di bawah sebagai rujukan.
+Bukan karena saya merasa berhak — pemilik sedang menguji, menemukan dua bug
+yang menghalanginya, dan meminta saya langsung mengerjakannya daripada
+menunggu. Saya batasi perubahannya pada penyebabnya saja. Ini yang berubah:
 
-Papan `docs/PERMINTAAN-FRONTEND-KE-BACKEND.md` kosong.
+| # | Perubahan | Kenapa |
+|---|---|---|
+| 1 | `Field` dapat prop `as`; **hanya** field "Isi surat" memakai `as="div"` | Sebagai `<label>`, kotak isi surat **tidak bisa diketik sama sekali**. `<label>` tanpa `for` meneruskan klik ke elemen labelable pertama di dalamnya — dan toolbar editor berisi `<button>` serta `<select>`. Caret tidak pernah mendarat. Tiga puluh field lain tetap `<label>`; di sana perilaku itu justru yang benar. |
+| 2 | Keempat `focus()` memakai `preventScroll` | `focus()` menggulir elemennya ke pandangan. Satu ketukan Tab melewati tiga pemanggilan berturut, dan tampilan melompat naik di tengah orang mengetik. |
+| 3 | **Tab kembali jadi pindah kolom; indentasi ke `Ctrl/Cmd + ]`** | Ini **membatalkan fiturmu dari `b492ec5`** — tolong dibaca bagian di bawah. |
+| 4 | `aria-label` permukaan tulis tidak lagi `labels.toolbar` | Ia mengumumkan dirinya sebagai "Toolbar" kepada pembaca layar. |
+
+### Soal nomor 3 — ini keputusan yang membatalkan pekerjaanmu
+
+Kotak isi surat duduk di tengah form: Nama template → Bahasa → Subjek → Isi
+surat. Tab adalah cara orang berpindah kolom. Sejak `b492ec5` Tab menyisipkan
+indentasi, jadi **satu-satunya jalan keluar dari kotak itu tinggal tetikus** —
+pengguna papan ketik dan pembaca layar terjebak di dalamnya. Pemilik sendiri
+menemukan bug gulir itu justru karena menekan Tab untuk pindah kolom.
+
+Satu hal lagi yang perlu kamu tahu: **pasangan Shift+Tab-mu tidak pernah
+bekerja.** `execCommand("outdent")` bertindak pada blockquote dan daftar, bukan
+pada spasi-tanpa-putus (`\u00a0`) yang disisipkan indentasinya. Jadi Shift+Tab
+tidak pernah membatalkan apa pun; Backspace yang membatalkannya. Karena itu
+saya tidak membawanya ke pintasan baru.
+
+Kalau kamu punya pertimbangan lain soal Tab, silakan ubah — itu wilayahmu dan
+saya cuma menambal. **Yang tidak boleh kembali cuma satu: Tab yang menyandera
+fokus sehingga tidak ada jalan keluar lewat papan ketik.**
+
+### Penjaganya
+
+`tests/editor-surat.test.mjs` — empat pemeriksaan sumber (tidak ada peramban
+di suite ini, dan kedua bug ini soal DOM). Keempatnya sudah dibuktikan **gagal**
+pada kode `b492ec5` dan lulus sesudahnya. Kalau kamu mengubah editor dan salah
+satunya merah, bacalah pesannya dulu — ia menyebutkan bug mana yang kembali.
+
+---
+
+## Yang saya kerjakan hari ini, supaya kamu tahu keadaan kodenya
+
+Semua sudah berjalan di demo **dan** produksi (`d9377c2`, 374 tes lulus).
+
+| Commit | Isi |
+|---|---|
+| `f714796` | **BAST bisa dikirim ke klien.** Jenis dokumen keempat (`bast`). Lampirannya **arsip final, bukan render baru** — lihat §T-24. |
+| `6698525` | **Alokasi sisa laba ke kas perusahaan.** Dua kaki; kas bersih tidak bergerak. Lihat §T-26. |
+| `d9377c2` | Perbaikan editor di atas. |
+| `c328a0b`, `9902287` | Izin template per jenis dokumen; detail prospek satu bentuk untuk semua jalur. |
+
+Tiga hal dari situ yang menyentuh layar dan mudah keliru kalau tidak tahu:
+
+1. **Jangan menawarkan "render ulang" atau "lampirkan versi terbaru" di dialog
+   kirim BAST.** Byte-nya harus sama persis dengan yang sidiknya sudah
+   tercatat, atau halaman verifikasi klien menyatakan dokumennya tidak sah.
+2. **Jangan menjumlahkan `companyTreasury.balance` ke total kas masuk.**
+   Kaki masuknya sengaja tidak dihitung sebagai pemasukan di server; menambahkan
+   di layar akan menghitungnya dua kali.
+3. `GET /api/document-email-templates` memulangkan `viewableKinds`,
+   `manageableKinds`, dan `audience` — pakai itu, jangan menebak dari peran.
+
+Papan `docs/PERMINTAAN-FRONTEND-KE-BACKEND.md` kosong; tidak ada yang menunggu
+saya dari sisimu.
+
+Kontrak T-24/T-25/T-26 tetap ditinggal di bawah sebagai rujukan — ketiganya
+sudah kamu kerjakan di `7b8cd6b`, jangan diulang.
 
 ---
 
