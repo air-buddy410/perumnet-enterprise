@@ -1768,7 +1768,7 @@ export const chapterTax: Chapter = {
     {
       kind: "bullets",
       items: [
-        ["Arah kewajiban pajak potong mengikuti siapa yang memotong: kita memotong vendor → utang (Payable); klien memotong kita → piutang (Receivable). Aturan potong hanya boleh dibukukan sebagai Payable atau Receivable — pilihan lain ditolak.", "The direction of a withholding obligation follows who withholds: we withhold from a vendor → payable; the client withholds from us → receivable. A withholding rule may only be booked as Payable or Receivable — other treatments are refused."],
+        ["Arah kewajiban pajak potong mengikuti siapa yang memotong: kita memotong vendor, maka lahir utang (Payable); klien memotong kita, maka lahir piutang (Receivable). Aturan potong hanya boleh dibukukan sebagai Payable atau Receivable — pilihan lain ditolak.", "The direction of a withholding obligation follows who withholds: we withhold from a vendor and a payable is born; the client withholds from us and a receivable is born. A withholding rule may only be booked as Payable or Receivable — other treatments are refused."],
         ["Mematikan saklar pajak tidak menghitung ulang dokumen yang sudah terkunci. Quotation, invoice, dan SPK yang sudah memuat pajak tetap memuatnya; yang berubah hanya dokumen baru.", "Switching tax off never recalculates locked documents. Quotations, invoices, and work orders that already carry tax keep it; only new documents change."],
         ["Quotation yang sudah Sent tidak bisa ditambahi pajak. Ubah BoQ-nya supaya lahir revisi Draft, lalu pilih aturannya di revisi itu.", "A quotation already Sent cannot gain tax. Change its BoQ so a Draft revision is born, then choose the rules on that revision."],
       ],

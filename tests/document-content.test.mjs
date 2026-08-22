@@ -22,6 +22,7 @@ import { existsSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { after, before, test } from "node:test";
 import { PDFParse } from "pdf-parse";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 let server;
 let baseUrl;
@@ -852,4 +853,89 @@ test("panduan menjelaskan kenapa lampiran BAST adalah arsip, bukan cetakan baru"
   const en = await pdfText("/api/help/sop.pdf?language=en");
   assert.match(en.flat, /A new rendering would produce a different fingerprint/);
   assert.match(en.flat, /only be sent once it has been finalised/);
+});
+
+// ── Tata letak panduan, bukan cuma isinya ───────────────────────────────────
+//
+// Halaman 28 edisi 2.2 rusak dan tidak satu pun tes menyadarinya: sebuah butir
+// memuat karakter panah "→", yang TIDAK ADA di WinAnsi — satu-satunya encoding
+// yang dikenal font bawaan jsPDF. Glyph-nya digambar sebagai sampah, lebarnya
+// dihitung keliru, dan barisnya tidak pernah dibungkus: teksnya berjalan lurus
+// keluar dari tepi kertas.
+//
+// Seluruh tes panduan yang ada memeriksa TEKS ("apakah kalimat ini tercetak"),
+// dan teks tetap ditemukan — pdf-parse membacanya kembali dari isi berkas,
+// bukan dari yang terlihat. Yang tidak pernah diperiksa adalah DI MANA teks itu
+// mendarat. Karena itu penjaganya geometri, bukan karakter: apa pun sebabnya —
+// panah, kata panjang tanpa spasi, metrik font yang meleset — teks yang keluar
+// halaman akan tertangkap.
+
+const MARGIN_AMAN = 6; // titik; toleransi pembulatan jsPDF
+
+async function petaTeks(path) {
+  const response = await request(path);
+  assert.equal(response.status, 200, `${path} -> ${response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const doc = await getDocument({ data: new Uint8Array(bytes), useSystemFonts: true }).promise;
+  const halaman = [];
+  for (let n = 1; n <= doc.numPages; n += 1) {
+    const page = await doc.getPage(n);
+    const { width, height } = page.getViewport({ scale: 1 });
+    const isi = await page.getTextContent();
+    halaman.push({
+      nomor: n,
+      width,
+      height,
+      items: isi.items
+        .filter((item) => item.str.trim())
+        .map((item) => ({ x: item.transform[4], y: item.transform[5], w: item.width, s: item.str })),
+    });
+  }
+  return halaman;
+}
+
+for (const bahasa of ["id", "en"]) {
+  test(`tidak ada teks panduan yang keluar halaman (${bahasa})`, async () => {
+    await loginAsAdmin(bahasa);
+    const halaman = await petaTeks(`/api/help/sop.pdf?language=${bahasa}`);
+    assert.ok(halaman.length > 20, `panduan cuma ${halaman.length} halaman`);
+    const luber = [];
+    for (const h of halaman) {
+      for (const item of h.items) {
+        const kanan = item.x + item.w;
+        if (kanan > h.width - MARGIN_AMAN || item.x < MARGIN_AMAN) {
+          luber.push(`hal ${h.nomor}: x=${item.x.toFixed(0)}..${kanan.toFixed(0)} (lebar kertas ${h.width.toFixed(0)}) ${JSON.stringify(item.s.slice(0, 60))}`);
+        }
+      }
+    }
+    assert.deepEqual(luber, [], `teks keluar halaman:\n  ${luber.join("\n  ")}`);
+  });
+}
+
+// Penyebab paling mungkin, disebut namanya supaya kegagalannya bisa langsung
+// ditindak. Font bawaan jsPDF memakai WinAnsi (cp1252): apa pun di luar itu
+// digambar sebagai sampah DAN mengacaukan perhitungan lebar baris.
+test("isi panduan hanya memakai karakter yang bisa dirender font PDF", () => {
+  // cp1252 = Latin-1 yang bisa dicetak, ditambah blok khusus 0x80–0x9F.
+  const KHUSUS = "€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ";
+  const sumber = [
+    "server/api/sop-pdf-content.ts",
+    "server/api/sop-pdf.ts",
+  ].map((relatif) => [relatif, readFileSync(new URL(`../${relatif}`, import.meta.url), "utf8")]);
+
+  const temuan = [];
+  for (const [nama, isi] of sumber) {
+    isi.split("\n").forEach((baris, index) => {
+      for (const ch of baris) {
+        const kode = ch.codePointAt(0);
+        if (kode < 0x100 || KHUSUS.includes(ch)) continue;
+        temuan.push(`${nama}:${index + 1} U+${kode.toString(16).toUpperCase().padStart(4, "0")} ${JSON.stringify(ch)}`);
+      }
+    });
+  }
+  assert.deepEqual(
+    [...new Set(temuan)],
+    [],
+    "karakter di luar WinAnsi akan dicetak sebagai sampah dan merusak pembungkusan baris",
+  );
 });
