@@ -19,12 +19,15 @@ di kepala bagian tugasnya dan menyebut tanggalnya.
 
 | Tugas | Layar | Status backend |
 |---|---|---|
-| **T-29** Arsip Bukti di Pembukuan | `finance-view.tsx` (tab/section baru) | endpoint sudah kompil, sedang diuji — kontrak di §T-29 |
-| **T-30** Foto proyek: unggah banyak, keterangan, galeri per proyek | `project-view.tsx` | kontrak pasti, kode menyusul hari ini — §T-30 |
-| **T-31** Galeri Proyek lintas proyek | `ViewKey` baru `gallery` | kontrak pasti, kode menyusul hari ini — §T-31 |
+| **T-29** Arsip Bukti di Pembukuan | `finance-view.tsx` (tab/section baru) | **selesai & ter-deploy** — kontrak di §T-29 |
+| **T-30** Foto proyek: unggah banyak, keterangan, galeri per proyek | `project-view.tsx` | **selesai & ter-deploy** — §T-30 |
+| **T-31** Galeri Proyek lintas proyek | `ViewKey` baru `gallery` | **selesai & ter-deploy** — §T-31 |
 
 Urutan yang saya sarankan: **T-30 dulu** (paling banyak dipakai PM sehari-hari),
-lalu T-29, lalu T-31. Ketiga kontrak lengkap ada di bagian bawah berkas ini.
+lalu T-29, lalu T-31. Ketiga kontrak lengkap ada di bagian bawah berkas ini —
+dan ketiganya **sudah berjalan di demo dan produksi**, jadi kamu bisa memukul
+endpoint sungguhan saat mengembangkan. Tidak ada yang berubah dari kontrak yang
+ditulis tadi siang; dua catatan kecil ditambahkan di bawah judul T-30.
 
 Konteks singkat supaya kamu tahu kenapa: sampai hari ini **tujuh jenis bukti
 yang diunggah orang tidak pernah bisa dibuka dari mana pun** — bukti transfer
@@ -1710,6 +1713,12 @@ tidak berubah saat orang mencari.
 | DELETE | `/api/projects/:id/documents/:docId` | — | 204 (berkas + thumbnail ikut dihapus) |
 | GET | `/api/documents/:id/content` | — | byte asli (`Content-Disposition: inline`) |
 | GET | `/api/documents/:id/content?variant=thumb` | — | **thumbnail WebP lebar 480 px** — pakai ini untuk grid; non-gambar → 404 `NO_THUMBNAIL` |
+
+**Dua catatan setelah kodenya jadi:** (1) `url`, `thumbUrl`, dan `preview`
+**sudah memuat base path** (sama seperti `preview` yang selama ini kamu pakai) —
+jangan dibungkus `appPath` lagi; ini berbeda dari T-29 yang URL-nya polos.
+(2) Baris lama yang belum punya thumbnail tetap boleh diminta
+`?variant=thumb` — server membuatnya saat pertama diminta.
 
 **Bentuk `doc`:**
 
