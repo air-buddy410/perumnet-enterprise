@@ -54,6 +54,60 @@ yang menyesatkan pembaca layar untuk sebuah kotak isian.
 Tolong uji juga dengan mengetik di kotak yang sama pada **Template surat
 dokumen**, untuk memastikan perbaikannya tidak menyentuh yang sudah jalan.
 
+### T-28 — Menekan Tab di editor melompatkan tampilan ke atas (BUG)
+
+Dilaporkan pemilik 22 Agustus 2026, terlihat di tab **BAST, Invoice, dan
+Quotation** — yaitu di mana pun `DocumentTemplateManager` dipakai. Sedang
+mengetik di tengah surat, tekan Tab, tampilan malah melompat naik.
+
+**Sebabnya `focus()` tanpa `preventScroll`, dan Tab yang membuatnya terasa.**
+
+`HTMLElement.focus()` secara bawaan menggulir elemennya ke dalam pandangan.
+Ada empat pemanggilan di `app/panel/rich-text-editor.tsx` yang semuanya polos:
+baris **367** (akhir `restoreSelection`), **401** (`runCommand`), **410**
+(`insertText`), dan **429** (`focus` yang diekspor lewat ref).
+
+Menekan Tab sekali memicu rantai ini:
+
+```
+handleKeyDown → insertText()
+                  → restoreSelection()   → editor.focus()   ← gulir #1
+                  → editorRef.focus()                        ← gulir #2
+                  → emitHtml()
+                       → (bila sanitize mengubah HTML)
+                         restoreSelection() → editor.focus() ← gulir #3
+```
+
+Tiga kali "gulirkan editor ke dalam pandangan" dalam satu ketukan tombol.
+Karena `.richTextSurface` sendiri punya `max-height: 620px; overflow: auto`
+(`prospects.module.css:327`), yang tergulir bukan cuma halamannya tapi juga
+isi editornya.
+
+Ini BUKAN bug baru — keempat `focus()` itu sudah ada sejak T-17. Yang berubah
+di `b492ec5` adalah Tab kini memanggil `insertText`, dan Tab ditekan justru
+saat sedang mengetik jauh di dalam surat. Lewat tombol toolbar gejalanya nyaris
+tidak terasa karena toolbarnya memang sudah di pandangan.
+
+**Perbaikan:** `focus({ preventScroll: true })` pada keempatnya. Caret yang
+baru berpindah tetap akan terlihat sendiri tanpa perlu memaksa gulir.
+
+**Satu pertanyaan desain, tolong dipertimbangkan sekalian.** Tab sekarang
+disandera editor: di form ini ada Nama template → Bahasa → Subjek → Isi surat,
+dan orang menekan Tab untuk berpindah kolom. Sejak `b492ec5` Tab menyisipkan
+empat spasi dan **tidak ada lagi jalan keluar dari editor lewat papan ketik** —
+pengguna papan ketik dan pembaca layar terjebak di sana. Saya menduga inilah
+yang sebenarnya dilakukan pemilik saat menemukan bug ini: menekan Tab untuk
+pindah kolom, bukan untuk membuat indentasi.
+
+Saran: kembalikan Tab ke fungsi bawaannya (pindah fokus), dan pindahkan
+indentasi ke tombol toolbar atau pintasan yang tidak bertabrakan (`Ctrl+]` /
+`Cmd+]`). Kalau Tab tetap ingin dipakai untuk indentasi, minimal sediakan
+`Escape` lalu Tab sebagai jalan keluar — pola yang dipakai editor kode di web.
+Keputusannya ada padamu; yang wajib diperbaiki adalah gulirnya.
+
+Uji di tab BAST, Invoice, Quotation, dan juga Calon Klien (T-27 menyentuh
+berkas yang sama).
+
 ---
 
 ## ✅ Sudah selesai
