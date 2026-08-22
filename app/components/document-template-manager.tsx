@@ -462,7 +462,7 @@ export function DocumentTemplateManager({
                   <select value={form.bodyFormat} onChange={(event) => updateForm("bodyFormat", event.target.value as LetterBodyFormat)} disabled={form.bodyFormat === "html"}>
                     <option value="text">{id ? "Teks biasa" : "Plain text"}</option>
                     <option value="rich">Rich-text</option>
-                    {form.bodyFormat === "html" && <option value="html">HTML tulisan tangan</option>}
+                    {form.bodyFormat === "html" && <option value="html">{id ? "Editor visual (HTML)" : "Visual editor (HTML)"}</option>}
                   </select>
                 </label>
                 <div className={`field ${styles.full}`}>
@@ -472,6 +472,7 @@ export function DocumentTemplateManager({
                     value={form.bodyHtml}
                     format={form.bodyFormat}
                     disabled={!canManage || Boolean(busy)}
+                    language={language}
                     onChange={(bodyHtml, bodyFormat) => {
                       setForm((current) => ({ ...current, bodyHtml, bodyFormat }));
                       setDirtyState(true);

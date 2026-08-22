@@ -28,6 +28,8 @@ import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { downloadApiFile } from "../api-client";
 import type { AppLanguage } from "../i18n";
+import { appPath } from "../paths";
+import { aluraplikasi } from "../../shared/alur-aplikasi";
 
 interface HelpViewProps {
   language: AppLanguage;
@@ -118,7 +120,7 @@ const workflowsId: WorkflowGuide[] = [
       "Tekan Terbitkan invoice, lalu unduh PDF-nya dan kirim ke klien.",
       "Ulangi untuk termin berikutnya. Jumlah seluruh termin tidak boleh melebihi 100%; invoice terakhir otomatis menyerap sisa pembulatan.",
     ],
-    after: "Setiap invoice punya nomor sendiri dan mewarisi pajak yang terkunci pada penawaran. Selama belum ada pembayaran aktif, invoice masih dapat diedit atau dihapus; bila pembayarannya sudah di-void, invoice terbuka kembali.",
+    after: "Setiap invoice punya nomor sendiri dan mewarisi pajak yang terkunci pada penawaran. Batas total invoice dihitung per paket, bukan lintas proyek; invoice terakhir hanya boleh menagih sisa nilai quotation paket itu. Selama belum ada pembayaran aktif, invoice masih dapat diedit atau dihapus; bila pembayarannya sudah di-void, invoice terbuka kembali.",
   },
   {
     key: "invoice-payment",
@@ -135,7 +137,7 @@ const workflowsId: WorkflowGuide[] = [
       "Isi referensi pembayaran, pilih metode dan rekening perusahaan, lalu unggah bukti pembayaran.",
       "Tekan Posting pembayaran.",
     ],
-    after: "Hanya kas nyata yang masuk ke Buku Kas. Pajak yang dipotong klien dicatat sebagai posisi pajak, bukan kas. Pembayaran boleh bertahap; status invoice berubah menjadi Dibayar Sebagian lalu Lunas.",
+    after: "Hanya kas nyata yang masuk ke Buku Kas. Pajak yang dipotong klien dicatat sebagai posisi pajak, bukan kas. Pembayaran boleh bertahap; status invoice berubah menjadi Dibayar Sebagian lalu Lunas. Total pembayaran invoice tidak boleh melewati nilai quotation paketnya.",
   },
   {
     key: "addendum",
@@ -158,21 +160,21 @@ const workflowsId: WorkflowGuide[] = [
     icon: PackageSearch,
     title: "Membayar vendor lewat SPK atau PO",
     summary: "Dari membuat komitmen vendor sampai pembayaran termin, termasuk bukti progres dan penerimaan barang.",
-    who: "Project Manager atau Engineer membuat dan mengajukan. Admin atau Finance menyetujui. Verifikasi progres dan penerimaan barang oleh Admin, Project Manager, atau Engineer anggota proyek — izin Procurement & Vendor cukup Lihat. Pembatalan pembayaran hanya oleh Admin.",
+    who: "Project Manager atau Engineer membuat dan mengajukan. Admin atau Finance menyetujui. Verifikasi progres dan penerimaan barang oleh Admin, Project Manager, atau Engineer anggota proyek — izin Procurement & Vendor cukup Lihat. Pembayaran dicatat Admin atau Finance; pembatalan pembayaran hanya oleh Admin.",
     where: "Procurement & Vendor.",
-    prepare: "Penawaran yang sudah diterima klien beserta buktinya, data vendor, harga negosiasi, dan saat membayar: tagihan vendor, nomor referensi, serta bukti transfer.",
+    prepare: "Penawaran yang sudah diterima klien beserta tanggal dan buktinya, vendor aktif yang cocok dengan tipe dokumen, harga negosiasi, dan saat membayar: tagihan vendor, nomor referensi, rekening perusahaan, serta bukti transfer.",
     steps: [
       "Kerjakan seluruh siklusnya di layar Procurement & Vendor: buat, ajukan, setujui, kirim, verifikasi, bayar, lalu tutup. Tidak ada jalur lain — dari layar mana pun yang lain, SPK dan PO hanya dapat dibaca dan diunduh PDF-nya.",
       "Pilih jenis dokumen. SPK untuk pekerjaan Jasa atau Mobilitas, PO untuk Perangkat atau Material. Tipe vendor harus cocok dengan jenis dokumennya.",
       "Pilih item dari penawaran yang sudah diterima klien, lalu isi kuantitas dan harga vendor. Total alokasi tidak boleh melebihi kuantitas pada BoQ.",
-      "Atur termin. Isi DP dalam persen bila ada, sisanya menjadi Pelunasan. Jumlah seluruh termin harus persis sama dengan nilai kontrak vendor.",
+      "Atur termin. Isi DP dalam persen bila ada, sisanya menjadi Pelunasan. Jumlah seluruh termin harus persis sama dengan nilai kontrak vendor; setiap pembayaran nanti harus memilih satu termin.",
       "Ajukan dokumen, lalu Admin atau Finance menyetujuinya. Finance tidak boleh menyetujui pengajuannya sendiri, dan Admin yang menyetujui pengajuan sendiri wajib menulis alasan.",
       "Persetujuan belum berarti boleh dibayar. Persetujuan adalah keputusan internal; Kirim adalah saat dokumen benar-benar berlaku bagi vendor, dan karena itu pembayaran maupun penyelesaian baru terbuka setelah dokumen dikirim. Selama status dokumen masih Disetujui, tombol Bayar dan Selesaikan memang tidak muncul, dan aplikasi menolak keduanya bila tetap dicoba. Tekan Kirim lebih dulu.",
       "Kirim dokumen ke vendor, lalu bayar DP.",
       "Sebelum termin berikutnya dibayar, pekerjaan harus dibuktikan lebih dulu. Untuk SPK, Project Manager atau Engineer mencatat Verifikasi progres. Untuk PO, mereka mencatat Penerimaan barang beserta nomor surat jalan.",
-      "Catat pembayaran: isi bruto, pajak dipotong, kas aktual, tanggal bayar, nomor tagihan vendor, referensi, rekening perusahaan, lalu unggah bukti transfer.",
+      "Catat pembayaran per termin: isi bruto termasuk pajak, pajak dipotong, kas aktual yang harus lebih dari nol, tanggal bayar, nomor tagihan vendor, referensi, rekening perusahaan, lalu unggah bukti transfer.",
     ],
-    after: "Dokumen yang sudah disetujui terkunci dan nilainya menjadi komitmen. Hanya kas nyata yang masuk Buku Kas. Sisa komitmen yang belum dibayar mengurangi laba yang aman dibagikan. Selesai bersifat final: dokumen yang sudah Selesai tidak dapat diselesaikan lagi, tetapi pelunasan terakhirnya tetap boleh dicatat sesudah itu, karena retensi dan pelunasan memang mendarat setelah pekerjaan ditandatangani. Seluruh perubahan SPK dan PO hanya terjadi di layar ini; di layar lain dokumen kerja bersifat baca saja.",
+    after: "Dokumen yang sudah disetujui terkunci dan nilainya menjadi komitmen. Setiap pembayaran menempel pada satu termin dan hanya boleh sebesar bukti termin itu; verifikasi termin lain tidak membuat termin ini berhak dibayar. Status termin memakai nilai bruto termasuk pajak, dan pembayaran yang seluruhnya pajak potong ditolak karena kas harus lebih dari nol. Hanya kas nyata yang masuk Buku Kas. Sisa komitmen yang belum dibayar mengurangi laba yang aman dibagikan. Selesai bersifat final: dokumen yang sudah Selesai tidak dapat diselesaikan lagi, tetapi pelunasan terakhirnya tetap boleh dicatat sesudah itu, karena retensi dan pelunasan memang mendarat setelah pekerjaan ditandatangani. Seluruh perubahan SPK dan PO hanya terjadi di layar ini; di layar lain dokumen kerja bersifat baca saja.",
   },
   {
     key: "document-email",
@@ -199,7 +201,7 @@ const workflowsId: WorkflowGuide[] = [
     summary: "Memeriksa perangkat di lokasi, menandatangani serah terima, dan mengunci dokumen dengan cap resmi.",
     who: "Project Manager atau Engineer dengan akses Kelola pada BAST Digital. Cap perusahaan hanya diatur Admin, dan pencabutan BAST final hanya oleh Admin.",
     where: "Validasi Perangkat, lalu BAST Digital.",
-    prepare: "Perangkat sudah terpasang, perwakilan klien hadir untuk menandatangani, dan cap perusahaan sudah diunggah Admin.",
+    prepare: "Paket memiliki sedikitnya satu item Perangkat atau Material, perangkat sudah terpasang, perwakilan klien hadir untuk menandatangani, dan cap perusahaan sudah diunggah Admin.",
     steps: [
       "Buka Validasi Perangkat. Daftar pemeriksaan tersusun otomatis dari item Perangkat dan Material pada BoQ paket ini.",
       "Periksa setiap item di lokasi, centang bila sesuai, dan tulis temuan pada kolom catatan.",
@@ -207,9 +209,9 @@ const workflowsId: WorkflowGuide[] = [
       "Bila BoQ paket ini berubah setelah validasi diselesaikan — misalnya sebuah Addendum yang diterima klien menambah Perangkat atau Material — daftar pemeriksaan otomatis kembali menjadi Draft dan seluruh centangnya hilang. Buka lagi Validasi Perangkat, sinkronkan daftarnya, periksa item baru di lokasi, lalu selesaikan validasi sekali lagi sebelum BAST dibuat.",
       "Buka BAST Digital dan buat dokumen serah terima untuk paket tersebut.",
       "Minta perwakilan klien menandatangani di layar pada kolom Pihak Klien, lalu wakil PerumNet menandatangani pada kolom Pihak PerumNet.",
-      "Tekan finalisasi. Aplikasi membubuhkan cap perusahaan, mengunci berkasnya, dan menempelkan QR pemeriksaan keaslian.",
+      "Tekan finalisasi. Aplikasi membubuhkan cap perusahaan, menghitung SHA-256 final, mengunci berkasnya, dan menempelkan QR pemeriksaan keaslian.",
     ],
-    after: "Setiap perubahan BoQ paket sesudah checklist selesai — termasuk Addendum yang diterima klien — mengembalikan checklist ke status Draft dan menghapus seluruh centangnya, sehingga BAST baru hanya dapat terbit setelah pemeriksaan diulang. BAST menjadi Final dan tidak dapat diubah. Status proyek berubah menjadi Selesai hanya setelah seluruh paket yang penawarannya sudah diterima klien memiliki BAST final yang aktif; selama masih ada paket berjalan, proyek tetap Aktif. Siapa pun yang memindai QR pada PDF dapat memeriksa apakah dokumen itu asli dan masih berlaku. Bila ada kekeliruan, Admin mencabut dokumennya dengan alasan tertulis. Dokumen yang dicabut tidak dihapus: statusnya menjadi Batal dan QR-nya menyatakan dokumen tidak berlaku. Karena serah terima itulah yang menutup proyek, pencabutan mengembalikan status proyek menjadi Aktif bila masih ada paket yang belum diserahterimakan. Tim lalu membuat BAST baru untuk paket dan siklus yang sama, dan dokumen itu tercatat sebagai revisi berikutnya.",
+    after: "Setiap perubahan BoQ paket sesudah checklist selesai — termasuk Addendum yang diterima klien — mengembalikan checklist ke status Draft dan menghapus seluruh centangnya, sehingga BAST baru hanya dapat terbit setelah pemeriksaan diulang. Paket harus memiliki sedikitnya satu Perangkat atau Material sebelum validasi. BAST menjadi Final, hash SHA-256 dan QR-nya menjadi bukti berkas, dan dokumen tidak dapat diubah. Status proyek berubah menjadi Selesai hanya setelah seluruh paket yang penawarannya sudah diterima klien memiliki BAST final yang aktif; selama masih ada paket berjalan, proyek tetap Aktif. Bila ada kekeliruan, Admin mencabut dokumennya dengan alasan tertulis. Dokumen yang dicabut tidak dihapus: statusnya menjadi Batal dan QR-nya menyatakan dokumen tidak berlaku. Tim lalu membuat BAST baru untuk paket dan siklus yang sama, dan dokumen itu tercatat sebagai revisi berikutnya.",
   },
   {
     key: "expenses",
@@ -236,26 +238,26 @@ const workflowsId: WorkflowGuide[] = [
     summary: "Mengimpor mutasi rekening dan memastikan satu kejadian kas hanya tercatat sekali.",
     who: "Admin dan Finance. Penambahan, perubahan, dan penghapusan rekening hanya oleh Admin.",
     where: "Pembukuan, bagian Rekening perusahaan.",
-    prepare: "E-statement PDF asli dari internet banking dengan teks yang bisa diseleksi, maksimal 5 MB. Alternatifnya CSV maksimal 2 MB yang memuat kolom Tanggal, Keterangan, serta Mutasi atau Debit/Kredit.",
+    prepare: "E-statement PDF asli dari internet banking dengan teks yang bisa diseleksi, maksimal 5 MB, atau CSV maksimal 2 MB dengan paling banyak 5.000 baris yang memuat kolom Tanggal, Keterangan, serta Mutasi atau Debit/Kredit.",
     steps: [
       "Admin menambahkan rekening perusahaan beserta saldo awalnya.",
-      "Pilih bulan mutasi, unggah berkasnya, lalu tekan Impor mutasi. Baris yang pernah diimpor otomatis dilewati.",
+      "Pilih rekening dan bulan mutasi, unggah berkasnya, lalu tekan Impor mutasi. Baris yang pernah diimpor otomatis dilewati dan kandidat dicari dalam jendela 14 hari.",
       "Untuk mutasi yang belum cocok, buka daftar kandidat lalu tekan Cocokkan. Aplikasi menawarkan transaksi dengan arah dan nominal sama dalam rentang 14 hari.",
       "Mutasi impor yang belum dicocokkan tetap muncul di daftar, tetapi belum dihitung sebagai kas. Baris seperti itu hampir selalu adalah uang yang sudah tercatat lewat invoice, pembayaran vendor, atau setoran pajak, sehingga menghitungnya berarti menghitung uang yang sama dua kali. Ringkasan Pembukuan menampilkan jumlahnya secara terpisah supaya angkanya terlihat, dan begitu mutasi dicocokkan ia langsung ikut terhitung lewat catatan sumbernya.",
       "Mutasi yang bukan urusan proyek dapat dikecualikan dari pembukuan, dan sewaktu-waktu bisa dikembalikan. Saat dikembalikan, mutasi itu menempel lagi ke catatan yang sama seperti sebelum dikecualikan, bukan membuat catatan bank baru — jadi kasnya tidak pernah tercatat dua kali.",
     ],
-    after: "Pencocokan menghapus transaksi bank duplikat, bukan transaksi Invoice atau SPK. Pembayaran yang sudah dicocokkan harus dilepas dulu sebelum dapat dibatalkan. Transaksi manual yang sudah dicocokkan pun terkunci: ia tidak dapat diedit maupun dihapus sebelum pencocokannya dilepas.",
+    after: "Pencocokan otomatis, kandidat, dan manual memakai jendela yang sama: 14 hari. Mutasi yang tidak cocok tidak dihitung sebagai kas. Pencocokan menghapus transaksi bank duplikat, bukan transaksi Invoice atau SPK. Pembayaran yang sudah dicocokkan harus dilepas dulu sebelum dapat dibatalkan. Transaksi manual yang sudah dicocokkan pun terkunci: ia tidak dapat diedit maupun dihapus sebelum pencocokannya dilepas.",
   },
   {
     key: "tax",
     icon: Percent,
     title: "Menutup pembukuan dan mengurus pajak",
     summary: "Menyetel aturan pajak, melunasi utang pajak, dan mengekspor laporan bulanan.",
-    who: "Admin dan Finance. Pengaturan modul pajak dan master aturan hanya Admin, begitu pula pembatalan setoran.",
+    who: "Admin dan Finance dengan izin Kelola Pembukuan mengurus posisi, pelaporan, dan settlement. Pengaturan modul pajak, master aturan, dan pembatalan setoran hanya Admin.",
     where: "Pembukuan, bagian Posisi & settlement pajak.",
-    prepare: "Bukti setor pajak, nomor referensi, dan rekening perusahaan yang dipakai membayar.",
+    prepare: "Bukti pajak PDF/PNG/JPG/WebP, nomor referensi, dan rekening perusahaan yang dipakai membayar.",
     steps: [
-      "Admin mengaktifkan modul pajak, lalu mengisi kode, tarif, cakupan (klien atau vendor), efek (Tambah atau Potong), dan perlakuan akuntansinya.",
+      "Admin mengaktifkan modul pajak, lalu mengisi kode, tarif, cakupan (klien atau vendor), efek (Tambah atau Potong), dan perlakuan akuntansinya. Pajak Potong hanya boleh memakai perlakuan Payable atau Receivable.",
       "Aturan pajak dipilih pada penawaran selagi masih Draft. Nilainya terkunci saat penawaran diterima klien lalu diwariskan ke invoice-invoicenya.",
       "Posisi pajak muncul di Pembukuan sebagai Utang atau Piutang setelah dokumen sumbernya terkunci.",
       "Tekan Lapor untuk mencatat masa pajak, nomor faktur, dan referensi pelaporan.",
@@ -263,23 +265,23 @@ const workflowsId: WorkflowGuide[] = [
       "Tekan Settlement untuk mencatat penyetoran: isi nominal, tanggal, referensi, rekening, lalu unggah bukti setor.",
       "Tutup bulan dengan mengekspor laporan dari Pembukuan: PDF untuk arsip dan CSV untuk pemeriksaan angka.",
     ],
-    after: "Nilai pajak pada dokumen lama tidak ikut berubah walaupun tarif master diperbarui kemudian. Angka pada laporan berasal dari transaksi kas nyata, bukan laporan laba rugi akuntansi. Tanggal dan identitas pelapor tidak pernah dihapus, bahkan ketika Admin menurunkan status pelaporan, sehingga bukti bahwa laporan pernah dikirim selalu tersimpan.",
+    after: "Nilai pajak pada dokumen lama tidak ikut berubah walaupun tarif master diperbarui kemudian. Pajak Potong dicatat sebagai Payable atau Receivable, bukan biaya atau dapat dikreditkan. Settlement wajib memiliki bukti. Angka pada laporan berasal dari transaksi kas nyata, bukan laporan laba rugi akuntansi. Tanggal dan identitas pelapor tidak pernah dihapus, bahkan ketika Admin menurunkan status pelaporan, sehingga bukti bahwa laporan pernah dikirim selalu tersimpan.",
   },
   {
     key: "profit",
     icon: Coins,
     title: "Membagi keuntungan proyek",
     summary: "Menentukan porsi tiap penerima dan membayarkannya dengan aman.",
-    who: "Admin dan Finance menyusun alokasi; hanya Admin yang menyetujui dan membatalkan.",
+    who: "Admin dan Finance dengan izin Kelola Pembagian keuntungan menyusun alokasi; hanya Admin yang menyetujui dan membatalkan.",
     where: "Pembukuan, bagian Pembagian keuntungan.",
-    prepare: "Kesepakatan porsi untuk setiap penerima.",
+    prepare: "Kesepakatan porsi untuk setiap penerima dan angka kas setelah komitmen vendor, utang pajak, serta reimbursement diperhitungkan.",
     steps: [
       "Pilih proyek, tekan Tambah penerima, lalu isi nama dan persentasenya. Total seluruh penerima maksimal 100%.",
-      "Periksa Laba aman dibagikan. Angka ini sudah dikurangi komitmen vendor yang belum dibayar, utang pajak, dan utang reimbursement.",
-      "Admin menekan Setujui. Nominal rupiahnya dikunci pada saat itu juga.",
+      "Periksa Laba aman dibagikan: kas masuk dikurangi komitmen vendor yang belum dibayar, utang pajak, dan utang reimbursement.",
+      "Admin menekan Setujui. Nominal rupiahnya dikunci pada saat itu juga; total yang sudah dikunci ditampilkan terpisah dari alokasi Draft yang masih bergerak.",
       "Tekan Bayar dan isi tanggal pembayaran.",
     ],
-    after: "Pembayaran masuk Buku Kas sebagai kas keluar dan menunggu dicocokkan dengan mutasi bank. Alokasi yang sudah disetujui tidak dapat diedit; Admin membatalkannya lalu tim membuat alokasi baru. Pembatalan tidak menghapus pembayarannya: catatan kas keluar yang asli tetap ada dan aplikasi menambahkan catatan pembalik bertanggal hari ini, sehingga kas proyek kembali seperti sebelum pembagian dibayarkan dan kedua baris tetap terlihat.",
+    after: "Pembayaran masuk Buku Kas sebagai kas keluar dan menunggu dicocokkan dengan mutasi bank. Ringkasan memisahkan Sudah dikunci (Approved/Paid) dari alokasi Draft. Alokasi yang sudah disetujui tidak dapat diedit; Admin membatalkannya lalu tim membuat alokasi baru. Pembatalan tidak menghapus pembayarannya: catatan kas keluar yang asli tetap ada dan aplikasi menambahkan catatan pembalik bertanggal hari ini, sehingga kas proyek kembali seperti sebelum pembagian dibayarkan dan kedua baris tetap terlihat.",
   },
   {
     key: "catalog-ai",
@@ -303,7 +305,7 @@ const workflowsId: WorkflowGuide[] = [
     icon: UsersRound,
     title: "Mengelola Calon Klien dan surat penawaran",
     summary: "Mengumpulkan kontak yang belum meminta dihubungi, menyiapkan surat, dan membaca hasil pengirimannya.",
-    who: "Admin dan Finance secara bawaan. Admin dapat memberikan akses lewat Pengguna & Akses; Lihat cukup untuk membaca, sedangkan Kelola diperlukan untuk menyimpan, mengimpor, dan mengirim.",
+    who: "Admin dan Finance secara bawaan. Admin dapat memberikan akses lewat Pengguna & Akses; Lihat cukup untuk membaca, sedangkan Kelola diperlukan untuk menyimpan, mengimpor, mengirim, dan menjadikan prospek proyek. Konversi juga memerlukan Kelola pada Manajemen Proyek.",
     where: "Menu Calon Klien: Daftar prospek, Tambah prospek, Impor XLSX, Susun email, Template surat, dan Laporan kirim.",
     prepare: "Catatan sumber untuk setiap kontak, satu template surat yang tersimpan, dan mailserver yang sudah dikonfigurasi bila akan mengirim.",
     steps: [
@@ -315,8 +317,9 @@ const workflowsId: WorkflowGuide[] = [
       "Pilih penerima yang boleh dihubungi lalu kirim. Jeda 60 detik per surat disengaja: 40 penerima membutuhkan sekitar 40 menit, bukan berarti aplikasi macet. Mailserver yang sama juga membawa invoice dan tautan pemulihan kata sandi.",
       "Buka Laporan kirim untuk membaca empat status per penerima. Masih diproses bukan kegagalan; mengirim ulang karena status itu dapat membuat surat yang sama sampai dua kali.",
       "Surat yang sudah masuk antrean tidak bisa ditarik kembali. Jika seseorang meminta berhenti, tandai opt-out agar pengiriman berikutnya ditolak server.",
+      "Bila deal, tekan Jadikan proyek. Nama perusahaan, PIC, email, dan lokasi dibawa otomatis; isi nama, status Draft/Aktif, manager, tanggal, dan lokasi bila prospek belum memilikinya. Prospek Lost atau opt-out tidak dapat dikonversi, dan satu prospek hanya boleh melahirkan satu proyek.",
     ],
-    after: "Riwayat pengiriman tetap menempel pada kontak. Periksa pratinjau dan status setiap penerima sebelum mengambil tindakan lanjutan; jangan menganggap batch selesai hanya dari jumlah baris.",
+    after: "Riwayat pengiriman tetap menempel pada kontak. Status prospek hanya boleh mengikuti tabel transisi; Won dicapai dari Proposal atau Jadikan proyek, sedangkan Lost dapat dibuka kembali ke New. Setelah menjadi proyek, badge kode PN-… menjadi tautan dan tombol konversi hilang. Periksa pratinjau dan status setiap penerima sebelum mengambil tindakan lanjutan; jangan menganggap batch selesai hanya dari jumlah baris.",
   },
   {
     key: "access",
@@ -396,7 +399,7 @@ const workflowsEn: WorkflowGuide[] = [
       "Press Issue invoice, then download the PDF and send it to the client.",
       "Repeat for the next installment. All installments together may not exceed 100%; the final invoice absorbs any rounding difference automatically.",
     ],
-    after: "Each invoice gets its own number and inherits the tax locked on the quotation. As long as there is no active payment, an invoice can still be edited or deleted; once its payments have been voided, the invoice opens up again.",
+    after: "Each invoice gets its own number and inherits the tax locked on the quotation. The invoice cap is computed per package, not across the project; the final invoice may bill only the remaining value of that package's quotation. As long as there is no active payment, an invoice can still be edited or deleted; once its payments have been voided, the invoice opens up again.",
   },
   {
     key: "invoice-payment",
@@ -413,7 +416,7 @@ const workflowsEn: WorkflowGuide[] = [
       "Enter the payment reference, choose the method and company bank account, then upload the payment proof.",
       "Press Post payment.",
     ],
-    after: "Only real cash enters the Cash Ledger. Tax withheld by the client is recorded as a tax position, not as cash. Payments may arrive in stages; the invoice status moves to Partially Paid and then Paid.",
+    after: "Only real cash enters the Cash Ledger. Tax withheld by the client is recorded as a tax position, not as cash. Payments may arrive in stages; the invoice status moves to Partially Paid and then Paid. The total paid for an invoice may not exceed its package quotation.",
   },
   {
     key: "addendum",
@@ -436,21 +439,21 @@ const workflowsEn: WorkflowGuide[] = [
     icon: PackageSearch,
     title: "Paying a vendor through a Work Order or PO",
     summary: "From creating the vendor commitment through to staged payments, including progress and goods-receipt evidence.",
-    who: "A Project Manager or Engineer creates and submits. Admin or Finance approves. Progress verification and goods receipt are done by an Admin, Project Manager, or Engineer who is a project member — View on Procurement & Vendors is enough. Only an Admin may void a payment.",
+    who: "A Project Manager or Engineer creates and submits. Admin or Finance approves. Progress verification and goods receipt are done by an Admin, Project Manager, or Engineer who is a project member — View on Procurement & Vendors is enough. Admin or Finance records payments; only an Admin may void one.",
     where: "Procurement & Vendors.",
-    prepare: "An accepted quotation with its proof, vendor details, negotiated prices, and — when paying — the vendor invoice, a reference, and the transfer receipt.",
+    prepare: "An accepted quotation with its date and proof, an active vendor whose type matches the document, negotiated prices, and — when paying — the vendor invoice, a reference, the company account, and the transfer receipt.",
     steps: [
       "Do the whole cycle on the Procurement & Vendors screen: create, submit, approve, send, verify, pay, then close. There is no second route — from every other screen a Work Order or PO can only be read and downloaded as a PDF.",
       "Choose the document type. Use a Work Order (SPK) for Service or Mobility work and a PO for Devices or Materials. The vendor type must match the document.",
       "Select items from the accepted quotation, then enter quantities and vendor prices. Total allocations may not exceed the BoQ quantities.",
-      "Set the payment terms. Enter the down payment as a percentage if there is one; the rest becomes the final payment. All terms together must match the vendor contract value exactly.",
+      "Set the payment terms. Enter the down payment as a percentage if there is one; the rest becomes the final payment. All terms together must match the vendor contract value exactly, and every payment must choose one term.",
       "Submit the document, then an Admin or Finance user approves it. Finance may never approve its own submission, and an Admin approving their own submission must give a reason.",
       "Approval does not yet mean payable. Approval is an internal decision; Send is the moment the document actually binds the vendor, so payment and completion only open once it has been sent. While the document still reads Approved, the Pay and Complete buttons are deliberately absent, and the application refuses both if they are attempted anyway. Press Send first.",
       "Send the document to the vendor, then pay the down payment.",
       "Before any later term is paid, the work must be evidenced first. For a Work Order, a Project Manager or Engineer records Progress verification. For a PO, they record a Goods receipt with the delivery note number.",
-      "Record the payment: gross amount, tax withheld, actual cash, payment date, vendor invoice number, reference, company bank account, and the transfer receipt.",
+      "Record the payment per term: gross amount including tax, tax withheld, actual cash which must be greater than zero, payment date, vendor invoice number, reference, company bank account, and the transfer receipt.",
     ],
-    after: "An approved document is locked and its value becomes a commitment. Only real cash enters the Cash Ledger. Unpaid commitments reduce the profit that is safe to distribute. Completion is final: a document already Completed cannot be completed again, though its final settlement may still be recorded afterwards, because retention and final payment land after the work is signed off. Every change to a Work Order or PO happens on this screen alone; everywhere else those documents are read-only.",
+    after: "An approved document is locked and its value becomes a commitment. Each payment belongs to one term and may go only as far as that term's evidence; evidence for another term does not make this one payable. Term status figures include tax, and a payment made entirely of withholding is refused because cash must be greater than zero. Only real cash enters the Cash Ledger. Unpaid commitments reduce the profit that is safe to distribute. Completion is final: a document already Completed cannot be completed again, though its final settlement may still be recorded afterwards, because retention and final payment land after the work is signed off. Every change to a Work Order or PO happens on this screen alone; everywhere else those documents are read-only.",
   },
   {
     key: "document-email",
@@ -477,7 +480,7 @@ const workflowsEn: WorkflowGuide[] = [
     summary: "Inspecting the devices on site, signing the handover, and locking the document with the company seal.",
     who: "A Project Manager or Engineer with Manage access to Digital Handover. Only an Admin configures the company seal or revokes a final certificate.",
     where: "Device Validation, then Digital Handover.",
-    prepare: "The devices installed, a client representative present to sign, and the company seal already uploaded by an Admin.",
+    prepare: "The package contains at least one Device or Material item, the devices are installed, a client representative is present to sign, and the company seal has already been uploaded by an Admin.",
     steps: [
       "Open Device Validation. The checklist is built automatically from the Device and Material items in this package's BoQ.",
       "Inspect each item on site, tick it when it passes, and record any findings in the notes column.",
@@ -485,9 +488,9 @@ const workflowsEn: WorkflowGuide[] = [
       "If this package's BoQ changes after the validation was completed — an accepted Addendum adding a Device or Material, for instance — the checklist automatically returns to Draft and every tick is cleared. Open Device Validation again, re-sync the list, inspect the new items on site, and complete the validation once more before creating the certificate.",
       "Open Digital Handover and create the handover certificate for that package.",
       "Ask the client's representative to sign on screen in the Client panel, then have the PerumNet representative sign in the PerumNet panel.",
-      "Press finalize. The app applies the company seal, locks the file, and attaches a QR code for checking authenticity.",
+      "Press finalize. The app applies the company seal, calculates the final SHA-256, locks the file, and attaches a QR code for checking authenticity.",
     ],
-    after: "Any change to the package BoQ after the checklist was completed — an accepted Addendum included — returns the checklist to Draft and clears every tick, so a new certificate can only be issued once the inspection has been redone. The certificate becomes Final and can no longer be edited. The project status changes to Completed only once every package with a client-accepted quotation has an active final certificate; while another package is still running, the project stays Active. Anyone who scans the QR code on the PDF can check whether the document is genuine and still valid. If something is wrong, an Admin revokes it with a written reason. A revoked document is not deleted: its status becomes Void and its QR reports it as no longer valid. Because it is the handover that closes the project, revoking one returns the project to Active while any package is left without a certificate. The team then issues a new certificate for the same package and cycle, recorded as the next revision.",
+    after: "Any change to the package BoQ after the checklist was completed — an accepted Addendum included — returns the checklist to Draft and clears every tick, so a new certificate can only be issued once the inspection has been redone. The package must contain at least one Device or Material before validation. The certificate becomes Final, its SHA-256 hash and QR prove the file, and it can no longer be edited. The project status changes to Completed only once every package with a client-accepted quotation has an active final certificate; while another package is still running, the project stays Active. If something is wrong, an Admin revokes it with a written reason. A revoked document is not deleted: its status becomes Void and its QR reports it as no longer valid. The team then issues a new certificate for the same package and cycle, recorded as the next revision.",
   },
   {
     key: "expenses",
@@ -514,26 +517,26 @@ const workflowsEn: WorkflowGuide[] = [
     summary: "Importing bank entries and making sure one cash event is only ever recorded once.",
     who: "Admin and Finance. Only an Admin may add, change, or delete a bank account.",
     where: "Finance, Company banking section.",
-    prepare: "An original e-statement PDF from internet banking with selectable text, up to 5 MB. Alternatively a CSV of up to 2 MB containing date, description, and either a movement or debit/credit column.",
+    prepare: "An original e-statement PDF from internet banking with selectable text, up to 5 MB, or a CSV up to 2 MB with no more than 5,000 rows containing date, description, and either a movement or debit/credit column.",
     steps: [
       "An Admin adds the company account together with its opening balance.",
-      "Choose the statement month, upload the file, then press Import statement. Rows that were imported before are skipped automatically.",
+      "Choose the account and statement month, upload the file, then press Import statement. Rows that were imported before are skipped automatically and candidates are searched within a 14-day window.",
       "For entries that are not matched yet, open the candidate list and press Match. The app offers records with the same direction and amount within a 14-day window.",
       "An imported entry that is not matched yet is still listed, but it is not counted as cash. Such a line nearly always represents money an invoice, a vendor payment, or a tax settlement already recorded, so counting it would count the same money twice. The Finance summary reports that figure separately so it stays visible, and as soon as the entry is matched it counts again through its source record.",
       "Entries that have nothing to do with the projects can be excluded from the books, and restored again at any time. On restore an entry re-attaches to the very record it was booked against before, rather than creating a fresh bank record — so the cash is never recorded twice.",
     ],
-    after: "Matching deletes the duplicate bank record, never the Invoice or Work Order record. A payment that has been matched must be unmatched before it can be voided. A manual entry that has been matched locks in the same way: it can be neither edited nor deleted until the reconciliation is released.",
+    after: "Automatic matching, candidates, and manual matching use the same 14-day window. An unmatched statement line does not count as cash. Matching deletes the duplicate bank record, never the Invoice or Work Order record. A payment that has been matched must be unmatched before it can be voided. A manual entry that has been matched locks in the same way: it can be neither edited nor deleted until the reconciliation is released.",
   },
   {
     key: "tax",
     icon: Percent,
     title: "Closing the books and handling tax",
     summary: "Setting up tax rules, settling tax payables, and exporting the monthly reports.",
-    who: "Admin and Finance. Only an Admin configures the tax module and the master rules, or voids a settlement.",
+    who: "Admin and Finance with Manage access to Finance handle positions, reporting, and settlement. Only an Admin configures the tax module and master rules, or voids a settlement.",
     where: "Finance, Tax position & settlement section.",
-    prepare: "The tax payment receipt, a reference number, and the company bank account used to pay.",
+    prepare: "A tax receipt in PDF/PNG/JPG/WebP, a reference number, and the company bank account used to pay.",
     steps: [
-      "An Admin enables the tax module, then fills in the code, rate, scope (client or vendor), effect (added or withheld), and accounting treatment.",
+      "An Admin enables the tax module, then fills in the code, rate, scope (client or vendor), effect (added or withheld), and accounting treatment. Withheld tax may use Payable or Receivable only.",
       "Tax rules are chosen on a quotation while it is still a Draft. The amounts lock when the client accepts the quotation and are inherited by its invoices.",
       "Tax positions appear in Finance as Payable or Receivable once the source document is locked.",
       "Press Report to record the tax period, tax invoice number, and reporting reference.",
@@ -541,23 +544,23 @@ const workflowsEn: WorkflowGuide[] = [
       "Press Settlement to record the payment: amount, date, reference, bank account, and the payment receipt.",
       "Close the month by exporting the reports from Finance: the PDF for the archive and the CSV for checking the figures.",
     ],
-    after: "Tax amounts on older documents never change when a master rate is updated later. Report figures come from real cash movements, not from an accounting profit-and-loss statement. The filing date and the identity of whoever filed are never erased, not even when an Admin lowers a reporting status, so the evidence that a return was submitted always survives.",
+    after: "Tax amounts on older documents never change when a master rate is updated later. Withheld tax is recorded as Payable or Receivable, never Expense or Recoverable. A settlement needs evidence. Report figures come from real cash movements, not from an accounting profit-and-loss statement. The filing date and the identity of whoever filed are never erased, not even when an Admin lowers a reporting status, so the evidence that a return was submitted always survives.",
   },
   {
     key: "profit",
     icon: Coins,
     title: "Sharing project profit",
     summary: "Setting each recipient's share and paying it out safely.",
-    who: "Admin and Finance prepare the allocations; only an Admin approves or voids them.",
+    who: "Admin and Finance with Manage access to Profit Sharing prepare allocations; only an Admin approves or voids them.",
     where: "Finance, Profit sharing section.",
-    prepare: "An agreement on each recipient's share.",
+    prepare: "An agreement on each recipient's share and the cash figure after vendor commitments, tax payables, and reimbursements are considered.",
     steps: [
       "Choose the project, press Add recipient, then enter the name and percentage. All recipients together are capped at 100%.",
-      "Check the safe distributable profit. It already has unpaid vendor commitments, tax payables, and reimbursement payables deducted.",
-      "An Admin presses Approve. The rupiah amount is locked at that moment.",
+      "Check the safe distributable profit: cash in less unpaid vendor commitments, tax payables, and reimbursement payables.",
+      "An Admin presses Approve. The rupiah amount is locked at that moment; the total already locked is shown separately from Draft allocations that can still move.",
       "Press Pay and enter the payment date.",
     ],
-    after: "The payment enters the Cash Ledger as cash out and waits to be matched against the bank statement. An approved allocation cannot be edited; an Admin voids it and the team creates a new one. Voiding does not erase the payout: the original cash-out entry stays and a reversing entry dated today cancels it, so the project's cash returns to its pre-payout position with both lines still visible.",
+    after: "The payment enters the Cash Ledger as cash out and waits to be matched against the bank statement. The summary separates Locked (Approved/Paid) from Draft allocations. An approved allocation cannot be edited; an Admin voids it and the team creates a new one. Voiding does not erase the payout: the original cash-out entry stays and a reversing entry dated today cancels it, so the project's cash returns to its pre-payout position with both lines still visible.",
   },
   {
     key: "catalog-ai",
@@ -581,7 +584,7 @@ const workflowsEn: WorkflowGuide[] = [
     icon: UsersRound,
     title: "Managing prospects and outreach letters",
     summary: "Gathering contacts who did not ask to be contacted, preparing letters, and reading delivery results.",
-    who: "Admin and Finance by default. An Admin can grant access through Users & Access; View is enough to read, while Manage is required to save, import, and send.",
+    who: "Admin and Finance by default. An Admin can grant access through Users & Access; View is enough to read, while Manage is required to save, import, send, and convert a prospect. Conversion also requires Manage on Project Management.",
     where: "The Prospects menu: prospect list, add prospect, import XLSX, compose email, letter templates, and delivery report.",
     prepare: "A source note for every contact, one saved letter template, and a configured mail server when sending is needed.",
     steps: [
@@ -593,8 +596,9 @@ const workflowsEn: WorkflowGuide[] = [
       "Choose recipients who may be contacted and send. The 60-second delay per letter is intentional: 40 recipients take about 40 minutes, which is not a stalled application. The same mail server also carries invoices and password-recovery links.",
       "Open the delivery report to read the four statuses for each recipient. In progress is not a failure; resending because of that status can deliver the same letter twice.",
       "A letter already in the queue cannot be recalled. If someone asks to stop, mark the opt-out so the server refuses future delivery.",
+      "When the deal lands, press Convert to project. The company, contact, email, and location carry over; fill in the name, Draft/Active status, manager, dates, and location only when the prospect has none. Lost or opted-out prospects cannot be converted, and one prospect can create only one project.",
     ],
-    after: "Delivery history stays attached to the contact. Check the preview and each recipient's status before acting; do not infer that a batch is complete by counting rows.",
+    after: "Delivery history stays attached to the contact. Prospect status must follow the transition table; Won comes from Proposal or Convert to project, while Lost can reopen to New. Once converted, the PN-… code badge becomes the project link and the conversion button disappears. Check the preview and each recipient's status before acting; do not infer that a batch is complete by counting rows.",
   },
   {
     key: "access",
@@ -948,6 +952,72 @@ const messagesId: MessageGuide[] = [
     meaning: "Batas 10 MB menghitung dokumen resminya sekaligus, bukan hanya berkas yang Anda tambahkan. Batas itu bukan angka sembarangan: banyak gateway email perusahaan membuang lampiran di atasnya tanpa memberi tahu siapa pun, sehingga surat tampak Terkirim padahal lampirannya dicopot di tengah jalan.",
     action: "Kurangi atau perkecil lampiran tambahan. Pesan sejenis menyebut satu berkas melebihi 10 MB, atau maksimal lima lampiran tambahan per email. Untuk berkas besar, kirim tautan unduhan di isi suratnya.",
   },
+  {
+    key: "invalid-prospect-transition",
+    message: "Status prospek tidak bisa berpindah dari … ke ….",
+    meaning: "Perpindahan status mengikuti tabel di bab Calon Klien. Yang di luar tabel — Lost langsung ke Won, atau mundur dua langkah — ditolak.",
+    action: "Pindah selangkah demi selangkah. Prospek Lost dibuka kembali ke New lebih dulu; Won hanya dicapai dari Proposal atau lewat Jadikan proyek.",
+  },
+  {
+    key: "prospect-already-converted",
+    message: "Prospek ini sudah menjadi proyek PN-….",
+    meaning: "Satu prospek paling banyak satu proyek, dan pesannya menyebut kode proyek yang sudah ada.",
+    action: "Buka proyek yang disebut. Kalau memang ada pekerjaan kedua untuk klien yang sama, buat proyek baru dari Manajemen Proyek atau paket komersial baru di proyek itu.",
+  },
+  {
+    key: "prospect-not-convertible",
+    message: "Prospek berstatus Lost tidak dapat dijadikan proyek. / Prospek ini minta berhenti dihubungi.",
+    meaning: "Menjadikan klien tanpa membuka kembali statusnya berarti melewati catatan penolakannya.",
+    action: "Bila mereka menghubungi lagi, ubah statusnya ke New, lalu lanjutkan seperti biasa. Prospek yang minta berhenti dihubungi tidak dapat dijadikan proyek lewat tombol ini.",
+  },
+  {
+    key: "term-required",
+    message: "Pilih termin yang dibayar.",
+    meaning: "Setiap pembayaran vendor menempel pada satu termin; tanpa itu status termin tidak pernah bergerak.",
+    action: "Pilih termin pada dialog pembayaran — DP, progres, atau pelunasan — lalu ulangi.",
+  },
+  {
+    key: "payment-not-earned-for-term",
+    message: "Termin … baru berhak dibayar sekian (sudah dibayar sekian). Verifikasi progres termin ini lebih dulu.",
+    meaning: "Bukti diperiksa per termin. Termin yang belum diverifikasi tidak bisa dibayar berkat bukti termin lain. Angkanya sudah termasuk pajak.",
+    action: "Catat verifikasi untuk termin itu, atau bayar termin yang memang sudah berhak.",
+  },
+  {
+    key: "cash-amount-required",
+    message: "Kas yang dibayarkan harus lebih dari nol.",
+    meaning: "Pembayaran yang seluruhnya pajak potong tidak dapat dicatat; tarif potongan yang ada tidak pernah memakan seluruh pembayaran.",
+    action: "Periksa nominal gross, kas, dan potongannya — hampir pasti tertukar.",
+  },
+  {
+    key: "tax-rule-treatment-invalid",
+    message: "Pajak potong hanya boleh dibukukan sebagai Payable atau Receivable.",
+    meaning: "Pajak yang dipotong adalah uang yang tertahan: utang kita ke negara (vendor) atau piutang kita (klien). Dibukukan sebagai biaya atau terpulihkan, uang itu hilang dari semua daftar kewajiban.",
+    action: "Ubah perlakuan akuntansi aturan itu ke Payable (kita memotong) atau Receivable (klien memotong).",
+  },
+  {
+    key: "no-distributable-profit",
+    message: "Laba aman dibagikan saat ini sekian, sedangkan yang sudah dikunci untuk alokasi lain sekian. Alokasi ini tidak lagi tertampung.",
+    meaning: "Nominal yang sudah disetujui sebelumnya ditambah alokasi ini melampaui laba aman dibagikan saat ini — biasanya karena ada belanja atau komitmen baru setelah alokasi pertama dikunci.",
+    action: "Tunggu kas masuk berikutnya, kecilkan persentasenya, atau batalkan alokasi yang sudah disetujui bila memang keliru.",
+  },
+  {
+    key: "match-date-too-far",
+    message: "Tanggal transaksi berselisih sekian hari dari mutasi; batasnya 14 hari.",
+    meaning: "Pencocokan manual memakai jendela yang sama dengan pencocokan otomatis. Mutasi dan transaksi yang terpaut berminggu-minggu hampir pasti bukan pasangan.",
+    action: "Cari transaksi yang tanggalnya dekat. Kalau memang tidak ada, biarkan mutasinya Imported — ia tidak dihitung kas — dan periksa apakah pembayarannya memang belum dicatat.",
+  },
+  {
+    key: "validation-cycle",
+    message: "Siklus serah terima harus bilangan bulat antara 1 dan 100.",
+    meaning: "Alamat layar validasi memuat siklus yang bukan angka.",
+    action: "Buka kembali Validasi Perangkat dari menu dan pilih siklusnya di layar.",
+  },
+  {
+    key: "invoice-total-exceeds-quotation",
+    message: "Total Invoice melebihi nilai Quotation. Sisa yang dapat ditagihkan adalah ….",
+    meaning: "Batas ini dihitung per PAKET: jumlah invoice paket ini tidak boleh melampaui kontrak paket ini. Invoice paket lain tidak ikut dihitung.",
+    action: "Tagihkan sisa yang disebutkan, atau periksa apakah Anda sedang berada di paket yang benar.",
+  },
 ];
 
 const messagesEn: MessageGuide[] = [
@@ -1281,6 +1351,72 @@ const messagesEn: MessageGuide[] = [
     meaning: "The 10 MB limit counts the official document too, not only the files you added. The figure is not arbitrary: many corporate email gateways silently drop attachments above it, so a letter looks Sent while its attachment was stripped along the way.",
     action: "Remove or shrink the extra attachments. Related messages name a single file above 10 MB, or the maximum of five extra attachments per email. For large files, put a download link in the body of the letter instead.",
   },
+  {
+    key: "invalid-prospect-transition",
+    message: "The prospect status cannot move from … to ….",
+    meaning: "Status moves follow the table in the Prospects chapter. Anything outside it — Lost straight to Won, or two steps back — is refused.",
+    action: "Move one step at a time. Reopen a Lost prospect to New first; Won is reached only from Proposal or through Convert to project.",
+  },
+  {
+    key: "prospect-already-converted",
+    message: "This prospect has already become project PN-….",
+    meaning: "One prospect makes at most one project, and the message names the project that already exists.",
+    action: "Open the named project. If there genuinely is a second job for the same client, create a new project from Project Management or a new commercial package inside that project.",
+  },
+  {
+    key: "prospect-not-convertible",
+    message: "A Lost prospect cannot be converted. / This prospect asked not to be contacted.",
+    meaning: "Making them a client without reopening the status would skip over the record of their refusal.",
+    action: "If they got back in touch, set the status to New and continue as usual. A prospect who asked not to be contacted cannot be converted through this button.",
+  },
+  {
+    key: "term-required",
+    message: "Choose the term being paid.",
+    meaning: "Every vendor payment belongs to one term; without it the term statuses never move.",
+    action: "Pick the term in the payment dialog — advance, progress, or final — then try again.",
+  },
+  {
+    key: "payment-not-earned-for-term",
+    message: "Term … is only payable up to so much (so much already paid). Verify this term's progress first.",
+    meaning: "Evidence is checked per term. An unverified term cannot be paid on the strength of another term's evidence. The figures include tax.",
+    action: "Record a verification for that term, or pay the term that is actually due.",
+  },
+  {
+    key: "cash-amount-required",
+    message: "The cash paid must be more than zero.",
+    meaning: "A payment that is entirely withholding cannot be recorded; no withholding rate in use consumes a whole payment.",
+    action: "Check the gross, cash, and withholding figures — they are almost certainly swapped.",
+  },
+  {
+    key: "tax-rule-treatment-invalid",
+    message: "A withholding tax may only be booked as Payable or Receivable.",
+    meaning: "Withheld tax is money held back: our payable to the state (vendor) or our receivable (client). Booked as an expense or as recoverable, that money vanishes from every obligation list.",
+    action: "Change the rule's accounting treatment to Payable (we withhold) or Receivable (the client withholds).",
+  },
+  {
+    key: "no-distributable-profit",
+    message: "Today's distributable profit is so much, while so much is already locked for other allocations. This allocation no longer fits.",
+    meaning: "Amounts approved earlier plus this allocation exceed today's distributable profit — usually because a new expense or commitment landed after the first allocation locked.",
+    action: "Wait for the next cash in, lower the percentage, or void an approved allocation if it was wrong.",
+  },
+  {
+    key: "match-date-too-far",
+    message: "The transaction date is so many days from the statement line; the limit is 14 days.",
+    meaning: "Manual matching uses the same window as automatic matching. A statement line and a transaction weeks apart are almost certainly not a pair.",
+    action: "Look for a transaction with a nearby date. If there is none, leave the line Imported — it does not count as cash — and check whether the payment was ever recorded.",
+  },
+  {
+    key: "validation-cycle",
+    message: "The handover cycle must be a whole number between 1 and 100.",
+    meaning: "The validation screen address carries a cycle that is not a number.",
+    action: "Reopen Device Validation from the menu and choose the cycle on screen.",
+  },
+  {
+    key: "invoice-total-exceeds-quotation",
+    message: "The invoice total exceeds the quotation value. The remaining billable amount is ….",
+    meaning: "This cap is computed per PACKAGE: this package's invoices may not exceed this package's contract. Other packages' invoices are not counted.",
+    action: "Bill the remaining amount named, or check that you are on the right package.",
+  },
 ];
 
 const glossaryId: GlossaryEntry[] = [
@@ -1367,6 +1503,22 @@ export function HelpView({ language }: HelpViewProps) {
   const id = language === "id";
   const needle = query.trim().toLowerCase();
   const { workflows, messages, glossary } = content[language];
+  const visibleFlowPhases = useMemo(
+    () =>
+      aluraplikasi.filter((phase) => {
+        const searchFields = [
+          ...phase.judul,
+          ...phase.ringkas,
+          ...phase.simpul.flatMap((node) =>
+            node.jenis === "langkah"
+              ? [...node.label, ...node.peran, ...(node.syarat ?? [])]
+              : [...node.tanya, ...node.ya, ...node.tidak],
+          ),
+        ];
+        return matches(needle, searchFields);
+      }),
+    [needle],
+  );
 
   const visibleWorkflows = useMemo(
     () =>
@@ -1384,7 +1536,10 @@ export function HelpView({ language }: HelpViewProps) {
     [needle, glossary],
   );
   const anyResult =
-    visibleWorkflows.length > 0 || visibleMessages.length > 0 || visibleGlossary.length > 0;
+    visibleFlowPhases.length > 0 ||
+    visibleWorkflows.length > 0 ||
+    visibleMessages.length > 0 ||
+    visibleGlossary.length > 0;
 
   // Closing is a two-step: flag the dialog so the exit animation can play, then
   // drop it once the animation reports it is finished. Unmounting on the click
@@ -1445,6 +1600,58 @@ export function HelpView({ language }: HelpViewProps) {
           : "Step-by-step guidance for everyday work in PerumNet Enterprise: preparing quotations, billing clients, paying vendors, handing over on site, and closing the books."}</p>
         <label className="help-search"><Search size={19} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={id ? "Cari langkah, pesan kesalahan, atau istilah..." : "Search steps, error messages, or terms..."} /></label>
       </section>
+
+      {visibleFlowPhases.length > 0 && (
+        <>
+          <div className="help-section-head">
+            <span className="metric-icon teal"><BookOpenCheck size={19} /></span>
+            <div>
+              <h2>{id ? "Bagan alur aplikasi" : "Application workflow map"}</h2>
+              <p>{id
+                ? "Ikuti lima fase utama dari calon klien sampai pembagian laba. Daftar di bawah gambar memuat langkah yang sama dalam teks yang dapat dicari dan dibaca pembaca layar."
+                : "Follow the five main phases from prospect to profit sharing. The list below the image repeats the same steps as searchable, screen-reader-friendly text."}</p>
+            </div>
+          </div>
+          <section className="help-flow">
+            <div className="panel help-flow-image">
+              <img
+                src={appPath("/api/help/alur.png?language=" + language)}
+                alt={id ? "Bagan alur aplikasi PerumNet Enterprise dari calon klien sampai keuangan." : "PerumNet Enterprise application workflow from prospect through finance."}
+                loading="lazy"
+              />
+            </div>
+            <div className="help-flow-phases">
+              {visibleFlowPhases.map((phase) => {
+                const steps = phase.simpul.filter(
+                  (node): node is Extract<typeof node, { jenis: "langkah" }> => node.jenis === "langkah",
+                );
+                return (
+                  <article className="panel help-flow-phase" key={phase.key}>
+                    <div className="help-flow-phase-head">
+                      <div>
+                        <h3>{phase.judul[id ? 0 : 1]}</h3>
+                        <p>{phase.ringkas[id ? 0 : 1]}</p>
+                      </div>
+                      <span>{steps.length} {id ? "langkah" : "steps"}</span>
+                    </div>
+                    <ol>
+                      {steps.map((step) => (
+                        <li key={step.key}>
+                          <span className="help-flow-step-label">{step.label[id ? 0 : 1]}</span>
+                          <span className="help-flow-step-meta">
+                            {step.peran.join(" · ")}
+                            {step.syarat ? " · " + step.syarat[id ? 0 : 1] : ""}
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        </>
+      )}
 
       {visibleWorkflows.length > 0 && (
         <>

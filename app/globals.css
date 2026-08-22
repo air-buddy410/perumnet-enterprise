@@ -7685,6 +7685,96 @@ h3 {
   outline: none;
 }
 
+.help-flow {
+  display: grid;
+  gap: 12px;
+}
+
+.help-flow-image {
+  display: grid;
+  justify-items: center;
+  overflow: hidden;
+  padding: 14px;
+}
+
+.help-flow-image img {
+  display: block;
+  width: 100%;
+  max-width: 1400px;
+  height: auto;
+  border-radius: 10px;
+}
+
+.help-flow-phases {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.help-flow-phase {
+  display: grid;
+  align-content: start;
+  gap: 11px;
+  padding: 15px 17px;
+}
+
+.help-flow-phase-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.help-flow-phase h3 {
+  color: var(--navy);
+  font-size: 12px;
+}
+
+.help-flow-phase-head p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.65;
+}
+
+.help-flow-phase-head > span {
+  flex: none;
+  color: var(--teal-dark);
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.help-flow-phase ol {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.help-flow-phase li {
+  padding-left: 2px;
+  color: var(--navy);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.help-flow-phase li::marker {
+  color: var(--teal-dark);
+  font-weight: 700;
+}
+
+.help-flow-step-label,
+.help-flow-step-meta {
+  display: block;
+}
+
+.help-flow-step-meta {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
 /* The workflow guides used to be `<details>` in this grid, and opening one ran
    its column far past its neighbour — a two-column grid with one tall cell in
    it can never look tidy. The cards below never change size; the guide itself
@@ -8633,6 +8723,7 @@ h3 {
   }
 
   .help-guide-grid,
+  .help-flow-phases,
   .help-message-grid,
   .help-glossary,
   .language-options {

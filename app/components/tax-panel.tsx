@@ -86,6 +86,16 @@ function isReportingDowngrade(
   return !forward && !voidBeforeFiling;
 }
 
+function editableTaxRule(rule: TaxRule) {
+  if (
+    rule.effect === "Withhold" &&
+    !["Payable", "Receivable"].includes(rule.accountingTreatment)
+  ) {
+    return { ...rule, accountingTreatment: "Payable" as const };
+  }
+  return rule;
+}
+
 function fileToAttachment(file: File) {
   return new Promise<{ name: string; mimeType: string; contentBase64: string }>(
     (resolve, reject) => {
@@ -241,7 +251,11 @@ export function TaxPanel({
             scope: editingRule.scope,
             effect: editingRule.effect,
             rateBps: Math.round(editingRule.ratePercent * 100),
-            accountingTreatment: editingRule.accountingTreatment,
+            accountingTreatment:
+              editingRule.effect === "Withhold" &&
+              !["Payable", "Receivable"].includes(editingRule.accountingTreatment)
+                ? "Payable"
+                : editingRule.accountingTreatment,
             status: editingRule.status,
             sortOrder: editingRule.sortOrder,
           }),
@@ -400,7 +414,7 @@ export function TaxPanel({
           </div>
           <div className="tax-rule-list">
             {rules.map((rule) => (
-              <button type="button" key={rule.id} onClick={() => setEditingRule(rule)}>
+              <button type="button" key={rule.id} onClick={() => setEditingRule(editableTaxRule(rule))}>
                 <span><strong>{rule.code}</strong><small>{id ? rule.name : rule.nameEn}</small></span>
                 <span>{rule.ratePercent.toLocaleString(id ? "id-ID" : "en-US")}%</span>
                 <span className={`status-badge ${rule.status === "Active" ? "success" : ""}`}>{rule.status}</span>
@@ -450,8 +464,8 @@ export function TaxPanel({
               <label className="field"><span>Nama Indonesia</span><input required value={editingRule.name} onChange={(event) => setEditingRule({ ...editingRule, name: event.target.value })} /></label>
               <label className="field"><span>English name</span><input required value={editingRule.nameEn} onChange={(event) => setEditingRule({ ...editingRule, nameEn: event.target.value })} /></label>
               <label className="field"><span>{id ? "Cakupan" : "Scope"}</span><select value={editingRule.scope} onChange={(event) => setEditingRule({ ...editingRule, scope: event.target.value as TaxRule["scope"] })}><option value="Client">Client</option><option value="Vendor">Vendor</option><option value="Both">{id ? "Keduanya" : "Both"}</option></select></label>
-              <label className="field"><span>{id ? "Efek" : "Effect"}</span><select value={editingRule.effect} onChange={(event) => setEditingRule({ ...editingRule, effect: event.target.value as TaxRule["effect"] })}><option value="Add">{id ? "Tambah" : "Add"}</option><option value="Withhold">{id ? "Potong" : "Withhold"}</option></select></label>
-              <label className="field"><span>{id ? "Akuntansi" : "Accounting"}</span><select value={editingRule.accountingTreatment} onChange={(event) => setEditingRule({ ...editingRule, accountingTreatment: event.target.value as TaxRule["accountingTreatment"] })}><option value="Payable">{id ? "Utang pajak" : "Tax payable"}</option><option value="Receivable">{id ? "Piutang pajak" : "Tax receivable"}</option><option value="Recoverable">{id ? "Dapat dikreditkan" : "Recoverable"}</option><option value="Expense">{id ? "Biaya" : "Expense"}</option></select></label>
+              <label className="field"><span>{id ? "Efek" : "Effect"}</span><select value={editingRule.effect} onChange={(event) => { const effect = event.target.value as TaxRule["effect"]; setEditingRule({ ...editingRule, effect, accountingTreatment: effect === "Withhold" && !["Payable", "Receivable"].includes(editingRule.accountingTreatment) ? "Payable" : editingRule.accountingTreatment }); }}><option value="Add">{id ? "Tambah" : "Add"}</option><option value="Withhold">{id ? "Potong" : "Withhold"}</option></select></label>
+              <label className="field"><span>{id ? "Akuntansi" : "Accounting"}</span><select value={editingRule.accountingTreatment} onChange={(event) => setEditingRule({ ...editingRule, accountingTreatment: event.target.value as TaxRule["accountingTreatment"] })}><option value="Payable">{id ? "Utang pajak" : "Tax payable"}</option><option value="Receivable">{id ? "Piutang pajak" : "Tax receivable"}</option>{editingRule.effect === "Add" ? <><option value="Recoverable">{id ? "Dapat dikreditkan" : "Recoverable"}</option><option value="Expense">{id ? "Biaya" : "Expense"}</option></> : null}</select></label>
               <label className="field"><span>Status</span><select value={editingRule.status} onChange={(event) => setEditingRule({ ...editingRule, status: event.target.value as TaxRule["status"] })}><option value="Inactive">Inactive</option><option value="Active">Active</option></select></label>
               <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setEditingRule(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" type="submit" disabled={saving}><Save size={15} /> {id ? "Simpan" : "Save"}</button></div>
             </form>

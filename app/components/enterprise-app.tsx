@@ -502,7 +502,7 @@ export function EnterpriseApp() {
               }
             />
           )}
-          {currentView === "prospects" && canUse("prospects") && <ProspectsEditor canManage={canManage("prospects")} />}
+          {currentView === "prospects" && canUse("prospects") && <ProspectsEditor canManage={canManage("prospects")} canManageProjects={canManage("projects")} onProjectOpen={(projectId) => { selectProject(projectId); navigate("project"); void api<Project>("/api/projects/" + encodeURIComponent(projectId)).then(projectCreated).catch(() => undefined); }} />}
           {currentView === "users" && canUse("users") && <UsersView notify={notify} language={language} currentUserId={user.id} canManage={user.role === "Admin"} />}
           {currentView === "profile" && <ProfileView language={language} user={user} notify={notify} onUserChange={setUser} />}
           {currentView === "settings" && canUse("settings") && <SettingsView language={language} notify={notify} isAdmin={user.role === "Admin"} onLanguageChange={(next) => { setLanguage(next); window.localStorage.setItem("perumnet-language", next); setUser((current) => current ? { ...current, preferredLanguage: next } : current); }} />}

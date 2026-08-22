@@ -10,7 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { api, messageOf } from "../api-client";
+import { api, ApiClientError, messageOf } from "../api-client";
 import { formatCurrency, Project } from "../data";
 import { type AppLanguage } from "../i18n";
 
@@ -37,6 +37,7 @@ interface ProfitSummary {
   distributableProfit: number;
   allocatedPercentage: number;
   allocatedAmount: number;
+  lockedAmount: number;
   paidAmount: number;
   retainedProfit: number;
   allocations: ProfitAllocation[];
@@ -167,7 +168,11 @@ export function ProfitSharingPanel({
             : "The profit share was voided and related cash flow corrected.",
       );
     } catch (error) {
-      notify(messageOf(error, language));
+      notify(
+        error instanceof ApiClientError && error.code === "NO_DISTRIBUTABLE_PROFIT"
+          ? error.message
+          : messageOf(error, language),
+      );
     } finally {
       setBusy(false);
     }
@@ -295,6 +300,10 @@ export function ProfitSharingPanel({
               <div>
                 <span>{id ? "Laba ditahan" : "Retained profit"}</span>
                 <strong>{formatCurrency(summary.retainedProfit, language)}</strong>
+              </div>
+              <div>
+                <span>{id ? "Sudah dikunci" : "Locked amount"}</span>
+                <strong>{formatCurrency(summary.lockedAmount, language)}</strong>
               </div>
             </div>
 

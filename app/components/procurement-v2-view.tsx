@@ -27,7 +27,7 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { api, downloadApiFile, messageOf } from "../api-client";
+import { api, ApiClientError, downloadApiFile, messageOf } from "../api-client";
 import {
   BankAccount,
   CatalogItem,
@@ -212,6 +212,7 @@ export function ProcurementViewV2({
   const [paymentMethod, setPaymentMethod] = useState<"Transfer Bank" | "Tunai" | "Kartu" | "Lainnya">("Transfer Bank");
   const [bankAccountId, setBankAccountId] = useState("");
   const [paymentFile, setPaymentFile] = useState<File | null>(null);
+  const [paymentError, setPaymentError] = useState<{ message: string; payableForTerm?: number } | null>(null);
 
   const [verificationOrder, setVerificationOrder] = useState<ProcurementOrder | null>(null);
   const [verificationTermId, setVerificationTermId] = useState("");
@@ -776,6 +777,7 @@ export function ProcurementViewV2({
       banks.find((bank) => bank.status === "Aktif")?.id ?? "",
     );
     setPaymentFile(null);
+    setPaymentError(null);
   }
 
   async function savePayment(event: FormEvent) {
@@ -807,7 +809,23 @@ export function ProcurementViewV2({
       notify(id ? "Pembayaran aktual masuk ke Buku Kas." : "Actual payment posted to the Cash Ledger.");
       await load();
     } catch (error) {
-      notify(messageOf(error, language));
+      const details =
+        error instanceof ApiClientError &&
+        error.details &&
+        typeof error.details === "object"
+          ? error.details as Record<string, unknown>
+          : null;
+      const message = error instanceof ApiClientError
+        ? error.message
+        : messageOf(error, language);
+      setPaymentError({
+        message,
+        payableForTerm:
+          typeof details?.payableForTerm === "number"
+            ? details.payableForTerm
+            : undefined,
+      });
+      notify(message);
     } finally {
       setBusy("");
     }
@@ -1175,7 +1193,30 @@ export function ProcurementViewV2({
 
       {editingScopeValidity && <div className="modal-backdrop" onMouseDown={() => setEditingScopeValidity(null)}><section className="modal-card" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">QUOTATION VALIDITY</span><h2>{editingScopeValidity.quotation?.number}</h2></div><button className="icon-button" type="button" onClick={() => setEditingScopeValidity(null)}><X size={18} /></button></div><form className="form-grid" onSubmit={saveScopeValidity}><label className="field full"><span>{id ? "Tanggal terbit" : "Issue date"}</span><input required type="date" value={scopeIssuedAt} onChange={(event) => setScopeIssuedAt(event.target.value)} /></label><label className="field full"><span>{id ? "Berlaku sampai" : "Valid until"}</span><input required type="date" min={scopeIssuedAt} value={scopeValidUntil} onChange={(event) => setScopeValidUntil(event.target.value)} /></label><div className="field full"><span>{id ? "Pilihan cepat" : "Quick validity"}</span><div className="title-actions">{[7, 14, 30, 60].map((days) => <button className="button subtle small" type="button" key={days} onClick={() => setScopeValidityDays(days)}>{days} {id ? "hari" : "days"}</button>)}</div></div><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setEditingScopeValidity(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "scope-validity"}>{id ? "Simpan masa berlaku" : "Save validity"}</button></div></form></section></div>}
 
-      {paymentOrder && <div className="modal-backdrop" onMouseDown={() => setPaymentOrder(null)}><section className="modal-card wide" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">{id ? "PEMBAYARAN AKTUAL" : "ACTUAL PAYMENT"}</span><h2>{paymentOrder.number}</h2></div><button className="icon-button" type="button" onClick={() => setPaymentOrder(null)}><X size={18} /></button></div><form className="form-grid" onSubmit={savePayment}><label className="field"><span>{id ? "Termin" : "Term"}</span><select value={paymentTermId} onChange={(event) => setPaymentTermId(event.target.value)}>{paymentOrder.terms.map((term) => <option value={term.id} key={term.id}>{term.label} · {formatCurrency(term.plannedAmount, language)}</option>)}</select></label><label className="field"><span>{id ? "Bruto diselesaikan" : "Gross settled"}</span><input required type="number" min="1" max={paymentOrder.availableToPay} value={paymentAmount || ""} onChange={(event) => { const gross = Number(event.target.value); setPaymentAmount(gross); setPaymentCashAmount(Math.max(0, gross - paymentWithholdingAmount)); }} /></label><label className="field"><span>{id ? "Pajak dipotong" : "Tax withheld"}</span><input required type="number" min="0" max={paymentOrder.taxWithholdings ?? 0} value={paymentWithholdingAmount} onChange={(event) => { const withholding = Number(event.target.value); setPaymentWithholdingAmount(withholding); setPaymentCashAmount(Math.max(0, paymentAmount - withholding)); }} /></label><label className="field"><span>{id ? "Kas aktual dibayar" : "Actual cash paid"}</span><input required type="number" min="0" value={paymentCashAmount} onChange={(event) => setPaymentCashAmount(Number(event.target.value))} /></label><label className="field"><span>{id ? "Tanggal bayar" : "Payment date"}</span><input required type="date" max={serverToday} value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} /></label><label className="field"><span>{id ? "Nomor tagihan vendor" : "Vendor invoice number"}</span><input required value={vendorInvoice} onChange={(event) => setVendorInvoice(event.target.value)} /></label><label className="field"><span>{id ? "Referensi pembayaran" : "Payment reference"}</span><input required value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} /></label><label className="field"><span>{id ? "Metode" : "Method"}</span><select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as typeof paymentMethod)}><option>Transfer Bank</option><option>Tunai</option><option>Kartu</option><option>Lainnya</option></select></label>{paymentMethod === "Transfer Bank" && <label className="field full"><span>{id ? "Rekening perusahaan" : "Company bank account"}</span><select required value={bankAccountId} onChange={(event) => setBankAccountId(event.target.value)}>{banks.filter((bank) => bank.status === "Aktif").map((bank) => <option value={bank.id} key={bank.id}>{bank.bankName} · {bank.accountNumberMasked}</option>)}</select></label>}<label className="field full"><span>{id ? "Bukti pembayaran" : "Payment proof"}</span><input required type="file" accept=".pdf,image/png,image/jpeg,image/webp" onChange={(event) => setPaymentFile(event.target.files?.[0] ?? null)} /></label><div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setPaymentOrder(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "payment" || paymentAmount <= 0 || paymentAmount !== paymentCashAmount + paymentWithholdingAmount}>{id ? "Catat pembayaran" : "Post payment"}</button></div></form></section></div>}
+      {paymentOrder && (
+        <div className="modal-backdrop" onMouseDown={() => setPaymentOrder(null)}>
+          <section className="modal-card wide" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div><span className="eyebrow">{id ? "PEMBAYARAN AKTUAL" : "ACTUAL PAYMENT"}</span><h2>{paymentOrder.number}</h2></div>
+              <button className="icon-button" type="button" onClick={() => setPaymentOrder(null)}><X size={18} /></button>
+            </div>
+            <form className="form-grid" onSubmit={savePayment}>
+              {paymentError ? <div className="statement-guidance full" role="alert"><CircleDollarSign size={18} /><span><strong>{paymentError.message}</strong>{paymentError.payableForTerm !== undefined ? <small>{id ? "Nilai yang sudah berhak dibayar untuk termin ini: " : "Amount earned for this term: "}{formatCurrency(paymentError.payableForTerm, language)}.</small> : null}</span></div> : null}
+              <label className="field"><span>{id ? "Termin" : "Term"}</span><select required value={paymentTermId} onChange={(event) => { setPaymentTermId(event.target.value); setPaymentError(null); }}>{paymentOrder.terms.map((term) => <option value={term.id} key={term.id}>{term.label} · {formatCurrency(term.plannedAmount, language)}</option>)}</select></label>
+              <label className="field"><span>{id ? "Bruto diselesaikan" : "Gross settled"}</span><input required type="number" min="1" max={paymentOrder.availableToPay} value={paymentAmount || ""} onChange={(event) => { const gross = Number(event.target.value); setPaymentAmount(gross); setPaymentCashAmount(Math.max(0, gross - paymentWithholdingAmount)); }} /></label>
+              <label className="field"><span>{id ? "Pajak dipotong" : "Tax withheld"}</span><input required type="number" min="0" max={paymentOrder.taxWithholdings ?? 0} value={paymentWithholdingAmount} onChange={(event) => { const withholding = Number(event.target.value); setPaymentWithholdingAmount(withholding); setPaymentCashAmount(Math.max(0, paymentAmount - withholding)); }} /></label>
+              <label className="field"><span>{id ? "Kas aktual dibayar" : "Actual cash paid"}</span><input required type="number" min="1" step="1" value={paymentCashAmount} onChange={(event) => setPaymentCashAmount(Number(event.target.value))} /></label>
+              <label className="field"><span>{id ? "Tanggal bayar" : "Payment date"}</span><input required type="date" max={serverToday} value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} /></label>
+              <label className="field"><span>{id ? "Nomor tagihan vendor" : "Vendor invoice number"}</span><input required value={vendorInvoice} onChange={(event) => setVendorInvoice(event.target.value)} /></label>
+              <label className="field"><span>{id ? "Referensi pembayaran" : "Payment reference"}</span><input required value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} /></label>
+              <label className="field"><span>{id ? "Metode" : "Method"}</span><select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as typeof paymentMethod)}><option>Transfer Bank</option><option>Tunai</option><option>Kartu</option><option>Lainnya</option></select></label>
+              {paymentMethod === "Transfer Bank" && <label className="field full"><span>{id ? "Rekening perusahaan" : "Company bank account"}</span><select required value={bankAccountId} onChange={(event) => setBankAccountId(event.target.value)}>{banks.filter((bank) => bank.status === "Aktif").map((bank) => <option value={bank.id} key={bank.id}>{bank.bankName} · {bank.accountNumberMasked}</option>)}</select></label>}
+              <label className="field full"><span>{id ? "Bukti pembayaran" : "Payment proof"}</span><input required type="file" accept=".pdf,image/png,image/jpeg,image/webp" onChange={(event) => setPaymentFile(event.target.files?.[0] ?? null)} /></label>
+              <div className="modal-actions full"><button className="button secondary" type="button" onClick={() => setPaymentOrder(null)}>{id ? "Batal" : "Cancel"}</button><button className="button primary" disabled={busy === "payment" || paymentAmount <= 0 || paymentCashAmount <= 0 || paymentAmount !== paymentCashAmount + paymentWithholdingAmount}>{id ? "Catat pembayaran" : "Post payment"}</button></div>
+            </form>
+          </section>
+        </div>
+      )}
 
       {reasonPrompt && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setReasonPrompt(null)}>

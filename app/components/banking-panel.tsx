@@ -23,7 +23,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import { api, messageOf } from "../api-client";
+import { api, ApiClientError, messageOf } from "../api-client";
 import {
   type BankAccount,
   type BankStatementEntry,
@@ -247,7 +247,11 @@ export function BankingPanel({
             : "Company bank account added.",
       );
     } catch (error) {
-      notify(messageOf(error, language));
+      notify(
+        error instanceof ApiClientError && error.code === "MATCH_DATE_TOO_FAR"
+          ? error.message
+          : messageOf(error, language),
+      );
     } finally {
       setSubmitting(false);
     }
